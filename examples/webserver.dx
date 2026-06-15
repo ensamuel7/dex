@@ -1,0 +1,18 @@
+// DexLang Web Server Example
+// Build: dex build examples/webserver.dx
+// Run:   ./webserver
+// Test:  curl http://localhost:8080/hello
+//        curl http://localhost:8080/json
+import "http"
+import "json"
+
+fn handle_hello(): string {
+  return "{\"message\": \"Hello, World!\"}"
+}
+
+
+
+fn main(): void {
+  http.route("GET", "/hello", "handle_hello")
+  http.listen(8083)
+}

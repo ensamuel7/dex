@@ -1,0 +1,16 @@
+fn main(): void {
+    const x = 42
+    assert(x == 42)
+
+    const pi: double = 3.14
+    assert(pi == 3.14)
+
+    const name: string = "DexLang"
+    assert(name == "DexLang")
+
+    const flag: bool = true
+    assert(flag == true)
+
+    const big: long = 1000000
+    assert(big == 1000000)
+}

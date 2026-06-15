@@ -1,0 +1,23 @@
+import "fmt"
+import "db"
+
+fn main(): void {
+    let conn: int = db.open("sqlite", "test.db")
+
+    db.exec(conn, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, age INTEGER)")
+    db.exec(conn, "INSERT INTO users (name, age) VALUES ('Alice', 30)")
+    db.exec(conn, "INSERT INTO users (name, age) VALUES ('Bob', 25)")
+
+    let rows: int = db.query(conn, "SELECT id, name, age FROM users")
+    while (db.next(rows)) {
+        let id: int = db.col(rows, 0)
+        let name: string = db.col(rows, 1)
+        let age: int = db.col(rows, 2)
+        fmt.print(id)
+        fmt.print(name)
+        fmt.print(age)
+    }
+
+    db.free(rows)
+    db.close(conn)
+}

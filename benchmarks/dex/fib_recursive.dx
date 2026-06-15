@@ -1,0 +1,18 @@
+import "fmt"
+import "time"
+
+fn fib(n: int): int {
+    if (n <= 1) {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main(): void {
+    let start: long = time.now_ns()
+    let result: int = fib(40)
+    let end: long = time.now_ns()
+    let elapsed: long = (end - start) / 1000000
+    fmt.print(result)
+    fmt.print(elapsed)
+}

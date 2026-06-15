@@ -1,0 +1,6 @@
+// Simple hello: prints 5 + 10
+import "fmt"
+
+function main(): void {
+  fmt.print(5 + 10)
+}

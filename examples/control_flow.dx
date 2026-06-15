@@ -1,0 +1,21 @@
+// Control flow: if/else, while, recursion
+import "fmt"
+
+fn factorial(n: int): int {
+  if (n <= 1) {
+    return 1
+  } else {
+    return n * factorial(n - 1)
+  }
+}
+
+fn main(): void {
+  let result: int = factorial(5)
+  fmt.print(result)
+
+  if (result == 120) {
+    fmt.print(1)
+  } else {
+    fmt.print(0)
+  }
+}

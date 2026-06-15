@@ -1,0 +1,18 @@
+import "fmt"
+import "time"
+
+fn main(): void {
+    let start: long = time.now_ns()
+    let arr: int[] = []
+    for(let i: int = 0; i < 1000000; i++) {
+        arr.push(i)
+    }
+    let sum: long = 0
+    foreach(arr as v) {
+        sum += v
+    }
+    let end: long = time.now_ns()
+    let elapsed: long = (end - start) / 1000000
+    fmt.print(sum)
+    fmt.print(elapsed)
+}

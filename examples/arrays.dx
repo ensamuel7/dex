@@ -1,0 +1,57 @@
+import "fmt"
+import "json"
+
+fn main(): void {
+    // Array literal + indexing
+    let nums: int[] = [10, 20, 30]
+    fmt.print(nums[0])
+
+    // Index assignment + push
+    nums[1] = 25
+    nums.push(40)
+    fmt.print(nums.len())
+
+    // Stringify array to JSON
+    let j: string = json.stringify(nums)
+    fmt.print(j)
+
+    // Embed array in JSON object
+    let obj: string = json.new()
+    obj = json.set(obj, "name", "test")
+    obj = json.set_arr(obj, "values", nums)
+    fmt.print(obj)
+
+    // Empty array
+    let empty: int[] = []
+    empty.push(1)
+    fmt.print(empty[0])
+
+    // Sort
+    let sortable: int[] = [5, 2, 8, 1, 4]
+    sortable.sort("asc")
+    fmt.print(json.stringify(sortable))
+    sortable.sort("desc")
+    fmt.print(json.stringify(sortable))
+
+    // Pop
+    let last: int = sortable.pop()
+    fmt.print(last)
+    fmt.print(sortable.len())
+
+    // Remove
+    sortable.remove(0)
+    fmt.print(json.stringify(sortable))
+
+    // Contains
+    let has5: bool = sortable.contains(5)
+    fmt.print(has5)
+
+    // IndexOf
+    let idx: int = sortable.indexOf(4)
+    fmt.print(idx)
+
+    // Reverse
+    let rev: int[] = [1, 2, 3]
+    rev.reverse()
+    fmt.print(json.stringify(rev))
+}

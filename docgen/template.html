@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DexLang Documentation</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f1117;--surface:#161822;--surface2:#1e2030;--border:#2e3148;
+  --text:#c8cad8;--text2:#8b8fa8;--heading:#e2e4f0;
+  --accent:#7c8cf5;--accent2:#5e6ad2;--green:#4ade80;--orange:#fb923c;
+  --sidebar-w:260px;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.7;display:flex;min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* Sidebar */
+.sidebar{position:fixed;top:0;left:0;width:var(--sidebar-w);height:100vh;background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:24px 0;z-index:10}
+.sidebar .logo{padding:0 24px 24px;font-size:1.4rem;font-weight:700;color:var(--heading);letter-spacing:-0.5px}
+.sidebar .logo span{color:var(--accent)}
+.sidebar nav a{display:block;padding:6px 24px;font-size:.9rem;color:var(--text2);transition:all .15s;cursor:pointer}
+.sidebar nav a:hover{color:var(--heading);background:var(--surface2);text-decoration:none}
+.sidebar nav a.active{color:var(--heading);background:var(--surface2);border-right:2px solid var(--accent)}
+.sidebar nav .section-label{padding:16px 24px 4px;font-size:.7rem;text-transform:uppercase;letter-spacing:1.5px;color:var(--text2);font-weight:600}
+.section-label.label-guide{color:#7c8cf5}
+.section-label.label-language{color:#c792ea}
+.section-label.label-data{color:#2dd4bf}
+.section-label.label-stdlib{color:#4ade80}
+.section-label.label-internals{color:#fb923c}
+.section-label.label-examples{color:var(--text2)}
+
+/* Main */
+.main{margin-left:var(--sidebar-w);flex:1;max-width:900px;padding:48px 64px}
+h1{font-size:2.2rem;font-weight:700;color:var(--heading);margin-bottom:8px;letter-spacing:-1px}
+h2{font-size:1.5rem;font-weight:600;color:var(--heading);margin:48px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+h2:first-child{margin-top:0}
+h3{font-size:1.15rem;font-weight:600;color:var(--heading);margin:32px 0 12px}
+p{margin-bottom:16px}
+.subtitle{font-size:1.1rem;color:var(--text2);margin-bottom:32px}
+
+/* Code blocks */
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px 20px;overflow-x:auto;margin:12px 0 20px;font-size:.875rem;line-height:1.6}
+code{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;font-size:.875rem}
+p code,li code,td code{background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:.82rem}
+
+/* Tables */
+table{width:100%;border-collapse:collapse;margin:12px 0 24px}
+th,td{text-align:left;padding:10px 16px;border-bottom:1px solid var(--border);font-size:.9rem}
+th{background:var(--surface);color:var(--heading);font-weight:600;font-size:.8rem;text-transform:uppercase;letter-spacing:.5px}
+tr:hover{background:var(--surface2)}
+
+/* Function cards */
+.func-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin:8px 0 16px}
+.func-card .sig{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;font-size:.9rem;color:var(--green)}
+.func-card .sig .module{color:var(--accent)}
+.func-card .sig .ptype{color:var(--orange)}
+.func-card .sig .ret{color:var(--text2)}
+
+/* Install block */
+.install{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px 24px;margin:16px 0 24px}
+.install code{color:var(--green)}
+
+/* Badge */
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.75rem;font-weight:600;background:var(--accent2);color:#fff;margin-left:8px;vertical-align:middle}
+
+/* Sections */
+.page-section{display:none}
+.page-section.active{display:block}
+
+/* Search */
+.search-box{padding:0 24px 20px;position:relative}
+.search-box input{width:100%;padding:8px 12px 8px 32px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.85rem;outline:none}
+.search-box input:focus{border-color:var(--accent)}
+.search-box input::placeholder{color:var(--text2)}
+.search-box .search-icon{position:absolute;left:32px;top:9px;color:var(--text2);font-size:.8rem;pointer-events:none}
+.search-box .search-kbd{position:absolute;right:32px;top:7px;font-size:.65rem;color:var(--text2);background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:1px 5px;pointer-events:none}
+#search-results{position:absolute;top:calc(100% - 8px);left:24px;right:24px;background:var(--surface);border:1px solid var(--border);border-radius:6px;max-height:320px;overflow-y:auto;display:none;z-index:20;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#search-results .result{padding:10px 14px;cursor:pointer;font-size:.85rem;border-bottom:1px solid var(--border);color:var(--text)}
+#search-results .result:last-child{border-bottom:none}
+#search-results .result:hover{background:var(--surface2)}
+#search-results .result-section{font-size:.7rem;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+#search-results .no-results{padding:10px 14px;font-size:.85rem;color:var(--text2)}
+
+/* h4 */
+h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
+
+/* Driver cards */
+.driver-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0 24px}
+.driver-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
+.driver-card h4{margin:0 0 8px;font-size:.95rem}
+.driver-card code{font-size:.82rem}
+.driver-card p{font-size:.85rem;margin-bottom:8px}
+
+/* Search highlight */
+.search-highlight{outline:2px solid var(--accent);outline-offset:4px;border-radius:4px;transition:outline-color .3s}
+
+/* Syntax highlighting */
+.hl-kw{color:#c792ea}
+.hl-type{color:#ffcb6b}
+.hl-str{color:#c3e88d}
+.hl-num{color:#f78c6c}
+.hl-cmt{color:#546e7a;font-style:italic}
+.hl-bool{color:#ff5370}
+.hl-mod{color:#82aaff}
+.hl-fn{color:#82aaff}
+.hl-punct{color:#89ddff}
+
+/* Responsive */
+@media(max-width:768px){
+  .sidebar{display:none}
+  .main{margin-left:0;padding:24px}
+  .driver-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="logo">Dex<span>Lang</span></div>
+  <div class="search-box">
+    <span class="search-icon"></span>
+    <input type="text" id="search-input" placeholder="Search docs..." />
+    <span class="search-kbd">&#x2318;K</span>
+    <div id="search-results"></div>
+  </div>
+  <nav>
+    <div class="section-label label-guide">Guide</div>
+    <a onclick="show('getting-started')">Getting Started</a>
+    <div class="section-label label-language">Language</div>
+    <a onclick="show('types-variables')">Types &amp; Variables</a>
+    <a onclick="show('operators-math')">Operators &amp; Math</a>
+    <a onclick="show('functions-control')">Functions &amp; Control Flow</a>
+    <a onclick="show('concurrency')">Concurrency</a>
+    <div class="section-label label-data">Data Structures</div>
+    <a onclick="show('arrays')">Arrays</a>
+    <a onclick="show('structs')">Structs</a>
+    <div class="section-label label-stdlib">Standard Library</div>
+    <a onclick="show('stdlib')">Overview</a>
+    <a onclick="show('mod-fmt')">fmt</a>
+    <a onclick="show('mod-json')">json</a>
+    <a onclick="show('mod-http')">http</a>
+    <a onclick="show('mod-file')">file</a>
+    <a onclick="show('database')">db</a>
+    <div class="section-label label-internals">Internals</div>
+    <a onclick="show('ast')">AST</a>
+    <a onclick="show('lexer')">Lexer &amp; Tokens</a>
+    <div class="section-label label-examples">Examples</div>
+    <a onclick="show('examples')">Examples</a>
+  </nav>
+</aside>
+
+<!-- Main Content -->
+<div class="main">
+
+<!-- Getting Started -->
+<section id="getting-started" class="page-section">
+<h1>DexLang</h1>
+<p class="subtitle">A statically-typed language that compiles to C. Fast builds, native binaries, built-in HTTP server.</p>
+
+<h2>Getting Started</h2>
+
+<h3>Installation</h3>
+<div class="install">
+<pre><code>git clone https://github.com/ensamuel7/dex-lang.git
+cd dex
+go build -o dex .</code></pre>
+</div>
+
+<h3>Your first program</h3>
+<p>Create <code>hello.dx</code>:</p>
+<pre><code>import "fmt"
+
+fn main(): void {
+  fmt.print("Hello, World!")
+}</code></pre>
+
+<h3>Build &amp; Run</h3>
+<div class="install">
+<pre><code>dex build hello.dx    # produces ./hello binary
+dex run hello.dx      # build + run, cleans up after</code></pre>
+</div>
+
+<h3>CLI Commands</h3>
+<table>
+<tr><th>Command</th><th>Description</th></tr>
+<tr><td><code>dex build &lt;file&gt;</code></td><td>Compile to a native binary</td></tr>
+<tr><td><code>dex run &lt;file&gt;</code></td><td>Build and execute, then remove binary</td></tr>
+<tr><td><code>dex test [file]</code></td><td>Run test files (<code>*_test.dx</code>)</td></tr>
+<tr><td><code>dex lsp</code></td><td>Start the Language Server Protocol server</td></tr>
+<tr><td><code>dex docs</code></td><td>Generate this documentation page</td></tr>
+</table>
+</section>
+
+<!-- Types & Variables -->
+<section id="types-variables" class="page-section">
+<h2>Types &amp; Variables</h2>
+
+<h3>Types</h3>
+<table>
+<tr><th>Type</th><th>Description</th></tr>
+<tr><td><code>int</code></td><td>Signed integer</td></tr>
+<tr><td><code>long</code></td><td>Signed long integer</td></tr>
+<tr><td><code>double</code></td><td>Double-precision float</td></tr>
+<tr><td><code>bool</code></td><td>Boolean (<code>true</code> or <code>false</code>)</td></tr>
+<tr><td><code>string</code></td><td>String value</td></tr>
+<tr><td><code>void</code></td><td>No return value</td></tr>
+<tr><td><code>int[]</code></td><td>Array of integers</td></tr>
+<tr><td><code>long[]</code></td><td>Array of long integers</td></tr>
+<tr><td><code>double[]</code></td><td>Array of doubles</td></tr>
+<tr><td><code>bool[]</code></td><td>Array of booleans</td></tr>
+<tr><td><code>string[]</code></td><td>Array of strings</td></tr>
+<tr><td><code>struct</code></td><td>User-defined composite type with named fields</td></tr>
+<tr><td><code>chan T</code></td><td>Channel carrying values of type T (see <a onclick="show('concurrency')" style="cursor:pointer">Concurrency</a>)</td></tr>
+</table>
+
+<h3>Variables</h3>
+<p>Variables are declared with <code>let</code>. You can provide an explicit type annotation or let the compiler infer it:</p>
+<pre><code>// Explicit type annotation
+let x: int = 42
+let name: string = "hello"
+let flag: bool = true
+let nums: int[] = [1, 2, 3]
+
+// Type inference — the type is determined from the right-hand side
+let y = 100          // inferred as int
+let pi = 3.14        // inferred as double
+let msg = "world"    // inferred as string
+let ok = true        // inferred as bool</code></pre>
+<p>Type inference does <strong>not</strong> work with empty array literals — these require an explicit type:</p>
+<pre><code>let items: int[] = []   // explicit type required</code></pre>
+
+<h3>Assignment</h3>
+<p>A variable must be declared with <code>let</code> before it can be assigned.</p>
+<pre><code>x = 20
+name = "DexLang"</code></pre>
+
+<h3>Compound Assignment &amp; Increment</h3>
+<pre><code>x += 5    // equivalent to x = x + 5
+x -= 2    // equivalent to x = x - 2
+x++       // equivalent to x = x + 1
+x--       // equivalent to x = x - 1</code></pre>
+<p>These operators work on numeric variables (<code>int</code>, <code>long</code>, <code>double</code>).</p>
+
+<h3>String Escape Sequences</h3>
+<table>
+<tr><th>Sequence</th><th>Character</th></tr>
+<tr><td><code>\n</code></td><td>Newline</td></tr>
+<tr><td><code>\t</code></td><td>Tab</td></tr>
+<tr><td><code>\\</code></td><td>Backslash</td></tr>
+<tr><td><code>\"</code></td><td>Double quote</td></tr>
+</table>
+
+<h3>Comments</h3>
+<p>Line comments start with <code>//</code>:</p>
+<pre><code>// This is a comment
+let x: int = 42 // inline comment</code></pre>
+
+<h3>Imports</h3>
+<p>Standard library modules are imported by name:</p>
+<pre><code>import "fmt"
+import "http"
+import "json"</code></pre>
+
+<h3>Program Entry Point</h3>
+<p>Every program requires a <code>main</code> function that returns <code>void</code>. The compiler emits an implicit exit code of 0.</p>
+<pre><code>fn main(): void {
+  // your program here
+}</code></pre>
+</section>
+
+<!-- Operators & Math -->
+<section id="operators-math" class="page-section">
+<h2>Operators &amp; Math</h2>
+
+<h3>Arithmetic</h3>
+<table>
+<tr><th>Operator</th><th>Description</th><th>Operand Types</th></tr>
+<tr><td><code>+</code></td><td>Addition (also string concatenation)</td><td><code>int</code>, <code>long</code>, <code>double</code>, <code>string</code></td></tr>
+<tr><td><code>-</code></td><td>Subtraction</td><td><code>int</code>, <code>long</code>, <code>double</code></td></tr>
+<tr><td><code>*</code></td><td>Multiplication</td><td><code>int</code>, <code>long</code>, <code>double</code></td></tr>
+<tr><td><code>/</code></td><td>Division</td><td><code>int</code>, <code>long</code>, <code>double</code></td></tr>
+<tr><td><code>%</code></td><td>Modulo</td><td><code>int</code>, <code>long</code> only</td></tr>
+<tr><td><code>++</code></td><td>Increment (statement only)</td><td><code>int</code>, <code>long</code>, <code>double</code></td></tr>
+<tr><td><code>--</code></td><td>Decrement (statement only)</td><td><code>int</code>, <code>long</code>, <code>double</code></td></tr>
+<tr><td><code>+=</code></td><td>Add and assign</td><td><code>int</code>, <code>long</code>, <code>double</code></td></tr>
+<tr><td><code>-=</code></td><td>Subtract and assign</td><td><code>int</code>, <code>long</code>, <code>double</code></td></tr>
+</table>
+
+<h3>Comparison</h3>
+<table>
+<tr><th>Operator</th><th>Description</th><th>Notes</th></tr>
+<tr><td><code>==</code></td><td>Equal (relaxed)</td><td>Allows cross-numeric comparison (<code>int</code>/<code>long</code>/<code>double</code>)</td></tr>
+<tr><td><code>!=</code></td><td>Not equal (relaxed)</td><td>Allows cross-numeric comparison</td></tr>
+<tr><td><code>===</code></td><td>Strict equal</td><td>Operands must be the exact same type</td></tr>
+<tr><td><code>!==</code></td><td>Strict not equal</td><td>Operands must be the exact same type</td></tr>
+<tr><td><code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code></td><td>Ordering</td><td><code>int</code>, <code>long</code>, <code>double</code></td></tr>
+</table>
+<p><code>==</code>/<code>!=</code> allow comparing different numeric types. The narrower type is implicitly widened (<code>int</code> &rarr; <code>long</code> &rarr; <code>double</code>). <code>===</code>/<code>!==</code> require both operands to be the exact same type.</p>
+
+<h3>Logical</h3>
+<table>
+<tr><th>Operator</th><th>Description</th></tr>
+<tr><td><code>&amp;&amp;</code></td><td>Logical AND (both operands must be <code>bool</code>)</td></tr>
+<tr><td><code>||</code></td><td>Logical OR (both operands must be <code>bool</code>)</td></tr>
+<tr><td><code>!</code></td><td>Logical NOT (unary, operand must be <code>bool</code>)</td></tr>
+<tr><td><code>-</code></td><td>Negation (unary, operand must be numeric)</td></tr>
+</table>
+
+<h3>Operator Precedence</h3>
+<p>Low to high:</p>
+<table>
+<tr><th>Priority</th><th>Operators</th></tr>
+<tr><td>1 (lowest)</td><td><code>||</code></td></tr>
+<tr><td>2</td><td><code>&amp;&amp;</code></td></tr>
+<tr><td>3</td><td><code>==</code> <code>!=</code> <code>===</code> <code>!==</code></td></tr>
+<tr><td>4</td><td><code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code></td></tr>
+<tr><td>5</td><td><code>+</code> <code>-</code></td></tr>
+<tr><td>6</td><td><code>*</code> <code>/</code> <code>%</code></td></tr>
+<tr><td>7 (highest)</td><td>Unary <code>-</code>, <code>!</code></td></tr>
+</table>
+
+<h3>Built-in Functions</h3>
+<p><code>assert(condition: bool)</code> — if the condition is <code>false</code>, prints a failure message to stderr and exits with code 1. Used for testing.</p>
+<pre><code>assert(1 + 1 == 2)
+assert(x &gt; 0)</code></pre>
+
+<h3>Testing</h3>
+<p>Test files use the <code>*_test.dx</code> naming convention. Use <code>assert()</code> to validate behavior.</p>
+<pre><code>// math_test.dx
+fn main(): void {
+    assert(1 + 1 == 2)
+    assert(10 % 3 == 1)
+}</code></pre>
+<p>Run with <code>dex test</code> (discovers all <code>*_test.dx</code> files) or <code>dex test myfile_test.dx</code>.</p>
+</section>
+
+<!-- Functions & Control Flow -->
+<section id="functions-control" class="page-section">
+<h2>Functions &amp; Control Flow</h2>
+
+<h3>Functions</h3>
+<p>Functions are declared with <code>fn</code> or <code>function</code>. Both are equivalent:</p>
+<pre><code>fn add(a: int, b: int): int {
+  return a + b
+}
+
+function main(): void {
+  fmt.print("hello")
+}</code></pre>
+
+<h3>Control Flow</h3>
+
+<h4>if / else</h4>
+<pre><code>if (x &gt; 0) {
+  fmt.print(x)
+} else {
+  fmt.print(0)
+}</code></pre>
+<p><code>else if</code> chains are supported. The condition must be <code>bool</code> and enclosed in parentheses.</p>
+
+<h4>while</h4>
+<pre><code>let i: int = 0
+while (i &lt; 10) {
+  fmt.print(i)
+  i = i + 1
+}</code></pre>
+
+<h4>for</h4>
+<p>C-style for loop with init, condition, and post statements:</p>
+<pre><code>for (let i: int = 0; i &lt; 10; i++) {
+  fmt.print(i)
+}
+
+// Type inference works in the init statement
+for (let i = 0; i &lt; 100; i += 2) {
+  // iterate by 2
+}</code></pre>
+<p>The post statement supports <code>++</code>, <code>--</code>, <code>+=</code>, <code>-=</code>, or <code>=</code>.</p>
+
+<h4>foreach</h4>
+<p>Iterate over array elements:</p>
+<pre><code>let nums: int[] = [10, 20, 30]
+
+// Value only
+foreach (nums as n) {
+  fmt.print(n)
+}
+
+// Index and value
+foreach (nums as i, n) {
+  fmt.print(i)  // 0, 1, 2
+  fmt.print(n)  // 10, 20, 30
+}</code></pre>
+<p>The iterable must be an array type. The index variable (if used) is always <code>int</code>. The value variable takes the element type of the array.</p>
+
+<h4>break and continue</h4>
+<p>Exit a loop early with <code>break</code>, or skip to the next iteration with <code>continue</code>:</p>
+<pre><code>while (true) {
+  if (done) { break }
+}
+
+for (let i = 0; i &lt; 10; i++) {
+  if (i % 2 == 0) { continue }
+  fmt.print(i)  // prints odd numbers only
+}</code></pre>
+<p><code>break</code> and <code>continue</code> work inside <code>while</code>, <code>for</code>, and <code>foreach</code> loops. Using them outside a loop is a compile error.</p>
+</section>
+
+<!-- Arrays -->
+<section id="arrays" class="page-section">
+<h2>Arrays</h2>
+
+<h3>Array Basics</h3>
+<pre><code>let nums: int[] = [10, 20, 30]
+let first: int = nums[0]       // indexing
+nums[1] = 25                    // index assignment
+nums.push(40)                   // append
+let length: int = nums.len()   // length</code></pre>
+
+<h3>Array Methods</h3>
+<table>
+<tr><th>Method</th><th>Description</th><th>Returns</th></tr>
+<tr><td><code>.push(value)</code></td><td>Append an element to the array</td><td><code>void</code></td></tr>
+<tr><td><code>.len()</code></td><td>Get the number of elements</td><td><code>int</code></td></tr>
+</table>
+<pre><code>let items: int[] = []
+items.push(10)
+items.push(20)
+let count: int = items.len()  // 2</code></pre>
+</section>
+
+<!-- Structs -->
+<section id="structs" class="page-section">
+<h2>Structs</h2>
+
+<h3>Struct Declaration</h3>
+<p>Structs define composite types with named, typed fields:</p>
+<pre><code>struct Point {
+  x: int
+  y: int
+}
+
+struct User {
+  name: string
+  age: int
+  active: bool
+}</code></pre>
+
+<h3>Creating Instances</h3>
+<p>Create a struct instance using literal syntax with field names:</p>
+<pre><code>let p: Point = Point{x: 10, y: 20}
+let u: User = User{name: "Alice", age: 30, active: true}</code></pre>
+
+<h3>Field Access &amp; Assignment</h3>
+<p>Access fields with dot notation. Fields can be reassigned after creation:</p>
+<pre><code>let name: string = u.name    // field access
+u.age = 31                    // field assignment
+fmt.print(p.x)                // use in expressions</code></pre>
+</section>
+
+<!-- Standard Library -->
+<section id="stdlib" class="page-section">
+<h2>Standard Library</h2>
+<p>DexLang ships with built-in modules that cover I/O, networking, data formats, and databases. Import any module with the <code>import</code> keyword:</p>
+<pre><code>import "fmt"
+import "json"</code></pre>
+
+<h3>Available Modules</h3>
+<table>
+<tr><th>Module</th><th>Description</th><th>Functions</th></tr>
+<tr><td><code><a onclick="show('mod-fmt')" style="cursor:pointer">fmt</a></code></td><td>Formatted output to stdout</td><td><code>print</code></td></tr>
+<tr><td><code><a onclick="show('mod-json')" style="cursor:pointer">json</a></code></td><td>Build and serialize JSON objects</td><td><code>new</code>, <code>set</code>, <code>set_arr</code>, <code>stringify</code></td></tr>
+<tr><td><code><a onclick="show('mod-http')" style="cursor:pointer">http</a></code></td><td>Built-in HTTP server</td><td><code>route</code>, <code>listen</code></td></tr>
+<tr><td><code><a onclick="show('database')" style="cursor:pointer">db</a></code></td><td>Database access (SQLite, PostgreSQL, MySQL, MongoDB)</td><td><code>open</code>, <code>exec</code>, <code>query</code>, <code>next</code>, <code>col</code>, <code>free</code>, <code>close</code></td></tr>
+<tr><td><code><a onclick="show('mod-file')" style="cursor:pointer">file</a></code></td><td>Filesystem operations and file uploads</td><td><code>read</code>, <code>write</code>, <code>append</code>, <code>exists</code>, <code>remove</code>, <code>rename</code>, <code>upload</code></td></tr>
+</table>
+
+<h3>Quick Reference</h3>
+<p>Click any module name above to see full documentation with examples. Below is a complete function reference for all modules.</p>
+
+{{range .Modules}}
+<h4>{{.Name}}</h4>
+{{range .Funcs}}
+<div class="func-card"><div class="sig"><span class="module">{{.Module}}</span>.{{.Name}}(<span class="ptype">{{.Params}}</span>) <span class="ret">-&gt; {{.Return}}</span></div></div>
+{{end}}
+{{end}}
+</section>
+
+<!-- Database -->
+<section id="database" class="page-section">
+<h2>Database</h2>
+<p>The <code>db</code> module provides a unified interface for <strong>SQLite</strong>, <strong>PostgreSQL</strong>, <strong>MySQL</strong>, and <strong>MongoDB</strong>. The API follows a handle-based pattern: open a connection, execute statements or query rows, iterate with a cursor, and clean up.</p>
+
+<pre><code>import "db"
+
+let conn: int = db.open("sqlite", "app.db")
+db.exec(conn, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")
+db.exec(conn, "INSERT INTO users (name) VALUES ('Alice')")
+
+let rows: int = db.query(conn, "SELECT id, name FROM users")
+while (db.next(rows)) {
+    let name: string = db.col(rows, 1)
+    fmt.print(name)
+}
+db.free(rows)
+db.close(conn)</code></pre>
+
+<h3>Supported Drivers</h3>
+<table>
+<tr><th>Driver String</th><th>Database</th><th>C Library</th><th>Install (macOS)</th></tr>
+<tr><td><code>"sqlite"</code></td><td>SQLite 3</td><td>libsqlite3</td><td><code>brew install sqlite</code></td></tr>
+<tr><td><code>"postgres"</code></td><td>PostgreSQL</td><td>libpq</td><td><code>brew install libpq</code></td></tr>
+<tr><td><code>"mysql"</code></td><td>MySQL / MariaDB</td><td>libmysqlclient</td><td><code>brew install mysql-client</code></td></tr>
+<tr><td><code>"mongo"</code></td><td>MongoDB</td><td>libmongoc + libbson</td><td><code>brew install mongo-c-driver</code></td></tr>
+</table>
+
+<h3>Connection Strings (DSN)</h3>
+
+<div class="driver-grid">
+<div class="driver-card">
+<h4>SQLite</h4>
+<p>Path to the database file. Created if it does not exist.</p>
+<pre><code>db.open("sqlite", "mydb.sqlite")</code></pre>
+</div>
+<div class="driver-card">
+<h4>PostgreSQL</h4>
+<p>Standard <code>libpq</code> connection string with key=value pairs.</p>
+<pre><code>db.open("postgres", "host=localhost dbname=mydb user=postgres")</code></pre>
+</div>
+<div class="driver-card">
+<h4>MySQL</h4>
+<p>Key=value pairs: <code>host</code>, <code>user</code>, <code>password</code>, <code>dbname</code>, <code>port</code>.</p>
+<pre><code>db.open("mysql", "host=localhost user=root password=secret dbname=mydb")</code></pre>
+</div>
+<div class="driver-card">
+<h4>MongoDB</h4>
+<p>Standard MongoDB URI. Database name is extracted from the path.</p>
+<pre><code>db.open("mongo", "mongodb://localhost:27017/mydb")</code></pre>
+</div>
+</div>
+
+<h3>Functions</h3>
+
+<div class="func-card"><div class="sig"><span class="module">db</span>.open(<span class="ptype">driver: string, dsn: string</span>) <span class="ret">-&gt; int</span></div></div>
+<p>Open a database connection. Returns a connection handle (&ge;0) on success, or <code>-1</code> on error.</p>
+
+<div class="func-card"><div class="sig"><span class="module">db</span>.exec(<span class="ptype">conn: int, sql: string</span>) <span class="ret">-&gt; int</span></div></div>
+<p>Execute a SQL statement (INSERT, UPDATE, DELETE, CREATE, etc.). Returns the number of affected rows, or <code>-1</code> on error.</p>
+
+<div class="func-card"><div class="sig"><span class="module">db</span>.query(<span class="ptype">conn: int, sql: string</span>) <span class="ret">-&gt; int</span></div></div>
+<p>Execute a SELECT query. Returns a result-set handle (&ge;0), or <code>-1</code> on error.</p>
+
+<div class="func-card"><div class="sig"><span class="module">db</span>.next(<span class="ptype">rows: int</span>) <span class="ret">-&gt; bool</span></div></div>
+<p>Advance the cursor to the next row. Returns <code>true</code> if a row is available, <code>false</code> when finished.</p>
+
+<div class="func-card"><div class="sig"><span class="module">db</span>.col(<span class="ptype">rows: int, index: int</span>) <span class="ret">-&gt; int|string|double|bool</span></div></div>
+<p>Read a column value from the current row. The return type is determined by the variable's type annotation — the compiler dispatches to the correct column reader at compile time:</p>
+<pre><code>let id: int = db.col(rows, 0)        // reads as int
+let name: string = db.col(rows, 1)   // reads as string
+let score: double = db.col(rows, 2)  // reads as double
+let active: bool = db.col(rows, 3)   // reads as bool</code></pre>
+<p>An explicit type annotation is required — <code>let x = db.col(rows, 0)</code> is a compile error.</p>
+
+<div class="func-card"><div class="sig"><span class="module">db</span>.free(<span class="ptype">rows: int</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Free a result set and release its slot. Always call this after you finish iterating.</p>
+
+<div class="func-card"><div class="sig"><span class="module">db</span>.close(<span class="ptype">conn: int</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Close a database connection and release its slot.</p>
+
+<h3>Return Values &amp; Error Handling</h3>
+<table>
+<tr><th>Function</th><th>On Success</th><th>On Error</th></tr>
+<tr><td><code>open</code></td><td>Connection handle (&ge;0)</td><td><code>-1</code></td></tr>
+<tr><td><code>exec</code></td><td>Number of rows affected</td><td><code>-1</code></td></tr>
+<tr><td><code>query</code></td><td>Result-set handle (&ge;0)</td><td><code>-1</code></td></tr>
+<tr><td><code>next</code></td><td><code>true</code> if row available</td><td><code>false</code></td></tr>
+<tr><td><code>col</code></td><td>Column value</td><td>Zero value (<code>0</code>, <code>""</code>, <code>false</code>)</td></tr>
+</table>
+
+<h3>MongoDB Notes</h3>
+<p>MongoDB uses a document model rather than SQL. The <code>exec</code> function accepts a JSON command string, and <code>query</code> takes a collection name to return all documents.</p>
+<pre><code>// exec takes a JSON database command
+db.exec(conn, "{\"insert\": \"users\", \"documents\": [{\"name\": \"Alice\", \"age\": 30}]}")
+
+// query takes a collection name — returns all documents
+let rows: int = db.query(conn, "users")
+while (db.next(rows)) {
+    // Column 0 is _id, then fields in insertion order
+    let name: string = db.col(rows, 1)
+    let age: int = db.col(rows, 2)
+}</code></pre>
+
+<h3>Limits</h3>
+<p>The runtime uses fixed-size pools: up to <strong>16</strong> simultaneous connections and <strong>64</strong> active result sets. Always call <code>db.free(rows)</code> and <code>db.close(conn)</code> to release slots.</p>
+</section>
+
+<!-- Concurrency -->
+<section id="concurrency" class="page-section">
+<h2>Concurrency</h2>
+<p>DexLang provides lightweight concurrency with four primitives: <code>spawn</code>, <code>send</code>, <code>receive</code>, and <code>channel</code>. Under the hood these compile to pthreads and a lock-free channel implementation.</p>
+
+<h3>spawn</h3>
+<p>Launch a concurrent task. Returns a task handle that can be used with <code>receive</code> to get results.</p>
+
+<h4>Block form</h4>
+<p>Run arbitrary code in a new thread. Use <code>send(value)</code> to return a result to the caller.</p>
+<pre><code>let task = spawn {
+    let result = expensive_computation()
+    send(result)
+}
+let val = receive(task)</code></pre>
+
+<h4>Function call form</h4>
+<p>Spawn a single function call. The function's return value is automatically sent back.</p>
+<pre><code>fn compute(n: int): int {
+    return n * 2
+}
+
+let task = spawn compute(21)
+let val = receive(task)  // 42</code></pre>
+
+<h4>Fire-and-forget</h4>
+<p>If you don't need the result, omit the assignment. The task runs in the background.</p>
+<pre><code>spawn { do_background_work() }</code></pre>
+
+<h3>send</h3>
+<p>Send a value from inside a spawn block, or to a shared channel.</p>
+<pre><code>send(value)            // send to the task's implicit handle
+send(channel, value)   // send to a shared channel</code></pre>
+<p>Inside a spawn block, <code>send(value)</code> delivers the value to whoever calls <code>receive(task)</code>. With two arguments, <code>send(channel, value)</code> pushes a value into a shared channel for many-to-one communication.</p>
+
+<h3>receive</h3>
+<p>Block until a value is available from a task handle or channel, then return it.</p>
+<pre><code>let val: int = receive(task)      // receive from a task handle
+let val: int = receive(channel)   // receive from a channel</code></pre>
+<p>The return type matches the type that was sent. For task handles, this is determined by the <code>send(value)</code> call or the spawned function's return type.</p>
+
+<h3>channel</h3>
+<p>Create a shared channel for many-to-one communication. Takes a type argument specifying the element type.</p>
+<pre><code>let ch = channel(int)</code></pre>
+<p>Channels are typed — a <code>channel(int)</code> can only carry <code>int</code> values. Use explicit type annotations with <code>chan</code>:</p>
+<pre><code>let ch: chan int = channel(int)</code></pre>
+
+<h3>close</h3>
+<p>Close a channel. Subsequent sends are ignored and blocked receivers get zero values.</p>
+<pre><code>close(ch)</code></pre>
+
+<h3>Patterns</h3>
+
+<h4>1-to-1 (task sends result to parent)</h4>
+<pre><code>let task = spawn {
+    send(42)
+}
+assert(receive(task) == 42)</code></pre>
+
+<h4>Many-to-one (fan-in via shared channel)</h4>
+<pre><code>let ch = channel(int)
+for (let i = 0; i &lt; 10; i++) {
+    spawn { send(ch, i * 10) }
+}
+let total = 0
+for (let i = 0; i &lt; 10; i++) {
+    total += receive(ch)
+}</code></pre>
+
+<h4>Variable capture</h4>
+<p>Spawn blocks automatically capture variables from the outer scope by value. Mutations inside the block do not affect the original variables.</p>
+<pre><code>let x: int = 10
+let task = spawn {
+    // x is captured by value — this is a copy
+    send(x * 2)
+}
+let result = receive(task)  // 20</code></pre>
+</section>
+
+<!-- fmt module -->
+<section id="mod-fmt" class="page-section">
+<h2>fmt<span class="badge">module</span></h2>
+<p>The <code>fmt</code> module provides formatted output to stdout.</p>
+<pre><code>import "fmt"</code></pre>
+
+<h3>print</h3>
+<div class="func-card"><div class="sig"><span class="module">fmt</span>.print(<span class="ptype">value: int|long|double|string|bool</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Print a single value followed by a newline. Accepts any primitive type — the compiler selects the correct format string at compile time.</p>
+<pre><code>fmt.print(42)            // prints: 42
+fmt.print("hello")       // prints: hello
+fmt.print(3.14)          // prints: 3.140000
+fmt.print(true)          // prints: true
+fmt.print(1000000)       // prints: 1000000</code></pre>
+<p>Each call prints exactly one value. To print multiple values, use multiple calls or build a string with concatenation.</p>
+</section>
+
+<!-- json module -->
+<section id="mod-json" class="page-section">
+<h2>json<span class="badge">module</span></h2>
+<p>The <code>json</code> module builds JSON objects using string manipulation. Each function returns a new string — JSON objects are immutable.</p>
+<pre><code>import "json"</code></pre>
+
+<h3>new</h3>
+<div class="func-card"><div class="sig"><span class="module">json</span>.new() <span class="ret">-&gt; string</span></div></div>
+<p>Create an empty JSON object. Returns the string <code>{}</code>.</p>
+<pre><code>let obj: string = json.new()  // "{}"</code></pre>
+
+<h3>set</h3>
+<div class="func-card"><div class="sig"><span class="module">json</span>.set(<span class="ptype">obj: string, key: string, value: string|int|bool|long|double</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Set a key-value pair on a JSON object. Returns a new string with the field added. The value type is detected at compile time — no type suffix needed.</p>
+<pre><code>let obj: string = json.new()
+obj = json.set(obj, "name", "Dex")       // string value
+obj = json.set(obj, "version", 1)         // int value
+obj = json.set(obj, "stable", true)       // bool value
+obj = json.set(obj, "bignum", 1000000)    // long value
+obj = json.set(obj, "pi", 3.14)           // double value
+// {"name":"Dex","version":1,"stable":true,"bignum":1000000,"pi":3.14}</code></pre>
+<p>Each call inserts the new field before the closing <code>}</code>. The original string is not modified — you must reassign the result.</p>
+
+<h3>set_arr</h3>
+<div class="func-card"><div class="sig"><span class="module">json</span>.set_arr(<span class="ptype">obj: string, key: string, arr: T[]</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Set an array value on a JSON object. Works with any array type (<code>int[]</code>, <code>long[]</code>, <code>double[]</code>, <code>bool[]</code>, <code>string[]</code>).</p>
+<pre><code>let nums: int[] = [1, 2, 3]
+let obj: string = json.new()
+obj = json.set_arr(obj, "numbers", nums)
+// {"numbers": [1, 2, 3]}</code></pre>
+
+<h3>stringify</h3>
+<div class="func-card"><div class="sig"><span class="module">json</span>.stringify(<span class="ptype">arr: T[]</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Convert an array to a JSON array string. Works with any array type.</p>
+<pre><code>let nums: int[] = [10, 20, 30]
+let s: string = json.stringify(nums)  // "[10, 20, 30]"
+
+let names: string[] = ["alice", "bob"]
+let s2: string = json.stringify(names)  // ["alice", "bob"]</code></pre>
+
+<h3>Full example</h3>
+<pre><code>import "json"
+import "http"
+
+fn handle_api(): string {
+    let scores: int[] = [10, 20, 30]
+    scores.push(40)
+
+    let obj: string = json.new()
+    obj = json.set(obj, "message", "Hello from Dex!")
+    obj = json.set(obj, "count", scores.len())
+    obj = json.set_arr(obj, "scores", scores)
+    obj = json.set(obj, "success", true)
+    return obj
+}
+
+fn main(): void {
+    http.route("GET", "/api", "handle_api")
+    http.listen(8080)
+}</code></pre>
+</section>
+
+<!-- http module -->
+<section id="mod-http" class="page-section">
+<h2>http<span class="badge">module</span></h2>
+<p>The <code>http</code> module provides a built-in HTTP server. Routes map HTTP methods and paths to handler functions.</p>
+<pre><code>import "http"</code></pre>
+
+<h3>route</h3>
+<div class="func-card"><div class="sig"><span class="module">http</span>.route(<span class="ptype">method: string, path: string, handler: string</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Register a route handler. The handler is referenced by name as a string literal. Handler functions must take no parameters and return <code>string</code> (the HTTP response body).</p>
+<pre><code>fn my_handler(): string {
+    return "{\"ok\": true}"
+}
+
+fn main(): void {
+    http.route("GET", "/api", "my_handler")
+    http.listen(3000)
+}</code></pre>
+<p>The handler name must be a string literal — it is resolved to a function pointer at compile time. The handler function is validated by the checker: it must exist, take no parameters, and return <code>string</code>.</p>
+
+<h3>listen</h3>
+<div class="func-card"><div class="sig"><span class="module">http</span>.listen(<span class="ptype">port: int</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Start the HTTP server on the given port. This call blocks — it runs the server event loop indefinitely.</p>
+<pre><code>http.listen(8080)  // server listens on http://localhost:8080</code></pre>
+
+<h3>Full example</h3>
+<pre><code>import "http"
+import "json"
+
+fn handle_hello(): string {
+    return "{\"message\": \"Hello, World!\"}"
+}
+
+fn handle_json(): string {
+    let response: string = json.new()
+    response = json.set(response, "message", "Hello from Dex!")
+    response = json.set(response, "number", 42)
+    response = json.set(response, "success", true)
+    return response
+}
+
+fn main(): void {
+    http.route("GET", "/hello", "handle_hello")
+    http.route("GET", "/json", "handle_json")
+    http.listen(8080)
+}</code></pre>
+</section>
+
+<!-- file module -->
+<section id="mod-file" class="page-section">
+<h2>file<span class="badge">module</span></h2>
+<p>The <code>file</code> module provides filesystem operations and HTTP file uploads.</p>
+<pre><code>import "file"</code></pre>
+
+<h3>read</h3>
+<div class="func-card"><div class="sig"><span class="module">file</span>.read(<span class="ptype">path: string</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Read the entire contents of a file and return it as a string. Returns an empty string if the file does not exist or cannot be read.</p>
+<pre><code>let content: string = file.read("config.txt")
+fmt.print(content)</code></pre>
+
+<h3>write</h3>
+<div class="func-card"><div class="sig"><span class="module">file</span>.write(<span class="ptype">path: string, data: string</span>) <span class="ret">-&gt; bool</span></div></div>
+<p>Write data to a file, creating it if it does not exist or overwriting if it does. Returns <code>true</code> on success.</p>
+<pre><code>let ok: bool = file.write("output.txt", "Hello, World!")
+if (!ok) {
+    fmt.print("Failed to write file")
+}</code></pre>
+
+<h3>append</h3>
+<div class="func-card"><div class="sig"><span class="module">file</span>.append(<span class="ptype">path: string, data: string</span>) <span class="ret">-&gt; bool</span></div></div>
+<p>Append data to the end of a file. Creates the file if it does not exist. Returns <code>true</code> on success.</p>
+<pre><code>file.append("log.txt", "Event occurred\n")</code></pre>
+
+<h3>exists</h3>
+<div class="func-card"><div class="sig"><span class="module">file</span>.exists(<span class="ptype">path: string</span>) <span class="ret">-&gt; bool</span></div></div>
+<p>Check whether a file exists at the given path.</p>
+<pre><code>if (file.exists("config.json")) {
+    let cfg: string = file.read("config.json")
+}</code></pre>
+
+<h3>remove</h3>
+<div class="func-card"><div class="sig"><span class="module">file</span>.remove(<span class="ptype">path: string</span>) <span class="ret">-&gt; bool</span></div></div>
+<p>Delete a file. Returns <code>true</code> if the file was successfully removed.</p>
+<pre><code>file.remove("temp.txt")</code></pre>
+
+<h3>rename</h3>
+<div class="func-card"><div class="sig"><span class="module">file</span>.rename(<span class="ptype">old_path: string, new_path: string</span>) <span class="ret">-&gt; bool</span></div></div>
+<p>Rename or move a file. Returns <code>true</code> on success.</p>
+<pre><code>file.rename("draft.txt", "final.txt")</code></pre>
+
+<h3>upload</h3>
+<div class="func-card"><div class="sig"><span class="module">file</span>.upload(<span class="ptype">path: string, url: string</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Upload a file to a URL via HTTP multipart form POST. The file is sent as a form field named <code>file</code>. Returns the server's response body as a string, or an empty string on failure.</p>
+<pre><code>let response: string = file.upload("photo.jpg", "https://api.example.com/upload")
+fmt.print(response)</code></pre>
+<p>Requires <code>libcurl</code> at compile time (<code>brew install curl</code> on macOS).</p>
+
+<h3>Full example</h3>
+<pre><code>import "file"
+import "fmt"
+
+fn main(): void {
+    // Write and read back
+    file.write("hello.txt", "Hello, Dex!")
+    let content: string = file.read("hello.txt")
+    fmt.print(content)
+
+    // Append a line
+    file.append("hello.txt", "\nSecond line")
+
+    // Check and clean up
+    if (file.exists("hello.txt")) {
+        file.remove("hello.txt")
+    }
+}</code></pre>
+</section>
+
+<!-- AST (Abstract Syntax Tree) -->
+<section id="ast" class="page-section">
+<h2>Abstract Syntax Tree</h2>
+<p>DexLang source code is parsed into an AST defined in <code>ast/ast.go</code>. The compilation pipeline is: <code>.dx</code> source &rarr; tokens &rarr; <strong>AST</strong> &rarr; type check &rarr; C code &rarr; native binary.</p>
+
+<h3>Program Structure</h3>
+<p>A <code>Program</code> is the top-level AST node containing all imports, struct definitions, and functions.</p>
+<pre><code>// Program is the root of every .dx file
+Program {
+    Imports:   []Import    // import "fmt", import "db", ...
+    Structs:   []StructDef // struct definitions
+    Functions: []Function  // all function declarations
+}</code></pre>
+
+<h3>Type System</h3>
+<p>Types are represented as integer constants. The compiler uses these throughout type checking and code generation.</p>
+<table>
+<tr><th>Constant</th><th>DexLang Type</th><th>C Type</th></tr>
+<tr><td><code>TypeInt</code></td><td><code>int</code></td><td><code>int</code></td></tr>
+<tr><td><code>TypeBool</code></td><td><code>bool</code></td><td><code>_Bool</code></td></tr>
+<tr><td><code>TypeString</code></td><td><code>string</code></td><td><code>const char*</code></td></tr>
+<tr><td><code>TypeVoid</code></td><td><code>void</code></td><td><code>void</code></td></tr>
+<tr><td><code>TypeLong</code></td><td><code>long</code></td><td><code>long</code></td></tr>
+<tr><td><code>TypeDouble</code></td><td><code>double</code></td><td><code>double</code></td></tr>
+<tr><td><code>TypeArrayInt</code></td><td><code>int[]</code></td><td>dynamic array</td></tr>
+<tr><td><code>TypeArrayBool</code></td><td><code>bool[]</code></td><td>dynamic array</td></tr>
+<tr><td><code>TypeArrayString</code></td><td><code>string[]</code></td><td>dynamic array</td></tr>
+<tr><td><code>TypeArrayLong</code></td><td><code>long[]</code></td><td>dynamic array</td></tr>
+<tr><td><code>TypeArrayDouble</code></td><td><code>double[]</code></td><td>dynamic array</td></tr>
+<tr><td><code>TypeStructBase+N</code></td><td>user structs</td><td>generated C struct</td></tr>
+</table>
+<p>Struct types are assigned dynamic IDs starting at <code>1000</code>. Each <code>struct</code> definition calls <code>RegisterStructType</code> to get a unique ID. Helper functions: <code>IsStructType</code>, <code>IsArrayType</code>, <code>ElementType</code>, <code>ArrayTypeOf</code>.</p>
+
+<h3>Functions &amp; Parameters</h3>
+<pre><code>Function {
+    Name:       string   // function name
+    Params:     []Param  // typed parameters
+    ReturnType: Type     // return type
+    Body:       []Stmt   // list of statements
+}
+
+Param {
+    Name: string
+    Type: Type
+}</code></pre>
+
+<h3>Statements</h3>
+<p>All statements implement the <code>Stmt</code> interface. The compiler pattern-matches on concrete types during code generation.</p>
+<table>
+<tr><th>Node</th><th>Fields</th><th>Example</th></tr>
+<tr><td><code>LetStmt</code></td><td>Name, Type, Value</td><td><code>let x: int = 42</code></td></tr>
+<tr><td><code>ReturnStmt</code></td><td>Value</td><td><code>return x + 1</code></td></tr>
+<tr><td><code>ExprStmt</code></td><td>Expr</td><td><code>fmt.print(x)</code></td></tr>
+<tr><td><code>IfStmt</code></td><td>Cond, Then, Else</td><td><code>if (x &gt; 0) { ... } else { ... }</code></td></tr>
+<tr><td><code>WhileStmt</code></td><td>Cond, Body</td><td><code>while (i &lt; 10) { ... }</code></td></tr>
+<tr><td><code>BlockStmt</code></td><td>Stmts</td><td><code>{ ... }</code></td></tr>
+<tr><td><code>AssignStmt</code></td><td>Name, Value</td><td><code>x = 10</code></td></tr>
+<tr><td><code>IndexAssignStmt</code></td><td>Array, Index, Value</td><td><code>arr[0] = 5</code></td></tr>
+<tr><td><code>FieldAssignStmt</code></td><td>Object, Field, Value</td><td><code>user.name = "Bob"</code></td></tr>
+</table>
+
+<h3>Expressions</h3>
+<p>All expressions implement the <code>Expr</code> interface. Expressions produce values; statements do not.</p>
+<table>
+<tr><th>Node</th><th>Fields</th><th>Example</th></tr>
+<tr><td><code>IntLit</code></td><td>Value (int)</td><td><code>42</code></td></tr>
+<tr><td><code>FloatLit</code></td><td>Value (float64)</td><td><code>3.14</code></td></tr>
+<tr><td><code>BoolLit</code></td><td>Value (bool)</td><td><code>true</code></td></tr>
+<tr><td><code>StringLit</code></td><td>Value (string)</td><td><code>"hello"</code></td></tr>
+<tr><td><code>Ident</code></td><td>Name</td><td><code>x</code></td></tr>
+<tr><td><code>BinaryExpr</code></td><td>Op, Left, Right</td><td><code>a + b</code></td></tr>
+<tr><td><code>UnaryExpr</code></td><td>Op, Operand</td><td><code>!flag</code></td></tr>
+<tr><td><code>CallExpr</code></td><td>Module, Name, Args</td><td><code>fmt.print(x)</code></td></tr>
+<tr><td><code>ArrayLitExpr</code></td><td>ElemType, Elems</td><td><code>[1, 2, 3]</code></td></tr>
+<tr><td><code>IndexExpr</code></td><td>Array, Index</td><td><code>arr[0]</code></td></tr>
+<tr><td><code>StructLitExpr</code></td><td>Name, FieldNames, FieldValues</td><td><code>Point{x: 1, y: 2}</code></td></tr>
+<tr><td><code>FieldAccessExpr</code></td><td>Object, Field</td><td><code>p.x</code></td></tr>
+</table>
+
+<h3>Operators</h3>
+<table>
+<tr><th>Binary Operators</th><th>Unary Operators</th></tr>
+<tr><td><code>BinAdd</code> (<code>+</code>), <code>BinSub</code> (<code>-</code>), <code>BinMul</code> (<code>*</code>), <code>BinDiv</code> (<code>/</code>), <code>BinMod</code> (<code>%</code>)</td><td><code>UnaryNeg</code> (<code>-</code>)</td></tr>
+<tr><td><code>BinEq</code> (<code>==</code>), <code>BinNeq</code> (<code>!=</code>), <code>BinStrictEq</code> (<code>===</code>), <code>BinStrictNeq</code> (<code>!==</code>)</td><td><code>UnaryNot</code> (<code>!</code>)</td></tr>
+<tr><td><code>BinLt</code> (<code>&lt;</code>), <code>BinGt</code> (<code>&gt;</code>), <code>BinLte</code> (<code>&lt;=</code>), <code>BinGte</code> (<code>&gt;=</code>)</td><td></td></tr>
+<tr><td><code>BinAnd</code> (<code>&amp;&amp;</code>), <code>BinOr</code> (<code>||</code>)</td><td></td></tr>
+</table>
+
+<h3>Compilation Pipeline</h3>
+<pre><code>// 1. Lexer: source text → tokens
+//    "let x: int = 42" → [TokenLet, TokenIdent("x"), TokenColon, TokenIntKw, ...]
+
+// 2. Parser: tokens → AST
+//    → LetStmt{Name:"x", Type:TypeInt, Value:IntLit{42}}
+
+// 3. Checker: type-check the AST
+//    → verifies IntLit(42) matches TypeInt
+
+// 4. Codegen: AST → C source code
+//    → "int x = 42;"
+
+// 5. C compiler: C source → native binary
+//    → gcc output.c -o output</code></pre>
+</section>
+
+<!-- Lexer Reference -->
+<section id="lexer" class="page-section">
+<h2>Lexer &amp; Tokens</h2>
+
+<h3>Keywords</h3>
+<table>
+<tr><th>Keyword</th><th>Token</th></tr>
+{{range .Keywords}}
+<tr><td><code>{{.Name}}</code></td><td>{{.Token}}</td></tr>
+{{end}}
+</table>
+
+<h3>Type Keywords</h3>
+<table>
+<tr><th>Keyword</th><th>Token</th></tr>
+{{range .Types}}
+<tr><td><code>{{.Name}}</code></td><td>{{.Token}}</td></tr>
+{{end}}
+</table>
+
+<h3>Operators &amp; Symbols</h3>
+<table>
+<tr><th>Symbol</th><th>Token</th></tr>
+<tr><td><code>+</code></td><td>TokenPlus</td></tr>
+<tr><td><code>-</code></td><td>TokenMinus</td></tr>
+<tr><td><code>*</code></td><td>TokenStar</td></tr>
+<tr><td><code>/</code></td><td>TokenSlash</td></tr>
+<tr><td><code>=</code></td><td>TokenAssign</td></tr>
+<tr><td><code>==</code></td><td>TokenEq</td></tr>
+<tr><td><code>!=</code></td><td>TokenNeq</td></tr>
+<tr><td><code>===</code></td><td>TokenStrictEq</td></tr>
+<tr><td><code>!==</code></td><td>TokenStrictNeq</td></tr>
+<tr><td><code>%</code></td><td>TokenPercent</td></tr>
+<tr><td><code>&lt;</code></td><td>TokenLt</td></tr>
+<tr><td><code>&gt;</code></td><td>TokenGt</td></tr>
+<tr><td><code>&lt;=</code></td><td>TokenLte</td></tr>
+<tr><td><code>&gt;=</code></td><td>TokenGte</td></tr>
+<tr><td><code>&amp;&amp;</code></td><td>TokenAnd</td></tr>
+<tr><td><code>||</code></td><td>TokenOr</td></tr>
+<tr><td><code>!</code></td><td>TokenBang</td></tr>
+<tr><td><code>(</code></td><td>TokenLParen</td></tr>
+<tr><td><code>)</code></td><td>TokenRParen</td></tr>
+<tr><td><code>{</code></td><td>TokenLBrace</td></tr>
+<tr><td><code>}</code></td><td>TokenRBrace</td></tr>
+<tr><td><code>[</code></td><td>TokenLBracket</td></tr>
+<tr><td><code>]</code></td><td>TokenRBracket</td></tr>
+<tr><td><code>:</code></td><td>TokenColon</td></tr>
+<tr><td><code>,</code></td><td>TokenComma</td></tr>
+<tr><td><code>.</code></td><td>TokenDot</td></tr>
+</table>
+</section>
+
+<!-- Examples -->
+<section id="examples" class="page-section">
+<h2>Examples</h2>
+{{range .Examples}}
+<h3>{{.Title}}</h3>
+<p><code>{{.Filename}}</code></p>
+<pre><code>{{.Content}}</code></pre>
+
+{{end}}
+</section>
+
+</div>
+
+<script>
+function show(id) {
+  document.querySelectorAll('.page-section').forEach(function(s) {
+    s.classList.remove('active');
+  });
+  document.querySelectorAll('.sidebar nav a').forEach(function(a) {
+    a.classList.remove('active');
+  });
+  var el = document.getElementById(id);
+  if (el) el.classList.add('active');
+  document.querySelectorAll('.sidebar nav a').forEach(function(a) {
+    if (a.getAttribute('onclick') === "show('" + id + "')") {
+      a.classList.add('active');
+    }
+  });
+  window.location.hash = id;
+}
+
+/* --- Global Search --- */
+var searchIndex = [];
+var sectionNames = {
+  'getting-started': 'Getting Started',
+  'types-variables': 'Types & Variables',
+  'operators-math': 'Operators & Math',
+  'functions-control': 'Functions & Control Flow',
+  'concurrency': 'Concurrency',
+  'arrays': 'Arrays',
+  'structs': 'Structs',
+  'stdlib': 'Standard Library',
+  'mod-fmt': 'fmt Module',
+  'mod-json': 'json Module',
+  'mod-http': 'http Module',
+  'mod-file': 'file Module',
+  'database': 'db Module',
+  'ast': 'AST',
+  'lexer': 'Lexer & Tokens',
+  'examples': 'Examples'
+};
+
+function buildSearchIndex() {
+  searchIndex = [];
+  var sections = document.querySelectorAll('.page-section');
+  sections.forEach(function(section) {
+    var sid = section.id;
+    var sname = sectionNames[sid] || sid;
+
+    section.querySelectorAll('h2, h3, h4').forEach(function(h) {
+      searchIndex.push({ text: h.textContent, section: sid, sectionName: sname, el: h });
+    });
+
+    section.querySelectorAll('.func-card').forEach(function(card) {
+      var sig = card.querySelector('.sig');
+      if (sig) searchIndex.push({ text: sig.textContent, section: sid, sectionName: sname, el: card });
+    });
+
+    section.querySelectorAll('p').forEach(function(p) {
+      if (p.textContent.length > 10) {
+        searchIndex.push({ text: p.textContent, section: sid, sectionName: sname, el: p });
+      }
+    });
+
+    section.querySelectorAll('td').forEach(function(td) {
+      if (td.textContent.length > 2) {
+        searchIndex.push({ text: td.textContent, section: sid, sectionName: sname, el: td.closest('tr') || td });
+      }
+    });
+
+    section.querySelectorAll('pre code').forEach(function(c) {
+      searchIndex.push({ text: c.textContent, section: sid, sectionName: sname, el: c.closest('pre') });
+    });
+  });
+}
+
+function escapeHtml(text) {
+  var d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function handleSearch() {
+  var query = document.getElementById('search-input').value.toLowerCase().trim();
+  var resultsEl = document.getElementById('search-results');
+
+  if (!query) {
+    resultsEl.style.display = 'none';
+    return;
+  }
+
+  var matches = [];
+  var seen = {};
+  for (var i = 0; i < searchIndex.length; i++) {
+    var item = searchIndex[i];
+    if (item.text.toLowerCase().indexOf(query) !== -1) {
+      var key = item.section + '|' + item.text.substring(0, 80);
+      if (!seen[key]) {
+        seen[key] = true;
+        matches.push(item);
+      }
+    }
+    if (matches.length >= 25) break;
+  }
+
+  if (matches.length === 0) {
+    resultsEl.innerHTML = '<div class="no-results">No results found</div>';
+    resultsEl.style.display = 'block';
+    return;
+  }
+
+  var html = '';
+  for (var j = 0; j < matches.length; j++) {
+    var m = matches[j];
+    var display = m.text.length > 70 ? m.text.substring(0, 70) + '...' : m.text;
+    html += '<div class="result" data-idx="' + j + '" data-section="' + m.section + '">' +
+      '<div>' + escapeHtml(display) + '</div>' +
+      '<div class="result-section">' + escapeHtml(m.sectionName) + '</div></div>';
+  }
+  resultsEl.innerHTML = html;
+  resultsEl.style.display = 'block';
+
+  var resultEls = resultsEl.querySelectorAll('.result');
+  resultEls.forEach(function(r) {
+    r.addEventListener('click', function() {
+      var idx = parseInt(this.getAttribute('data-idx'));
+      var match = matches[idx];
+      show(match.section);
+      resultsEl.style.display = 'none';
+      document.getElementById('search-input').value = '';
+      if (match.el) {
+        setTimeout(function() {
+          match.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          match.el.classList.add('search-highlight');
+          setTimeout(function() { match.el.classList.remove('search-highlight'); }, 2000);
+        }, 100);
+      }
+    });
+  });
+}
+
+/* --- Syntax Highlighting --- */
+function hlEsc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function highlightAll(){
+  var kwSet={fn:1,'function':1,let:1,'if':1,'else':1,'while':1,'for':1,foreach:1,'return':1,'import':1,struct:1,assert:1,spawn:1,send:1,receive:1,channel:1,close:1,as:1,'break':1,'continue':1};
+  var tySet={int:1,long:1,'double':1,bool:1,string:1,'void':1,chan:1};
+  document.querySelectorAll('pre > code').forEach(function(block){
+    if(block.closest('.install'))return;
+    var text=block.textContent,out='',i=0,len=text.length;
+    while(i<len){
+      if(text[i]==='/'&&i+1<len&&text[i+1]==='/'){
+        var end=text.indexOf('\n',i);if(end===-1)end=len;
+        out+='<span class="hl-cmt">'+hlEsc(text.slice(i,end))+'</span>';i=end;continue;
+      }
+      if(text[i]==='"'){
+        var j=i+1;while(j<len&&text[j]!=='"'){if(text[j]==='\\')j++;j++;}j++;
+        out+='<span class="hl-str">'+hlEsc(text.slice(i,j))+'</span>';i=j;continue;
+      }
+      if(/[0-9]/.test(text[i])&&(i===0||!/[a-zA-Z_]/.test(text[i-1]))){
+        var j=i;while(j<len&&/[0-9.]/.test(text[j]))j++;
+        if(j<len&&/[a-zA-Z_]/.test(text[j])){out+=hlEsc(text[i]);i++;continue;}
+        out+='<span class="hl-num">'+hlEsc(text.slice(i,j))+'</span>';i=j;continue;
+      }
+      if(/[a-zA-Z_]/.test(text[i])){
+        var j=i;while(j<len&&/[a-zA-Z0-9_]/.test(text[j]))j++;
+        var word=text.slice(i,j);
+        var arr='';if(j+1<len&&text[j]==='['&&text[j+1]===']'){arr='[]';j+=2;}
+        if(text[j]==='.'&&j+1<len&&/[a-zA-Z_]/.test(text[j+1])){
+          var k=j+1;while(k<len&&/[a-zA-Z0-9_]/.test(text[k]))k++;
+          out+='<span class="hl-mod">'+hlEsc(word)+'</span><span class="hl-punct">.</span><span class="hl-fn">'+hlEsc(text.slice(j+1,k))+'</span>';
+          i=k;continue;
+        }
+        if(word==='true'||word==='false'){out+='<span class="hl-bool">'+hlEsc(word)+'</span>';}
+        else if(kwSet[word]){out+='<span class="hl-kw">'+hlEsc(word)+'</span>'+hlEsc(arr);}
+        else if(tySet[word]){out+='<span class="hl-type">'+hlEsc(word+arr)+'</span>';}
+        else{out+=hlEsc(word+arr);}
+        i=j;continue;
+      }
+      if('(){}[]:;,.'.indexOf(text[i])!==-1){out+='<span class="hl-punct">'+hlEsc(text[i])+'</span>';i++;continue;}
+      if('=!<>&|+-*/%'.indexOf(text[i])!==-1){
+        var j=i+1;while(j<len&&'=!<>&|+-*/%'.indexOf(text[j])!==-1&&j-i<3)j++;
+        out+='<span class="hl-punct">'+hlEsc(text.slice(i,j))+'</span>';i=j;continue;
+      }
+      out+=hlEsc(text[i]);i++;
+    }
+    block.innerHTML=out;
+  });
+}
+
+window.addEventListener('load', function() {
+  highlightAll();
+  var hash = window.location.hash.replace('#', '');
+  show(hash || 'getting-started');
+  buildSearchIndex();
+
+  document.getElementById('search-input').addEventListener('input', handleSearch);
+
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.search-box')) {
+      document.getElementById('search-results').style.display = 'none';
+    }
+  });
+
+  document.addEventListener('keydown', function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      document.getElementById('search-input').focus();
+    }
+    if (e.key === 'Escape') {
+      document.getElementById('search-results').style.display = 'none';
+      document.getElementById('search-input').blur();
+    }
+  });
+});
+window.addEventListener('hashchange', function() {
+  var hash = window.location.hash.replace('#', '');
+  if (hash) show(hash);
+});
+</script>
+</body>
+</html>

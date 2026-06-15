@@ -1,0 +1,11 @@
+// Function calls and print
+import "fmt"
+
+fn add(a: int, b: int): int {
+  return a + b
+}
+
+function main(): void {
+  let x: int = add(5, 10)
+  fmt.print(x)
+}

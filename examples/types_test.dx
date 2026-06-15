@@ -1,0 +1,15 @@
+fn main(): void {
+    // Cross-numeric ==
+    let x: int = 42
+    let y: long = 42
+    assert(x == y)
+
+    // Strict ===
+    let a: int = 10
+    let b: int = 10
+    assert(a === b)
+
+    // Double comparison
+    let d: double = 3.14
+    assert(d == 3.14)
+}

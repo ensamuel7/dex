@@ -1,0 +1,41 @@
+fn main(): void {
+    // Type inference with primitive types
+    let x = 42
+    let y = 3.14
+    let s = "hello"
+    let b = true
+
+    assert(x == 42)
+    assert(y == 3.14)
+    assert(b == true)
+
+    // Type inference with expressions
+    let sum = x + 8
+    assert(sum == 50)
+
+    // Type inference with array literals
+    let arr = [1, 2, 3]
+    assert(arr[0] == 1)
+    assert(arr[1] == 2)
+    assert(arr[2] == 3)
+
+    // Type inference in for loop init
+    for(let i = 0; i < 5; i++) {
+        let doubled = i * 2
+    }
+
+    // Compound assignment with inferred variables
+    let counter = 0
+    counter += 10
+    counter -= 3
+    assert(counter == 7)
+
+    // Increment/decrement with inferred variables
+    let n = 0
+    n++
+    n++
+    n++
+    assert(n == 3)
+    n--
+    assert(n == 2)
+}

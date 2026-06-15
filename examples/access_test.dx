@@ -1,0 +1,21 @@
+struct User {
+    name: string
+    private password: string
+}
+
+private fn helper(): int {
+    return 42
+}
+
+public fn api(): int {
+    return helper()
+}
+
+fn main(): void {
+    let u = User { name: "Alice", password: "secret" }
+    assert(u.name == "Alice")
+    assert(u.password == "secret")
+
+    assert(helper() == 42)
+    assert(api() == 42)
+}

@@ -1,0 +1,25 @@
+import "fmt"
+import "time"
+
+fn fib(n: int): long {
+    let a: long = 0
+    let b: long = 1
+    for(let i: int = 0; i < n; i++) {
+        let temp: long = a + b
+        a = b
+        b = temp
+    }
+    return a
+}
+
+fn main(): void {
+    let start: long = time.now_ns()
+    let result: long = 0
+    for(let i: int = 0; i < 10000000; i++) {
+        result = fib(50)
+    }
+    let end: long = time.now_ns()
+    let elapsed: long = (end - start) / 1000000
+    fmt.print(result)
+    fmt.print(elapsed)
+}

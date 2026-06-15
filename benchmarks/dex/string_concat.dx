@@ -1,0 +1,15 @@
+import "fmt"
+import "time"
+
+fn main(): void {
+    let start: long = time.now_ns()
+    let s: string = ""
+    let count: int = 100000
+    for(let i: int = 0; i < count; i++) {
+        s = s + "a"
+    }
+    let end: long = time.now_ns()
+    let elapsed: long = (end - start) / 1000000
+    fmt.print(count)
+    fmt.print(elapsed)
+}

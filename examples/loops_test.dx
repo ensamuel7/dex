@@ -1,0 +1,68 @@
+import "fmt"
+
+fn main(): void {
+    // for loop with break
+    let sum = 0
+    for(let i = 0; i < 100; i++) {
+        if (i == 10) { break }
+        sum += i
+    }
+    assert(sum == 45)
+
+    // for loop with continue (skip even numbers)
+    let odd_sum = 0
+    for(let i = 0; i < 10; i++) {
+        if (i % 2 == 0) { continue }
+        odd_sum += i
+    }
+    assert(odd_sum == 25)
+
+    // for loop with decrement
+    let countdown = 0
+    for(let i = 5; i > 0; i--) {
+        countdown += i
+    }
+    assert(countdown == 15)
+
+    // for loop with compound assign
+    let step_sum = 0
+    for(let i = 0; i < 20; i += 5) {
+        step_sum += i
+    }
+    assert(step_sum == 30)
+
+    // foreach value only
+    let nums: int[] = [10, 20, 30]
+    let total = 0
+    foreach(nums as n) {
+        total += n
+    }
+    assert(total == 60)
+
+    // foreach with index
+    let index_sum = 0
+    foreach(nums as i, n) {
+        index_sum += i
+    }
+    assert(index_sum == 3)
+
+    // while with break
+    let x = 0
+    while (true) {
+        x++
+        if (x == 5) { break }
+    }
+    assert(x == 5)
+
+    // nested loops with break
+    let outer = 0
+    for(let i = 0; i < 10; i++) {
+        for(let j = 0; j < 10; j++) {
+            if (j == 3) { break }
+            outer++
+        }
+    }
+    assert(outer == 30)
+
+    fmt.print("All loop tests passed!")
+}

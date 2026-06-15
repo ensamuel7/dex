@@ -1,0 +1,24 @@
+# Compiled Go binary
+/dex
+
+# Build output (generated C files and compiled binaries)
+/build/
+
+# C compilation artifacts
+*.o
+*.out
+
+# Generated docs
+docs/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Claude Code
+.claude/

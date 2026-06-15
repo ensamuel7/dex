@@ -19,7 +19,7 @@ fn handle_json(): string {
 }
 
 fn main(): void {
-  http.route("GET", "/hello", "handle_hello")
-  http.route("GET", "/json", "handle_json")
+  http.route("GET", "/hello", handle_hello)
+  http.route("GET", "/json", handle_json)
   http.listen(8083)
 }

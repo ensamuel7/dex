@@ -1,0 +1,23 @@
+fn multiply2(x: int): int {
+  return x * 2
+}
+
+fn multiply3(x: int): int {
+  return x * 3
+}
+
+fn apply(f: fn(int): int, x: int): int {
+  return f(x)
+}
+
+fn main(): void {
+  let f: fn(int): int = multiply2
+  assert(f(5) == 10)
+  assert(f(0) == 0)
+
+  f = multiply3
+  assert(f(4) == 12)
+
+  assert(apply(multiply2, 3) == 6)
+  assert(apply(multiply3, 3) == 9)
+}

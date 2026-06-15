@@ -239,6 +239,35 @@ func (p *Parser) parseType() (ast.Type, error) {
 			return 0, err
 		}
 		return ast.ChanTypeOf(elemType), nil
+	case token.TokenFn, token.TokenFunction:
+		p.advance() // consume 'fn' or 'function'
+		if err := p.expect(token.TokenLParen); err != nil {
+			return 0, err
+		}
+		var paramTypes []ast.Type
+		if !p.check(token.TokenRParen) {
+			for {
+				pt, err := p.parseType()
+				if err != nil {
+					return 0, err
+				}
+				paramTypes = append(paramTypes, pt)
+				if !p.match(token.TokenComma) {
+					break
+				}
+			}
+		}
+		if err := p.expect(token.TokenRParen); err != nil {
+			return 0, err
+		}
+		if err := p.expect(token.TokenColon); err != nil {
+			return 0, err
+		}
+		retType, err := p.parseType()
+		if err != nil {
+			return 0, err
+		}
+		return ast.FuncTypeOf(paramTypes, retType), nil
 	case token.TokenIdent:
 		name := tok.Value
 		if p.structNames[name] {
@@ -251,7 +280,7 @@ func (p *Parser) parseType() (ast.Type, error) {
 		}
 		return 0, p.errorf("unknown type '%s'", name)
 	default:
-		return 0, p.errorf("expected type ('int', 'bool', 'string', 'long', 'double', 'chan', or 'void')")
+		return 0, p.errorf("expected type ('int', 'bool', 'string', 'long', 'double', 'fn', 'chan', or 'void')")
 	}
 
 	// Check for [] suffix to make array type

@@ -27,6 +27,9 @@ type Generator struct {
 	foreachCounter int                  // unique counter for foreach loop variables
 	spawnCounter   int                  // unique counter for spawn wrapper functions
 	spawnWrappers  strings.Builder      // collected wrapper functions emitted before main
+
+	funcTypedefs   map[ast.Type]string  // function type → typedef name (e.g. DexFn_1)
+	funcTypedefCnt int                  // counter for unique typedef names
 }
 
 func New() *Generator {
@@ -38,6 +41,7 @@ func New() *Generator {
 		arrVars:         make(map[string]ast.Type),
 		structVars:      make(map[string]ast.Type),
 		varTypes:        make(map[string]ast.Type),
+		funcTypedefs:    make(map[ast.Type]string),
 	}
 }
 
@@ -155,6 +159,24 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
 	}
 
+	// Emit function pointer typedefs
+	for t, name := range g.funcTypedefs {
+		params := ast.FuncTypeParams(t)
+		retType := ast.FuncTypeReturn(t)
+		out.WriteString(fmt.Sprintf("typedef %s (*%s)(", g.cType(retType), name))
+		if len(params) == 0 {
+			out.WriteString("void")
+		} else {
+			for i, p := range params {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				out.WriteString(g.cType(p))
+			}
+		}
+		out.WriteString(");\n")
+	}
+
 	if out.Len() > 0 {
 		out.WriteString("\n")
 	}
@@ -233,6 +255,9 @@ func (g *Generator) scanType(t ast.Type) {
 	if ast.IsArrayType(t) {
 		g.usesArray = true
 		g.usesSafety = true
+	}
+	if ast.IsFuncType(t) {
+		g.funcTypedef(t) // register the typedef
 	}
 }
 
@@ -969,15 +994,19 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	}
 
 	if e.Module == "http" && e.Name == "route" {
-		// route("GET", "/path", "handler_name") -> dex_route("GET", "/path", handler_name)
+		// route("GET", "/path", handler) -> dex_route("GET", "/path", handler_name)
 		out.WriteString("dex_route(")
 		g.genExpr(out, e.Args[0])
 		out.WriteString(", ")
 		g.genExpr(out, e.Args[1])
 		out.WriteString(", ")
 		// Resolve handler name to function pointer
-		handlerName := e.Args[2].(*ast.StringLit).Value
-		out.WriteString(handlerName)
+		switch h := e.Args[2].(type) {
+		case *ast.StringLit:
+			out.WriteString(h.Value)
+		case *ast.Ident:
+			out.WriteString(h.Name)
+		}
 		out.WriteString(")")
 		return
 	}
@@ -1448,8 +1477,22 @@ func (g *Generator) cType(t ast.Type) string {
 		if ast.IsChanType(t) || ast.IsTaskType(t) {
 			return "DexChan*"
 		}
+		if ast.IsFuncType(t) {
+			return g.funcTypedef(t)
+		}
 		return "void"
 	}
+}
+
+// funcTypedef returns (and lazily registers) a typedef name for a function pointer type.
+func (g *Generator) funcTypedef(t ast.Type) string {
+	if name, ok := g.funcTypedefs[t]; ok {
+		return name
+	}
+	g.funcTypedefCnt++
+	name := fmt.Sprintf("DexFn_%d", g.funcTypedefCnt)
+	g.funcTypedefs[t] = name
+	return name
 }
 
 func (g *Generator) arrayNewFunc(t ast.Type) string {
@@ -1616,6 +1659,14 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		if t, ok := g.varTypes[e.Name]; ok {
 			return t
 		}
+		// Check if it's a function reference
+		if fn, ok := g.funcs[e.Name]; ok {
+			var paramTypes []ast.Type
+			for _, p := range fn.Params {
+				paramTypes = append(paramTypes, p.Type)
+			}
+			return ast.FuncTypeOf(paramTypes, fn.ReturnType)
+		}
 	case *ast.CallExpr:
 		// Polymorphic return type: db.col uses ResolvedType
 		if e.Module == "db" && e.Name == "col" {
@@ -1629,6 +1680,10 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		}
 		if fn, ok := g.funcs[e.Name]; ok {
 			return fn.ReturnType
+		}
+		// Check if calling through a function-typed variable
+		if t, ok := g.varTypes[e.Name]; ok && ast.IsFuncType(t) {
+			return ast.FuncTypeReturn(t)
 		}
 	case *ast.BinaryExpr:
 		if e.Op == ast.BinAdd && g.isStringExpr(e.Left) {

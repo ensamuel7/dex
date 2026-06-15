@@ -1,5 +1,7 @@
 package ast
 
+import "fmt"
+
 type Type int
 
 const (
@@ -28,6 +30,9 @@ const TypeChanBase Type = 2000
 
 // Task type system: dynamic IDs starting at 3000
 const TypeTaskBase Type = 3000
+
+// Function type system: dynamic IDs starting at 4000
+const TypeFuncBase Type = 4000
 
 type StructField struct {
 	Name      string
@@ -150,7 +155,7 @@ func TaskTypeOf(returnType Type) Type {
 }
 
 func IsTaskType(t Type) bool {
-	return t >= TypeTaskBase
+	return t >= TypeTaskBase && t < TypeFuncBase
 }
 
 func TaskReturnType(t Type) Type {
@@ -159,6 +164,72 @@ func TaskReturnType(t Type) Type {
 		return TypeVoid
 	}
 	return taskTypes[idx]
+}
+
+// Function type registry
+type FuncTypeInfo struct {
+	Params     []Type
+	ReturnType Type
+}
+
+var (
+	funcTypes    []FuncTypeInfo
+	funcTypeKeys map[string]Type
+)
+
+func init() {
+	ResetFuncTypes()
+}
+
+func ResetFuncTypes() {
+	funcTypes = nil
+	funcTypeKeys = make(map[string]Type)
+}
+
+func funcTypeKey(params []Type, returnType Type) string {
+	key := "fn("
+	for i, p := range params {
+		if i > 0 {
+			key += ","
+		}
+		key += fmt.Sprintf("%d", int(p))
+	}
+	key += fmt.Sprintf("):%d", int(returnType))
+	return key
+}
+
+func FuncTypeOf(params []Type, returnType Type) Type {
+	key := funcTypeKey(params, returnType)
+	if id, ok := funcTypeKeys[key]; ok {
+		return id
+	}
+	id := TypeFuncBase + Type(len(funcTypes))
+	funcTypeKeys[key] = id
+	// Copy params to avoid aliasing
+	paramsCopy := make([]Type, len(params))
+	copy(paramsCopy, params)
+	funcTypes = append(funcTypes, FuncTypeInfo{Params: paramsCopy, ReturnType: returnType})
+	return id
+}
+
+func IsFuncType(t Type) bool {
+	return t >= TypeFuncBase
+}
+
+func FuncTypeParams(t Type) []Type {
+	idx := int(t - TypeFuncBase)
+	if idx < 0 || idx >= len(funcTypes) {
+		return nil
+	}
+	return funcTypes[idx].Params
+}
+
+func FuncTypeReturn(t Type) Type {
+	idx := int(t - TypeFuncBase)
+	if idx < 0 || idx >= len(funcTypes) {
+		return TypeVoid
+	}
+	return funcTypes[idx].ReturnType
 }
 
 func IsArrayType(t Type) bool {

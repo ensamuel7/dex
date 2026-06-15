@@ -471,6 +471,10 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 	case *ast.Ident:
 		typ, ok := c.resolve(e.Name)
 		if !ok {
+			// Check if it's a function reference
+			if sig, found := c.funcs[e.Name]; found {
+				return ast.FuncTypeOf(sig.Params, sig.ReturnType), nil
+			}
 			return 0, fmt.Errorf("undefined variable '%s'", e.Name)
 		}
 		return typ, nil
@@ -840,6 +844,44 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return ast.TypeString, nil
 			}
 
+			// Special case: http.route handler validation (before generic arg check)
+			if e.Module == "http" && e.Name == "route" {
+				if len(e.Args) != 3 {
+					return 0, fmt.Errorf("http.route() takes exactly 3 arguments, got %d", len(e.Args))
+				}
+				// Check method (arg 0) and path (arg 1) are strings
+				for i := 0; i < 2; i++ {
+					argType, err := c.checkExpr(e.Args[i])
+					if err != nil {
+						return 0, err
+					}
+					if argType != ast.TypeString {
+						return 0, fmt.Errorf("http.route() argument %d must be string, got %s", i+1, typeName(argType))
+					}
+				}
+				// Check handler (arg 2): accept string literal or function reference (Ident)
+				var handlerName string
+				switch h := e.Args[2].(type) {
+				case *ast.StringLit:
+					handlerName = h.Value
+				case *ast.Ident:
+					handlerName = h.Name
+				default:
+					return 0, fmt.Errorf("http.route() handler (argument 3) must be a function name or string literal")
+				}
+				sig, ok := c.funcs[handlerName]
+				if !ok {
+					return 0, fmt.Errorf("http.route() handler '%s' is not a defined function", handlerName)
+				}
+				if len(sig.Params) != 0 {
+					return 0, fmt.Errorf("http.route() handler '%s' must take no parameters", handlerName)
+				}
+				if sig.ReturnType != ast.TypeString {
+					return 0, fmt.Errorf("http.route() handler '%s' must return string", handlerName)
+				}
+				return ast.TypeVoid, nil
+			}
+
 			funcDef, ok := mod.Funcs[e.Name]
 			if !ok {
 				return 0, fmt.Errorf("undefined function '%s' in module '%s'", e.Name, e.Module)
@@ -854,23 +896,6 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 				if argType != funcDef.Params[i] {
 					return 0, fmt.Errorf("%s.%s() argument %d must be %s, got %s", e.Module, e.Name, i+1, typeName(funcDef.Params[i]), typeName(argType))
-				}
-			}
-			// Special case: http.route handler validation
-			if e.Module == "http" && e.Name == "route" {
-				handlerArg, ok := e.Args[2].(*ast.StringLit)
-				if !ok {
-					return 0, fmt.Errorf("http.route() handler name (argument 3) must be a string literal")
-				}
-				sig, ok := c.funcs[handlerArg.Value]
-				if !ok {
-					return 0, fmt.Errorf("http.route() handler '%s' is not a defined function", handlerArg.Value)
-				}
-				if len(sig.Params) != 0 {
-					return 0, fmt.Errorf("http.route() handler '%s' must take no parameters", handlerArg.Value)
-				}
-				if sig.ReturnType != ast.TypeString {
-					return 0, fmt.Errorf("http.route() handler '%s' must return string", handlerArg.Value)
 				}
 			}
 			return funcDef.ReturnType, nil
@@ -904,6 +929,25 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return 0, fmt.Errorf("close() argument must be a channel, got %s", typeName(argType))
 			}
 			return ast.TypeVoid, nil
+		}
+
+		// Check if calling through a function-typed variable (indirect call)
+		if varType, ok := c.resolve(e.Name); ok && ast.IsFuncType(varType) {
+			fnParams := ast.FuncTypeParams(varType)
+			fnReturn := ast.FuncTypeReturn(varType)
+			if len(e.Args) != len(fnParams) {
+				return 0, fmt.Errorf("function variable '%s' expects %d arguments, got %d", e.Name, len(fnParams), len(e.Args))
+			}
+			for i, arg := range e.Args {
+				argType, err := c.checkExpr(arg)
+				if err != nil {
+					return 0, err
+				}
+				if argType != fnParams[i] {
+					return 0, fmt.Errorf("argument %d of '%s': expected %s, got %s", i+1, e.Name, typeName(fnParams[i]), typeName(argType))
+				}
+			}
+			return fnReturn, nil
 		}
 
 		// Unqualified call: user-defined function
@@ -1136,6 +1180,19 @@ func typeName(t ast.Type) string {
 		}
 		if ast.IsTaskType(t) {
 			return "task " + typeName(ast.TaskReturnType(t))
+		}
+		if ast.IsFuncType(t) {
+			params := ast.FuncTypeParams(t)
+			ret := ast.FuncTypeReturn(t)
+			s := "fn("
+			for i, p := range params {
+				if i > 0 {
+					s += ", "
+				}
+				s += typeName(p)
+			}
+			s += "): " + typeName(ret)
+			return s
 		}
 		return "unknown"
 	}

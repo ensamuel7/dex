@@ -3,7 +3,7 @@ package stdlib
 import (
 	_ "embed"
 
-	"github.com/ensamuel7/dex-lang/ast"
+	"github.com/ensamuel7/dex/ast"
 )
 
 //go:embed cruntime/db.c

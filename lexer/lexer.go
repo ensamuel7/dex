@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"unicode"
 
-	"github.com/ensamuel7/dex-lang/token"
+	"github.com/ensamuel7/dex/token"
 )
 
 type Lexer struct {

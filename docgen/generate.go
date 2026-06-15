@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ensamuel7/dex-lang/ast"
-	"github.com/ensamuel7/dex-lang/stdlib"
-	"github.com/ensamuel7/dex-lang/token"
+	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/stdlib"
+	"github.com/ensamuel7/dex/token"
 )
 
 //go:embed template.html

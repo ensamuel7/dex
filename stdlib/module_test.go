@@ -3,7 +3,7 @@ package stdlib
 import (
 	"testing"
 
-	"github.com/ensamuel7/dex-lang/ast"
+	"github.com/ensamuel7/dex/ast"
 )
 
 func TestLookupExistingModules(t *testing.T) {

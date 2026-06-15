@@ -10,9 +10,16 @@ fn handle_hello(): string {
   return "{\"message\": \"Hello, World!\"}"
 }
 
-
+fn handle_json(): string {
+  let response: string = json.new()
+  response = json.set(response, "message", "Hello from Dex!")
+  response = json.set(response, "number", 42)
+  response = json.set(response, "success", true)
+  return response
+}
 
 fn main(): void {
   http.route("GET", "/hello", "handle_hello")
+  http.route("GET", "/json", "handle_json")
   http.listen(8083)
 }

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/ensamuel7/dex-lang/ast"
-	"github.com/ensamuel7/dex-lang/token"
+	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/token"
 )
 
 type Parser struct {

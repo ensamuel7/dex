@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ensamuel7/dex-lang/token"
+	"github.com/ensamuel7/dex/token"
 )
 
 func TestSingleCharTokens(t *testing.T) {

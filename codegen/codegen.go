@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ensamuel7/dex-lang/ast"
-	"github.com/ensamuel7/dex-lang/stdlib"
+	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/stdlib"
 )
 
 type Generator struct {

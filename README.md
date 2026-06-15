@@ -17,15 +17,31 @@ The boilerplate and most of the verbose code was written with the help of Claude
 You need Go 1.24+ and a C compiler (`gcc` or `cc`).
 
 ```bash
+# build the compiler
+go build -o dex
+
 # run a program
-go run . run examples/hello.dx
+./dex run examples/hello.dx
 
 # compile to a binary
-go run . build examples/hello.dx
+./dex build examples/hello.dx
 ./build/hello
 
 # run tests
-go run . test
+./dex test
+```
+
+To install `dex` globally so you can use it from anywhere:
+
+```bash
+go build -o dex && sudo mv dex /usr/local/bin/
+```
+
+Then you can run `dex` directly from any directory:
+
+```bash
+dex run examples/hello.dx
+dex build examples/hello.dx
 ```
 
 ## What It Looks Like
@@ -129,8 +145,8 @@ fn main(): void {
 ```
 
 ```bash
-go run . test                          # run all tests
-go run . test examples/loops_test.dx   # run a specific test
+dex test                          # run all tests
+dex test examples/loops_test.dx   # run a specific test
 ```
 
 ## Editor Support
@@ -138,7 +154,7 @@ go run . test examples/loops_test.dx   # run a specific test
 There's a VSCode extension in `editors/vscode/dex-lang/` with syntax highlighting and LSP integration (completions, diagnostics).
 
 ```bash
-go run . lsp
+dex lsp
 ```
 
 ## How It Compiles

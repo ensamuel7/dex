@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ensamuel7/dex-lang/ast"
-	"github.com/ensamuel7/dex-lang/lexer"
+	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/lexer"
 )
 
 // parse is a test helper that lexes and parses a full program.

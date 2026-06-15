@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ensamuel7/dex-lang/ast"
-	"github.com/ensamuel7/dex-lang/checker"
-	"github.com/ensamuel7/dex-lang/lexer"
-	"github.com/ensamuel7/dex-lang/parser"
-	_ "github.com/ensamuel7/dex-lang/stdlib"
+	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/checker"
+	"github.com/ensamuel7/dex/lexer"
+	"github.com/ensamuel7/dex/parser"
+	_ "github.com/ensamuel7/dex/stdlib"
 )
 
 // generate runs the full pipeline (lex -> parse -> check -> codegen) and returns the C code.

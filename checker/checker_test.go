@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ensamuel7/dex-lang/lexer"
-	"github.com/ensamuel7/dex-lang/parser"
-	_ "github.com/ensamuel7/dex-lang/stdlib" // ensure init() registers modules
+	"github.com/ensamuel7/dex/lexer"
+	"github.com/ensamuel7/dex/parser"
+	_ "github.com/ensamuel7/dex/stdlib" // ensure init() registers modules
 )
 
 // checkSource runs the full pipeline (lex -> parse -> check) and returns the error if any.

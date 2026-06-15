@@ -1,6 +1,6 @@
 package stdlib
 
-import "github.com/ensamuel7/dex-lang/ast"
+import "github.com/ensamuel7/dex/ast"
 
 type FuncDef struct {
 	Params     []ast.Type

@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ensamuel7/dex-lang/ast"
-	"github.com/ensamuel7/dex-lang/checker"
-	"github.com/ensamuel7/dex-lang/codegen"
-	"github.com/ensamuel7/dex-lang/docgen"
-	"github.com/ensamuel7/dex-lang/lexer"
-	"github.com/ensamuel7/dex-lang/lsp"
-	"github.com/ensamuel7/dex-lang/parser"
-	_ "github.com/ensamuel7/dex-lang/stdlib"
+	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/checker"
+	"github.com/ensamuel7/dex/codegen"
+	"github.com/ensamuel7/dex/docgen"
+	"github.com/ensamuel7/dex/lexer"
+	"github.com/ensamuel7/dex/lsp"
+	"github.com/ensamuel7/dex/parser"
+	_ "github.com/ensamuel7/dex/stdlib"
 )
 
 func main() {
@@ -103,17 +103,24 @@ func runTests() {
 		// Run specific test file
 		files = append(files, os.Args[2])
 	} else {
-		// Discover *_test.dx files in current directory
-		matches, err := filepath.Glob("*_test.dx")
+		// Discover *_test.dx files recursively
+		err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() && strings.HasSuffix(path, "_test.dx") {
+				files = append(files, path)
+			}
+			return nil
+		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if len(matches) == 0 {
+		if len(files) == 0 {
 			fmt.Fprintln(os.Stderr, "No *_test.dx files found")
 			os.Exit(1)
 		}
-		files = matches
 	}
 
 	passed := 0

@@ -1,0 +1,41 @@
+import "fmt"
+
+fn main(): void {
+  // Basic char literal
+  let ch: char = 'A'
+  assert(ch == 'A')
+
+  // Char is numeric — arithmetic widens to int
+  let code: int = ch + 0
+  assert(code == 65)
+
+  // Char comparison
+  assert('a' > 'A')
+  assert('z' >= 'z')
+
+  // Escape sequences
+  let newline: char = '\n'
+  let tab: char = '\t'
+  let backslash: char = '\\'
+  let quote: char = '\''
+  assert(newline == '\n')
+  assert(tab == '\t')
+
+  // Char mod
+  let rem: int = 'z' % 10
+  assert(rem == 2)
+
+  // Char array
+  let chars: char[] = ['H', 'i']
+  assert(chars[0] == 'H')
+  assert(chars[1] == 'i')
+  chars.push('!')
+  assert(chars.len() == 3)
+
+  // Print char
+  fmt.print('X')
+
+  // Char inference
+  let inferred = 'B'
+  assert(inferred == 'B')
+}

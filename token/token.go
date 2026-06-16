@@ -65,6 +65,8 @@ const (
 	TokenPrivate
 	TokenSpawn
 	TokenChan
+	TokenCharKw
+	TokenChar
 	TokenEOF
 )
 
@@ -103,4 +105,5 @@ var Keywords = map[string]TokenKind{
 	"private":  TokenPrivate,
 	"spawn":    TokenSpawn,
 	"chan":      TokenChan,
+	"char":     TokenCharKw,
 }

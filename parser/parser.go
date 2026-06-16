@@ -229,6 +229,9 @@ func (p *Parser) parseType() (ast.Type, error) {
 	case token.TokenDouble:
 		p.advance()
 		base = ast.TypeDouble
+	case token.TokenCharKw:
+		p.advance()
+		base = ast.TypeChar
 	case token.TokenVoid:
 		p.advance()
 		return ast.TypeVoid, nil
@@ -280,7 +283,7 @@ func (p *Parser) parseType() (ast.Type, error) {
 		}
 		return 0, p.errorf("unknown type '%s'", name)
 	default:
-		return 0, p.errorf("expected type ('int', 'bool', 'string', 'long', 'double', 'fn', 'chan', or 'void')")
+		return 0, p.errorf("expected type ('int', 'bool', 'string', 'long', 'double', 'char', 'fn', 'chan', or 'void')")
 	}
 
 	// Check for [] suffix to make array type
@@ -956,6 +959,14 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 	case token.TokenString:
 		p.advance()
 		return &ast.StringLit{Value: tok.Value}, nil
+
+	case token.TokenChar:
+		p.advance()
+		runes := []rune(tok.Value)
+		if len(runes) != 1 {
+			return nil, p.errorf("invalid char literal")
+		}
+		return &ast.CharLit{Value: runes[0]}, nil
 
 	case token.TokenTrue:
 		p.advance()

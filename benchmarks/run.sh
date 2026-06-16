@@ -32,7 +32,7 @@ echo "  done."
 printf "${CYAN}Compiling DexLang benchmarks (dex build)...${RESET}\n"
 for bench in $BENCHMARKS; do
     (cd "$PROJECT_DIR" && go run . build "benchmarks/dex/${bench}.dx") > /dev/null
-    mv "$PROJECT_DIR/${bench}" "$BUILD_DIR/${bench}_dex"
+    mv "$PROJECT_DIR/build/${bench}" "$BUILD_DIR/${bench}_dex"
 done
 echo "  done."
 

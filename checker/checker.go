@@ -468,6 +468,9 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 	case *ast.StringLit:
 		return ast.TypeString, nil
 
+	case *ast.CharLit:
+		return ast.TypeChar, nil
+
 	case *ast.Ident:
 		typ, ok := c.resolve(e.Name)
 		if !ok {
@@ -516,9 +519,9 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			return widerNumericType(leftType, rightType), nil
 
 		case ast.BinMod:
-			if (leftType != ast.TypeInt && leftType != ast.TypeLong) ||
-				(rightType != ast.TypeInt && rightType != ast.TypeLong) {
-				return 0, fmt.Errorf("'%%' requires int or long operands")
+			if (leftType != ast.TypeChar && leftType != ast.TypeInt && leftType != ast.TypeLong) ||
+				(rightType != ast.TypeChar && rightType != ast.TypeInt && rightType != ast.TypeLong) {
+				return 0, fmt.Errorf("'%%' requires char, int, or long operands")
 			}
 			if leftType != rightType {
 				e.LeftType = leftType
@@ -745,7 +748,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 					return 0, err
 				}
 				if argType != ast.TypeInt && argType != ast.TypeLong && argType != ast.TypeDouble &&
-					argType != ast.TypeString && argType != ast.TypeBool {
+					argType != ast.TypeString && argType != ast.TypeBool && argType != ast.TypeChar {
 					return 0, fmt.Errorf("fmt.print() argument must be a primitive type, got %s", typeName(argType))
 				}
 				return ast.TypeVoid, nil
@@ -1102,7 +1105,7 @@ func (c *Checker) checkArrayMethod(varName string, arrType ast.Type, method stri
 
 func isValidFieldType(t ast.Type) bool {
 	switch t {
-	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble:
+	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar:
 		return true
 	default:
 		return ast.IsStructType(t)
@@ -1110,7 +1113,7 @@ func isValidFieldType(t ast.Type) bool {
 }
 
 func widerNumericType(a, b ast.Type) ast.Type {
-	rank := map[ast.Type]int{ast.TypeInt: 0, ast.TypeLong: 1, ast.TypeDouble: 2}
+	rank := map[ast.Type]int{ast.TypeChar: 0, ast.TypeInt: 1, ast.TypeLong: 2, ast.TypeDouble: 3}
 	if rank[a] >= rank[b] {
 		return a
 	}
@@ -1118,7 +1121,7 @@ func widerNumericType(a, b ast.Type) ast.Type {
 }
 
 func isNumericType(t ast.Type) bool {
-	return t == ast.TypeInt || t == ast.TypeLong || t == ast.TypeDouble
+	return t == ast.TypeChar || t == ast.TypeInt || t == ast.TypeLong || t == ast.TypeDouble
 }
 
 // isIntLiteral returns true if the expression is an integer literal.
@@ -1133,6 +1136,12 @@ func isFloatLiteral(expr ast.Expr) bool {
 	return ok
 }
 
+// isCharLiteral returns true if the expression is a char literal.
+func isCharLiteral(expr ast.Expr) bool {
+	_, ok := expr.(*ast.CharLit)
+	return ok
+}
+
 // canAssign checks if an expression of exprType can be assigned to a target of targetType,
 // allowing implicit widening of int literals to long/double and float literals to double.
 func canAssign(targetType, exprType ast.Type, expr ast.Expr) bool {
@@ -1141,6 +1150,10 @@ func canAssign(targetType, exprType ast.Type, expr ast.Expr) bool {
 	}
 	// int literal -> long or double
 	if isIntLiteral(expr) && (targetType == ast.TypeLong || targetType == ast.TypeDouble) {
+		return true
+	}
+	// char literal -> int, long, or double
+	if isCharLiteral(expr) && (targetType == ast.TypeInt || targetType == ast.TypeLong || targetType == ast.TypeDouble) {
 		return true
 	}
 	// float literal -> double (already types as double, but keep for clarity)
@@ -1171,6 +1184,10 @@ func typeName(t ast.Type) string {
 		return "long[]"
 	case ast.TypeArrayDouble:
 		return "double[]"
+	case ast.TypeChar:
+		return "char"
+	case ast.TypeArrayChar:
+		return "char[]"
 	default:
 		if ast.IsStructType(t) {
 			return ast.StructName(t)

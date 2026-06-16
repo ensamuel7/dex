@@ -16,6 +16,8 @@ const (
 	TypeArrayString
 	TypeArrayLong
 	TypeArrayDouble
+	TypeChar
+	TypeArrayChar
 )
 
 // TypeInferred is used during parsing when a let statement has no explicit type annotation.
@@ -233,7 +235,7 @@ func FuncTypeReturn(t Type) Type {
 }
 
 func IsArrayType(t Type) bool {
-	return t == TypeArrayInt || t == TypeArrayBool || t == TypeArrayString || t == TypeArrayLong || t == TypeArrayDouble
+	return t == TypeArrayInt || t == TypeArrayBool || t == TypeArrayString || t == TypeArrayLong || t == TypeArrayDouble || t == TypeArrayChar
 }
 
 func ElementType(t Type) Type {
@@ -248,6 +250,8 @@ func ElementType(t Type) Type {
 		return TypeLong
 	case TypeArrayDouble:
 		return TypeDouble
+	case TypeArrayChar:
+		return TypeChar
 	default:
 		return TypeVoid
 	}
@@ -265,6 +269,8 @@ func ArrayTypeOf(elem Type) Type {
 		return TypeArrayLong
 	case TypeDouble:
 		return TypeArrayDouble
+	case TypeChar:
+		return TypeArrayChar
 	default:
 		return TypeVoid
 	}
@@ -454,6 +460,10 @@ type StringLit struct {
 	Value string
 }
 
+type CharLit struct {
+	Value rune
+}
+
 type Ident struct {
 	Name string
 }
@@ -504,6 +514,7 @@ func (e *IntLit) exprNode()          {}
 func (e *FloatLit) exprNode()        {}
 func (e *BoolLit) exprNode()         {}
 func (e *StringLit) exprNode()       {}
+func (e *CharLit) exprNode()         {}
 func (e *Ident) exprNode()           {}
 func (e *BinaryExpr) exprNode()      {}
 func (e *UnaryExpr) exprNode()       {}

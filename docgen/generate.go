@@ -78,6 +78,10 @@ func typeName(t ast.Type) string {
 		return "long[]"
 	case ast.TypeArrayDouble:
 		return "double[]"
+	case ast.TypeChar:
+		return "char"
+	case ast.TypeArrayChar:
+		return "char[]"
 	default:
 		return "unknown"
 	}
@@ -139,6 +143,8 @@ func tokenKindName(k token.TokenKind) string {
 		return "TokenDouble"
 	case token.TokenVoid:
 		return "TokenVoid"
+	case token.TokenCharKw:
+		return "TokenCharKw"
 	default:
 		return fmt.Sprintf("TokenKind(%d)", k)
 	}
@@ -218,7 +224,7 @@ func Generate(projectRoot string) (string, error) {
 	types := make([]string, 0)
 	for kw, kind := range token.Keywords {
 		switch kind {
-		case token.TokenIntKw, token.TokenBool, token.TokenStringKw, token.TokenLong, token.TokenDouble:
+		case token.TokenIntKw, token.TokenBool, token.TokenStringKw, token.TokenLong, token.TokenDouble, token.TokenCharKw:
 			types = append(types, kw)
 		default:
 			keywords = append(keywords, kw)

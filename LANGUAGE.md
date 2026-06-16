@@ -53,6 +53,7 @@ fn main(): void {
 | `int`      | Signed integer type                  |
 | `long`     | Signed long integer type             |
 | `double`   | Double-precision floating point type |
+| `char`     | Single character type                |
 | `bool`     | Boolean type                         |
 | `string`   | String type                          |
 | `void`     | No return value (for main/functions) |
@@ -68,6 +69,7 @@ fn main(): void {
 | `int`    | Signed integer                     | `0`, `42`, `-7`       |
 | `long`   | Signed long integer                | `0`, `1000000`        |
 | `double` | Double-precision floating point    | `3.14`, `0.5`, `1.0`  |
+| `char`   | Single character                   | `'A'`, `'z'`, `'\n'`  |
 | `bool`   | Boolean                            | `true`, `false`       |
 | `string` | String                             | `"hello"`, `"world"`  |
 | `void`   | No return value (functions only)   | —                     |
@@ -83,6 +85,7 @@ Append `[]` to a primitive type to make an array type.
 | `double[]` | Array of doubles         |
 | `bool[]`   | Array of booleans        |
 | `string[]` | Array of strings         |
+| `char[]`   | Array of characters      |
 
 Variables can have explicit type annotations or use type inference (see Variables section).
 
@@ -104,6 +107,28 @@ let big: long = 1000000
 let pi: double = 3.14
 let name: string = "Dex"
 let flag: bool = true
+let ch: char = 'A'
+```
+
+### Char Literals
+
+Char literals use single quotes and support escape sequences:
+
+```dex
+let a: char = 'A'
+let newline: char = '\n'
+let tab: char = '\t'
+let backslash: char = '\\'
+let quote: char = '\''
+```
+
+Char is a numeric type (narrower than int). Arithmetic operations on chars widen to int:
+
+```dex
+let ch: char = 'A'
+let code: int = ch + 1    // 66
+let upper: char = 'a'
+let diff: int = upper - 'A'  // 32
 ```
 
 ### Declaration (type inference)

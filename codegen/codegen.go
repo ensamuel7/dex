@@ -714,6 +714,20 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	case *ast.IntLit:
 		out.WriteString(fmt.Sprintf("%d", e.Value))
 
+	case *ast.CharLit:
+		switch e.Value {
+		case '\'':
+			out.WriteString("'\\''")
+		case '\\':
+			out.WriteString("'\\\\'")
+		case '\n':
+			out.WriteString("'\\n'")
+		case '\t':
+			out.WriteString("'\\t'")
+		default:
+			out.WriteString(fmt.Sprintf("'%c'", e.Value))
+		}
+
 	case *ast.FloatLit:
 		out.WriteString(fmt.Sprintf("%g", e.Value))
 
@@ -874,6 +888,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		argType := g.typeOfExpr(e.Args[0])
 		var fmtStr string
 		switch argType {
+		case ast.TypeChar:
+			fmtStr = "%c"
 		case ast.TypeInt:
 			fmtStr = "%d"
 		case ast.TypeLong:
@@ -914,6 +930,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString(fmt.Sprintf("dex_json_stringify_long(&%s)", argIdent.Name))
 			case ast.TypeArrayDouble:
 				out.WriteString(fmt.Sprintf("dex_json_stringify_double(&%s)", argIdent.Name))
+			case ast.TypeArrayChar:
+				out.WriteString(fmt.Sprintf("dex_json_stringify_char(&%s)", argIdent.Name))
 			}
 		}
 		return
@@ -936,6 +954,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				fn = "dex_json_set_arr_long"
 			case ast.TypeArrayDouble:
 				fn = "dex_json_set_arr_double"
+			case ast.TypeArrayChar:
+				fn = "dex_json_set_arr_char"
 			}
 			out.WriteString(fmt.Sprintf("%s(", fn))
 			g.genExpr(out, e.Args[0])
@@ -1470,6 +1490,10 @@ func (g *Generator) cType(t ast.Type) string {
 		return "DexArrayLong"
 	case ast.TypeArrayDouble:
 		return "DexArrayDouble"
+	case ast.TypeChar:
+		return "unsigned char"
+	case ast.TypeArrayChar:
+		return "DexArrayChar"
 	default:
 		if ast.IsStructType(t) {
 			return "Dex_" + ast.StructName(t)
@@ -1507,6 +1531,8 @@ func (g *Generator) arrayNewFunc(t ast.Type) string {
 		return "dex_array_long_new"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_new"
+	case ast.TypeArrayChar:
+		return "dex_array_char_new"
 	default:
 		return ""
 	}
@@ -1524,6 +1550,8 @@ func (g *Generator) arrayPushFunc(t ast.Type) string {
 		return "dex_array_long_push"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_push"
+	case ast.TypeArrayChar:
+		return "dex_array_char_push"
 	default:
 		return ""
 	}
@@ -1541,6 +1569,8 @@ func (g *Generator) arrayPopFunc(t ast.Type) string {
 		return "dex_array_long_pop"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_pop"
+	case ast.TypeArrayChar:
+		return "dex_array_char_pop"
 	default:
 		return ""
 	}
@@ -1558,6 +1588,8 @@ func (g *Generator) arrayRemoveFunc(t ast.Type) string {
 		return "dex_array_long_remove"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_remove"
+	case ast.TypeArrayChar:
+		return "dex_array_char_remove"
 	default:
 		return ""
 	}
@@ -1575,6 +1607,8 @@ func (g *Generator) arrayContainsFunc(t ast.Type) string {
 		return "dex_array_long_contains"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_contains"
+	case ast.TypeArrayChar:
+		return "dex_array_char_contains"
 	default:
 		return ""
 	}
@@ -1592,6 +1626,8 @@ func (g *Generator) arrayIndexOfFunc(t ast.Type) string {
 		return "dex_array_long_indexOf"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_indexOf"
+	case ast.TypeArrayChar:
+		return "dex_array_char_indexOf"
 	default:
 		return ""
 	}
@@ -1609,6 +1645,8 @@ func (g *Generator) arrayReverseFunc(t ast.Type) string {
 		return "dex_array_long_reverse"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_reverse"
+	case ast.TypeArrayChar:
+		return "dex_array_char_reverse"
 	default:
 		return ""
 	}
@@ -1624,6 +1662,8 @@ func (g *Generator) arraySortAscFunc(t ast.Type) string {
 		return "dex_array_long_sort_asc"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_sort_asc"
+	case ast.TypeArrayChar:
+		return "dex_array_char_sort_asc"
 	default:
 		return ""
 	}
@@ -1639,6 +1679,8 @@ func (g *Generator) arraySortDescFunc(t ast.Type) string {
 		return "dex_array_long_sort_desc"
 	case ast.TypeArrayDouble:
 		return "dex_array_double_sort_desc"
+	case ast.TypeArrayChar:
+		return "dex_array_char_sort_desc"
 	default:
 		return ""
 	}
@@ -1647,6 +1689,8 @@ func (g *Generator) arraySortDescFunc(t ast.Type) string {
 // typeOfExpr returns the type of an expression based on available information.
 func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 	switch e := expr.(type) {
+	case *ast.CharLit:
+		return ast.TypeChar
 	case *ast.IntLit:
 		return ast.TypeInt
 	case *ast.FloatLit:
@@ -1734,9 +1778,10 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 // Widening order: int → long → double
 func (g *Generator) widerNumericType(a, b ast.Type) ast.Type {
 	rank := map[ast.Type]int{
-		ast.TypeInt:    0,
-		ast.TypeLong:   1,
-		ast.TypeDouble: 2,
+		ast.TypeChar:   0,
+		ast.TypeInt:    1,
+		ast.TypeLong:   2,
+		ast.TypeDouble: 3,
 	}
 	if rank[a] >= rank[b] {
 		return a

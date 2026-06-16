@@ -447,6 +447,10 @@ func (s *Server) hoverAt(text string, pos Position) string {
 		return "**type** `long`\n\nSigned long integer (C `long`)."
 	case token.TokenDouble:
 		return "**type** `double`\n\nDouble-precision floating point (C `double`)."
+	case token.TokenCharKw:
+		return "**type** `char`\n\nSingle character (C `unsigned char`)."
+	case token.TokenChar:
+		return fmt.Sprintf("**char literal** `char`\n\n`'%s'`", tok.Value)
 	case token.TokenTrue, token.TokenFalse:
 		return "**constant** `bool`\n\nBoolean literal."
 	case token.TokenIdent:
@@ -640,7 +644,7 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 	}
 
 	// Types
-	for _, t := range []string{"int", "bool", "string", "long", "double", "int[]", "bool[]", "string[]", "long[]", "double[]"} {
+	for _, t := range []string{"int", "bool", "string", "long", "double", "char", "int[]", "bool[]", "string[]", "long[]", "double[]", "char[]"} {
 		items = append(items, CompletionItem{
 			Label:  t,
 			Kind:   CompletionKindType,
@@ -755,6 +759,10 @@ func typeName(t ast.Type) string {
 		return "long[]"
 	case ast.TypeArrayDouble:
 		return "double[]"
+	case ast.TypeChar:
+		return "char"
+	case ast.TypeArrayChar:
+		return "char[]"
 	default:
 		return "unknown"
 	}

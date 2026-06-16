@@ -223,6 +223,43 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 			continue
 		}
 
+		// Char literals
+		if ch == '\'' {
+			l.advance() // consume opening quote
+			if l.pos >= len(l.source) {
+				return nil, fmt.Errorf("%d:%d: unterminated char literal", startLine, startCol)
+			}
+			var charVal rune
+			if l.source[l.pos] == '\\' {
+				l.advance() // consume backslash
+				if l.pos >= len(l.source) {
+					return nil, fmt.Errorf("%d:%d: unterminated char literal", startLine, startCol)
+				}
+				switch l.source[l.pos] {
+				case '\'':
+					charVal = '\''
+				case '\\':
+					charVal = '\\'
+				case 'n':
+					charVal = '\n'
+				case 't':
+					charVal = '\t'
+				default:
+					return nil, fmt.Errorf("%d:%d: unknown escape sequence '\\%c' in char literal", l.line, l.col, l.source[l.pos])
+				}
+				l.advance()
+			} else {
+				charVal = l.source[l.pos]
+				l.advance()
+			}
+			if l.pos >= len(l.source) || l.source[l.pos] != '\'' {
+				return nil, fmt.Errorf("%d:%d: unterminated char literal", startLine, startCol)
+			}
+			l.advance() // consume closing quote
+			tokens = append(tokens, token.Token{Kind: token.TokenChar, Value: string(charVal), Line: startLine, Col: startCol})
+			continue
+		}
+
 		// Percent operator
 		if ch == '%' {
 			tokens = append(tokens, token.Token{Kind: token.TokenPercent, Value: "%", Line: startLine, Col: startCol})

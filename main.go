@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/checker"
@@ -15,11 +18,12 @@ import (
 	"github.com/ensamuel7/dex/lsp"
 	"github.com/ensamuel7/dex/parser"
 	_ "github.com/ensamuel7/dex/stdlib"
+	"github.com/fsnotify/fsnotify"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|test|lsp|docs> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|lsp|docs> <file.dx>")
 		os.Exit(1)
 	}
 
@@ -55,7 +59,7 @@ func main() {
 	}
 
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev> <file.dx>")
 		os.Exit(1)
 	}
 
@@ -89,9 +93,12 @@ func main() {
 			os.Exit(1)
 		}
 
+	case "dev":
+		dev(filename)
+
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|test|lsp|docs> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|lsp|docs> <file.dx>")
 		os.Exit(1)
 	}
 }
@@ -156,6 +163,146 @@ func runTests() {
 	fmt.Printf("\n%d passed, %d failed\n", passed, failed)
 	if failed > 0 {
 		os.Exit(1)
+	}
+}
+
+func dev(filename string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[dev] failed to create watcher: %v\n", err)
+		os.Exit(1)
+	}
+	defer watcher.Close()
+
+	// Watch all directories under the entry file's project dir
+	projectDir := filepath.Dir(filename)
+	if projectDir == "" || projectDir == "." {
+		projectDir, _ = os.Getwd()
+	} else {
+		projectDir, _ = filepath.Abs(projectDir)
+	}
+
+	filepath.Walk(projectDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			// Skip hidden dirs, build dir, node_modules
+			base := filepath.Base(path)
+			if strings.HasPrefix(base, ".") || base == "build" || base == "node_modules" {
+				return filepath.SkipDir
+			}
+			watcher.Add(path)
+		}
+		return nil
+	})
+
+	var cmd *exec.Cmd
+	var binaryPath string
+
+	killProcess := func() {
+		if cmd != nil && cmd.Process != nil {
+			cmd.Process.Signal(syscall.SIGTERM)
+			done := make(chan struct{})
+			go func() {
+				cmd.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				cmd.Process.Kill()
+				<-done
+			}
+			cmd = nil
+		}
+	}
+
+	cleanup := func() {
+		killProcess()
+		if binaryPath != "" {
+			os.Remove(binaryPath)
+		}
+	}
+
+	buildAndRun := func() {
+		killProcess()
+		if binaryPath != "" {
+			os.Remove(binaryPath)
+			binaryPath = ""
+		}
+
+		fmt.Println("[dev] building...")
+		bp, err := build(filename)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[dev] build error: %v\n", err)
+			fmt.Println("[dev] waiting for changes...")
+			return
+		}
+		binaryPath = bp
+		fmt.Printf("[dev] running %s\n", binaryPath)
+
+		cmd = exec.Command(binaryPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "[dev] run error: %v\n", err)
+			fmt.Println("[dev] waiting for changes...")
+			return
+		}
+
+		// Monitor process exit in background
+		go func(c *exec.Cmd) {
+			err := c.Wait()
+			if c == cmd {
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[dev] process exited: %v\n", err)
+				} else {
+					fmt.Println("[dev] process exited")
+				}
+			}
+		}(cmd)
+	}
+
+	// Handle Ctrl+C
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Println("\n[dev] shutting down...")
+		cleanup()
+		os.Exit(0)
+	}()
+
+	// Initial build and run
+	buildAndRun()
+
+	// Watch for changes with debounce
+	debounce := time.NewTimer(0)
+	if !debounce.Stop() {
+		<-debounce.C
+	}
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Remove) {
+				if strings.HasSuffix(event.Name, ".dx") {
+					debounce.Reset(200 * time.Millisecond)
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "[dev] watcher error: %v\n", err)
+		case <-debounce.C:
+			fmt.Println("[dev] change detected, rebuilding...")
+			buildAndRun()
+		}
 	}
 }
 

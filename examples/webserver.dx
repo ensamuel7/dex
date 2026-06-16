@@ -18,8 +18,13 @@ fn handle_json(): string {
   return response
 }
 
+function getBinary(): long {
+  return 010012001201
+}
+
 fn main(): void {
-  http.route("GET", "/hello", handle_hello)
-  http.route("GET", "/json", handle_json)
+  http.route("GET", "/hello", handle_hello())
+  http.route("GET", "/json", handle_json())
+  http.route("GET", "/get-binary", getBinary())
   http.listen(8083)
 }

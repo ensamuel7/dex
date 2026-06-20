@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"fmt"
+	"strings"
 	"unicode"
 
 	"github.com/ensamuel7/dex/token"
@@ -270,20 +271,20 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 		// Numeric literals (int or float)
 		if unicode.IsDigit(ch) {
 			start := l.pos
-			for l.pos < len(l.source) && unicode.IsDigit(l.source[l.pos]) {
+			for l.pos < len(l.source) && (unicode.IsDigit(l.source[l.pos]) || l.source[l.pos] == '_') {
 				l.advance()
 			}
 			// Check for decimal point (float literal)
 			if l.pos < len(l.source) && l.source[l.pos] == '.' && l.pos+1 < len(l.source) && unicode.IsDigit(l.source[l.pos+1]) {
 				l.advance() // consume '.'
-				for l.pos < len(l.source) && unicode.IsDigit(l.source[l.pos]) {
+				for l.pos < len(l.source) && (unicode.IsDigit(l.source[l.pos]) || l.source[l.pos] == '_') {
 					l.advance()
 				}
-				value := string(l.source[start:l.pos])
+				value := strings.ReplaceAll(string(l.source[start:l.pos]), "_", "")
 				tokens = append(tokens, token.Token{Kind: token.TokenFloat, Value: value, Line: startLine, Col: startCol})
 				continue
 			}
-			value := string(l.source[start:l.pos])
+			value := strings.ReplaceAll(string(l.source[start:l.pos]), "_", "")
 			tokens = append(tokens, token.Token{Kind: token.TokenInt, Value: value, Line: startLine, Col: startCol})
 			continue
 		}

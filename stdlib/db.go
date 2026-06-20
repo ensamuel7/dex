@@ -50,13 +50,13 @@ func init() {
 			},
 		},
 		CIncludes: `#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sqlite3.h>
-#include <libpq-fe.h>
-#include <mysql/mysql.h>
-#include <mongoc/mongoc.h>
-`,
+		#include <stdlib.h>
+		#include <string.h>
+		#include <sqlite3.h>
+		#include <libpq-fe.h>
+		#include <mysql/mysql.h>
+		#include <mongoc/mongoc.h>
+		`,
 		CFlags:   []string{"-lsqlite3", "-lpq", "-lmysqlclient", "-lmongoc-1.0", "-lbson-1.0"},
 		CRuntime: dbRuntime,
 	})

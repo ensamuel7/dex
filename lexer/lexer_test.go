@@ -141,17 +141,28 @@ func TestKeywords(t *testing.T) {
 }
 
 func TestIntegerLiterals(t *testing.T) {
-	tests := []string{"0", "1", "42", "12345"}
-	for _, input := range tests {
-		tokens, err := New(input).Tokenize()
+	tests := []struct {
+		input string
+		value string
+	}{
+		{"0", "0"},
+		{"1", "1"},
+		{"42", "42"},
+		{"12345", "12345"},
+		{"1_000", "1000"},
+		{"1_000_000", "1000000"},
+		{"10_000", "10000"},
+	}
+	for _, tt := range tests {
+		tokens, err := New(tt.input).Tokenize()
 		if err != nil {
-			t.Fatalf("Tokenize(%q) error: %v", input, err)
+			t.Fatalf("Tokenize(%q) error: %v", tt.input, err)
 		}
 		if tokens[0].Kind != token.TokenInt {
-			t.Errorf("Tokenize(%q)[0].Kind = %d, want TokenInt", input, tokens[0].Kind)
+			t.Errorf("Tokenize(%q)[0].Kind = %d, want TokenInt", tt.input, tokens[0].Kind)
 		}
-		if tokens[0].Value != input {
-			t.Errorf("Tokenize(%q)[0].Value = %q, want %q", input, tokens[0].Value, input)
+		if tokens[0].Value != tt.value {
+			t.Errorf("Tokenize(%q)[0].Value = %q, want %q", tt.input, tokens[0].Value, tt.value)
 		}
 	}
 }
@@ -164,6 +175,8 @@ func TestFloatLiterals(t *testing.T) {
 		{"3.14", "3.14"},
 		{"0.5", "0.5"},
 		{"100.001", "100.001"},
+		{"3.14_15", "3.1415"},
+		{"1_000.50", "1000.50"},
 	}
 	for _, tt := range tests {
 		tokens, err := New(tt.input).Tokenize()

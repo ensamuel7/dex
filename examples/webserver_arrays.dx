@@ -12,7 +12,7 @@ import "http"
 import "json"
 import "fmt"
 
-// Native array path: builds 1000 ints via push, returns via json.set_arr
+// Native array path: builds 1000 ints via push, returns via json.setArray
 fn handle_items(): string {
     let nums: int[] = []
     let i: int = 0
@@ -22,7 +22,7 @@ fn handle_items(): string {
     }
     let response: string = json.new()
     response = json.set(response, "count", nums.len())
-    response = json.set_arr(response, "items", nums)
+    response = json.setArray(response, "items", nums)
     return response
 }
 
@@ -47,7 +47,7 @@ fn handle_users(): string {
 
 fn main(): void {
     fmt.print("Routes:")
-    fmt.print("  GET /items  - 1000 ints via native array + json.set_arr")
+    fmt.print("  GET /items  - 1000 ints via native array + json.setArray")
     fmt.print("  GET /users  - 100 objects via json.new/set + string concat")
     http.route("GET", "/items", "handle_items")
     http.route("GET", "/users", "handle_users")

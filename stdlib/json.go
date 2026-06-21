@@ -28,7 +28,7 @@ func init() {
 				ReturnType: ast.TypeString,
 				CName:      "",
 			},
-			"set_arr": {
+			"setArray": {
 				Params:     []ast.Type{ast.TypeString, ast.TypeString, ast.TypeInt}, // placeholder
 				ReturnType: ast.TypeString,
 				CName:      "",

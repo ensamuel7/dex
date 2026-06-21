@@ -38,3 +38,8 @@
 - Polymorphic stdlib functions (e.g. `json.set`, `db.col`) use `Params: nil, CName: ""` in their `FuncDef` and are special-cased in `checker/checker.go` and `codegen/codegen.go`.
 - `CallExpr.ResolvedType` is used for return-type polymorphism (set by checker, read by codegen).
 - Concurrency (`spawn`, `send`, `receive`, `channel`, `close`) compiles to pthreads + lock-free channels in C.
+
+## Naming Conventions
+
+- DexLang standard library functions use **camelCase** (e.g. `json.setArray`, `time.nowNs`), not snake_case.
+- After any compiler or stdlib change, always regenerate docs with `go run . docs` and update `LANGUAGE.md` if the change affects the language API.

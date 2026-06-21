@@ -472,7 +472,7 @@ import "json"</code></pre>
 <table>
 <tr><th>Module</th><th>Description</th><th>Functions</th></tr>
 <tr><td><code><a onclick="show('mod-fmt')" style="cursor:pointer">fmt</a></code></td><td>Formatted output to stdout</td><td><code>print</code></td></tr>
-<tr><td><code><a onclick="show('mod-json')" style="cursor:pointer">json</a></code></td><td>Build and serialize JSON objects</td><td><code>new</code>, <code>set</code>, <code>set_arr</code>, <code>stringify</code></td></tr>
+<tr><td><code><a onclick="show('mod-json')" style="cursor:pointer">json</a></code></td><td>Build and serialize JSON objects</td><td><code>new</code>, <code>set</code>, <code>setArray</code>, <code>stringify</code></td></tr>
 <tr><td><code><a onclick="show('mod-http')" style="cursor:pointer">http</a></code></td><td>Built-in HTTP server</td><td><code>route</code>, <code>listen</code></td></tr>
 <tr><td><code><a onclick="show('database')" style="cursor:pointer">db</a></code></td><td>Database access (SQLite, PostgreSQL, MySQL, MongoDB)</td><td><code>open</code>, <code>exec</code>, <code>query</code>, <code>next</code>, <code>col</code>, <code>free</code>, <code>close</code></td></tr>
 <tr><td><code><a onclick="show('mod-file')" style="cursor:pointer">file</a></code></td><td>Filesystem operations and file uploads</td><td><code>read</code>, <code>write</code>, <code>append</code>, <code>exists</code>, <code>remove</code>, <code>rename</code>, <code>upload</code></td></tr>
@@ -716,12 +716,12 @@ obj = json.set(obj, "pi", 3.14)           // double value
 // {"name":"Dex","version":1,"stable":true,"bignum":1000000,"pi":3.14}</code></pre>
 <p>Each call inserts the new field before the closing <code>}</code>. The original string is not modified — you must reassign the result.</p>
 
-<h3>set_arr</h3>
-<div class="func-card"><div class="sig"><span class="module">json</span>.set_arr(<span class="ptype">obj: string, key: string, arr: T[]</span>) <span class="ret">-&gt; string</span></div></div>
+<h3>setArray</h3>
+<div class="func-card"><div class="sig"><span class="module">json</span>.setArray(<span class="ptype">obj: string, key: string, arr: T[]</span>) <span class="ret">-&gt; string</span></div></div>
 <p>Set an array value on a JSON object. Works with any array type (<code>int[]</code>, <code>long[]</code>, <code>double[]</code>, <code>bool[]</code>, <code>string[]</code>).</p>
 <pre><code>let nums: int[] = [1, 2, 3]
 let obj: string = json.new()
-obj = json.set_arr(obj, "numbers", nums)
+obj = json.setArray(obj, "numbers", nums)
 // {"numbers": [1, 2, 3]}</code></pre>
 
 <h3>stringify</h3>
@@ -744,7 +744,7 @@ fn handle_api(): string {
     let obj: string = json.new()
     obj = json.set(obj, "message", "Hello from Dex!")
     obj = json.set(obj, "count", scores.len())
-    obj = json.set_arr(obj, "scores", scores)
+    obj = json.setArray(obj, "scores", scores)
     obj = json.set(obj, "success", true)
     return obj
 }

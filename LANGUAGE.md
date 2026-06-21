@@ -638,15 +638,15 @@ obj = json.set(obj, "pi", 3.14)
 |--------------|---------------------------------------------------------------------------------|--------------------------------|
 | `new`        | `new(): string`                                                                 | Create empty `{}`              |
 | `set`        | `set(obj: string, key: string, value: string\|int\|bool\|long\|double): string` | Set a value (type auto-detected) |
-| `set_arr`    | `set_arr(obj: string, key: string, arr: T[]): string`                           | Set an array value             |
+| `setArray`    | `setArray(obj: string, key: string, arr: T[]): string`                           | Set an array value             |
 | `stringify`  | `stringify(arr: T[]): string`                                                   | Convert an array to JSON string |
 
-`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `set_arr` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`).
+`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`).
 
 ```dex
 let nums: int[] = [1, 2, 3]
 let obj: string = json.new()
-obj = json.set_arr(obj, "numbers", nums)
+obj = json.setArray(obj, "numbers", nums)
 // obj is now: {"numbers": [1, 2, 3]}
 
 let s: string = json.stringify(nums)
@@ -755,7 +755,7 @@ let elapsed: long = time.now() - start
 | Function  | Signature               | Description                          |
 |-----------|-------------------------|--------------------------------------|
 | `now`     | `now(): long`           | Current time in milliseconds         |
-| `now_ns`  | `now_ns(): long`        | Current time in nanoseconds          |
+| `nowNs`  | `nowNs(): long`        | Current time in nanoseconds          |
 | `sleep`   | `sleep(ms: int): void`  | Sleep for specified milliseconds     |
 
 ---
@@ -844,7 +844,7 @@ fn handle_hello(): string {
   let obj: string = json.new()
   obj = json.set(obj, "message", "Hello from Dex!")
   obj = json.set(obj, "count", scores.len())
-  obj = json.set_arr(obj, "scores", scores)
+  obj = json.setArray(obj, "scores", scores)
   obj = json.set(obj, "success", true)
   return obj
 }

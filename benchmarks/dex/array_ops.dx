@@ -2,7 +2,7 @@ import "fmt"
 import "time"
 
 fn main(): void {
-    let start: long = time.now_ns()
+    let start: long = time.nowNs()
     let arr: int[] = []
     for(let i: int = 0; i < 1000000; i++) {
         arr.push(i)
@@ -11,7 +11,7 @@ fn main(): void {
     foreach(arr as v) {
         sum += v
     }
-    let end: long = time.now_ns()
+    let end: long = time.nowNs()
     let elapsed: long = (end - start) / 1000000
     fmt.print(sum)
     fmt.print(elapsed)

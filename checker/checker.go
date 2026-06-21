@@ -818,31 +818,31 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return e.ResolvedType, nil
 			}
 
-			// Special case: json.set_arr(obj, key, array) -> string
-			if e.Module == "json" && e.Name == "set_arr" {
+			// Special case: json.setArray(obj, key, array) -> string
+			if e.Module == "json" && e.Name == "setArray" {
 				if len(e.Args) != 3 {
-					return 0, fmt.Errorf("json.set_arr() takes exactly 3 arguments, got %d", len(e.Args))
+					return 0, fmt.Errorf("json.setArray() takes exactly 3 arguments, got %d", len(e.Args))
 				}
 				objType, err := c.checkExpr(e.Args[0])
 				if err != nil {
 					return 0, err
 				}
 				if objType != ast.TypeString {
-					return 0, fmt.Errorf("json.set_arr() argument 1 must be string, got %s", typeName(objType))
+					return 0, fmt.Errorf("json.setArray() argument 1 must be string, got %s", typeName(objType))
 				}
 				keyType, err := c.checkExpr(e.Args[1])
 				if err != nil {
 					return 0, err
 				}
 				if keyType != ast.TypeString {
-					return 0, fmt.Errorf("json.set_arr() argument 2 must be string, got %s", typeName(keyType))
+					return 0, fmt.Errorf("json.setArray() argument 2 must be string, got %s", typeName(keyType))
 				}
 				arrType, err := c.checkExpr(e.Args[2])
 				if err != nil {
 					return 0, err
 				}
 				if !ast.IsArrayType(arrType) {
-					return 0, fmt.Errorf("json.set_arr() argument 3 must be an array type, got %s", typeName(arrType))
+					return 0, fmt.Errorf("json.setArray() argument 3 must be an array type, got %s", typeName(arrType))
 				}
 				return ast.TypeString, nil
 			}

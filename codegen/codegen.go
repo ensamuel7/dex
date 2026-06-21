@@ -937,8 +937,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
-	// json.set_arr(obj, key, array) — special codegen
-	if e.Module == "json" && e.Name == "set_arr" {
+	// json.setArray(obj, key, array) — special codegen
+	if e.Module == "json" && e.Name == "setArray" {
 		argIdent, ok := e.Args[2].(*ast.Ident)
 		if ok {
 			arrType := g.arrVars[argIdent.Name]

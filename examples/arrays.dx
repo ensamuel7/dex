@@ -18,7 +18,7 @@ fn main(): void {
     // Embed array in JSON object
     let obj: string = json.new()
     obj = json.set(obj, "name", "test")
-    obj = json.set_arr(obj, "values", nums)
+    obj = json.setArray(obj, "values", nums)
     fmt.print(obj)
 
     // Empty array

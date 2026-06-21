@@ -36,7 +36,7 @@ func TestLookupFuncExisting(t *testing.T) {
 		{"json", "new"},
 		{"json", "set"},
 		{"json", "stringify"},
-		{"json", "set_arr"},
+		{"json", "setArray"},
 		{"http", "route"},
 		{"http", "listen"},
 		{"db", "open"},

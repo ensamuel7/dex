@@ -13,12 +13,12 @@ fn fib(n: int): long {
 }
 
 fn main(): void {
-    let start: long = time.now_ns()
+    let start: long = time.nowNs()
     let result: long = 0
     for(let i: int = 0; i < 10000000; i++) {
         result = fib(50)
     }
-    let end: long = time.now_ns()
+    let end: long = time.nowNs()
     let elapsed: long = (end - start) / 1000000
     fmt.print(result)
     fmt.print(elapsed)

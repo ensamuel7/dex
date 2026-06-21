@@ -9,9 +9,9 @@ fn fib(n: int): int {
 }
 
 fn main(): void {
-    let start: long = time.now_ns()
+    let start: long = time.nowNs()
     let result: int = fib(40)
-    let end: long = time.now_ns()
+    let end: long = time.nowNs()
     let elapsed: long = (end - start) / 1000000
     fmt.print(result)
     fmt.print(elapsed)

@@ -371,7 +371,7 @@ func TestCodegenJsonSetArr(t *testing.T) {
 	out := generate(t, `import "json" fn main(): string {
 		let obj: string = json.new()
 		let a: int[] = [1, 2]
-		return json.set_arr(obj, "nums", a)
+		return json.setArray(obj, "nums", a)
 	}`)
 	assertContains(t, out, "dex_json_set_arr_int(")
 }

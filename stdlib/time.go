@@ -18,7 +18,7 @@ func init() {
 				ReturnType: ast.TypeLong,
 				CName:      "dex_time_now",
 			},
-			"now_ns": {
+			"nowNs": {
 				Params:     []ast.Type{},
 				ReturnType: ast.TypeLong,
 				CName:      "dex_time_now_ns",

@@ -13,13 +13,13 @@ fn add_vecs(a: Vec3, b: Vec3): Vec3 {
 }
 
 fn main(): void {
-    let start: long = time.now_ns()
+    let start: long = time.nowNs()
     let acc: Vec3 = Vec3 { x: 0, y: 0, z: 0 }
     for(let i: int = 0; i < 10000000; i++) {
         let v: Vec3 = Vec3 { x: 1, y: 2, z: 3 }
         acc = add_vecs(acc, v)
     }
-    let end: long = time.now_ns()
+    let end: long = time.nowNs()
     let elapsed: long = (end - start) / 1000000
     fmt.print(acc.x)
     fmt.print(acc.y)

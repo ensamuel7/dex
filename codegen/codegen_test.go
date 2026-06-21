@@ -18,6 +18,7 @@ func generate(t *testing.T, source string) string {
 	ast.ResetStructTypes()
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
+	ast.ResetWeakTypes()
 	stdlib.RegisterAllModuleTypes()
 
 	tokens, err := lexer.New(source).Tokenize()
@@ -215,7 +216,7 @@ func TestCodegenLetBool(t *testing.T) {
 
 func TestCodegenLetString(t *testing.T) {
 	out := generate(t, `fn main(): void { let s: string = "hi" }`)
-	assertContains(t, out, `const char* s = strdup("hi");`)
+	assertContains(t, out, `DexString* s = dex_string_from_lit("hi");`)
 }
 
 func TestCodegenLetLong(t *testing.T) {
@@ -231,10 +232,10 @@ func TestCodegenLetDouble(t *testing.T) {
 
 func TestCodegenLetArrayInt(t *testing.T) {
 	out := generate(t, "fn main(): int { let a: int[] = [1, 2] return a[0] }")
-	assertContains(t, out, "DexArrayInt a = dex_array_int_new();")
-	assertContains(t, out, "a.data[0] = 1;")
-	assertContains(t, out, "a.data[1] = 2;")
-	assertContains(t, out, "a.len = 2;")
+	assertContains(t, out, "DexArrayInt* a = dex_array_int_new();")
+	assertContains(t, out, "a->data[0] = 1;")
+	assertContains(t, out, "a->data[1] = 2;")
+	assertContains(t, out, "a->len = 2;")
 }
 
 // --- Control flow ---
@@ -293,7 +294,7 @@ func TestCodegenMultipleFunctions(t *testing.T) {
 func TestCodegenVoidStringFunc(t *testing.T) {
 	out := generate(t, `fn handler(): string { return "ok" }
 		fn main(): void {}`)
-	assertContains(t, out, "const char* handler(void)")
+	assertContains(t, out, "DexString* handler(void)")
 }
 
 // --- Arrays ---
@@ -303,7 +304,7 @@ func TestCodegenArrayPush(t *testing.T) {
 		let a: int[] = [1]
 		a.push(2)
 	}`)
-	assertContains(t, out, "dex_array_int_push(&a, 2)")
+	assertContains(t, out, "dex_array_int_push(a, 2)")
 }
 
 func TestCodegenArrayLen(t *testing.T) {
@@ -311,7 +312,7 @@ func TestCodegenArrayLen(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		return a.len()
 	}`)
-	assertContains(t, out, "a.len")
+	assertContains(t, out, "a->len")
 }
 
 func TestCodegenArrayIndexing(t *testing.T) {
@@ -319,15 +320,15 @@ func TestCodegenArrayIndexing(t *testing.T) {
 		let a: int[] = [10, 20]
 		return a[0]
 	}`)
-	assertContains(t, out, "dex_bounds_check(0, a.len)")
-	assertContains(t, out, "a.data[0]")
+	assertContains(t, out, "dex_bounds_check(0, a->len)")
+	assertContains(t, out, "a->data[0]")
 }
 
 func TestCodegenEmptyArray(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let a: int[] = []
 	}`)
-	assertContains(t, out, "DexArrayInt a = dex_array_int_new();")
+	assertContains(t, out, "DexArrayInt* a = dex_array_int_new();")
 }
 
 func TestCodegenIndexAssign(t *testing.T) {
@@ -335,8 +336,8 @@ func TestCodegenIndexAssign(t *testing.T) {
 		let a: int[] = [1, 2]
 		a[0] = 99
 	}`)
-	assertContains(t, out, "dex_bounds_check(0, a.len);")
-	assertContains(t, out, "a.data[0] = 99;")
+	assertContains(t, out, "dex_bounds_check(0, a->len);")
+	assertContains(t, out, "a->data[0] = 99;")
 }
 
 // --- Stdlib codegen ---
@@ -372,7 +373,7 @@ func TestCodegenFmtPrintBool(t *testing.T) {
 
 func TestCodegenJsonNew(t *testing.T) {
 	out := generate(t, `import "json" fn main(): string { return json.new() }`)
-	assertContains(t, out, "dex_json_new()")
+	assertContains(t, out, "dex_string_from_cstr(dex_json_new())")
 }
 
 func TestCodegenJsonSet(t *testing.T) {
@@ -388,7 +389,7 @@ func TestCodegenJsonStringify(t *testing.T) {
 		let a: int[] = [1, 2]
 		return json.stringify(a)
 	}`)
-	assertContains(t, out, "dex_json_stringify_int(&a)")
+	assertContains(t, out, "dex_string_from_cstr(dex_json_stringify_int(a))")
 }
 
 func TestCodegenJsonSetArr(t *testing.T) {
@@ -483,15 +484,15 @@ func TestCTypeMapping(t *testing.T) {
 	}{
 		{ast.TypeInt, "int"},
 		{ast.TypeBool, "_Bool"},
-		{ast.TypeString, "const char*"},
+		{ast.TypeString, "DexString*"},
 		{ast.TypeLong, "long"},
 		{ast.TypeDouble, "double"},
 		{ast.TypeVoid, "void"},
-		{ast.TypeArrayInt, "DexArrayInt"},
-		{ast.TypeArrayBool, "DexArrayBool"},
-		{ast.TypeArrayString, "DexArrayString"},
-		{ast.TypeArrayLong, "DexArrayLong"},
-		{ast.TypeArrayDouble, "DexArrayDouble"},
+		{ast.TypeArrayInt, "DexArrayInt*"},
+		{ast.TypeArrayBool, "DexArrayBool*"},
+		{ast.TypeArrayString, "DexArrayString*"},
+		{ast.TypeArrayLong, "DexArrayLong*"},
+		{ast.TypeArrayDouble, "DexArrayDouble*"},
 	}
 	for _, tt := range tests {
 		got := g.cType(tt.typ)
@@ -537,28 +538,28 @@ func TestCodegenArrayBool(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let a: bool[] = [true, false]
 	}`)
-	assertContains(t, out, "DexArrayBool a = dex_array_bool_new();")
+	assertContains(t, out, "DexArrayBool* a = dex_array_bool_new();")
 }
 
 func TestCodegenArrayString(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let a: string[] = ["a", "b"]
 	}`)
-	assertContains(t, out, "DexArrayString a = dex_array_string_new();")
+	assertContains(t, out, "DexArrayString* a = dex_array_string_new();")
 }
 
 func TestCodegenArrayLong(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let a: long[] = []
 	}`)
-	assertContains(t, out, "DexArrayLong a = dex_array_long_new();")
+	assertContains(t, out, "DexArrayLong* a = dex_array_long_new();")
 }
 
 func TestCodegenArrayDouble(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let a: double[] = []
 	}`)
-	assertContains(t, out, "DexArrayDouble a = dex_array_double_new();")
+	assertContains(t, out, "DexArrayDouble* a = dex_array_double_new();")
 }
 
 func TestCodegenArraySort(t *testing.T) {
@@ -566,13 +567,13 @@ func TestCodegenArraySort(t *testing.T) {
 		let a: int[] = [3, 1, 2]
 		a.sort("asc")
 	}`)
-	assertContains(t, out, "dex_array_int_sort_asc(&a)")
+	assertContains(t, out, "dex_array_int_sort_asc(a)")
 
 	out2 := generate(t, `fn main(): void {
 		let a: string[] = ["c", "a"]
 		a.sort("desc")
 	}`)
-	assertContains(t, out2, "dex_array_string_sort_desc(&a)")
+	assertContains(t, out2, "dex_array_string_sort_desc(a)")
 }
 
 func TestCodegenArrayPop(t *testing.T) {
@@ -580,7 +581,7 @@ func TestCodegenArrayPop(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		let x: int = a.pop()
 	}`)
-	assertContains(t, out, "dex_array_int_pop(&a)")
+	assertContains(t, out, "dex_array_int_pop(a)")
 }
 
 func TestCodegenArrayRemove(t *testing.T) {
@@ -588,7 +589,7 @@ func TestCodegenArrayRemove(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		a.remove(0)
 	}`)
-	assertContains(t, out, "dex_array_int_remove(&a, 0)")
+	assertContains(t, out, "dex_array_int_remove(a, 0)")
 }
 
 func TestCodegenArrayContains(t *testing.T) {
@@ -596,7 +597,7 @@ func TestCodegenArrayContains(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		let b: bool = a.contains(2)
 	}`)
-	assertContains(t, out, "dex_array_int_contains(&a, 2)")
+	assertContains(t, out, "dex_array_int_contains(a, 2)")
 }
 
 func TestCodegenArrayIndexOf(t *testing.T) {
@@ -604,7 +605,7 @@ func TestCodegenArrayIndexOf(t *testing.T) {
 		let a: string[] = ["a", "b"]
 		let i: int = a.indexOf("b")
 	}`)
-	assertContains(t, out, `dex_array_string_indexOf(&a, "b")`)
+	assertContains(t, out, `dex_array_string_indexOf(a, dex_string_from_lit("b"))`)
 }
 
 func TestCodegenCrossNumericAdd(t *testing.T) {
@@ -640,7 +641,7 @@ func TestCodegenArrayReverse(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		a.reverse()
 	}`)
-	assertContains(t, out, "dex_array_int_reverse(&a)")
+	assertContains(t, out, "dex_array_int_reverse(a)")
 }
 
 // --- Break and Continue ---
@@ -706,8 +707,8 @@ func TestCodegenForeachValueOnly(t *testing.T) {
 			let x: int = n
 		}
 	}`)
-	assertContains(t, out, "for (int _foreach_idx_0 = 0; _foreach_idx_0 < a.len; _foreach_idx_0++)")
-	assertContains(t, out, "int n = a.data[_foreach_idx_0];")
+	assertContains(t, out, "for (int _foreach_idx_0 = 0; _foreach_idx_0 < a->len; _foreach_idx_0++)")
+	assertContains(t, out, "int n = a->data[_foreach_idx_0];")
 }
 
 func TestCodegenForeachWithIndex(t *testing.T) {
@@ -717,7 +718,7 @@ func TestCodegenForeachWithIndex(t *testing.T) {
 			let x: int = i + n
 		}
 	}`)
-	assertContains(t, out, "int n = a.data[_foreach_idx_0];")
+	assertContains(t, out, "int n = a->data[_foreach_idx_0];")
 	assertContains(t, out, "int i = _foreach_idx_0;")
 }
 
@@ -786,7 +787,7 @@ func TestCodegenTypeInferenceString(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let x = "hello"
 	}`)
-	assertContains(t, out, `const char* x = strdup("hello");`)
+	assertContains(t, out, `DexString* x = dex_string_from_lit("hello");`)
 }
 
 func TestCodegenTypeInferenceBool(t *testing.T) {
@@ -800,9 +801,9 @@ func TestCodegenTypeInferenceArray(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let a = [1, 2, 3]
 	}`)
-	assertContains(t, out, "DexArrayInt a = dex_array_int_new();")
-	assertContains(t, out, "a.data[0] = 1;")
-	assertContains(t, out, "a.len = 3;")
+	assertContains(t, out, "DexArrayInt* a = dex_array_int_new();")
+	assertContains(t, out, "a->data[0] = 1;")
+	assertContains(t, out, "a->len = 3;")
 }
 
 // --- Runtime safety checks ---
@@ -812,7 +813,7 @@ func TestCodegenBoundsCheckRead(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		return a[1]
 	}`)
-	assertContains(t, out, "(dex_bounds_check(1, a.len), a.data[1])")
+	assertContains(t, out, "(dex_bounds_check(1, a->len), a->data[1])")
 }
 
 func TestCodegenBoundsCheckReadVariable(t *testing.T) {
@@ -821,7 +822,7 @@ func TestCodegenBoundsCheckReadVariable(t *testing.T) {
 		let i: int = 0
 		return a[i]
 	}`)
-	assertContains(t, out, "(dex_bounds_check(i, a.len), a.data[i])")
+	assertContains(t, out, "(dex_bounds_check(i, a->len), a->data[i])")
 }
 
 func TestCodegenBoundsCheckWrite(t *testing.T) {
@@ -829,8 +830,8 @@ func TestCodegenBoundsCheckWrite(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		a[1] = 42
 	}`)
-	assertContains(t, out, "dex_bounds_check(1, a.len);")
-	assertContains(t, out, "a.data[1] = 42;")
+	assertContains(t, out, "dex_bounds_check(1, a->len);")
+	assertContains(t, out, "a->data[1] = 42;")
 }
 
 func TestCodegenDivByZeroCheckInt(t *testing.T) {

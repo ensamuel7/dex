@@ -2,6 +2,9 @@ package codegen
 
 import _ "embed"
 
+//go:embed cruntime/refcount.c
+var RefcountRuntime string
+
 //go:embed cruntime/safety.c
 var SafetyRuntime string
 
@@ -13,3 +16,12 @@ var ArrayRuntime string
 
 //go:embed cruntime/concurrency.c
 var ConcurrencyRuntime string
+
+//go:embed cruntime/weakref.c
+var WeakRefRuntime string
+
+//go:embed cruntime/arena.c
+var ArenaRuntime string
+
+//go:embed cruntime/cycles.c
+var CycleDebugRuntime string

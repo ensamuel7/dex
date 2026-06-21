@@ -8,6 +8,11 @@ import (
 	"github.com/ensamuel7/dex/stdlib"
 )
 
+type scopeVar struct {
+	name string
+	typ  ast.Type
+}
+
 type Generator struct {
 	usesBool        bool
 	usesString      bool
@@ -15,21 +20,32 @@ type Generator struct {
 	usesAssert      bool
 	usesConcurrency bool
 	usesSafety      bool
+	usesRefcount    bool
+	usesArena       bool
+	usesDebugCycles bool
+	usesWeakRef     bool
 
 	importedModules map[string]*stdlib.Module
 
-	funcs          map[string]*ast.Function
-	strVars        map[string]bool     // variables known to be string type
-	strLenVars     map[string]bool     // string vars with a shadow _dex_slen_ length variable
-	arrVars        map[string]ast.Type  // variables known to be array type (name -> array type)
-	structVars     map[string]ast.Type  // variables known to be struct type
-	varTypes       map[string]ast.Type  // all variable types for this function scope
-	foreachCounter int                  // unique counter for foreach loop variables
-	spawnCounter   int                  // unique counter for spawn wrapper functions
-	spawnWrappers  strings.Builder      // collected wrapper functions emitted before main
+	funcs      map[string]*ast.Function
+	strVars    map[string]bool      // variables known to be string type
+	arrVars    map[string]ast.Type   // variables known to be array type (name -> array type)
+	structVars map[string]ast.Type   // variables known to be struct type
+	varTypes   map[string]ast.Type   // all variable types for this function scope
 
-	funcTypedefs   map[ast.Type]string  // function type → typedef name (e.g. DexFn_1)
-	funcTypedefCnt int                  // counter for unique typedef names
+	foreachCounter int            // unique counter for foreach loop variables
+	spawnCounter   int            // unique counter for spawn wrapper functions
+	spawnWrappers  strings.Builder // collected wrapper functions emitted before main
+
+	funcTypedefs   map[ast.Type]string // function type → typedef name (e.g. DexFn_1)
+	funcTypedefCnt int                 // counter for unique typedef names
+
+	// Scope tracking for cleanup
+	scopeStack     [][]scopeVar
+	currentFn      *ast.Function        // current function being generated
+	isInLoop       bool                 // whether we're inside a loop body
+	loopDepth      int                  // scope depth at loop entry (for break/continue cleanup)
+	varAnnotations map[string][]string  // per-variable annotation tracking
 }
 
 func New() *Generator {
@@ -37,12 +53,144 @@ func New() *Generator {
 		importedModules: make(map[string]*stdlib.Module),
 		funcs:           make(map[string]*ast.Function),
 		strVars:         make(map[string]bool),
-		strLenVars:      make(map[string]bool),
 		arrVars:         make(map[string]ast.Type),
 		structVars:      make(map[string]ast.Type),
 		varTypes:        make(map[string]ast.Type),
 		funcTypedefs:    make(map[ast.Type]string),
+		varAnnotations:  make(map[string][]string),
 	}
+}
+
+// Scope management
+func (g *Generator) pushScope() {
+	g.scopeStack = append(g.scopeStack, nil)
+}
+
+func (g *Generator) popScope(out *strings.Builder, prefix string) {
+	if len(g.scopeStack) == 0 {
+		return
+	}
+	scope := g.scopeStack[len(g.scopeStack)-1]
+	g.scopeStack = g.scopeStack[:len(g.scopeStack)-1]
+	for i := len(scope) - 1; i >= 0; i-- {
+		sv := scope[i]
+		g.emitReleaseVar(out, prefix, sv.name, sv.typ)
+	}
+}
+
+func (g *Generator) registerScopeVar(name string, typ ast.Type) {
+	if !ast.NeedsRelease(typ) {
+		return
+	}
+	if len(g.scopeStack) == 0 {
+		return
+	}
+	idx := len(g.scopeStack) - 1
+	g.scopeStack[idx] = append(g.scopeStack[idx], scopeVar{name: name, typ: typ})
+}
+
+func (g *Generator) emitReleaseVar(out *strings.Builder, prefix, name string, typ ast.Type) {
+	if ast.IsHeapType(typ) {
+		annots := g.varAnnotations[name]
+		if ast.HasAnnotation(annots, ast.AnnotOwned) {
+			out.WriteString(fmt.Sprintf("%sdex_owned_free(%s);\n", prefix, name))
+		} else if ast.HasAnnotation(annots, ast.AnnotRegion) {
+			// Skip — arena handles it
+		} else {
+			out.WriteString(fmt.Sprintf("%sdex_release(%s);\n", prefix, name))
+		}
+	} else if ast.IsStructType(typ) {
+		def := ast.GetStructDef(typ)
+		if def != nil {
+			for _, f := range def.Fields {
+				if ast.NeedsRelease(f.Type) {
+					g.emitReleaseVar(out, prefix, name+"."+f.Name, f.Type)
+				}
+			}
+		}
+	}
+}
+
+// emitCleanupAll releases all vars in ALL scopes (for return statements), skipping exceptVar
+func (g *Generator) emitCleanupAll(out *strings.Builder, prefix string, exceptVar string) {
+	for i := len(g.scopeStack) - 1; i >= 0; i-- {
+		scope := g.scopeStack[i]
+		for j := len(scope) - 1; j >= 0; j-- {
+			sv := scope[j]
+			if sv.name == exceptVar {
+				continue
+			}
+			g.emitReleaseVar(out, prefix, sv.name, sv.typ)
+		}
+	}
+}
+
+// emitCleanupInnerScopes releases vars from inner scopes down to (not including) targetDepth
+func (g *Generator) emitCleanupInnerScopes(out *strings.Builder, prefix string, targetDepth int) {
+	for i := len(g.scopeStack) - 1; i >= targetDepth; i-- {
+		scope := g.scopeStack[i]
+		for j := len(scope) - 1; j >= 0; j-- {
+			sv := scope[j]
+			g.emitReleaseVar(out, prefix, sv.name, sv.typ)
+		}
+	}
+}
+
+// functionUsesRegion checks if any let statement in the function uses #[region].
+func (g *Generator) functionUsesRegion(fn *ast.Function) bool {
+	for _, stmt := range fn.Body {
+		if g.stmtUsesRegion(stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Generator) stmtUsesRegion(stmt ast.Stmt) bool {
+	switch s := stmt.(type) {
+	case *ast.LetStmt:
+		return ast.HasAnnotation(s.Annotations, ast.AnnotRegion)
+	case *ast.IfStmt:
+		for _, st := range s.Then {
+			if g.stmtUsesRegion(st) {
+				return true
+			}
+		}
+		for _, st := range s.Else {
+			if g.stmtUsesRegion(st) {
+				return true
+			}
+		}
+	case *ast.WhileStmt:
+		for _, st := range s.Body {
+			if g.stmtUsesRegion(st) {
+				return true
+			}
+		}
+	case *ast.ForStmt:
+		for _, st := range s.Body {
+			if g.stmtUsesRegion(st) {
+				return true
+			}
+		}
+	case *ast.BlockStmt:
+		for _, st := range s.Stmts {
+			if g.stmtUsesRegion(st) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasHeapVarsInScope checks if there are any heap vars tracked in any scope
+func (g *Generator) hasHeapVarsInScope() bool {
+	for _, scope := range g.scopeStack {
+		if len(scope) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // CompilerFlags returns extra flags needed for the C compiler based on features used.
@@ -74,6 +222,14 @@ func (g *Generator) Generate(program *ast.Program) string {
 
 	// Pre-scan to determine needed language-level features
 	g.scan(program)
+
+	// Arrays depend on the string runtime (DexArrayString uses DexString)
+	if g.usesArray {
+		g.usesString = true
+	}
+
+	// Refcount is needed whenever strings, arrays, or concurrency is used
+	g.usesRefcount = g.usesString || g.usesArray || g.usesConcurrency
 
 	var out strings.Builder
 
@@ -117,6 +273,16 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 	}
 
+	// Refcount needs these includes
+	if g.usesRefcount {
+		for _, inc := range []string{"#include <stdatomic.h>", "#include <stdlib.h>", "#include <string.h>", "#include <stdio.h>"} {
+			if !emittedIncludes[inc] {
+				emittedIncludes[inc] = true
+				out.WriteString(inc + "\n")
+			}
+		}
+	}
+
 	// Emit safety runtime (bounds checks, div-zero checks, panic helper)
 	if g.usesSafety {
 		for _, inc := range []string{"#include <stdio.h>", "#include <stdlib.h>"} {
@@ -126,6 +292,16 @@ func (g *Generator) Generate(program *ast.Program) string {
 			}
 		}
 		out.WriteString(SafetyRuntime)
+	}
+
+	// Emit refcount runtime (must come before string/array/concurrency runtimes)
+	if g.usesRefcount {
+		out.WriteString(RefcountRuntime)
+	}
+
+	// Emit weak reference runtime (must come after refcount runtime)
+	if g.usesWeakRef {
+		out.WriteString(WeakRefRuntime)
 	}
 
 	// Emit string runtime (language-level feature for + on strings)
@@ -141,6 +317,16 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit concurrency runtime
 	if g.usesConcurrency {
 		out.WriteString(ConcurrencyRuntime)
+	}
+
+	// Emit arena runtime (for #[region] annotations)
+	if g.usesArena {
+		out.WriteString(ArenaRuntime)
+	}
+
+	// Emit cycle debug runtime (for #[debug(cycles)] annotations)
+	if g.usesDebugCycles {
+		out.WriteString(CycleDebugRuntime)
 	}
 
 	// Emit struct typedefs (module-provided types first, then user-defined)
@@ -194,7 +380,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 	if _, ok := g.importedModules["http"]; ok {
 		for _, fn := range program.Functions {
 			if fn.ReturnType == ast.TypeString && len(fn.Params) == 0 && fn.Name != "main" {
-				out.WriteString(fmt.Sprintf("const char* %s(void);\n", fn.Name))
+				out.WriteString(fmt.Sprintf("DexString* %s(void);\n", fn.Name))
 			}
 		}
 		out.WriteString("\n")
@@ -268,6 +454,10 @@ func (g *Generator) scanType(t ast.Type) {
 	if ast.IsFuncType(t) {
 		g.funcTypedef(t) // register the typedef
 	}
+	if ast.IsWeakType(t) {
+		g.usesWeakRef = true
+		g.usesRefcount = true
+	}
 }
 
 func (g *Generator) scanStmt(stmt ast.Stmt) {
@@ -275,6 +465,13 @@ func (g *Generator) scanStmt(stmt ast.Stmt) {
 	case *ast.LetStmt:
 		g.scanType(s.Type)
 		g.scanExpr(s.Value)
+		// Detect annotation-based feature flags
+		if ast.HasAnnotation(s.Annotations, ast.AnnotRegion) {
+			g.usesArena = true
+		}
+		if ast.HasAnnotation(s.Annotations, ast.AnnotDebugCycles) {
+			g.usesDebugCycles = true
+		}
 	case *ast.ReturnStmt:
 		g.scanExpr(s.Value)
 	case *ast.ExprStmt:
@@ -390,13 +587,17 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	// Reset var tracking for this function scope
 	g.strVars = make(map[string]bool)
-	g.strLenVars = make(map[string]bool)
 	g.arrVars = make(map[string]ast.Type)
 	g.structVars = make(map[string]ast.Type)
 	g.varTypes = make(map[string]ast.Type)
+	g.varAnnotations = make(map[string][]string)
 	g.foreachCounter = 0
+	g.scopeStack = nil
+	g.currentFn = fn
+	g.isInLoop = false
+	g.loopDepth = 0
 
-	// Register params
+	// Register params (not tracked in scope — callee-borrows convention)
 	for _, p := range fn.Params {
 		g.varTypes[p.Name] = p.Type
 		if p.Type == ast.TypeString {
@@ -430,13 +631,31 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		out.WriteString(") {\n")
 	}
 
+	// Check if function uses #[region] — emit arena setup
+	fnUsesArena := g.functionUsesRegion(fn)
+
+	// Push function-level scope
+	g.pushScope()
+
+	if fnUsesArena {
+		out.WriteString("    DexArena* _arena = dex_arena_new(65536);\n")
+	}
+
 	for _, stmt := range fn.Body {
 		g.genStmt(out, stmt, 1)
 	}
 
-	// For void main(), insert implicit return 0
+	if fnUsesArena {
+		out.WriteString("    dex_arena_destroy(_arena);\n")
+	}
+
+	// For void main(), insert cleanup + implicit return 0
 	if fn.Name == "main" && fn.ReturnType == ast.TypeVoid {
+		g.popScope(out, "    ")
 		out.WriteString("    return 0;\n")
+	} else {
+		// Pop function scope (cleanup for functions that fall through without return)
+		g.popScope(out, "    ")
 	}
 
 	out.WriteString("}\n")
@@ -448,6 +667,9 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	switch s := stmt.(type) {
 	case *ast.LetStmt:
 		g.varTypes[s.Name] = s.Type
+		if len(s.Annotations) > 0 {
+			g.varAnnotations[s.Name] = s.Annotations
+		}
 		if s.Type == ast.TypeString {
 			g.strVars[s.Name] = true
 		}
@@ -467,6 +689,7 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			out.WriteString(fmt.Sprintf("%s%s %s; dex_chan_recv(", prefix, ctyp, s.Name))
 			g.genExpr(out, recvExpr.Source)
 			out.WriteString(fmt.Sprintf(", &%s);\n", s.Name))
+			g.registerScopeVar(s.Name, s.Type)
 			break
 		}
 		// Special case for array literal value
@@ -476,26 +699,65 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			if len(arrLit.Elems) > 0 {
 				// Inline initialize data
 				for i, elem := range arrLit.Elems {
-					out.WriteString(fmt.Sprintf("%s%s.data[%d] = ", prefix, s.Name, i))
-					g.genExpr(out, elem)
+					if s.Type == ast.TypeArrayString {
+						// For string arrays, we need to retain the string element
+						out.WriteString(fmt.Sprintf("%s%s->data[%d] = ", prefix, s.Name, i))
+						g.genExpr(out, elem)
+						out.WriteString(";\n")
+						// String literals from genExpr produce +1 refs via dex_string_from_lit
+						// so no extra retain needed
+					} else {
+						out.WriteString(fmt.Sprintf("%s%s->data[%d] = ", prefix, s.Name, i))
+						g.genExpr(out, elem)
+						out.WriteString(";\n")
+					}
+				}
+				out.WriteString(fmt.Sprintf("%s%s->len = %d;\n", prefix, s.Name, len(arrLit.Elems)))
+			}
+			g.registerScopeVar(s.Name, s.Type)
+			break
+		}
+		// Special case for string declarations
+		if s.Type == ast.TypeString {
+			if ast.HasAnnotation(s.Annotations, ast.AnnotRegion) {
+				// #[region] string — allocate from arena
+				if strLit, ok := s.Value.(*ast.StringLit); ok {
+					out.WriteString(fmt.Sprintf("%sDexString* %s = dex_arena_string(_arena, %q, %d);\n", prefix, s.Name, strLit.Value, len(strLit.Value)))
+				} else {
+					out.WriteString(fmt.Sprintf("%sDexString* %s = ", prefix, s.Name))
+					g.genExpr(out, s.Value)
 					out.WriteString(";\n")
 				}
-				out.WriteString(fmt.Sprintf("%s%s.len = %d;\n", prefix, s.Name, len(arrLit.Elems)))
+				g.registerScopeVar(s.Name, s.Type)
+				break
+			}
+			if strLit, ok := s.Value.(*ast.StringLit); ok {
+				out.WriteString(fmt.Sprintf("%sDexString* %s = dex_string_from_lit(%q);\n", prefix, s.Name, strLit.Value))
+			} else {
+				out.WriteString(fmt.Sprintf("%sDexString* %s = ", prefix, s.Name))
+				g.genExpr(out, s.Value)
+				out.WriteString(";\n")
+				// If RHS is a variable reference (borrowed), retain it
+				// But not for #[owned] — ownership transfer, no retain
+				if _, ok := s.Value.(*ast.Ident); ok {
+					if !ast.HasAnnotation(s.Annotations, ast.AnnotOwned) {
+						out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, s.Name))
+					}
+				}
+			}
+			g.registerScopeVar(s.Name, s.Type)
+			// Emit debug cycle tracking if annotated
+			if ast.HasAnnotation(s.Annotations, ast.AnnotDebugCycles) {
+				out.WriteString(fmt.Sprintf("%sdex_cycle_track(%s, %q);\n", prefix, s.Name, s.Name))
 			}
 			break
 		}
-		// Special case for string declarations: heap-owned + shadow length
-		if s.Type == ast.TypeString {
-			if strLit, ok := s.Value.(*ast.StringLit); ok {
-				out.WriteString(fmt.Sprintf("%sconst char* %s = strdup(%q);\n", prefix, s.Name, strLit.Value))
-				out.WriteString(fmt.Sprintf("%ssize_t _dex_slen_%s = %d;\n", prefix, s.Name, len(strLit.Value)))
-			} else {
-				out.WriteString(fmt.Sprintf("%sconst char* %s = ", prefix, s.Name))
-				g.genExpr(out, s.Value)
-				out.WriteString(";\n")
-				out.WriteString(fmt.Sprintf("%ssize_t _dex_slen_%s = strlen(%s);\n", prefix, s.Name, s.Name))
-			}
-			g.strLenVars[s.Name] = true
+		// Special case for weak reference declarations
+		if ast.IsWeakType(s.Type) {
+			out.WriteString(fmt.Sprintf("%sDexWeakRef* %s = dex_weak_new(", prefix, s.Name))
+			g.genExpr(out, s.Value)
+			out.WriteString(");\n")
+			g.registerScopeVar(s.Name, s.Type)
 			break
 		}
 		constPrefix := ""
@@ -505,11 +767,49 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		out.WriteString(fmt.Sprintf("%s%s%s %s = ", prefix, constPrefix, g.cType(s.Type), s.Name))
 		g.genExpr(out, s.Value)
 		out.WriteString(";\n")
+		g.registerScopeVar(s.Name, s.Type)
+		// Emit debug cycle tracking if annotated
+		if ast.HasAnnotation(s.Annotations, ast.AnnotDebugCycles) && ast.IsHeapType(s.Type) {
+			out.WriteString(fmt.Sprintf("%sdex_cycle_track(%s, %q);\n", prefix, s.Name, s.Name))
+		}
 
 	case *ast.ReturnStmt:
-		out.WriteString(fmt.Sprintf("%sreturn ", prefix))
-		g.genExpr(out, s.Value)
-		out.WriteString(";\n")
+		retType := g.currentFn.ReturnType
+		if ast.IsHeapType(retType) {
+			// Retain the return value, clean up everything else, then return
+			if ident, ok := s.Value.(*ast.Ident); ok {
+				out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, ident.Name))
+				g.emitCleanupAll(out, prefix, "")
+				out.WriteString(fmt.Sprintf("%sreturn %s;\n", prefix, ident.Name))
+			} else {
+				// Expression result — eval into temp
+				out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, g.cType(retType)))
+				g.genExpr(out, s.Value)
+				out.WriteString(";\n")
+				g.emitCleanupAll(out, prefix, "")
+				out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
+			}
+		} else {
+			// Non-heap return — clean up all heap vars first
+			if g.hasHeapVarsInScope() {
+				// Evaluate return value into temp to avoid use-after-free
+				ctyp := g.cType(retType)
+				if retType != ast.TypeVoid {
+					out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
+					g.genExpr(out, s.Value)
+					out.WriteString(";\n")
+					g.emitCleanupAll(out, prefix, "")
+					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
+				} else {
+					g.emitCleanupAll(out, prefix, "")
+					out.WriteString(fmt.Sprintf("%sreturn;\n", prefix))
+				}
+			} else {
+				out.WriteString(fmt.Sprintf("%sreturn ", prefix))
+				g.genExpr(out, s.Value)
+				out.WriteString(";\n")
+			}
+		}
 
 	case *ast.ExprStmt:
 		// Fire-and-forget spawn: suppress unused value warning by casting to void
@@ -519,45 +819,55 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			out.WriteString(";\n")
 			break
 		}
+		// Check if this is a call that returns a heap type we need to release
+		if call, ok := s.Expr.(*ast.CallExpr); ok {
+			callRetType := g.typeOfExpr(call)
+			if ast.IsHeapType(callRetType) {
+				// Result is discarded, but may be a new allocation — release it
+				out.WriteString(fmt.Sprintf("%sdex_release(", prefix))
+				g.genExpr(out, s.Expr)
+				out.WriteString(");\n")
+				break
+			}
+		}
 		out.WriteString(prefix)
 		g.genExpr(out, s.Expr)
 		out.WriteString(";\n")
 
 	case *ast.AssignStmt:
-		// Optimized string concat: s = s + expr → use dex_str_concat_len + free old
-		if g.strLenVars[s.Name] {
-			if binExpr, ok := s.Value.(*ast.BinaryExpr); ok && binExpr.Op == ast.BinAdd {
-				if ident, ok := binExpr.Left.(*ast.Ident); ok && ident.Name == s.Name {
-					out.WriteString(fmt.Sprintf("%s{ const char* _dex_old = %s; ", prefix, s.Name))
-					out.WriteString(fmt.Sprintf("%s = dex_str_concat_len(%s, _dex_slen_%s, ", s.Name, "_dex_old", s.Name))
-					g.genExpr(out, binExpr.Right)
-					out.WriteString(fmt.Sprintf(", &_dex_slen_%s); free((char*)_dex_old); }\n", s.Name))
-					break
-				}
-			}
-			// Non-concat reassignment: free old, update shadow length
-			out.WriteString(fmt.Sprintf("%s{ const char* _dex_old = %s; ", prefix, s.Name))
-			out.WriteString(fmt.Sprintf("%s = ", s.Name))
+		varType := g.varTypes[s.Name]
+		if ast.IsHeapType(varType) {
+			// For heap-typed reassignment: old = var; var = new_val; release(old);
+			out.WriteString(fmt.Sprintf("%s{ %s _dex_old = %s; %s = ", prefix, g.cType(varType), s.Name, s.Name))
 			g.genExpr(out, s.Value)
-			out.WriteString(fmt.Sprintf("; _dex_slen_%s = strlen(%s); free((char*)_dex_old); }\n", s.Name, s.Name))
-			break
+			out.WriteString(";")
+			// If the RHS is a variable reference (borrowed), retain
+			if _, ok := s.Value.(*ast.Ident); ok {
+				out.WriteString(fmt.Sprintf(" dex_retain(%s);", s.Name))
+			}
+			out.WriteString(" dex_release(_dex_old); }\n")
+		} else {
+			out.WriteString(fmt.Sprintf("%s%s = ", prefix, s.Name))
+			g.genExpr(out, s.Value)
+			out.WriteString(";\n")
 		}
-		out.WriteString(fmt.Sprintf("%s%s = ", prefix, s.Name))
-		g.genExpr(out, s.Value)
-		out.WriteString(";\n")
 
 	case *ast.IfStmt:
 		out.WriteString(fmt.Sprintf("%sif (", prefix))
 		g.genExprNoParen(out, s.Cond)
 		out.WriteString(") {\n")
+		g.pushScope()
 		for _, stmt := range s.Then {
 			g.genStmt(out, stmt, indent+1)
 		}
+		g.popScope(out, prefix+"    ")
 		if s.Else != nil {
 			out.WriteString(fmt.Sprintf("%s} else {\n", prefix))
+			g.pushScope()
 			for _, stmt := range s.Else {
 				g.genStmt(out, stmt, indent+1)
 			}
+			g.popScope(out, prefix+"    ")
 		}
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
@@ -565,9 +875,17 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		out.WriteString(fmt.Sprintf("%swhile (", prefix))
 		g.genExprNoParen(out, s.Cond)
 		out.WriteString(") {\n")
+		savedLoop := g.isInLoop
+		savedDepth := g.loopDepth
+		g.isInLoop = true
+		g.pushScope()
+		g.loopDepth = len(g.scopeStack)
 		for _, stmt := range s.Body {
 			g.genStmt(out, stmt, indent+1)
 		}
+		g.popScope(out, prefix+"    ")
+		g.isInLoop = savedLoop
+		g.loopDepth = savedDepth
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 	case *ast.ForStmt:
@@ -578,27 +896,40 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		out.WriteString("; ")
 		g.genForPost(out, s.Post)
 		out.WriteString(") {\n")
+		savedLoop := g.isInLoop
+		savedDepth := g.loopDepth
+		g.isInLoop = true
+		g.pushScope()
+		g.loopDepth = len(g.scopeStack)
 		for _, stmt := range s.Body {
 			g.genStmt(out, stmt, indent+1)
 		}
+		g.popScope(out, prefix+"    ")
+		g.isInLoop = savedLoop
+		g.loopDepth = savedDepth
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 	case *ast.ForeachStmt:
 		idx := g.foreachCounter
 		g.foreachCounter++
 		idxVar := fmt.Sprintf("_foreach_idx_%d", idx)
-		// Determine the array expression name for .len and .data access
+		// Determine the array expression name for ->len and ->data access
 		arrExpr := g.exprToString(s.Iterable)
 		// Get element type from the iterable
 		arrType := g.typeOfExpr(s.Iterable)
 		elemType := ast.ElementType(arrType)
 		elemCType := g.cType(elemType)
 
-		out.WriteString(fmt.Sprintf("%sfor (int %s = 0; %s < %s.len; %s++) {\n",
+		out.WriteString(fmt.Sprintf("%sfor (int %s = 0; %s < %s->len; %s++) {\n",
 			prefix, idxVar, idxVar, arrExpr, idxVar))
+		savedLoop := g.isInLoop
+		savedDepth := g.loopDepth
+		g.isInLoop = true
+		g.pushScope()
+		g.loopDepth = len(g.scopeStack)
 		// Declare value variable
 		innerPrefix := strings.Repeat("    ", indent+1)
-		out.WriteString(fmt.Sprintf("%s%s %s = %s.data[%s];\n",
+		out.WriteString(fmt.Sprintf("%s%s %s = %s->data[%s];\n",
 			innerPrefix, elemCType, s.ValueVar, arrExpr, idxVar))
 		// Register the value variable type
 		g.varTypes[s.ValueVar] = elemType
@@ -613,12 +944,21 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		for _, stmt := range s.Body {
 			g.genStmt(out, stmt, indent+1)
 		}
+		g.popScope(out, innerPrefix)
+		g.isInLoop = savedLoop
+		g.loopDepth = savedDepth
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 	case *ast.BreakStmt:
+		if g.isInLoop {
+			g.emitCleanupInnerScopes(out, prefix, g.loopDepth)
+		}
 		out.WriteString(fmt.Sprintf("%sbreak;\n", prefix))
 
 	case *ast.ContinueStmt:
+		if g.isInLoop {
+			g.emitCleanupInnerScopes(out, prefix, g.loopDepth)
+		}
 		out.WriteString(fmt.Sprintf("%scontinue;\n", prefix))
 
 	case *ast.IncrementStmt:
@@ -638,10 +978,10 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		g.genExpr(out, s.Index)
 		out.WriteString(", ")
 		g.genExpr(out, s.Array)
-		out.WriteString(".len);\n")
+		out.WriteString("->len);\n")
 		out.WriteString(prefix)
 		g.genExpr(out, s.Array)
-		out.WriteString(".data[")
+		out.WriteString("->data[")
 		g.genExpr(out, s.Index)
 		out.WriteString("] = ")
 		g.genExpr(out, s.Value)
@@ -653,12 +993,25 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		out.WriteString(fmt.Sprintf(".%s = ", s.Field))
 		g.genExpr(out, s.Value)
 		out.WriteString(";\n")
+		// Emit cycle check if debug(cycles) is enabled and field is heap-typed
+		if g.usesDebugCycles {
+			fieldType := g.typeOfExpr(s.Value)
+			if ast.IsHeapType(fieldType) {
+				out.WriteString(fmt.Sprintf("%sdex_cycle_check_assign(&", prefix))
+				g.genExpr(out, s.Object)
+				out.WriteString(", ")
+				g.genExpr(out, s.Value)
+				out.WriteString(");\n")
+			}
+		}
 
 	case *ast.BlockStmt:
 		out.WriteString(fmt.Sprintf("%s{\n", prefix))
+		g.pushScope()
 		for _, stmt := range s.Stmts {
 			g.genStmt(out, stmt, indent+1)
 		}
+		g.popScope(out, prefix+"    ")
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 	case *ast.SendStmt:
@@ -718,6 +1071,23 @@ func (g *Generator) exprToString(expr ast.Expr) string {
 	return buf.String()
 }
 
+// isNewAlloc returns true if the expression produces a +1 ref (new allocation).
+// Variable references are borrowed (not +1).
+func (g *Generator) isNewAlloc(expr ast.Expr) bool {
+	switch expr.(type) {
+	case *ast.Ident:
+		return false // borrowed reference
+	case *ast.StringLit:
+		return true // dex_string_from_lit produces +1
+	case *ast.CallExpr:
+		return true // function calls produce +1
+	case *ast.BinaryExpr:
+		return true // concat produces +1
+	default:
+		return true
+	}
+}
+
 func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	switch e := expr.(type) {
 	case *ast.IntLit:
@@ -748,7 +1118,7 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		}
 
 	case *ast.StringLit:
-		out.WriteString(fmt.Sprintf("%q", e.Value))
+		out.WriteString(fmt.Sprintf("dex_string_from_lit(%q)", e.Value))
 
 	case *ast.Ident:
 		out.WriteString(e.Name)
@@ -766,16 +1136,16 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 				return
 			case ast.BinEq, ast.BinStrictEq:
 				out.WriteString("(strcmp(")
-				g.genExpr(out, e.Left)
+				g.genStringData(out, e.Left)
 				out.WriteString(", ")
-				g.genExpr(out, e.Right)
+				g.genStringData(out, e.Right)
 				out.WriteString(") == 0)")
 				return
 			case ast.BinNeq, ast.BinStrictNeq:
 				out.WriteString("(strcmp(")
-				g.genExpr(out, e.Left)
+				g.genStringData(out, e.Left)
 				out.WriteString(", ")
-				g.genExpr(out, e.Right)
+				g.genStringData(out, e.Right)
 				out.WriteString(") != 0)")
 				return
 			}
@@ -834,9 +1204,9 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		g.genExpr(out, e.Index)
 		out.WriteString(", ")
 		g.genExpr(out, e.Array)
-		out.WriteString(".len), ")
+		out.WriteString("->len), ")
 		g.genExpr(out, e.Array)
-		out.WriteString(".data[")
+		out.WriteString("->data[")
 		g.genExpr(out, e.Index)
 		out.WriteString("])")
 
@@ -891,6 +1261,17 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	}
 }
 
+// genStringData generates the raw C string (->data) for use in strcmp etc.
+func (g *Generator) genStringData(out *strings.Builder, expr ast.Expr) {
+	if _, ok := expr.(*ast.StringLit); ok {
+		// String literals: just emit the C string literal directly for strcmp
+		out.WriteString(fmt.Sprintf("%q", expr.(*ast.StringLit).Value))
+		return
+	}
+	g.genExpr(out, expr)
+	out.WriteString("->data")
+}
+
 func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	// Special case: fmt.print — polymorphic print for any primitive type
 	if e.Module == "fmt" && e.Name == "print" {
@@ -906,7 +1287,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		case ast.TypeDouble:
 			fmtStr = "%f"
 		case ast.TypeString:
-			fmtStr = "%s"
+			out.WriteString("printf(\"%s\\n\", ")
+			g.genExpr(out, e.Args[0])
+			out.WriteString("->data)")
+			return
 		case ast.TypeBool:
 			// Print bools as "true"/"false"
 			out.WriteString("printf(\"%s\\n\", ")
@@ -922,26 +1306,27 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		out.WriteString(")")
 		return
 	}
-	// json.stringify(array) — special codegen
+	// json.stringify(array) — special codegen (returns const char*, needs wrapping)
 	if e.Module == "json" && e.Name == "stringify" {
-		// Determine array type from the argument
 		argIdent, ok := e.Args[0].(*ast.Ident)
 		if ok {
 			arrType := g.arrVars[argIdent.Name]
+			var fn string
 			switch arrType {
 			case ast.TypeArrayInt:
-				out.WriteString(fmt.Sprintf("dex_json_stringify_int(&%s)", argIdent.Name))
+				fn = "dex_json_stringify_int"
 			case ast.TypeArrayBool:
-				out.WriteString(fmt.Sprintf("dex_json_stringify_bool(&%s)", argIdent.Name))
+				fn = "dex_json_stringify_bool"
 			case ast.TypeArrayString:
-				out.WriteString(fmt.Sprintf("dex_json_stringify_str(&%s)", argIdent.Name))
+				fn = "dex_json_stringify_str"
 			case ast.TypeArrayLong:
-				out.WriteString(fmt.Sprintf("dex_json_stringify_long(&%s)", argIdent.Name))
+				fn = "dex_json_stringify_long"
 			case ast.TypeArrayDouble:
-				out.WriteString(fmt.Sprintf("dex_json_stringify_double(&%s)", argIdent.Name))
+				fn = "dex_json_stringify_double"
 			case ast.TypeArrayChar:
-				out.WriteString(fmt.Sprintf("dex_json_stringify_char(&%s)", argIdent.Name))
+				fn = "dex_json_stringify_char"
 			}
+			out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(%s))", fn, argIdent.Name))
 		}
 		return
 	}
@@ -966,11 +1351,14 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			case ast.TypeArrayChar:
 				fn = "dex_json_set_arr_char"
 			}
-			out.WriteString(fmt.Sprintf("%s(", fn))
+			// Bridge: extract ->data for string args, wrap result in dex_string_from_cstr
+			out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", fn))
 			g.genExpr(out, e.Args[0])
-			out.WriteString(", ")
+			out.WriteString("->data, ")
 			g.genExpr(out, e.Args[1])
-			out.WriteString(fmt.Sprintf(", &%s)", argIdent.Name))
+			out.WriteString("->data, ")
+			out.WriteString(argIdent.Name)
+			out.WriteString("))")
 		}
 		return
 	}
@@ -991,13 +1379,26 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		default:
 			fn = "dex_json_set"
 		}
-		out.WriteString(fn + "(")
+		// Bridge: string args need ->data, result needs wrapping
+		out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", fn))
 		g.genExpr(out, e.Args[0])
-		out.WriteString(", ")
+		out.WriteString("->data, ")
 		g.genExpr(out, e.Args[1])
-		out.WriteString(", ")
-		g.genExpr(out, e.Args[2])
-		out.WriteString(")")
+		out.WriteString("->data, ")
+		// For the value arg: if string type, extract ->data
+		if valType == ast.TypeString {
+			g.genExpr(out, e.Args[2])
+			out.WriteString("->data")
+		} else {
+			g.genExpr(out, e.Args[2])
+		}
+		out.WriteString("))")
+		return
+	}
+
+	// json.new() — returns const char*, wrap
+	if e.Module == "json" && e.Name == "new" {
+		out.WriteString("dex_string_from_cstr(dex_json_new())")
 		return
 	}
 
@@ -1014,20 +1415,28 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		default:
 			fn = "dex_db_col_int"
 		}
-		out.WriteString(fn + "(")
-		g.genExpr(out, e.Args[0])
-		out.WriteString(", ")
-		g.genExpr(out, e.Args[1])
-		out.WriteString(")")
+		if e.ResolvedType == ast.TypeString {
+			out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", fn))
+			g.genExpr(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString("))")
+		} else {
+			out.WriteString(fn + "(")
+			g.genExpr(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString(")")
+		}
 		return
 	}
 
 	if e.Module == "http" && e.Name == "route" {
 		// route("GET", "/path", handler) -> dex_route("GET", "/path", handler_name)
 		out.WriteString("dex_route(")
-		g.genExpr(out, e.Args[0])
+		g.genStringArg(out, e.Args[0])
 		out.WriteString(", ")
-		g.genExpr(out, e.Args[1])
+		g.genStringArg(out, e.Args[1])
 		out.WriteString(", ")
 		// Resolve handler name to function pointer
 		switch h := e.Args[2].(type) {
@@ -1040,143 +1449,148 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
-	// HTTP client functions
+	// HTTP client functions — bridge string args and wrap string returns
 	if e.Module == "http" {
 		switch e.Name {
 		case "get":
 			if len(e.Args) == 2 {
 				out.WriteString("dex_http_get_h(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(")")
 			} else {
 				out.WriteString("dex_http_get(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(")")
 			}
 			return
 		case "post":
 			if len(e.Args) == 3 {
 				out.WriteString("dex_http_post_h(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[2])
+				g.genStringArg(out, e.Args[2])
 				out.WriteString(")")
 			} else {
 				out.WriteString("dex_http_post(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(")")
 			}
 			return
 		case "put":
 			if len(e.Args) == 3 {
 				out.WriteString("dex_http_put_h(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[2])
+				g.genStringArg(out, e.Args[2])
 				out.WriteString(")")
 			} else {
 				out.WriteString("dex_http_put(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(")")
 			}
 			return
 		case "patch":
 			if len(e.Args) == 3 {
 				out.WriteString("dex_http_patch_h(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[2])
+				g.genStringArg(out, e.Args[2])
 				out.WriteString(")")
 			} else {
 				out.WriteString("dex_http_patch(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(")")
 			}
 			return
 		case "delete":
 			if len(e.Args) == 2 {
 				out.WriteString("dex_http_delete_h(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(")")
 			} else {
 				out.WriteString("dex_http_delete(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(")")
 			}
 			return
 		case "request":
 			out.WriteString("dex_http_request(")
-			g.genExpr(out, e.Args[0])
+			g.genStringArg(out, e.Args[0])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[1])
+			g.genStringArg(out, e.Args[1])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[2])
+			g.genStringArg(out, e.Args[2])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[3])
+			g.genStringArg(out, e.Args[3])
 			out.WriteString(")")
 			return
 		case "header":
-			out.WriteString("dex_http_header(")
-			g.genExpr(out, e.Args[0])
+			out.WriteString("dex_string_from_cstr(dex_http_header(")
+			g.genStringArg(out, e.Args[0])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[1])
+			g.genStringArg(out, e.Args[1])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[2])
-			out.WriteString(")")
+			g.genStringArg(out, e.Args[2])
+			out.WriteString("))")
 			return
 		case "formNew":
-			out.WriteString("dex_http_form_new()")
+			out.WriteString("dex_string_from_cstr(dex_http_form_new())")
 			return
 		case "formField":
-			out.WriteString("dex_http_form_field(")
-			g.genExpr(out, e.Args[0])
+			out.WriteString("dex_string_from_cstr(dex_http_form_field(")
+			g.genStringArg(out, e.Args[0])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[1])
+			g.genStringArg(out, e.Args[1])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[2])
-			out.WriteString(")")
+			g.genStringArg(out, e.Args[2])
+			out.WriteString("))")
 			return
 		case "formFile":
-			out.WriteString("dex_http_form_file(")
-			g.genExpr(out, e.Args[0])
+			out.WriteString("dex_string_from_cstr(dex_http_form_file(")
+			g.genStringArg(out, e.Args[0])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[1])
+			g.genStringArg(out, e.Args[1])
 			out.WriteString(", ")
-			g.genExpr(out, e.Args[2])
-			out.WriteString(")")
+			g.genStringArg(out, e.Args[2])
+			out.WriteString("))")
 			return
 		case "postForm":
 			if len(e.Args) == 3 {
 				out.WriteString("dex_http_post_form_h(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[2])
+				g.genStringArg(out, e.Args[2])
 				out.WriteString(")")
 			} else {
 				out.WriteString("dex_http_post_form(")
-				g.genExpr(out, e.Args[0])
+				g.genStringArg(out, e.Args[0])
 				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
+				g.genStringArg(out, e.Args[1])
 				out.WriteString(")")
 			}
+			return
+		case "listen":
+			out.WriteString("dex_listen(")
+			g.genExpr(out, e.Args[0])
+			out.WriteString(")")
 			return
 		}
 	}
@@ -1203,38 +1617,38 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			switch e.Name {
 			case "push":
 				pushFn := g.arrayPushFunc(arrType)
-				out.WriteString(fmt.Sprintf("%s(&%s, ", pushFn, e.Module))
+				out.WriteString(fmt.Sprintf("%s(%s, ", pushFn, e.Module))
 				g.genExpr(out, e.Args[0])
 				out.WriteString(")")
 				return
 			case "len":
-				out.WriteString(fmt.Sprintf("%s.len", e.Module))
+				out.WriteString(fmt.Sprintf("%s->len", e.Module))
 				return
 			case "pop":
 				popFn := g.arrayPopFunc(arrType)
-				out.WriteString(fmt.Sprintf("%s(&%s)", popFn, e.Module))
+				out.WriteString(fmt.Sprintf("%s(%s)", popFn, e.Module))
 				return
 			case "remove":
 				removeFn := g.arrayRemoveFunc(arrType)
-				out.WriteString(fmt.Sprintf("%s(&%s, ", removeFn, e.Module))
+				out.WriteString(fmt.Sprintf("%s(%s, ", removeFn, e.Module))
 				g.genExpr(out, e.Args[0])
 				out.WriteString(")")
 				return
 			case "contains":
 				containsFn := g.arrayContainsFunc(arrType)
-				out.WriteString(fmt.Sprintf("%s(&%s, ", containsFn, e.Module))
+				out.WriteString(fmt.Sprintf("%s(%s, ", containsFn, e.Module))
 				g.genExpr(out, e.Args[0])
 				out.WriteString(")")
 				return
 			case "indexOf":
 				indexOfFn := g.arrayIndexOfFunc(arrType)
-				out.WriteString(fmt.Sprintf("%s(&%s, ", indexOfFn, e.Module))
+				out.WriteString(fmt.Sprintf("%s(%s, ", indexOfFn, e.Module))
 				g.genExpr(out, e.Args[0])
 				out.WriteString(")")
 				return
 			case "reverse":
 				reverseFn := g.arrayReverseFunc(arrType)
-				out.WriteString(fmt.Sprintf("%s(&%s)", reverseFn, e.Module))
+				out.WriteString(fmt.Sprintf("%s(%s)", reverseFn, e.Module))
 				return
 			case "sort":
 				sortArg := e.Args[0].(*ast.StringLit).Value
@@ -1244,7 +1658,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				} else {
 					sortFn = g.arraySortDescFunc(arrType)
 				}
-				out.WriteString(fmt.Sprintf("%s(&%s)", sortFn, e.Module))
+				out.WriteString(fmt.Sprintf("%s(%s)", sortFn, e.Module))
 				return
 			}
 		}
@@ -1254,15 +1668,29 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	if e.Module != "" {
 		funcDef, ok := stdlib.LookupFunc(e.Module, e.Name)
 		if ok && funcDef.CName != "" {
-			out.WriteString(funcDef.CName)
-			out.WriteString("(")
-			for i, arg := range e.Args {
-				if i > 0 {
-					out.WriteString(", ")
+			// Check if function returns string — needs wrapping
+			if funcDef.ReturnType == ast.TypeString {
+				out.WriteString("dex_string_from_cstr(")
+				out.WriteString(funcDef.CName)
+				out.WriteString("(")
+				for i, arg := range e.Args {
+					if i > 0 {
+						out.WriteString(", ")
+					}
+					g.genStdlibArg(out, arg, funcDef, i)
 				}
-				g.genExpr(out, arg)
+				out.WriteString("))")
+			} else {
+				out.WriteString(funcDef.CName)
+				out.WriteString("(")
+				for i, arg := range e.Args {
+					if i > 0 {
+						out.WriteString(", ")
+					}
+					g.genStdlibArg(out, arg, funcDef, i)
+				}
+				out.WriteString(")")
 			}
-			out.WriteString(")")
 			return
 		}
 	}
@@ -1277,6 +1705,39 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		g.genExpr(out, arg)
 	}
 	out.WriteString(")")
+}
+
+// genStringArg generates a string argument for a stdlib function, extracting ->data
+func (g *Generator) genStringArg(out *strings.Builder, arg ast.Expr) {
+	argType := g.typeOfExpr(arg)
+	if argType == ast.TypeString {
+		if strLit, ok := arg.(*ast.StringLit); ok {
+			// String literal — just use C string directly
+			out.WriteString(fmt.Sprintf("%q", strLit.Value))
+		} else {
+			g.genExpr(out, arg)
+			out.WriteString("->data")
+		}
+	} else {
+		g.genExpr(out, arg)
+	}
+}
+
+// genStdlibArg generates an argument for a stdlib function with CName,
+// bridging DexString* to const char* when the stdlib expects it.
+func (g *Generator) genStdlibArg(out *strings.Builder, arg ast.Expr, funcDef *stdlib.FuncDef, idx int) {
+	argType := g.typeOfExpr(arg)
+	if argType == ast.TypeString {
+		// Stdlib functions with CName expect const char*
+		if strLit, ok := arg.(*ast.StringLit); ok {
+			out.WriteString(fmt.Sprintf("%q", strLit.Value))
+		} else {
+			g.genExpr(out, arg)
+			out.WriteString("->data")
+		}
+	} else {
+		g.genExpr(out, arg)
+	}
 }
 
 func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
@@ -1526,16 +1987,16 @@ func (g *Generator) genExprNoParen(out *strings.Builder, expr ast.Expr) {
 			switch e.Op {
 			case ast.BinEq, ast.BinStrictEq:
 				out.WriteString("strcmp(")
-				g.genExpr(out, e.Left)
+				g.genStringData(out, e.Left)
 				out.WriteString(", ")
-				g.genExpr(out, e.Right)
+				g.genStringData(out, e.Right)
 				out.WriteString(") == 0")
 				return
 			case ast.BinNeq, ast.BinStrictNeq:
 				out.WriteString("strcmp(")
-				g.genExpr(out, e.Left)
+				g.genStringData(out, e.Left)
 				out.WriteString(", ")
-				g.genExpr(out, e.Right)
+				g.genStringData(out, e.Right)
 				out.WriteString(") != 0")
 				return
 			}
@@ -1625,25 +2086,25 @@ func (g *Generator) cType(t ast.Type) string {
 	case ast.TypeBool:
 		return "_Bool"
 	case ast.TypeString:
-		return "const char*"
+		return "DexString*"
 	case ast.TypeLong:
 		return "long"
 	case ast.TypeDouble:
 		return "double"
 	case ast.TypeArrayInt:
-		return "DexArrayInt"
+		return "DexArrayInt*"
 	case ast.TypeArrayBool:
-		return "DexArrayBool"
+		return "DexArrayBool*"
 	case ast.TypeArrayString:
-		return "DexArrayString"
+		return "DexArrayString*"
 	case ast.TypeArrayLong:
-		return "DexArrayLong"
+		return "DexArrayLong*"
 	case ast.TypeArrayDouble:
-		return "DexArrayDouble"
+		return "DexArrayDouble*"
 	case ast.TypeChar:
 		return "unsigned char"
 	case ast.TypeArrayChar:
-		return "DexArrayChar"
+		return "DexArrayChar*"
 	default:
 		if ast.IsStructType(t) {
 			return "Dex_" + ast.StructName(t)
@@ -1653,6 +2114,9 @@ func (g *Generator) cType(t ast.Type) string {
 		}
 		if ast.IsFuncType(t) {
 			return g.funcTypedef(t)
+		}
+		if ast.IsWeakType(t) {
+			return "DexWeakRef*"
 		}
 		return "void"
 	}

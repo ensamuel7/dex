@@ -312,6 +312,7 @@ func build(filename string) (string, error) {
 	ast.ResetStructTypes()
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
+	ast.ResetWeakTypes()
 
 	// Register module-provided struct types (e.g. HttpResponse)
 	stdlib.RegisterAllModuleTypes()

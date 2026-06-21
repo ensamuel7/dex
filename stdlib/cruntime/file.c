@@ -1,4 +1,10 @@
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <curl/curl.h>
+
 const char* dex_file_read(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) {

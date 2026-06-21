@@ -1,20 +1,45 @@
+// DexLang String Runtime
+// DexString is a refcounted, length-prefixed string.
 
-#include <string.h>
-#include <stdlib.h>
+typedef struct {
+    DexObjHeader hdr;
+    size_t len;
+    char data[];
+} DexString;
 
-const char* dex_str_concat(const char* a, const char* b) {
-    size_t la = strlen(a), lb = strlen(b);
-    char* result = (char*)malloc(la + lb + 1);
-    memcpy(result, a, la);
-    memcpy(result + la, b, lb + 1);
-    return result;
+static void dex_string_destroy(void* ptr) {
+    (void)ptr; // data[] is part of the struct, freed with it
 }
 
-const char* dex_str_concat_len(const char* a, size_t a_len, const char* b, size_t* out_len) {
-    size_t lb = strlen(b);
-    *out_len = a_len + lb;
-    char* result = (char*)malloc(*out_len + 1);
-    memcpy(result, a, a_len);
-    memcpy(result + a_len, b, lb + 1);
-    return result;
+static DexString* dex_string_new(const char* s, size_t len) {
+    DexString* ds = (DexString*)dex_obj_alloc(sizeof(DexString) + len + 1, dex_string_destroy);
+    ds->len = len;
+    memcpy(ds->data, s, len);
+    ds->data[len] = '\0';
+    return ds;
+}
+
+static DexString* dex_string_from_lit(const char* s) {
+    return dex_string_new(s, strlen(s));
+}
+
+static DexString* dex_string_from_cstr(const char* s) {
+    if (!s) return dex_string_new("", 0);
+    DexString* ds = dex_string_new(s, strlen(s));
+    free((void*)s);
+    return ds;
+}
+
+static DexString* dex_string_empty(void) {
+    return dex_string_new("", 0);
+}
+
+static DexString* dex_str_concat(DexString* a, DexString* b) {
+    size_t newlen = a->len + b->len;
+    DexString* ds = (DexString*)dex_obj_alloc(sizeof(DexString) + newlen + 1, dex_string_destroy);
+    ds->len = newlen;
+    memcpy(ds->data, a->data, a->len);
+    memcpy(ds->data + a->len, b->data, b->len);
+    ds->data[newlen] = '\0';
+    return ds;
 }

@@ -34,7 +34,6 @@ func init() {
 				CName:      "",
 			},
 		},
-		CIncludes: "",
-		CRuntime:  jsonRuntime,
+		CRuntime: jsonRuntime,
 	})
 }

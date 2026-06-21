@@ -4,18 +4,25 @@
 #include <string.h>
 #include <limits.h>
 
+// === DexArrayInt ===
 typedef struct {
+    DexObjHeader hdr;
     int* data;
     int len;
     int cap;
 } DexArrayInt;
 
-DexArrayInt dex_array_int_new(void) {
-    DexArrayInt a;
-    a.cap = 8;
-    a.len = 0;
-    a.data = (int*)malloc(sizeof(int) * a.cap);
-    if (!a.data) { dex_panic("out of memory"); }
+static void dex_array_int_destroy(void* ptr) {
+    DexArrayInt* a = (DexArrayInt*)ptr;
+    free(a->data);
+}
+
+DexArrayInt* dex_array_int_new(void) {
+    DexArrayInt* a = (DexArrayInt*)dex_obj_alloc(sizeof(DexArrayInt), dex_array_int_destroy);
+    a->cap = 8;
+    a->len = 0;
+    a->data = (int*)malloc(sizeof(int) * a->cap);
+    if (!a->data) { dex_panic("out of memory"); }
     return a;
 }
 
@@ -82,18 +89,25 @@ void dex_array_int_sort_desc(DexArrayInt* a) {
     qsort(a->data, a->len, sizeof(int), dex_cmp_int_desc);
 }
 
+// === DexArrayBool ===
 typedef struct {
+    DexObjHeader hdr;
     _Bool* data;
     int len;
     int cap;
 } DexArrayBool;
 
-DexArrayBool dex_array_bool_new(void) {
-    DexArrayBool a;
-    a.cap = 8;
-    a.len = 0;
-    a.data = (_Bool*)malloc(sizeof(_Bool) * a.cap);
-    if (!a.data) { dex_panic("out of memory"); }
+static void dex_array_bool_destroy(void* ptr) {
+    DexArrayBool* a = (DexArrayBool*)ptr;
+    free(a->data);
+}
+
+DexArrayBool* dex_array_bool_new(void) {
+    DexArrayBool* a = (DexArrayBool*)dex_obj_alloc(sizeof(DexArrayBool), dex_array_bool_destroy);
+    a->cap = 8;
+    a->len = 0;
+    a->data = (_Bool*)malloc(sizeof(_Bool) * a->cap);
+    if (!a->data) { dex_panic("out of memory"); }
     return a;
 }
 
@@ -142,94 +156,117 @@ void dex_array_bool_reverse(DexArrayBool* a) {
     }
 }
 
+// === DexArrayString ===
 typedef struct {
-    const char** data;
+    DexObjHeader hdr;
+    DexString** data;
     int len;
     int cap;
 } DexArrayString;
 
-DexArrayString dex_array_string_new(void) {
-    DexArrayString a;
-    a.cap = 8;
-    a.len = 0;
-    a.data = (const char**)malloc(sizeof(const char*) * a.cap);
-    if (!a.data) { dex_panic("out of memory"); }
+static void dex_array_string_destroy(void* ptr) {
+    DexArrayString* a = (DexArrayString*)ptr;
+    for (int i = 0; i < a->len; i++) {
+        dex_release(a->data[i]);
+    }
+    free(a->data);
+}
+
+DexArrayString* dex_array_string_new(void) {
+    DexArrayString* a = (DexArrayString*)dex_obj_alloc(sizeof(DexArrayString), dex_array_string_destroy);
+    a->cap = 8;
+    a->len = 0;
+    a->data = (DexString**)malloc(sizeof(DexString*) * a->cap);
+    if (!a->data) { dex_panic("out of memory"); }
     return a;
 }
 
-void dex_array_string_push(DexArrayString* a, const char* val) {
+void dex_array_string_push(DexArrayString* a, DexString* val) {
     if (a->len == a->cap) {
         if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
         a->cap *= 2;
-        a->data = (const char**)realloc(a->data, sizeof(const char*) * a->cap);
+        a->data = (DexString**)realloc(a->data, sizeof(DexString*) * a->cap);
         if (!a->data) { dex_panic("out of memory"); }
     }
+    dex_retain(val);
     a->data[a->len++] = val;
 }
 
-const char* dex_array_string_pop(DexArrayString* a) {
+DexString* dex_array_string_pop(DexArrayString* a) {
     if (a->len == 0) { dex_panic("pop from empty array"); }
-    return a->data[--a->len];
+    return a->data[--a->len]; // ownership transfers to caller
 }
 
 void dex_array_string_remove(DexArrayString* a, int index) {
     if (index < 0 || index >= a->len) { dex_panic("remove index out of bounds"); }
+    dex_release(a->data[index]);
     for (int i = index; i < a->len - 1; i++) {
         a->data[i] = a->data[i + 1];
     }
     a->len--;
 }
 
-_Bool dex_array_string_contains(DexArrayString* a, const char* val) {
+_Bool dex_array_string_contains(DexArrayString* a, DexString* val) {
     for (int i = 0; i < a->len; i++) {
-        if (strcmp(a->data[i], val) == 0) return 1;
+        if (strcmp(a->data[i]->data, val->data) == 0) return 1;
     }
     return 0;
 }
 
-int dex_array_string_indexOf(DexArrayString* a, const char* val) {
+int dex_array_string_indexOf(DexArrayString* a, DexString* val) {
     for (int i = 0; i < a->len; i++) {
-        if (strcmp(a->data[i], val) == 0) return i;
+        if (strcmp(a->data[i]->data, val->data) == 0) return i;
     }
     return -1;
 }
 
 void dex_array_string_reverse(DexArrayString* a) {
     for (int i = 0, j = a->len - 1; i < j; i++, j--) {
-        const char* tmp = a->data[i];
+        DexString* tmp = a->data[i];
         a->data[i] = a->data[j];
         a->data[j] = tmp;
     }
 }
 
 static int dex_cmp_string_asc(const void* a, const void* b) {
-    return strcmp(*(const char**)a, *(const char**)b);
+    DexString* x = *(DexString**)a;
+    DexString* y = *(DexString**)b;
+    return strcmp(x->data, y->data);
 }
 
 static int dex_cmp_string_desc(const void* a, const void* b) {
-    return strcmp(*(const char**)b, *(const char**)a);
+    DexString* x = *(DexString**)a;
+    DexString* y = *(DexString**)b;
+    return strcmp(y->data, x->data);
 }
 
 void dex_array_string_sort_asc(DexArrayString* a) {
-    qsort(a->data, a->len, sizeof(const char*), dex_cmp_string_asc);
+    qsort(a->data, a->len, sizeof(DexString*), dex_cmp_string_asc);
 }
 
 void dex_array_string_sort_desc(DexArrayString* a) {
-    qsort(a->data, a->len, sizeof(const char*), dex_cmp_string_desc);
+    qsort(a->data, a->len, sizeof(DexString*), dex_cmp_string_desc);
 }
 
+// === DexArrayLong ===
 typedef struct {
+    DexObjHeader hdr;
     long* data;
     int len;
     int cap;
 } DexArrayLong;
 
-DexArrayLong dex_array_long_new(void) {
-    DexArrayLong a;
-    a.cap = 8;
-    a.len = 0;
-    a.data = (long*)malloc(sizeof(long) * a.cap);
-    if (!a.data) { dex_panic("out of memory"); }
+static void dex_array_long_destroy(void* ptr) {
+    DexArrayLong* a = (DexArrayLong*)ptr;
+    free(a->data);
+}
+
+DexArrayLong* dex_array_long_new(void) {
+    DexArrayLong* a = (DexArrayLong*)dex_obj_alloc(sizeof(DexArrayLong), dex_array_long_destroy);
+    a->cap = 8;
+    a->len = 0;
+    a->data = (long*)malloc(sizeof(long) * a->cap);
+    if (!a->data) { dex_panic("out of memory"); }
     return a;
 }
 
@@ -296,18 +333,25 @@ void dex_array_long_sort_desc(DexArrayLong* a) {
     qsort(a->data, a->len, sizeof(long), dex_cmp_long_desc);
 }
 
+// === DexArrayDouble ===
 typedef struct {
+    DexObjHeader hdr;
     double* data;
     int len;
     int cap;
 } DexArrayDouble;
 
-DexArrayDouble dex_array_double_new(void) {
-    DexArrayDouble a;
-    a.cap = 8;
-    a.len = 0;
-    a.data = (double*)malloc(sizeof(double) * a.cap);
-    if (!a.data) { dex_panic("out of memory"); }
+static void dex_array_double_destroy(void* ptr) {
+    DexArrayDouble* a = (DexArrayDouble*)ptr;
+    free(a->data);
+}
+
+DexArrayDouble* dex_array_double_new(void) {
+    DexArrayDouble* a = (DexArrayDouble*)dex_obj_alloc(sizeof(DexArrayDouble), dex_array_double_destroy);
+    a->cap = 8;
+    a->len = 0;
+    a->data = (double*)malloc(sizeof(double) * a->cap);
+    if (!a->data) { dex_panic("out of memory"); }
     return a;
 }
 
@@ -374,18 +418,25 @@ void dex_array_double_sort_desc(DexArrayDouble* a) {
     qsort(a->data, a->len, sizeof(double), dex_cmp_double_desc);
 }
 
+// === DexArrayChar ===
 typedef struct {
+    DexObjHeader hdr;
     unsigned char* data;
     int len;
     int cap;
 } DexArrayChar;
 
-DexArrayChar dex_array_char_new(void) {
-    DexArrayChar a;
-    a.cap = 8;
-    a.len = 0;
-    a.data = (unsigned char*)malloc(sizeof(unsigned char) * a.cap);
-    if (!a.data) { dex_panic("out of memory"); }
+static void dex_array_char_destroy(void* ptr) {
+    DexArrayChar* a = (DexArrayChar*)ptr;
+    free(a->data);
+}
+
+DexArrayChar* dex_array_char_new(void) {
+    DexArrayChar* a = (DexArrayChar*)dex_obj_alloc(sizeof(DexArrayChar), dex_array_char_destroy);
+    a->cap = 8;
+    a->len = 0;
+    a->data = (unsigned char*)malloc(sizeof(unsigned char) * a->cap);
+    if (!a->data) { dex_panic("out of memory"); }
     return a;
 }
 
@@ -452,6 +503,8 @@ void dex_array_char_sort_desc(DexArrayChar* a) {
     qsort(a->data, a->len, sizeof(unsigned char), dex_cmp_char_desc);
 }
 
+// === JSON stringify helpers (still return const char* for stdlib bridging) ===
+
 const char* dex_json_stringify_int(DexArrayInt* a) {
     size_t cap = 64;
     char* buf = (char*)malloc(cap);
@@ -498,7 +551,7 @@ const char* dex_json_stringify_str(DexArrayString* a) {
     buf[pos++] = '[';
     for (int i = 0; i < a->len; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
-        int n = snprintf(buf + pos, cap - pos, "\"%s\"", a->data[i]);
+        int n = snprintf(buf + pos, cap - pos, "\"%s\"", a->data[i]->data);
         pos += n;
         if ((size_t)pos + 64 > cap) {
             cap *= 2;

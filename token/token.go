@@ -67,6 +67,8 @@ const (
 	TokenChan
 	TokenCharKw
 	TokenChar
+	TokenAnnotation
+	TokenWeak
 	TokenEOF
 )
 
@@ -106,4 +108,5 @@ var Keywords = map[string]TokenKind{
 	"spawn":    TokenSpawn,
 	"chan":      TokenChan,
 	"char":     TokenCharKw,
+	"weak":     TokenWeak,
 }

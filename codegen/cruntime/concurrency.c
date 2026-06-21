@@ -7,6 +7,7 @@
 
 // === Channel (blocking bounded queue) ===
 typedef struct {
+    DexObjHeader hdr;
     void* data;
     int elem_size;
     int cap;
@@ -19,8 +20,16 @@ typedef struct {
     pthread_cond_t not_full;
 } DexChan;
 
+static void dex_chan_destroy(void* ptr) {
+    DexChan* ch = (DexChan*)ptr;
+    pthread_mutex_destroy(&ch->lock);
+    pthread_cond_destroy(&ch->not_empty);
+    pthread_cond_destroy(&ch->not_full);
+    free(ch->data);
+}
+
 DexChan* dex_chan_new(int elem_size, int cap) {
-    DexChan* ch = (DexChan*)malloc(sizeof(DexChan));
+    DexChan* ch = (DexChan*)dex_obj_alloc(sizeof(DexChan), dex_chan_destroy);
     ch->elem_size = elem_size;
     ch->cap = cap;
     ch->len = 0;

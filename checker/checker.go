@@ -14,11 +14,12 @@ type funcSig struct {
 }
 
 type Checker struct {
-	scopes      []map[string]ast.Type
-	constScopes []map[string]bool
-	funcs       map[string]funcSig
-	imports     map[string]*stdlib.Module
-	loopDepth   int
+	scopes           []map[string]ast.Type
+	constScopes      []map[string]bool
+	annotationScopes []map[string][]string // per-variable annotation tracking
+	funcs            map[string]funcSig
+	imports          map[string]*stdlib.Module
+	loopDepth        int
 }
 
 func New() *Checker {
@@ -93,6 +94,13 @@ func (c *Checker) Check(program *ast.Program) error {
 func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 	switch s := stmt.(type) {
 	case *ast.LetStmt:
+		// Check if RHS is an #[owned] variable — aliasing is not allowed
+		if ident, ok := s.Value.(*ast.Ident); ok {
+			rhsAnnots := c.resolveAnnotations(ident.Name)
+			if ast.HasAnnotation(rhsAnnots, ast.AnnotOwned) {
+				return fmt.Errorf("cannot alias #[owned] variable '%s'", ident.Name)
+			}
+		}
 		// Pre-annotate db.col() with the expected return type
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "db" && call.Name == "col" {
 			if s.Type == ast.TypeInferred {
@@ -112,11 +120,20 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 				return err
 			}
 			s.Type = exprType
+			if err := validateAnnotations(s.Annotations, s.Type, s.Name); err != nil {
+				return err
+			}
 			c.define(s.Name, s.Type)
+			c.defineAnnotations(s.Name, s.Annotations)
 			if s.IsConst {
 				c.defineConst(s.Name)
 			}
 			return nil
+		}
+
+		// Validate annotations on the declared type
+		if err := validateAnnotations(s.Annotations, s.Type, s.Name); err != nil {
+			return err
 		}
 
 		// Handle empty array literal: infer element type from declared type
@@ -126,6 +143,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			}
 			arrLit.ElemType = ast.ElementType(s.Type)
 			c.define(s.Name, s.Type)
+			c.defineAnnotations(s.Name, s.Annotations)
 			if s.IsConst {
 				c.defineConst(s.Name)
 			}
@@ -148,6 +166,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			if allCompatible {
 				arrLit.ElemType = targetElem
 				c.define(s.Name, s.Type)
+				c.defineAnnotations(s.Name, s.Annotations)
 				if s.IsConst {
 					c.defineConst(s.Name)
 				}
@@ -162,12 +181,23 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			return fmt.Errorf("type mismatch in let: expected %s, got %s", typeName(s.Type), typeName(exprType))
 		}
 		c.define(s.Name, s.Type)
+		c.defineAnnotations(s.Name, s.Annotations)
 		if s.IsConst {
 			c.defineConst(s.Name)
 		}
 		return nil
 
 	case *ast.ReturnStmt:
+		// Check if returning a #[noEscape] or #[region] variable
+		if ident, ok := s.Value.(*ast.Ident); ok {
+			annots := c.resolveAnnotations(ident.Name)
+			if ast.HasAnnotation(annots, ast.AnnotNoEscape) {
+				return fmt.Errorf("cannot return #[noEscape] variable '%s'", ident.Name)
+			}
+			if ast.HasAnnotation(annots, ast.AnnotRegion) {
+				return fmt.Errorf("cannot return #[region] variable '%s'", ident.Name)
+			}
+		}
 		// Pre-annotate db.col() with the expected return type
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "db" && call.Name == "col" {
 			call.ResolvedType = returnType
@@ -354,6 +384,13 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		}
 		if c.isConst(s.Name) {
 			return fmt.Errorf("cannot reassign const variable '%s'", s.Name)
+		}
+		// Check if RHS is an #[owned] variable — aliasing is not allowed
+		if ident, ok := s.Value.(*ast.Ident); ok {
+			rhsAnnots := c.resolveAnnotations(ident.Name)
+			if ast.HasAnnotation(rhsAnnots, ast.AnnotOwned) {
+				return fmt.Errorf("cannot alias #[owned] variable '%s'", ident.Name)
+			}
 		}
 		// Pre-annotate db.col() with the expected return type
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "db" && call.Name == "col" {
@@ -1113,11 +1150,13 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 func (c *Checker) pushScope() {
 	c.scopes = append(c.scopes, make(map[string]ast.Type))
 	c.constScopes = append(c.constScopes, make(map[string]bool))
+	c.annotationScopes = append(c.annotationScopes, make(map[string][]string))
 }
 
 func (c *Checker) popScope() {
 	c.scopes = c.scopes[:len(c.scopes)-1]
 	c.constScopes = c.constScopes[:len(c.constScopes)-1]
+	c.annotationScopes = c.annotationScopes[:len(c.annotationScopes)-1]
 }
 
 func (c *Checker) define(name string, typ ast.Type) {
@@ -1144,6 +1183,21 @@ func (c *Checker) resolve(name string) (ast.Type, bool) {
 		}
 	}
 	return 0, false
+}
+
+func (c *Checker) defineAnnotations(name string, annotations []string) {
+	if len(annotations) > 0 {
+		c.annotationScopes[len(c.annotationScopes)-1][name] = annotations
+	}
+}
+
+func (c *Checker) resolveAnnotations(name string) []string {
+	for i := len(c.annotationScopes) - 1; i >= 0; i-- {
+		if annots, ok := c.annotationScopes[i][name]; ok {
+			return annots
+		}
+	}
+	return nil
 }
 
 func (c *Checker) checkArrayMethod(varName string, arrType ast.Type, method string, args []ast.Expr) (ast.Type, error) {
@@ -1275,6 +1329,42 @@ func isCharLiteral(expr ast.Expr) bool {
 
 // canAssign checks if an expression of exprType can be assigned to a target of targetType,
 // allowing implicit widening of int literals to long/double and float literals to double.
+// validateAnnotations checks that annotations are valid and compatible with the type.
+func validateAnnotations(annotations []string, typ ast.Type, name string) error {
+	if len(annotations) == 0 {
+		return nil
+	}
+
+	// Validate each annotation is known
+	validAnnotations := map[string]bool{
+		ast.AnnotOwned:       true,
+		ast.AnnotRegion:      true,
+		ast.AnnotNoEscape:    true,
+		ast.AnnotDebugCycles: true,
+	}
+	memAnnotCount := 0
+	for _, a := range annotations {
+		if !validAnnotations[a] {
+			return fmt.Errorf("unknown annotation '#[%s]' on '%s'", a, name)
+		}
+		if a == ast.AnnotOwned || a == ast.AnnotRegion || a == ast.AnnotNoEscape {
+			memAnnotCount++
+		}
+	}
+
+	// Mutual exclusivity: only one of owned/region/noEscape
+	if memAnnotCount > 1 {
+		return fmt.Errorf("annotations #[owned], #[region], and #[noEscape] are mutually exclusive on '%s'", name)
+	}
+
+	// Annotations only on heap types
+	if !ast.IsHeapType(typ) {
+		return fmt.Errorf("annotations are only allowed on heap types (string, arrays, channels), got %s on '%s'", typeName(typ), name)
+	}
+
+	return nil
+}
+
 func canAssign(targetType, exprType ast.Type, expr ast.Expr) bool {
 	if exprType == targetType {
 		return true
@@ -1285,6 +1375,10 @@ func canAssign(targetType, exprType ast.Type, expr ast.Expr) bool {
 	}
 	// char literal -> int, long, or double
 	if isCharLiteral(expr) && (targetType == ast.TypeInt || targetType == ast.TypeLong || targetType == ast.TypeDouble) {
+		return true
+	}
+	// weak<T> accepts T (wrapping a strong ref into a weak ref)
+	if ast.IsWeakType(targetType) && exprType == ast.WeakInnerType(targetType) {
 		return true
 	}
 	// float literal -> double (already types as double, but keep for clarity)
@@ -1341,6 +1435,9 @@ func typeName(t ast.Type) string {
 			}
 			s += "): " + typeName(ret)
 			return s
+		}
+		if ast.IsWeakType(t) {
+			return "weak<" + typeName(ast.WeakInnerType(t)) + ">"
 		}
 		return "unknown"
 	}

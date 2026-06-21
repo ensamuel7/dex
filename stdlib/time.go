@@ -29,9 +29,6 @@ func init() {
 				CName:      "dex_time_sleep",
 			},
 		},
-		CIncludes: `#include <time.h>
-#include <unistd.h>
-`,
 		CRuntime: timeRuntime,
 	})
 }

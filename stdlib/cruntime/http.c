@@ -1,5 +1,16 @@
 
-typedef const char* (*dex_handler_fn)(void);
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <signal.h>
+#include <curl/curl.h>
+
+typedef DexString* (*dex_handler_fn)(void);
 
 typedef struct {
     const char* method;
@@ -57,17 +68,18 @@ static void dex_handle_connection(int client_fd) {
         if (strstr(buf, "Connection: close")) keep_alive = 0;
 
         // Match route
-        const char* body = NULL;
+        DexString* body_str = NULL;
         for (int i = 0; i < dex_route_count; i++) {
             if (strcmp(method, dex_routes[i].method) == 0 &&
                 strcmp(path, dex_routes[i].path) == 0) {
-                body = dex_routes[i].handler();
+                body_str = dex_routes[i].handler();
                 break;
             }
         }
 
-        if (body) {
-            dex_send_response(client_fd, "200 OK", body, keep_alive);
+        if (body_str) {
+            dex_send_response(client_fd, "200 OK", body_str->data, keep_alive);
+            dex_release(body_str);
         } else {
             dex_send_response(client_fd, "404 Not Found",
                 "{\"error\": \"Not Found\"}", keep_alive);
@@ -204,7 +216,7 @@ static struct curl_slist* dex_http_parse_json_headers(const char* json_str) {
 }
 
 static Dex_HttpResponse dex_http_request_impl(const char* method, const char* url, const char* body, const char* headers) {
-    Dex_HttpResponse resp = {0, ""};
+    Dex_HttpResponse resp = {0, NULL};
     CURL* curl = curl_easy_init();
     if (!curl) return resp;
 
@@ -255,10 +267,11 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
         long code;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
         resp.statusCode = (int)code;
-        resp.body = buf.data;
+        resp.body = dex_string_from_cstr(buf.data);
+        free(buf.data);
     } else {
         resp.statusCode = 0;
-        resp.body = strdup(curl_easy_strerror(res));
+        resp.body = dex_string_from_cstr(curl_easy_strerror(res));
         free(buf.data);
     }
 
@@ -341,7 +354,7 @@ const char* dex_http_form_file(const char* form, const char* key, const char* pa
 }
 
 static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* form, const char* headers) {
-    Dex_HttpResponse resp = {0, ""};
+    Dex_HttpResponse resp = {0, NULL};
     CURL* curl = curl_easy_init();
     if (!curl) return resp;
 
@@ -418,10 +431,11 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
         long code;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
         resp.statusCode = (int)code;
-        resp.body = buf.data;
+        resp.body = dex_string_from_cstr(buf.data);
+        free(buf.data);
     } else {
         resp.statusCode = 0;
-        resp.body = strdup(curl_easy_strerror(res));
+        resp.body = dex_string_from_cstr(curl_easy_strerror(res));
         free(buf.data);
     }
 

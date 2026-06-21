@@ -38,34 +38,43 @@ func (p *Parser) Parse() (*ast.Program, error) {
 		program.Imports = append(program.Imports, ast.Import{Path: path})
 	}
 
-	// Parse struct definitions (with optional access modifiers)
-	for p.isStructDef() {
+	// Parse struct definitions (with optional annotations and access modifiers)
+	for p.isStructDefAhead() {
+		annotations := p.collectAnnotations()
 		sd, err := p.parseStructDef()
 		if err != nil {
 			return nil, err
 		}
+		_ = annotations // struct-level annotations reserved for future use
 		program.Structs = append(program.Structs, *sd)
 	}
 
 	for !p.atEnd() {
+		annotations := p.collectAnnotations()
 		fn, err := p.parseFunction()
 		if err != nil {
 			return nil, err
 		}
+		fn.Annotations = annotations
 		program.Functions = append(program.Functions, *fn)
 	}
 
 	return program, nil
 }
 
-// isStructDef returns true if the current tokens form a struct definition,
-// possibly preceded by an access modifier (public/private).
-func (p *Parser) isStructDef() bool {
-	if p.check(token.TokenStruct) {
+// isStructDefAhead returns true if the current tokens form a struct definition,
+// possibly preceded by annotations and/or an access modifier (public/private).
+func (p *Parser) isStructDefAhead() bool {
+	// Skip past any annotations to peek at what follows
+	i := p.pos
+	for i < len(p.tokens) && p.tokens[i].Kind == token.TokenAnnotation {
+		i++
+	}
+	if i < len(p.tokens) && p.tokens[i].Kind == token.TokenStruct {
 		return true
 	}
-	if (p.check(token.TokenPublic) || p.check(token.TokenPrivate)) &&
-		p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenStruct {
+	if i < len(p.tokens) && (p.tokens[i].Kind == token.TokenPublic || p.tokens[i].Kind == token.TokenPrivate) &&
+		i+1 < len(p.tokens) && p.tokens[i+1].Kind == token.TokenStruct {
 		return true
 	}
 	return false
@@ -90,6 +99,9 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 
 	var fields []ast.StructField
 	for !p.check(token.TokenRBrace) && !p.atEnd() {
+		// Collect optional annotations on field
+		fieldAnnotations := p.collectAnnotations()
+
 		// Check for optional access modifier on field
 		fieldPrivate := false
 		if p.check(token.TokenPrivate) {
@@ -110,7 +122,7 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 		if err != nil {
 			return nil, err
 		}
-		fields = append(fields, ast.StructField{Name: fieldName, Type: fieldType, IsPrivate: fieldPrivate})
+		fields = append(fields, ast.StructField{Name: fieldName, Type: fieldType, IsPrivate: fieldPrivate, Annotations: fieldAnnotations})
 	}
 
 	if err := p.expect(token.TokenRBrace); err != nil {
@@ -192,6 +204,8 @@ func (p *Parser) parseParams() ([]ast.Param, error) {
 	}
 
 	for {
+		annotations := p.collectAnnotations()
+
 		name, err := p.expectIdent()
 		if err != nil {
 			return nil, err
@@ -206,7 +220,7 @@ func (p *Parser) parseParams() ([]ast.Param, error) {
 			return nil, err
 		}
 
-		params = append(params, ast.Param{Name: name, Type: typ})
+		params = append(params, ast.Param{Name: name, Type: typ, Annotations: annotations})
 
 		if !p.match(token.TokenComma) {
 			break
@@ -248,6 +262,19 @@ func (p *Parser) parseType() (ast.Type, error) {
 			return 0, err
 		}
 		return ast.ChanTypeOf(elemType), nil
+	case token.TokenWeak:
+		p.advance() // consume 'weak'
+		if err := p.expect(token.TokenLt); err != nil {
+			return 0, p.errorf("expected '<' after 'weak'")
+		}
+		innerType, err := p.parseType()
+		if err != nil {
+			return 0, err
+		}
+		if err := p.expect(token.TokenGt); err != nil {
+			return 0, p.errorf("expected '>' after weak inner type")
+		}
+		return ast.WeakTypeOf(innerType), nil
 	case token.TokenFn, token.TokenFunction:
 		p.advance() // consume 'fn' or 'function'
 		if err := p.expect(token.TokenLParen); err != nil {
@@ -321,6 +348,29 @@ func (p *Parser) parseBlock() ([]ast.Stmt, error) {
 }
 
 func (p *Parser) parseStmt() (ast.Stmt, error) {
+	// Collect annotations that may precede let/const
+	if p.check(token.TokenAnnotation) {
+		annotations := p.collectAnnotations()
+		switch p.current().Kind {
+		case token.TokenLet:
+			stmt, err := p.parseLetStmt()
+			if err != nil {
+				return nil, err
+			}
+			stmt.(*ast.LetStmt).Annotations = annotations
+			return stmt, nil
+		case token.TokenConst:
+			stmt, err := p.parseConstStmt()
+			if err != nil {
+				return nil, err
+			}
+			stmt.(*ast.LetStmt).Annotations = annotations
+			return stmt, nil
+		default:
+			return nil, p.errorf("annotations are only allowed before 'let' or 'const' declarations")
+		}
+	}
+
 	switch p.current().Kind {
 	case token.TokenLet:
 		return p.parseLetStmt()
@@ -1229,6 +1279,15 @@ func (p *Parser) expectIdent() (string, error) {
 	}
 	p.advance()
 	return tok.Value, nil
+}
+
+func (p *Parser) collectAnnotations() []string {
+	var annotations []string
+	for p.check(token.TokenAnnotation) {
+		annotations = append(annotations, p.current().Value)
+		p.advance()
+	}
+	return annotations
 }
 
 func (p *Parser) errorf(format string, args ...interface{}) error {

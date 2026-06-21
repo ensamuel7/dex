@@ -261,6 +261,35 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 			continue
 		}
 
+		// Annotation: #[...]
+		if ch == '#' && l.pos+1 < len(l.source) && l.source[l.pos+1] == '[' {
+			l.advance() // consume '#'
+			l.advance() // consume '['
+			depth := 1
+			var content []rune
+			for l.pos < len(l.source) && depth > 0 {
+				c := l.source[l.pos]
+				if c == '[' || c == '(' {
+					depth++
+				} else if c == ']' {
+					depth--
+					if depth == 0 {
+						break
+					}
+				} else if c == ')' {
+					// only decrement if we had a matching '('
+				}
+				content = append(content, c)
+				l.advance()
+			}
+			if l.pos >= len(l.source) {
+				return nil, fmt.Errorf("%d:%d: unterminated annotation", startLine, startCol)
+			}
+			l.advance() // consume closing ']'
+			tokens = append(tokens, token.Token{Kind: token.TokenAnnotation, Value: string(content), Line: startLine, Col: startCol})
+			continue
+		}
+
 		// Percent operator
 		if ch == '%' {
 			tokens = append(tokens, token.Token{Kind: token.TokenPercent, Value: "%", Line: startLine, Col: startCol})

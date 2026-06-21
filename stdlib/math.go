@@ -120,8 +120,7 @@ func init() {
 				CName:      "dex_math_max",
 			},
 		},
-		CIncludes: "#include <math.h>\n",
-		CFlags:    []string{"-lm"},
+		CFlags: []string{"-lm"},
 		CRuntime:  mathRuntime,
 	})
 }

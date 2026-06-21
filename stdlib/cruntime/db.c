@@ -1,4 +1,12 @@
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sqlite3.h>
+#include <libpq-fe.h>
+#include <mysql/mysql.h>
+#include <mongoc/mongoc.h>
+
 #define DEX_DB_MAX_CONNS 16
 #define DEX_DB_MAX_RESULTS 64
 

@@ -1,4 +1,8 @@
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 const char* dex_json_new(void) {
     char* s = (char*)malloc(3);
     s[0] = '{'; s[1] = '}'; s[2] = '\0';

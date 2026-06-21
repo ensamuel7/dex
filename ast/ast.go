@@ -36,10 +36,14 @@ const TypeTaskBase Type = 3000
 // Function type system: dynamic IDs starting at 4000
 const TypeFuncBase Type = 4000
 
+// Weak reference type system: dynamic IDs starting at 5000
+const TypeWeakBase Type = 5000
+
 type StructField struct {
-	Name      string
-	Type      Type
-	IsPrivate bool
+	Name        string
+	Type        Type
+	IsPrivate   bool
+	Annotations []string
 }
 
 type StructDef struct {
@@ -215,7 +219,7 @@ func FuncTypeOf(params []Type, returnType Type) Type {
 }
 
 func IsFuncType(t Type) bool {
-	return t >= TypeFuncBase
+	return t >= TypeFuncBase && t < TypeWeakBase
 }
 
 func FuncTypeParams(t Type) []Type {
@@ -232,6 +236,27 @@ func FuncTypeReturn(t Type) Type {
 		return TypeVoid
 	}
 	return funcTypes[idx].ReturnType
+}
+
+func IsHeapType(t Type) bool {
+	return t == TypeString || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t)
+}
+
+func NeedsRelease(t Type) bool {
+	if IsHeapType(t) {
+		return true
+	}
+	if IsStructType(t) {
+		def := GetStructDef(t)
+		if def != nil {
+			for _, f := range def.Fields {
+				if NeedsRelease(f.Type) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func IsArrayType(t Type) bool {
@@ -314,16 +339,18 @@ type Program struct {
 }
 
 type Function struct {
-	Name       string
-	Params     []Param
-	ReturnType Type
-	Body       []Stmt
-	IsPrivate  bool
+	Name        string
+	Params      []Param
+	ReturnType  Type
+	Body        []Stmt
+	IsPrivate   bool
+	Annotations []string
 }
 
 type Param struct {
-	Name string
-	Type Type
+	Name        string
+	Type        Type
+	Annotations []string
 }
 
 // Stmt interface
@@ -339,10 +366,11 @@ type Expr interface {
 // Statements
 
 type LetStmt struct {
-	Name    string
-	Type    Type
-	Value   Expr
-	IsConst bool
+	Name        string
+	Type        Type
+	Value       Expr
+	IsConst     bool
+	Annotations []string
 }
 
 type ReturnStmt struct {
@@ -546,3 +574,58 @@ type ReceiveExpr struct {
 }
 
 func (e *ReceiveExpr) exprNode() {}
+
+// Weak reference type registry
+var (
+	weakTypes  []Type        // inner type for each weak type ID
+	weakByInner map[Type]Type // inner type → weak type ID
+)
+
+func init() {
+	ResetWeakTypes()
+}
+
+func ResetWeakTypes() {
+	weakTypes = nil
+	weakByInner = make(map[Type]Type)
+}
+
+func WeakTypeOf(innerType Type) Type {
+	if id, ok := weakByInner[innerType]; ok {
+		return id
+	}
+	id := TypeWeakBase + Type(len(weakTypes))
+	weakByInner[innerType] = id
+	weakTypes = append(weakTypes, innerType)
+	return id
+}
+
+func IsWeakType(t Type) bool {
+	return t >= TypeWeakBase
+}
+
+func WeakInnerType(t Type) Type {
+	idx := int(t - TypeWeakBase)
+	if idx < 0 || idx >= len(weakTypes) {
+		return TypeVoid
+	}
+	return weakTypes[idx]
+}
+
+// Annotation constants
+const (
+	AnnotOwned       = "owned"
+	AnnotRegion      = "region"
+	AnnotNoEscape    = "noEscape"
+	AnnotDebugCycles = "debug(cycles)"
+)
+
+// HasAnnotation checks if the given annotation is present in the list.
+func HasAnnotation(annotations []string, name string) bool {
+	for _, a := range annotations {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}

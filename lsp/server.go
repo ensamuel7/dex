@@ -582,7 +582,11 @@ func formatModuleHover(path string) string {
 	for name, fdef := range mod.Funcs {
 		var params []string
 		for i, p := range fdef.Params {
-			params = append(params, fmt.Sprintf("arg%d: %s", i+1, typeName(p)))
+			pname := fmt.Sprintf("arg%d", i+1)
+			if i < len(fdef.ParamNames) {
+				pname = fdef.ParamNames[i]
+			}
+			params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
 		}
 		funcs = append(funcs, fmt.Sprintf("- `%s(%s): %s`", name, strings.Join(params, ", "), typeName(fdef.ReturnType)))
 	}
@@ -592,10 +596,18 @@ func formatModuleHover(path string) string {
 func formatStdlibFuncHover(moduleName, funcName string, fdef *stdlib.FuncDef) string {
 	var params []string
 	for i, p := range fdef.Params {
-		params = append(params, fmt.Sprintf("arg%d: %s", i+1, typeName(p)))
+		pname := fmt.Sprintf("arg%d", i+1)
+		if i < len(fdef.ParamNames) {
+			pname = fdef.ParamNames[i]
+		}
+		params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
 	}
 	sig := fmt.Sprintf("%s.%s(%s): %s", moduleName, funcName, strings.Join(params, ", "), typeName(fdef.ReturnType))
-	return fmt.Sprintf("```dex\n%s\n```\n\nStandard library function.", sig)
+	doc := "Standard library function."
+	if fdef.Doc != "" {
+		doc = fdef.Doc
+	}
+	return fmt.Sprintf("```dex\n%s\n```\n\n%s", sig, doc)
 }
 
 // --- Completion ---
@@ -698,13 +710,18 @@ func (s *Server) moduleCompletions(moduleName string) []CompletionItem {
 		for name, fdef := range mod.Funcs {
 			var params []string
 			for i, p := range fdef.Params {
-				params = append(params, fmt.Sprintf("arg%d: %s", i+1, typeName(p)))
+				pname := fmt.Sprintf("arg%d", i+1)
+				if i < len(fdef.ParamNames) {
+					pname = fdef.ParamNames[i]
+				}
+				params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
 			}
 			detail := fmt.Sprintf("(%s): %s", strings.Join(params, ", "), typeName(fdef.ReturnType))
 			items = append(items, CompletionItem{
-				Label:  name,
-				Kind:   CompletionKindFunction,
-				Detail: detail,
+				Label:         name,
+				Kind:          CompletionKindFunction,
+				Detail:        detail,
+				Documentation: fdef.Doc,
 			})
 		}
 		return items

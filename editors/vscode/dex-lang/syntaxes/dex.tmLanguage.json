@@ -5,12 +5,15 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
+    { "include": "#characters" },
     { "include": "#numbers" },
+    { "include": "#struct-definition" },
     { "include": "#function-definition" },
     { "include": "#import-statement" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
+    { "include": "#builtins" },
     { "include": "#module-call" },
     { "include": "#function-call" },
     { "include": "#operators" },
@@ -34,17 +37,43 @@
           "patterns": [
             {
               "name": "constant.character.escape.dex",
-              "match": "\\\\[\"\\\\nt]"
+              "match": "\\\\[\"\\\\nt0]"
             }
           ]
+        }
+      ]
+    },
+    "characters": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.dex",
+          "match": "'(\\\\[\"\\\\nt0']|[^'\\\\])'",
+          "captures": {
+            "0": { "name": "string.quoted.single.dex" }
+          }
         }
       ]
     },
     "numbers": {
       "patterns": [
         {
+          "name": "constant.numeric.float.dex",
+          "match": "\\b[0-9]+\\.[0-9]+\\b"
+        },
+        {
           "name": "constant.numeric.integer.dex",
           "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "struct-definition": {
+      "patterns": [
+        {
+          "match": "\\b(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.struct.dex" },
+            "2": { "name": "entity.name.type.struct.dex" }
+          }
         }
       ]
     },
@@ -74,7 +103,7 @@
       "patterns": [
         {
           "name": "keyword.control.dex",
-          "match": "\\b(if|else|while|return)\\b"
+          "match": "\\b(if|else|while|for|foreach|as|return|break|continue)\\b"
         },
         {
           "name": "keyword.other.fn.dex",
@@ -82,11 +111,27 @@
         },
         {
           "name": "keyword.other.let.dex",
-          "match": "\\blet\\b"
+          "match": "\\b(let|const)\\b"
         },
         {
           "name": "keyword.control.import.dex",
           "match": "\\bimport\\b"
+        },
+        {
+          "name": "keyword.other.struct.dex",
+          "match": "\\bstruct\\b"
+        },
+        {
+          "name": "keyword.other.access.dex",
+          "match": "\\b(public|private)\\b"
+        },
+        {
+          "name": "keyword.other.concurrency.dex",
+          "match": "\\b(spawn)\\b"
+        },
+        {
+          "name": "keyword.other.modifier.dex",
+          "match": "\\b(weak)\\b"
         }
       ]
     },
@@ -94,7 +139,11 @@
       "patterns": [
         {
           "name": "support.type.primitive.dex",
-          "match": "\\b(i32|bool|string|void)\\b"
+          "match": "\\b(int|long|double|char|bool|string|void)\\b"
+        },
+        {
+          "name": "support.type.channel.dex",
+          "match": "\\b(chan)\\b"
         }
       ]
     },
@@ -103,6 +152,14 @@
         {
           "name": "constant.language.boolean.dex",
           "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.dex",
+          "match": "\\b(assert|send|receive|channel|close)\\s*(?=\\()"
         }
       ]
     },
@@ -131,15 +188,23 @@
       "patterns": [
         {
           "name": "keyword.operator.comparison.dex",
-          "match": "==|!=|<=|>=|<|>"
+          "match": "===|!==|==|!=|<=|>=|<|>"
         },
         {
           "name": "keyword.operator.logical.dex",
           "match": "&&|\\|\\||!"
         },
         {
+          "name": "keyword.operator.assignment.compound.dex",
+          "match": "\\+=|-="
+        },
+        {
+          "name": "keyword.operator.increment.dex",
+          "match": "\\+\\+|--"
+        },
+        {
           "name": "keyword.operator.arithmetic.dex",
-          "match": "[+\\-*/]"
+          "match": "[+\\-*/%]"
         },
         {
           "name": "keyword.operator.assignment.dex",
@@ -156,6 +221,10 @@
         {
           "name": "punctuation.separator.comma.dex",
           "match": ","
+        },
+        {
+          "name": "punctuation.terminator.semicolon.dex",
+          "match": ";"
         },
         {
           "name": "punctuation.accessor.dot.dex",

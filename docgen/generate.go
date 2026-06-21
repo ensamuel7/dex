@@ -39,6 +39,7 @@ type FuncData struct {
 	Name   string
 	Params string
 	Return string
+	Doc    string
 }
 
 // KeywordData represents a keyword or type keyword entry.
@@ -237,6 +238,7 @@ func Generate(projectRoot string) (string, error) {
 				Name:   fnName,
 				Params: paramStr,
 				Return: retType,
+				Doc:    fd.Doc,
 			})
 		}
 		data.Modules = append(data.Modules, md)

@@ -4,8 +4,10 @@ import "github.com/ensamuel7/dex/ast"
 
 type FuncDef struct {
 	Params     []ast.Type
+	ParamNames []string // human-readable parameter names
 	ReturnType ast.Type
 	CName      string // C function to call ("" = special handling in codegen)
+	Doc        string // one-line description shown in editor
 }
 
 type Module struct {

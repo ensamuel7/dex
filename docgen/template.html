@@ -484,7 +484,7 @@ import "json"</code></pre>
 {{range .Modules}}
 <h4>{{.Name}}</h4>
 {{range .Funcs}}
-<div class="func-card"><div class="sig"><span class="module">{{.Module}}</span>.{{.Name}}(<span class="ptype">{{.Params}}</span>) <span class="ret">-&gt; {{.Return}}</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">{{.Module}}</span>.{{.Name}}(<span class="ptype">{{.Params}}</span>) <span class="ret">-&gt; {{.Return}}</span></div>{{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}</div>
 {{end}}
 {{end}}
 </section>

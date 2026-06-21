@@ -143,20 +143,29 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString(ConcurrencyRuntime)
 	}
 
-	// Emit C runtime from imported modules
+	// Emit struct typedefs (module-provided types first, then user-defined)
 	for _, mod := range g.importedModules {
-		if mod.CRuntime != "" {
-			out.WriteString(mod.CRuntime)
+		for _, sd := range mod.Types {
+			out.WriteString(fmt.Sprintf("typedef struct {\n"))
+			for _, f := range sd.Fields {
+				out.WriteString(fmt.Sprintf("    %s %s;\n", g.cType(f.Type), f.Name))
+			}
+			out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
 		}
 	}
-
-	// Emit struct typedefs
 	for _, sd := range program.Structs {
 		out.WriteString(fmt.Sprintf("typedef struct {\n"))
 		for _, f := range sd.Fields {
 			out.WriteString(fmt.Sprintf("    %s %s;\n", g.cType(f.Type), f.Name))
 		}
 		out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
+	}
+
+	// Emit C runtime from imported modules
+	for _, mod := range g.importedModules {
+		if mod.CRuntime != "" {
+			out.WriteString(mod.CRuntime)
+		}
 	}
 
 	// Emit function pointer typedefs
@@ -1031,6 +1040,147 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
+	// HTTP client functions
+	if e.Module == "http" {
+		switch e.Name {
+		case "get":
+			if len(e.Args) == 2 {
+				out.WriteString("dex_http_get_h(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(")")
+			} else {
+				out.WriteString("dex_http_get(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(")")
+			}
+			return
+		case "post":
+			if len(e.Args) == 3 {
+				out.WriteString("dex_http_post_h(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[2])
+				out.WriteString(")")
+			} else {
+				out.WriteString("dex_http_post(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(")")
+			}
+			return
+		case "put":
+			if len(e.Args) == 3 {
+				out.WriteString("dex_http_put_h(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[2])
+				out.WriteString(")")
+			} else {
+				out.WriteString("dex_http_put(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(")")
+			}
+			return
+		case "patch":
+			if len(e.Args) == 3 {
+				out.WriteString("dex_http_patch_h(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[2])
+				out.WriteString(")")
+			} else {
+				out.WriteString("dex_http_patch(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(")")
+			}
+			return
+		case "delete":
+			if len(e.Args) == 2 {
+				out.WriteString("dex_http_delete_h(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(")")
+			} else {
+				out.WriteString("dex_http_delete(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(")")
+			}
+			return
+		case "request":
+			out.WriteString("dex_http_request(")
+			g.genExpr(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[2])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[3])
+			out.WriteString(")")
+			return
+		case "header":
+			out.WriteString("dex_http_header(")
+			g.genExpr(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[2])
+			out.WriteString(")")
+			return
+		case "formNew":
+			out.WriteString("dex_http_form_new()")
+			return
+		case "formField":
+			out.WriteString("dex_http_form_field(")
+			g.genExpr(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[2])
+			out.WriteString(")")
+			return
+		case "formFile":
+			out.WriteString("dex_http_form_file(")
+			g.genExpr(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[2])
+			out.WriteString(")")
+			return
+		case "postForm":
+			if len(e.Args) == 3 {
+				out.WriteString("dex_http_post_form_h(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[2])
+				out.WriteString(")")
+			} else {
+				out.WriteString("dex_http_post_form(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(")")
+			}
+			return
+		}
+	}
+
 	// Built-in: close(channel)
 	if e.Module == "" && e.Name == "close" {
 		out.WriteString("dex_chan_close(")
@@ -1432,8 +1582,8 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 	case *ast.StringLit:
 		return true
 	case *ast.CallExpr:
-		// Polymorphic return type: db.col uses ResolvedType
-		if e.Module == "db" && e.Name == "col" {
+		// Polymorphic return type: uses ResolvedType if set
+		if e.ResolvedType != 0 {
 			return e.ResolvedType == ast.TypeString
 		}
 		// Check stdlib functions
@@ -1712,8 +1862,8 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			return ast.FuncTypeOf(paramTypes, fn.ReturnType)
 		}
 	case *ast.CallExpr:
-		// Polymorphic return type: db.col uses ResolvedType
-		if e.Module == "db" && e.Name == "col" {
+		// Polymorphic return type: db.col and http client functions use ResolvedType
+		if e.ResolvedType != 0 {
 			return e.ResolvedType
 		}
 		if e.Module != "" {

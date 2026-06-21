@@ -134,3 +134,307 @@ void dex_listen(int port) {
         pthread_detach(tid);
     }
 }
+
+// --- HTTP Client (libcurl) ---
+// Dex_HttpResponse typedef is emitted by codegen from module Types.
+
+typedef struct {
+    char* data;
+    size_t len;
+} dex_http_buf;
+
+static size_t dex_http_write_cb(void* contents, size_t size, size_t nmemb, void* userp) {
+    size_t total = size * nmemb;
+    dex_http_buf* buf = (dex_http_buf*)userp;
+    char* ptr = realloc(buf->data, buf->len + total + 1);
+    if (!ptr) return 0;
+    buf->data = ptr;
+    memcpy(buf->data + buf->len, contents, total);
+    buf->len += total;
+    buf->data[buf->len] = '\0';
+    return total;
+}
+
+// --- Header builder ---
+const char* dex_http_header(const char* headers, const char* key, const char* value) {
+    size_t hlen = strlen(headers);
+    size_t klen = strlen(key);
+    size_t vlen = strlen(value);
+    // "Key: Value\n"
+    size_t newlen = hlen + klen + 2 + vlen + 1 + 1;
+    char* result = (char*)malloc(newlen);
+    snprintf(result, newlen, "%s%s: %s\n", headers, key, value);
+    return result;
+}
+
+// --- JSON header auto-detection ---
+static struct curl_slist* dex_http_parse_json_headers(const char* json_str) {
+    struct curl_slist* list = NULL;
+    const char* p = json_str;
+    while (*p) {
+        // Find next quoted key
+        const char* kq = strchr(p, '"');
+        if (!kq) break;
+        kq++;
+        const char* kend = strchr(kq, '"');
+        if (!kend) break;
+        size_t klen = (size_t)(kend - kq);
+        // Find colon then quoted value
+        const char* colon = strchr(kend + 1, ':');
+        if (!colon) break;
+        const char* vq = strchr(colon + 1, '"');
+        if (!vq) break;
+        vq++;
+        const char* vend = strchr(vq, '"');
+        if (!vend) break;
+        size_t vlen = (size_t)(vend - vq);
+        // Build "Key: Value" header
+        size_t hlen = klen + 2 + vlen + 1;
+        char* h = (char*)malloc(hlen);
+        memcpy(h, kq, klen);
+        h[klen] = ':';
+        h[klen + 1] = ' ';
+        memcpy(h + klen + 2, vq, vlen);
+        h[hlen - 1] = '\0';
+        list = curl_slist_append(list, h);
+        free(h);
+        p = vend + 1;
+    }
+    return list;
+}
+
+static Dex_HttpResponse dex_http_request_impl(const char* method, const char* url, const char* body, const char* headers) {
+    Dex_HttpResponse resp = {0, ""};
+    CURL* curl = curl_easy_init();
+    if (!curl) return resp;
+
+    dex_http_buf buf = {NULL, 0};
+    buf.data = malloc(1);
+    buf.data[0] = '\0';
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, dex_http_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+
+    if (body && body[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    }
+
+    struct curl_slist* hdr_list = NULL;
+    if (headers && headers[0] != '\0') {
+        // Auto-detect: JSON object vs newline-separated headers
+        // Skip leading whitespace for detection
+        const char* detect = headers;
+        while (*detect == ' ' || *detect == '\t') detect++;
+        if (*detect == '{') {
+            // JSON format: parse key-value pairs
+            hdr_list = dex_http_parse_json_headers(headers);
+        } else {
+            // Newline-separated "Key: Value\n" format
+            const char* p = headers;
+            while (*p) {
+                const char* end = strchr(p, '\n');
+                if (!end) end = p + strlen(p);
+                size_t hlen = (size_t)(end - p);
+                char* h = (char*)malloc(hlen + 1);
+                memcpy(h, p, hlen);
+                h[hlen] = '\0';
+                // Trim trailing \r
+                if (hlen > 0 && h[hlen-1] == '\r') h[hlen-1] = '\0';
+                if (h[0] != '\0') hdr_list = curl_slist_append(hdr_list, h);
+                free(h);
+                p = (*end) ? end + 1 : end;
+            }
+        }
+    }
+    if (hdr_list) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr_list);
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_OK) {
+        long code;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+        resp.statusCode = (int)code;
+        resp.body = buf.data;
+    } else {
+        resp.statusCode = 0;
+        resp.body = strdup(curl_easy_strerror(res));
+        free(buf.data);
+    }
+
+    if (hdr_list) curl_slist_free_all(hdr_list);
+    curl_easy_cleanup(curl);
+    return resp;
+}
+
+Dex_HttpResponse dex_http_get(const char* url) {
+    return dex_http_request_impl("GET", url, NULL, NULL);
+}
+
+Dex_HttpResponse dex_http_get_h(const char* url, const char* headers) {
+    return dex_http_request_impl("GET", url, NULL, headers);
+}
+
+Dex_HttpResponse dex_http_post(const char* url, const char* body) {
+    return dex_http_request_impl("POST", url, body, "Content-Type: application/json");
+}
+
+Dex_HttpResponse dex_http_post_h(const char* url, const char* body, const char* headers) {
+    return dex_http_request_impl("POST", url, body, headers);
+}
+
+Dex_HttpResponse dex_http_put(const char* url, const char* body) {
+    return dex_http_request_impl("PUT", url, body, "Content-Type: application/json");
+}
+
+Dex_HttpResponse dex_http_put_h(const char* url, const char* body, const char* headers) {
+    return dex_http_request_impl("PUT", url, body, headers);
+}
+
+Dex_HttpResponse dex_http_patch(const char* url, const char* body) {
+    return dex_http_request_impl("PATCH", url, body, "Content-Type: application/json");
+}
+
+Dex_HttpResponse dex_http_patch_h(const char* url, const char* body, const char* headers) {
+    return dex_http_request_impl("PATCH", url, body, headers);
+}
+
+Dex_HttpResponse dex_http_delete(const char* url) {
+    return dex_http_request_impl("DELETE", url, NULL, NULL);
+}
+
+Dex_HttpResponse dex_http_delete_h(const char* url, const char* headers) {
+    return dex_http_request_impl("DELETE", url, NULL, headers);
+}
+
+Dex_HttpResponse dex_http_request(const char* method, const char* url, const char* body, const char* headers) {
+    return dex_http_request_impl(method, url, body, headers);
+}
+
+// --- Form data (multipart) ---
+// Form string encoding: "F\tkey\tvalue\n" for fields, "P\tkey\tpath\n" for files
+
+const char* dex_http_form_new(void) {
+    return strdup("");
+}
+
+const char* dex_http_form_field(const char* form, const char* key, const char* value) {
+    size_t flen = strlen(form);
+    size_t klen = strlen(key);
+    size_t vlen = strlen(value);
+    // "F\tkey\tvalue\n"
+    size_t newlen = flen + 2 + klen + 1 + vlen + 1 + 1;
+    char* result = (char*)malloc(newlen);
+    snprintf(result, newlen, "%sF\t%s\t%s\n", form, key, value);
+    return result;
+}
+
+const char* dex_http_form_file(const char* form, const char* key, const char* path) {
+    size_t flen = strlen(form);
+    size_t klen = strlen(key);
+    size_t plen = strlen(path);
+    // "P\tkey\tpath\n"
+    size_t newlen = flen + 2 + klen + 1 + plen + 1 + 1;
+    char* result = (char*)malloc(newlen);
+    snprintf(result, newlen, "%sP\t%s\t%s\n", form, key, path);
+    return result;
+}
+
+static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* form, const char* headers) {
+    Dex_HttpResponse resp = {0, ""};
+    CURL* curl = curl_easy_init();
+    if (!curl) return resp;
+
+    dex_http_buf buf = {NULL, 0};
+    buf.data = malloc(1);
+    buf.data[0] = '\0';
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, dex_http_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+
+    struct curl_slist* hdr_list = NULL;
+    if (headers && headers[0] != '\0') {
+        const char* detect = headers;
+        while (*detect == ' ' || *detect == '\t') detect++;
+        if (*detect == '{') {
+            hdr_list = dex_http_parse_json_headers(headers);
+        } else {
+            const char* hp = headers;
+            while (*hp) {
+                const char* end = strchr(hp, '\n');
+                if (!end) end = hp + strlen(hp);
+                size_t hlen = (size_t)(end - hp);
+                char* h = (char*)malloc(hlen + 1);
+                memcpy(h, hp, hlen);
+                h[hlen] = '\0';
+                if (hlen > 0 && h[hlen-1] == '\r') h[hlen-1] = '\0';
+                if (h[0] != '\0') hdr_list = curl_slist_append(hdr_list, h);
+                free(h);
+                hp = (*end) ? end + 1 : end;
+            }
+        }
+    }
+    if (hdr_list) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr_list);
+
+    curl_mime* mime = curl_mime_init(curl);
+
+    // Parse form string
+    const char* p = form;
+    while (*p) {
+        const char* line_end = strchr(p, '\n');
+        if (!line_end) line_end = p + strlen(p);
+
+        if ((line_end - p) > 2 && (p[0] == 'F' || p[0] == 'P') && p[1] == '\t') {
+            char type = p[0];
+            const char* key_start = p + 2;
+            const char* tab2 = memchr(key_start, '\t', (size_t)(line_end - key_start));
+            if (tab2) {
+                size_t klen = (size_t)(tab2 - key_start);
+                size_t vlen = (size_t)(line_end - tab2 - 1);
+                char* key = (char*)malloc(klen + 1);
+                char* val = (char*)malloc(vlen + 1);
+                memcpy(key, key_start, klen); key[klen] = '\0';
+                memcpy(val, tab2 + 1, vlen); val[vlen] = '\0';
+
+                curl_mimepart* part = curl_mime_addpart(mime);
+                curl_mime_name(part, key);
+                if (type == 'F') {
+                    curl_mime_data(part, val, CURL_ZERO_TERMINATED);
+                } else {
+                    curl_mime_filedata(part, val);
+                }
+                free(key);
+                free(val);
+            }
+        }
+        p = (*line_end) ? line_end + 1 : line_end;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_OK) {
+        long code;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+        resp.statusCode = (int)code;
+        resp.body = buf.data;
+    } else {
+        resp.statusCode = 0;
+        resp.body = strdup(curl_easy_strerror(res));
+        free(buf.data);
+    }
+
+    if (hdr_list) curl_slist_free_all(hdr_list);
+    curl_mime_free(mime);
+    curl_easy_cleanup(curl);
+    return resp;
+}
+
+Dex_HttpResponse dex_http_post_form(const char* url, const char* form) {
+    return dex_http_post_form_impl(url, form, NULL);
+}
+
+Dex_HttpResponse dex_http_post_form_h(const char* url, const char* form, const char* headers) {
+    return dex_http_post_form_impl(url, form, headers);
+}

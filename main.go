@@ -17,7 +17,8 @@ import (
 	"github.com/ensamuel7/dex/lexer"
 	"github.com/ensamuel7/dex/lsp"
 	"github.com/ensamuel7/dex/parser"
-	_ "github.com/ensamuel7/dex/stdlib"
+	"github.com/ensamuel7/dex/stdlib"
+	"github.com/ensamuel7/dex/token"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -312,6 +313,9 @@ func build(filename string) (string, error) {
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
 
+	// Register module-provided struct types (e.g. HttpResponse)
+	stdlib.RegisterAllModuleTypes()
+
 	source, err := os.ReadFile(filename)
 	if err != nil {
 		return "", fmt.Errorf("%s: %v", filename, err)
@@ -324,8 +328,15 @@ func build(filename string) (string, error) {
 		return "", fmt.Errorf("%s:%v", filename, err)
 	}
 
+	// Seed parser with module-provided struct type names from imported modules
+	importPaths := extractImportPaths(tokens)
+	typeNames := stdlib.ModuleTypesForImports(importPaths)
+
 	// Parse
 	p := parser.New(tokens)
+	for _, name := range typeNames {
+		p.AddStructName(name)
+	}
 	program, err := p.Parse()
 	if err != nil {
 		return "", fmt.Errorf("%s:%v", filename, err)
@@ -367,4 +378,15 @@ func build(filename string) (string, error) {
 	}
 
 	return binaryPath, nil
+}
+
+// extractImportPaths scans tokens for import declarations and returns their paths.
+func extractImportPaths(tokens []token.Token) []string {
+	var paths []string
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
+			paths = append(paths, tokens[i+1].Value)
+		}
+	}
+	return paths
 }

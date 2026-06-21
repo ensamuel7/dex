@@ -885,6 +885,137 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return ast.TypeVoid, nil
 			}
 
+			// HTTP client functions returning HttpResponse
+			if e.Module == "http" && (e.Name == "get" || e.Name == "post" || e.Name == "put" || e.Name == "patch" || e.Name == "delete" || e.Name == "request" || e.Name == "postForm") {
+				httpRespType, ok := ast.LookupStructType("HttpResponse")
+				if !ok {
+					return 0, fmt.Errorf("HttpResponse type not registered (internal error)")
+				}
+				switch e.Name {
+				case "get":
+					if len(e.Args) < 1 || len(e.Args) > 2 {
+						return 0, fmt.Errorf("http.get() takes 1-2 arguments, got %d", len(e.Args))
+					}
+					for i, arg := range e.Args {
+						argType, err := c.checkExpr(arg)
+						if err != nil {
+							return 0, err
+						}
+						if argType != ast.TypeString {
+							return 0, fmt.Errorf("http.get() argument %d must be string, got %s", i+1, typeName(argType))
+						}
+					}
+				case "post", "put", "patch":
+					if len(e.Args) < 2 || len(e.Args) > 3 {
+						return 0, fmt.Errorf("http.%s() takes 2-3 arguments, got %d", e.Name, len(e.Args))
+					}
+					for i, arg := range e.Args {
+						argType, err := c.checkExpr(arg)
+						if err != nil {
+							return 0, err
+						}
+						if argType != ast.TypeString {
+							return 0, fmt.Errorf("http.%s() argument %d must be string, got %s", e.Name, i+1, typeName(argType))
+						}
+					}
+				case "delete":
+					if len(e.Args) < 1 || len(e.Args) > 2 {
+						return 0, fmt.Errorf("http.delete() takes 1-2 arguments, got %d", len(e.Args))
+					}
+					for i, arg := range e.Args {
+						argType, err := c.checkExpr(arg)
+						if err != nil {
+							return 0, err
+						}
+						if argType != ast.TypeString {
+							return 0, fmt.Errorf("http.delete() argument %d must be string, got %s", i+1, typeName(argType))
+						}
+					}
+				case "request":
+					if len(e.Args) != 4 {
+						return 0, fmt.Errorf("http.request() takes exactly 4 arguments, got %d", len(e.Args))
+					}
+					for i, arg := range e.Args {
+						argType, err := c.checkExpr(arg)
+						if err != nil {
+							return 0, err
+						}
+						if argType != ast.TypeString {
+							return 0, fmt.Errorf("http.request() argument %d must be string, got %s", i+1, typeName(argType))
+						}
+					}
+				case "postForm":
+					if len(e.Args) < 2 || len(e.Args) > 3 {
+						return 0, fmt.Errorf("http.postForm() takes 2-3 arguments, got %d", len(e.Args))
+					}
+					for i, arg := range e.Args {
+						argType, err := c.checkExpr(arg)
+						if err != nil {
+							return 0, err
+						}
+						if argType != ast.TypeString {
+							return 0, fmt.Errorf("http.postForm() argument %d must be string, got %s", i+1, typeName(argType))
+						}
+					}
+				}
+				e.ResolvedType = httpRespType
+				return httpRespType, nil
+			}
+
+			// HTTP header builder function returning string
+			if e.Module == "http" && e.Name == "header" {
+				if len(e.Args) != 3 {
+					return 0, fmt.Errorf("http.header() takes exactly 3 arguments, got %d", len(e.Args))
+				}
+				for i, arg := range e.Args {
+					argType, err := c.checkExpr(arg)
+					if err != nil {
+						return 0, err
+					}
+					if argType != ast.TypeString {
+						return 0, fmt.Errorf("http.header() argument %d must be string, got %s", i+1, typeName(argType))
+					}
+				}
+				return ast.TypeString, nil
+			}
+
+			// HTTP form builder functions returning string
+			if e.Module == "http" && (e.Name == "formNew" || e.Name == "formField" || e.Name == "formFile") {
+				switch e.Name {
+				case "formNew":
+					if len(e.Args) != 0 {
+						return 0, fmt.Errorf("http.formNew() takes no arguments, got %d", len(e.Args))
+					}
+				case "formField":
+					if len(e.Args) != 3 {
+						return 0, fmt.Errorf("http.formField() takes exactly 3 arguments, got %d", len(e.Args))
+					}
+					for i, arg := range e.Args {
+						argType, err := c.checkExpr(arg)
+						if err != nil {
+							return 0, err
+						}
+						if argType != ast.TypeString {
+							return 0, fmt.Errorf("http.formField() argument %d must be string, got %s", i+1, typeName(argType))
+						}
+					}
+				case "formFile":
+					if len(e.Args) != 3 {
+						return 0, fmt.Errorf("http.formFile() takes exactly 3 arguments, got %d", len(e.Args))
+					}
+					for i, arg := range e.Args {
+						argType, err := c.checkExpr(arg)
+						if err != nil {
+							return 0, err
+						}
+						if argType != ast.TypeString {
+							return 0, fmt.Errorf("http.formFile() argument %d must be string, got %s", i+1, typeName(argType))
+						}
+					}
+				}
+				return ast.TypeString, nil
+			}
+
 			funcDef, ok := mod.Funcs[e.Name]
 			if !ok {
 				return 0, fmt.Errorf("undefined function '%s' in module '%s'", e.Name, e.Module)

@@ -4,23 +4,49 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/lexer"
 	"github.com/ensamuel7/dex/parser"
-	_ "github.com/ensamuel7/dex/stdlib" // ensure init() registers modules
+	"github.com/ensamuel7/dex/stdlib"
+	"github.com/ensamuel7/dex/token"
 )
 
 // checkSource runs the full pipeline (lex -> parse -> check) and returns the error if any.
 func checkSource(t *testing.T, source string) error {
 	t.Helper()
+	ast.ResetStructTypes()
+	ast.ResetChanTypes()
+	ast.ResetTaskTypes()
+	stdlib.RegisterAllModuleTypes()
+
 	tokens, err := lexer.New(source).Tokenize()
 	if err != nil {
 		t.Fatalf("lexer error: %v", err)
 	}
-	prog, err := parser.New(tokens).Parse()
+
+	// Seed parser with module type names from imports
+	importPaths := extractTestImportPaths(tokens)
+	typeNames := stdlib.ModuleTypesForImports(importPaths)
+
+	p := parser.New(tokens)
+	for _, name := range typeNames {
+		p.AddStructName(name)
+	}
+	prog, err := p.Parse()
 	if err != nil {
 		t.Fatalf("parser error: %v", err)
 	}
 	return New().Check(prog)
+}
+
+func extractTestImportPaths(tokens []token.Token) []string {
+	var paths []string
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
+			paths = append(paths, tokens[i+1].Value)
+		}
+	}
+	return paths
 }
 
 // mustCheck asserts that the source type-checks without error.
@@ -191,7 +217,7 @@ func TestTypeMismatchArithBool(t *testing.T) {
 }
 
 func TestTypeMismatchModDouble(t *testing.T) {
-	mustFail(t, `fn main(): double { return 1.0 % 2.0 }`, "'%' requires int or long operands")
+	mustFail(t, `fn main(): double { return 1.0 % 2.0 }`, "'%' requires char, int, or long operands")
 }
 
 func TestTypeMismatchLogicalInt(t *testing.T) {
@@ -263,7 +289,7 @@ func TestCrossNumericMod(t *testing.T) {
 		let a: int = 10
 		let b: double = 3.0
 		let c: double = a % b
-	}`, "'%' requires int or long operands")
+	}`, "'%' requires char, int, or long operands")
 }
 
 // --- Variables ---
@@ -886,4 +912,103 @@ func TestTypeInferenceInForLoop(t *testing.T) {
 			let x: int = i
 		}
 	}`)
+}
+
+// --- HTTP Client ---
+
+func TestHttpGet(t *testing.T) {
+	mustCheck(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.get("https://example.com")
+}`)
+}
+
+func TestHttpGetFieldAccess(t *testing.T) {
+	mustCheck(t, `import "http"
+import "fmt"
+fn main(): void {
+	let resp: HttpResponse = http.get("https://example.com")
+	fmt.print(resp.statusCode)
+	fmt.print(resp.body)
+}`)
+}
+
+func TestHttpPost(t *testing.T) {
+	mustCheck(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.post("https://example.com", "{}")
+}`)
+}
+
+func TestHttpPut(t *testing.T) {
+	mustCheck(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.put("https://example.com/1", "{}")
+}`)
+}
+
+func TestHttpPatch(t *testing.T) {
+	mustCheck(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.patch("https://example.com/1", "{}")
+}`)
+}
+
+func TestHttpDelete(t *testing.T) {
+	mustCheck(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.delete("https://example.com/1")
+}`)
+}
+
+func TestHttpRequest(t *testing.T) {
+	mustCheck(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.request("POST", "https://example.com", "{}", "Authorization: Bearer token")
+}`)
+}
+
+func TestHttpFormFunctions(t *testing.T) {
+	mustCheck(t, `import "http"
+fn main(): void {
+	let form: string = http.formNew()
+	form = http.formField(form, "name", "Alice")
+	form = http.formFile(form, "avatar", "/path/to/file.jpg")
+	let resp: HttpResponse = http.postForm("https://example.com/upload", form)
+}`)
+}
+
+func TestHttpGetWrongArgs(t *testing.T) {
+	mustFail(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.get(123)
+}`, "http.get() argument 1 must be string")
+}
+
+func TestHttpGetTooManyArgs(t *testing.T) {
+	mustFail(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.get("a", "b", "c")
+}`, "http.get() takes 1-2 arguments")
+}
+
+func TestHttpPostWrongArgCount(t *testing.T) {
+	mustFail(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.post("url")
+}`, "http.post() takes 2-3 arguments")
+}
+
+func TestHttpFormNewWrongArgs(t *testing.T) {
+	mustFail(t, `import "http"
+fn main(): void {
+	let form: string = http.formNew("extra")
+}`, "http.formNew() takes no arguments")
+}
+
+func TestHttpFormFieldWrongArgCount(t *testing.T) {
+	mustFail(t, `import "http"
+fn main(): void {
+	let form: string = http.formField("a", "b")
+}`, "http.formField() takes exactly 3 arguments")
 }

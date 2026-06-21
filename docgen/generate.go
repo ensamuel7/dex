@@ -83,6 +83,9 @@ func typeName(t ast.Type) string {
 	case ast.TypeArrayChar:
 		return "char[]"
 	default:
+		if ast.IsStructType(t) {
+			return ast.StructName(t)
+		}
 		return "unknown"
 	}
 }
@@ -194,6 +197,34 @@ func Generate(projectRoot string) (string, error) {
 			} else if name == "db" && fnName == "col" {
 				paramStr = "int, int"
 				retType = "int|string|double|bool"
+			} else if name == "http" && fd.Params == nil {
+				// HTTP client special-cased functions
+				switch fnName {
+				case "get":
+					paramStr = "string, [string]"
+					retType = "HttpResponse"
+				case "post", "put", "patch":
+					paramStr = "string, string, [string]"
+					retType = "HttpResponse"
+				case "delete":
+					paramStr = "string, [string]"
+					retType = "HttpResponse"
+				case "request":
+					paramStr = "string, string, string, string"
+					retType = "HttpResponse"
+				case "header":
+					paramStr = "string, string, string"
+					retType = "string"
+				case "formNew":
+					paramStr = ""
+					retType = "string"
+				case "formField", "formFile":
+					paramStr = "string, string, string"
+					retType = "string"
+				case "postForm":
+					paramStr = "string, string, [string]"
+					retType = "HttpResponse"
+				}
 			} else {
 				params := make([]string, len(fd.Params))
 				for i, p := range fd.Params {

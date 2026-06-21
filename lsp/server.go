@@ -328,6 +328,12 @@ var errPosRegex = regexp.MustCompile(`^(\d+):(\d+):\s*(.*)$`)
 func (s *Server) diagnose(uri string, text string) {
 	var diagnostics []Diagnostic
 
+	// Reset and register module types
+	ast.ResetStructTypes()
+	ast.ResetChanTypes()
+	ast.ResetTaskTypes()
+	stdlib.RegisterAllModuleTypes()
+
 	// Lex
 	lex := lexer.New(text)
 	tokens, err := lex.Tokenize()
@@ -339,6 +345,7 @@ func (s *Server) diagnose(uri string, text string) {
 
 	// Parse
 	p := parser.New(tokens)
+	seedParserModuleTypes(p, tokens)
 	program, err := p.Parse()
 	if err != nil {
 		diagnostics = append(diagnostics, makeDiagnostic(err.Error()))
@@ -469,6 +476,7 @@ func (s *Server) hoverAt(text string, pos Position) string {
 func (s *Server) hoverIdent(text string, tokens []token.Token, tok *token.Token) string {
 	// Parse the file for function/variable info
 	p := parser.New(tokens)
+	seedParserModuleTypes(p, tokens)
 	program, err := p.Parse()
 	if err != nil {
 		return ""
@@ -657,6 +665,7 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 	tokens, err := lex.Tokenize()
 	if err == nil {
 		p := parser.New(tokens)
+		seedParserModuleTypes(p, tokens)
 		program, err := p.Parse()
 		if err == nil {
 			for _, fn := range program.Functions {
@@ -764,6 +773,23 @@ func typeName(t ast.Type) string {
 	case ast.TypeArrayChar:
 		return "char[]"
 	default:
+		if ast.IsStructType(t) {
+			return ast.StructName(t)
+		}
 		return "unknown"
+	}
+}
+
+// seedParserModuleTypes extracts import paths from tokens and seeds the parser
+// with struct type names from imported modules.
+func seedParserModuleTypes(p *parser.Parser, tokens []token.Token) {
+	var importPaths []string
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
+			importPaths = append(importPaths, tokens[i+1].Value)
+		}
+	}
+	for _, name := range stdlib.ModuleTypesForImports(importPaths) {
+		p.AddStructName(name)
 	}
 }

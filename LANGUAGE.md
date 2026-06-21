@@ -591,7 +591,7 @@ fmt.print(true)          // print a bool ("true" or "false")
 
 ### http
 
-Build HTTP servers.
+Build HTTP servers and make HTTP requests.
 
 ```dex
 import "http"
@@ -599,6 +599,8 @@ import "http"
 http.route("GET", "/path", "handler_function_name")
 http.listen(8080)
 ```
+
+#### Server
 
 | Function | Signature                                              | Description                        |
 |----------|--------------------------------------------------------|------------------------------------|
@@ -615,6 +617,92 @@ fn my_handler(): string {
 fn main(): void {
   http.route("GET", "/api", "my_handler")
   http.listen(3000)
+}
+```
+
+#### Client
+
+HTTP client functions return an `HttpResponse` struct:
+
+```dex
+struct HttpResponse {
+  statusCode: int
+  body: string
+}
+```
+
+**Convenience methods (headers optional):**
+
+| Function   | Signature                            | Description                              |
+|------------|--------------------------------------|------------------------------------------|
+| `get`      | `get(url: string[, headers: string]): HttpResponse`     | GET request                              |
+| `post`     | `post(url: string, body: string[, headers: string]): HttpResponse` | POST with `Content-Type: application/json` |
+| `put`      | `put(url: string, body: string[, headers: string]): HttpResponse`  | PUT with `Content-Type: application/json`  |
+| `patch`    | `patch(url: string, body: string[, headers: string]): HttpResponse` | PATCH with `Content-Type: application/json` |
+| `delete`   | `delete(url: string[, headers: string]): HttpResponse`  | DELETE request                            |
+
+**Full control:**
+
+| Function   | Signature                                                              | Description                    |
+|------------|------------------------------------------------------------------------|--------------------------------|
+| `request`  | `request(method: string, url: string, body: string, headers: string): HttpResponse` | Custom method and headers      |
+
+**Headers:**
+
+Headers can be provided in two formats:
+- **JSON object** (most intuitive): build with `json.new()` / `json.set()` — auto-detected when the string starts with `{`
+- **Header builder**: build with `http.header()` — produces newline-separated `Key: Value` pairs
+
+| Function    | Signature                                              | Description                     |
+|-------------|--------------------------------------------------------|---------------------------------|
+| `header`    | `header(headers: string, key: string, value: string): string` | Append a header to the builder  |
+
+**Multipart form data:**
+
+| Function    | Signature                                              | Description                     |
+|-------------|--------------------------------------------------------|---------------------------------|
+| `formNew`   | `formNew(): string`                                    | Create empty form builder       |
+| `formField` | `formField(form: string, key: string, value: string): string` | Add text field to form   |
+| `formFile`  | `formFile(form: string, key: string, filePath: string): string` | Add file to form       |
+| `postForm`  | `postForm(url: string, form: string[, headers: string]): HttpResponse`    | Submit form as multipart        |
+
+**Examples:**
+
+```dex
+import "http"
+import "fmt"
+import "json"
+
+fn main(): void {
+  // Simple GET
+  let resp: HttpResponse = http.get("https://api.example.com/data")
+  fmt.print(resp.statusCode)
+  fmt.print(resp.body)
+
+  // POST with JSON body
+  let body: string = json.new()
+  body = json.set(body, "name", "Alice")
+  let r2: HttpResponse = http.post("https://api.example.com", body)
+
+  // GET with headers (JSON approach)
+  let headers: string = json.new()
+  headers = json.set(headers, "Authorization", "Bearer token")
+  headers = json.set(headers, "Accept", "application/json")
+  let r3: HttpResponse = http.get("https://api.example.com/data", headers)
+
+  // POST with headers (header builder approach)
+  let h: string = http.header("", "Authorization", "Bearer token")
+  h = http.header(h, "Content-Type", "application/json")
+  let r4: HttpResponse = http.post("https://api.example.com", body, h)
+
+  // Full control with custom headers
+  let r5: HttpResponse = http.request("POST", "https://api.example.com", body, "Authorization: Bearer token\nX-Custom: value")
+
+  // Multipart form upload
+  let form: string = http.formNew()
+  form = http.formField(form, "name", "Alice")
+  form = http.formFile(form, "avatar", "/path/to/photo.jpg")
+  let r6: HttpResponse = http.postForm("https://api.example.com/upload", form)
 }
 ```
 

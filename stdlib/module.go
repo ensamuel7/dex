@@ -11,9 +11,10 @@ type FuncDef struct {
 type Module struct {
 	Name      string
 	Funcs     map[string]FuncDef
-	CRuntime  string   // C code to embed
-	CIncludes string   // #include directives
-	CFlags    []string // compiler flags (e.g. "-pthread")
+	Types     []ast.StructDef // module-provided struct types
+	CRuntime  string          // C code to embed
+	CIncludes string          // #include directives
+	CFlags    []string        // compiler flags (e.g. "-pthread")
 }
 
 var registry = map[string]*Module{}
@@ -40,4 +41,30 @@ func LookupFunc(moduleName, funcName string) (*FuncDef, bool) {
 		return nil, false
 	}
 	return &f, true
+}
+
+// RegisterAllModuleTypes registers struct types from all modules into the global ast registry.
+func RegisterAllModuleTypes() {
+	for _, mod := range registry {
+		for _, td := range mod.Types {
+			if _, exists := ast.LookupStructType(td.Name); !exists {
+				ast.RegisterStructType(td)
+			}
+		}
+	}
+}
+
+// ModuleTypesForImports returns the struct type names defined by the given imported modules.
+func ModuleTypesForImports(importPaths []string) []string {
+	var names []string
+	for _, path := range importPaths {
+		mod := registry[path]
+		if mod == nil {
+			continue
+		}
+		for _, td := range mod.Types {
+			names = append(names, td.Name)
+		}
+	}
+	return names
 }

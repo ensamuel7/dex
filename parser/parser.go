@@ -18,6 +18,12 @@ func New(tokens []token.Token) *Parser {
 	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool)}
 }
 
+// AddStructName registers a struct name so the parser recognizes it as a type.
+// Used for module-provided struct types (e.g. HttpResponse from the http module).
+func (p *Parser) AddStructName(name string) {
+	p.structNames[name] = true
+}
+
 func (p *Parser) Parse() (*ast.Program, error) {
 	program := &ast.Program{}
 

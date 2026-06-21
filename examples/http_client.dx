@@ -1,0 +1,54 @@
+import "http"
+import "fmt"
+import "json"
+
+fn main(): void {
+    // Simple GET request
+    let resp: HttpResponse = http.get("https://httpbin.org/get")
+    fmt.print(resp.statusCode)
+    fmt.print(resp.body)
+
+    // POST with JSON body
+    let body: string = json.new()
+    body = json.set(body, "name", "Alice")
+    body = json.set(body, "age", 30)
+    let r2: HttpResponse = http.post("https://httpbin.org/post", body)
+    fmt.print(r2.statusCode)
+
+    // GET with headers using JSON (auto-detected)
+    let headers: string = json.new()
+    headers = json.set(headers, "Authorization", "Bearer my-token")
+    headers = json.set(headers, "X-Custom", "value")
+    let r3: HttpResponse = http.get("https://httpbin.org/headers", headers)
+    fmt.print(r3.statusCode)
+    fmt.print(r3.body)
+
+    // POST with headers using header builder
+    let h: string = http.header("", "Authorization", "Bearer my-token")
+    h = http.header(h, "X-Request-Id", "12345")
+    let r4: HttpResponse = http.post("https://httpbin.org/post", body, h)
+    fmt.print(r4.statusCode)
+
+    // PUT
+    let r5: HttpResponse = http.put("https://httpbin.org/put", body)
+    fmt.print(r5.statusCode)
+
+    // PATCH
+    let r6: HttpResponse = http.patch("https://httpbin.org/patch", body)
+    fmt.print(r6.statusCode)
+
+    // DELETE
+    let r7: HttpResponse = http.delete("https://httpbin.org/delete")
+    fmt.print(r7.statusCode)
+
+    // Full control with custom headers
+    let r8: HttpResponse = http.request("GET", "https://httpbin.org/headers", "", "X-Custom-Header: hello\nAccept: application/json")
+    fmt.print(r8.statusCode)
+
+    // Multipart form data
+    let form: string = http.formNew()
+    form = http.formField(form, "username", "alice")
+    form = http.formField(form, "email", "alice@example.com")
+    let r9: HttpResponse = http.postForm("https://httpbin.org/post", form)
+    fmt.print(r9.statusCode)
+}

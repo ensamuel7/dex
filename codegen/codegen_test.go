@@ -8,17 +8,31 @@ import (
 	"github.com/ensamuel7/dex/checker"
 	"github.com/ensamuel7/dex/lexer"
 	"github.com/ensamuel7/dex/parser"
-	_ "github.com/ensamuel7/dex/stdlib"
+	"github.com/ensamuel7/dex/stdlib"
+	"github.com/ensamuel7/dex/token"
 )
 
 // generate runs the full pipeline (lex -> parse -> check -> codegen) and returns the C code.
 func generate(t *testing.T, source string) string {
 	t.Helper()
+	ast.ResetStructTypes()
+	ast.ResetChanTypes()
+	ast.ResetTaskTypes()
+	stdlib.RegisterAllModuleTypes()
+
 	tokens, err := lexer.New(source).Tokenize()
 	if err != nil {
 		t.Fatalf("lexer error: %v", err)
 	}
-	prog, err := parser.New(tokens).Parse()
+
+	importPaths := extractCodegenImportPaths(tokens)
+	typeNames := stdlib.ModuleTypesForImports(importPaths)
+
+	p := parser.New(tokens)
+	for _, name := range typeNames {
+		p.AddStructName(name)
+	}
+	prog, err := p.Parse()
 	if err != nil {
 		t.Fatalf("parser error: %v", err)
 	}
@@ -26,6 +40,16 @@ func generate(t *testing.T, source string) string {
 		t.Fatalf("checker error: %v", err)
 	}
 	return New().Generate(prog)
+}
+
+func extractCodegenImportPaths(tokens []token.Token) []string {
+	var paths []string
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
+			paths = append(paths, tokens[i+1].Value)
+		}
+	}
+	return paths
 }
 
 // assertContains checks that the output contains the expected substring.
@@ -843,4 +867,85 @@ func TestCodegenNoDivCheckForOtherOps(t *testing.T) {
 		return a + b
 	}`)
 	assertNotContains(t, out, "dex_check_nonzero")
+}
+
+// --- HTTP Client Codegen ---
+
+func TestCodegenHttpGet(t *testing.T) {
+	out := generate(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.get("https://example.com")
+}`)
+	assertContains(t, out, "dex_http_get(")
+	assertContains(t, out, "Dex_HttpResponse")
+}
+
+func TestCodegenHttpPost(t *testing.T) {
+	out := generate(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.post("https://example.com", "{}")
+}`)
+	assertContains(t, out, "dex_http_post(")
+}
+
+func TestCodegenHttpPut(t *testing.T) {
+	out := generate(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.put("https://example.com/1", "{}")
+}`)
+	assertContains(t, out, "dex_http_put(")
+}
+
+func TestCodegenHttpPatch(t *testing.T) {
+	out := generate(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.patch("https://example.com/1", "{}")
+}`)
+	assertContains(t, out, "dex_http_patch(")
+}
+
+func TestCodegenHttpDelete(t *testing.T) {
+	out := generate(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.delete("https://example.com/1")
+}`)
+	assertContains(t, out, "dex_http_delete(")
+}
+
+func TestCodegenHttpRequest(t *testing.T) {
+	out := generate(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.request("POST", "https://example.com", "{}", "Authorization: Bearer token")
+}`)
+	assertContains(t, out, "dex_http_request(")
+}
+
+func TestCodegenHttpFormFunctions(t *testing.T) {
+	out := generate(t, `import "http"
+fn main(): void {
+	let form: string = http.formNew()
+	form = http.formField(form, "name", "Alice")
+	form = http.formFile(form, "avatar", "/path/to/file.jpg")
+	let resp: HttpResponse = http.postForm("https://example.com/upload", form)
+}`)
+	assertContains(t, out, "dex_http_form_new()")
+	assertContains(t, out, "dex_http_form_field(")
+	assertContains(t, out, "dex_http_form_file(")
+	assertContains(t, out, "dex_http_post_form(")
+}
+
+func TestCodegenHttpStructTypedefBeforeRuntime(t *testing.T) {
+	out := generate(t, `import "http"
+fn main(): void {
+	let resp: HttpResponse = http.get("https://example.com")
+}`)
+	// Struct typedef must appear before the C runtime that uses it
+	typedefIdx := strings.Index(out, "typedef struct {")
+	runtimeIdx := strings.Index(out, "dex_route_entry")
+	if typedefIdx < 0 || runtimeIdx < 0 {
+		t.Fatal("expected both typedef and runtime in output")
+	}
+	if typedefIdx > runtimeIdx {
+		t.Error("struct typedef should appear before module C runtime")
+	}
 }

@@ -312,9 +312,10 @@ func (p *Parser) parseType() (ast.Type, error) {
 			if !ok {
 				return 0, p.errorf("unknown struct type '%s'", name)
 			}
-			return t, nil
+			base = t
+		} else {
+			return 0, p.errorf("unknown type '%s'", name)
 		}
-		return 0, p.errorf("unknown type '%s'", name)
 	default:
 		return 0, p.errorf("expected type ('int', 'bool', 'string', 'long', 'double', 'char', 'fn', 'chan', or 'void')")
 	}

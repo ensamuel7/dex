@@ -313,6 +313,7 @@ func build(filename string) (string, error) {
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
 	ast.ResetWeakTypes()
+	ast.ResetStructArrayTypes()
 
 	// Register module-provided struct types (e.g. HttpResponse)
 	stdlib.RegisterAllModuleTypes()
@@ -341,6 +342,16 @@ func build(filename string) (string, error) {
 	program, err := p.Parse()
 	if err != nil {
 		return "", fmt.Errorf("%s:%v", filename, err)
+	}
+
+	// Resolve user module imports (non-stdlib .dx files)
+	sourceDir := filepath.Dir(filename)
+	if sourceDir == "" {
+		sourceDir = "."
+	}
+	absSourceDir, _ := filepath.Abs(sourceDir)
+	if err := resolveUserModules(program, absSourceDir); err != nil {
+		return "", fmt.Errorf("%s: %v", filename, err)
 	}
 
 	// Type check
@@ -390,4 +401,264 @@ func extractImportPaths(tokens []token.Token) []string {
 		}
 	}
 	return paths
+}
+
+// resolveUserModules finds non-stdlib imports, parses their .dx files,
+// prefixes their functions, and merges them into the main program.
+func resolveUserModules(program *ast.Program, sourceDir string) error {
+	visited := map[string]bool{}    // fully resolved paths already merged
+	processing := map[string]bool{} // currently being processed (circular detection)
+	return resolveImports(program, sourceDir, visited, processing)
+}
+
+func resolveImports(program *ast.Program, sourceDir string, visited, processing map[string]bool) error {
+	var userImports []ast.Import
+	var stdlibImports []ast.Import
+
+	for _, imp := range program.Imports {
+		if stdlib.Lookup(imp.Path) != nil {
+			stdlibImports = append(stdlibImports, imp)
+		} else {
+			userImports = append(userImports, imp)
+		}
+	}
+
+	// Replace imports with only stdlib imports (user imports are resolved)
+	program.Imports = stdlibImports
+
+	for _, imp := range userImports {
+		moduleName := filepath.Base(imp.Path)
+		filePath := filepath.Join(sourceDir, imp.Path+".dx")
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			return fmt.Errorf("cannot resolve path for import '%s': %v", imp.Path, err)
+		}
+
+		if visited[absPath] {
+			// Already merged — just record the module name
+			if !containsString(program.UserModules, moduleName) {
+				program.UserModules = append(program.UserModules, moduleName)
+			}
+			continue
+		}
+
+		if processing[absPath] {
+			return fmt.Errorf("circular import detected: '%s'", imp.Path)
+		}
+
+		source, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("cannot open user module '%s': %v", imp.Path, err)
+		}
+
+		// Lex
+		lex := lexer.New(string(source))
+		tokens, err := lex.Tokenize()
+		if err != nil {
+			return fmt.Errorf("%s: %v", filePath, err)
+		}
+
+		// Seed parser with module-provided struct type names
+		modImportPaths := extractImportPaths(tokens)
+		typeNames := stdlib.ModuleTypesForImports(modImportPaths)
+
+		// Parse
+		p := parser.New(tokens)
+		for _, name := range typeNames {
+			p.AddStructName(name)
+		}
+		modProgram, err := p.Parse()
+		if err != nil {
+			return fmt.Errorf("%s: %v", filePath, err)
+		}
+
+		// Mark as processing for circular detection, then resolve sub-imports
+		processing[absPath] = true
+		modDir := filepath.Dir(absPath)
+		if err := resolveImports(modProgram, modDir, visited, processing); err != nil {
+			return err
+		}
+		delete(processing, absPath)
+		visited[absPath] = true
+
+		// Collect module's own function names (before prefixing)
+		modFuncNames := map[string]bool{}
+		for _, fn := range modProgram.Functions {
+			modFuncNames[fn.Name] = true
+		}
+
+		// Prefix functions and rewrite internal calls
+		for i := range modProgram.Functions {
+			fn := &modProgram.Functions[i]
+			if fn.Name == "main" {
+				continue // skip main from user modules
+			}
+			// Prefix function name
+			fn.Name = moduleName + "_" + fn.Name
+			// Rewrite internal unqualified calls in the body
+			for _, stmt := range fn.Body {
+				prefixCallsInStmt(stmt, moduleName, modFuncNames)
+			}
+		}
+
+		// Merge into main program
+		for _, fn := range modProgram.Functions {
+			if fn.Name == "main" {
+				continue
+			}
+			program.Functions = append(program.Functions, fn)
+		}
+		program.Structs = append(program.Structs, modProgram.Structs...)
+
+		// Deduplicate stdlib imports from module
+		for _, modImp := range modProgram.Imports {
+			if stdlib.Lookup(modImp.Path) != nil && !containsImport(program.Imports, modImp.Path) {
+				program.Imports = append(program.Imports, modImp)
+			}
+		}
+
+		// Merge user modules from sub-modules
+		for _, subMod := range modProgram.UserModules {
+			if !containsString(program.UserModules, subMod) {
+				program.UserModules = append(program.UserModules, subMod)
+			}
+		}
+
+		if !containsString(program.UserModules, moduleName) {
+			program.UserModules = append(program.UserModules, moduleName)
+		}
+	}
+
+	return nil
+}
+
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func containsImport(imports []ast.Import, path string) bool {
+	for _, imp := range imports {
+		if imp.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+// prefixCallsInStmt walks a statement tree and rewrites unqualified calls
+// to module-internal functions with the module prefix.
+func prefixCallsInStmt(stmt ast.Stmt, moduleName string, modFuncNames map[string]bool) {
+	switch s := stmt.(type) {
+	case *ast.ExprStmt:
+		prefixCallsInExpr(s.Expr, moduleName, modFuncNames)
+	case *ast.LetStmt:
+		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
+	case *ast.AssignStmt:
+		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
+	case *ast.ReturnStmt:
+		if s.Value != nil {
+			prefixCallsInExpr(s.Value, moduleName, modFuncNames)
+		}
+	case *ast.IfStmt:
+		prefixCallsInExpr(s.Cond, moduleName, modFuncNames)
+		for _, st := range s.Then {
+			prefixCallsInStmt(st, moduleName, modFuncNames)
+		}
+		for _, st := range s.Else {
+			prefixCallsInStmt(st, moduleName, modFuncNames)
+		}
+	case *ast.WhileStmt:
+		prefixCallsInExpr(s.Cond, moduleName, modFuncNames)
+		for _, st := range s.Body {
+			prefixCallsInStmt(st, moduleName, modFuncNames)
+		}
+	case *ast.ForStmt:
+		if s.Init != nil {
+			prefixCallsInStmt(s.Init, moduleName, modFuncNames)
+		}
+		if s.Cond != nil {
+			prefixCallsInExpr(s.Cond, moduleName, modFuncNames)
+		}
+		if s.Post != nil {
+			prefixCallsInStmt(s.Post, moduleName, modFuncNames)
+		}
+		for _, st := range s.Body {
+			prefixCallsInStmt(st, moduleName, modFuncNames)
+		}
+	case *ast.ForeachStmt:
+		prefixCallsInExpr(s.Iterable, moduleName, modFuncNames)
+		for _, st := range s.Body {
+			prefixCallsInStmt(st, moduleName, modFuncNames)
+		}
+	case *ast.BlockStmt:
+		for _, st := range s.Stmts {
+			prefixCallsInStmt(st, moduleName, modFuncNames)
+		}
+	case *ast.IndexAssignStmt:
+		prefixCallsInExpr(s.Array, moduleName, modFuncNames)
+		prefixCallsInExpr(s.Index, moduleName, modFuncNames)
+		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
+	case *ast.FieldAssignStmt:
+		prefixCallsInExpr(s.Object, moduleName, modFuncNames)
+		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
+	case *ast.CompoundAssignStmt:
+		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
+	case *ast.SendStmt:
+		if s.Target != nil {
+			prefixCallsInExpr(s.Target, moduleName, modFuncNames)
+		}
+		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
+	// BreakStmt, ContinueStmt, IncrementStmt, DecrementStmt — no expressions to rewrite
+	}
+}
+
+// prefixCallsInExpr walks an expression tree and rewrites unqualified calls
+// to module-internal functions with the module prefix.
+func prefixCallsInExpr(expr ast.Expr, moduleName string, modFuncNames map[string]bool) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.(type) {
+	case *ast.CallExpr:
+		// Rewrite unqualified calls to module-internal functions
+		if e.Module == "" && modFuncNames[e.Name] {
+			e.Name = moduleName + "_" + e.Name
+		}
+		for _, arg := range e.Args {
+			prefixCallsInExpr(arg, moduleName, modFuncNames)
+		}
+	case *ast.BinaryExpr:
+		prefixCallsInExpr(e.Left, moduleName, modFuncNames)
+		prefixCallsInExpr(e.Right, moduleName, modFuncNames)
+	case *ast.UnaryExpr:
+		prefixCallsInExpr(e.Operand, moduleName, modFuncNames)
+	case *ast.IndexExpr:
+		prefixCallsInExpr(e.Array, moduleName, modFuncNames)
+		prefixCallsInExpr(e.Index, moduleName, modFuncNames)
+	case *ast.ArrayLitExpr:
+		for _, elem := range e.Elems {
+			prefixCallsInExpr(elem, moduleName, modFuncNames)
+		}
+	case *ast.StructLitExpr:
+		for _, val := range e.FieldValues {
+			prefixCallsInExpr(val, moduleName, modFuncNames)
+		}
+	case *ast.FieldAccessExpr:
+		prefixCallsInExpr(e.Object, moduleName, modFuncNames)
+	case *ast.SpawnExpr:
+		if e.Call != nil {
+			prefixCallsInExpr(e.Call, moduleName, modFuncNames)
+		}
+		for _, stmt := range e.Body {
+			prefixCallsInStmt(stmt, moduleName, modFuncNames)
+		}
+	case *ast.ReceiveExpr:
+		prefixCallsInExpr(e.Source, moduleName, modFuncNames)
+	// IntLit, FloatLit, BoolLit, StringLit, CharLit, Ident, ChannelExpr — no calls to rewrite
+	}
 }

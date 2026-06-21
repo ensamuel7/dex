@@ -1,0 +1,7 @@
+import "json"
+
+fn getAll(): string {
+  let response: string = json.new()
+  response = json.set(response, "name", "Acme Corporation")
+  return response
+}

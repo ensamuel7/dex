@@ -39,6 +39,9 @@ const TypeFuncBase Type = 4000
 // Weak reference type system: dynamic IDs starting at 5000
 const TypeWeakBase Type = 5000
 
+// Struct array type system: dynamic IDs starting at 6000
+const TypeStructArrayBase Type = 6000
+
 type StructField struct {
 	Name        string
 	Type        Type
@@ -260,7 +263,7 @@ func NeedsRelease(t Type) bool {
 }
 
 func IsArrayType(t Type) bool {
-	return t == TypeArrayInt || t == TypeArrayBool || t == TypeArrayString || t == TypeArrayLong || t == TypeArrayDouble || t == TypeArrayChar
+	return t == TypeArrayInt || t == TypeArrayBool || t == TypeArrayString || t == TypeArrayLong || t == TypeArrayDouble || t == TypeArrayChar || IsStructArrayType(t)
 }
 
 func ElementType(t Type) Type {
@@ -278,6 +281,9 @@ func ElementType(t Type) Type {
 	case TypeArrayChar:
 		return TypeChar
 	default:
+		if IsStructArrayType(t) {
+			return StructArrayElemType(t)
+		}
 		return TypeVoid
 	}
 }
@@ -297,6 +303,9 @@ func ArrayTypeOf(elem Type) Type {
 	case TypeChar:
 		return TypeArrayChar
 	default:
+		if IsStructType(elem) {
+			return StructArrayTypeOf(elem)
+		}
 		return TypeVoid
 	}
 }
@@ -333,9 +342,10 @@ type Import struct {
 }
 
 type Program struct {
-	Imports   []Import
-	Structs   []StructDef
-	Functions []Function
+	Imports     []Import
+	Structs     []StructDef
+	Functions   []Function
+	UserModules []string // module names (last path segment) of resolved user imports
 }
 
 type Function struct {
@@ -601,7 +611,7 @@ func WeakTypeOf(innerType Type) Type {
 }
 
 func IsWeakType(t Type) bool {
-	return t >= TypeWeakBase
+	return t >= TypeWeakBase && t < TypeStructArrayBase
 }
 
 func WeakInnerType(t Type) Type {
@@ -610,6 +620,43 @@ func WeakInnerType(t Type) Type {
 		return TypeVoid
 	}
 	return weakTypes[idx]
+}
+
+// Struct array type registry
+var (
+	structArrayTypes  []Type        // element type for each struct array type ID
+	structArrayByElem map[Type]Type // element struct type → struct array type ID
+)
+
+func init() {
+	ResetStructArrayTypes()
+}
+
+func ResetStructArrayTypes() {
+	structArrayTypes = nil
+	structArrayByElem = make(map[Type]Type)
+}
+
+func StructArrayTypeOf(elemType Type) Type {
+	if id, ok := structArrayByElem[elemType]; ok {
+		return id
+	}
+	id := TypeStructArrayBase + Type(len(structArrayTypes))
+	structArrayByElem[elemType] = id
+	structArrayTypes = append(structArrayTypes, elemType)
+	return id
+}
+
+func IsStructArrayType(t Type) bool {
+	return t >= TypeStructArrayBase
+}
+
+func StructArrayElemType(t Type) Type {
+	idx := int(t - TypeStructArrayBase)
+	if idx < 0 || idx >= len(structArrayTypes) {
+		return TypeVoid
+	}
+	return structArrayTypes[idx]
 }
 
 // Annotation constants

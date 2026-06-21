@@ -19,18 +19,25 @@ type Checker struct {
 	annotationScopes []map[string][]string // per-variable annotation tracking
 	funcs            map[string]funcSig
 	imports          map[string]*stdlib.Module
+	userModules      map[string]bool
 	loopDepth        int
 }
 
 func New() *Checker {
 	return &Checker{
-		funcs:   make(map[string]funcSig),
-		imports: make(map[string]*stdlib.Module),
+		funcs:       make(map[string]funcSig),
+		imports:     make(map[string]*stdlib.Module),
+		userModules: make(map[string]bool),
 	}
 }
 
 func (c *Checker) Check(program *ast.Program) error {
-	// Validate imports
+	// Populate user modules set
+	for _, modName := range program.UserModules {
+		c.userModules[modName] = true
+	}
+
+	// Validate imports (only stdlib imports remain after user module resolution)
 	for _, imp := range program.Imports {
 		mod := stdlib.Lookup(imp.Path)
 		if mod == nil {
@@ -206,7 +213,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if err != nil {
 			return err
 		}
-		if exprType != returnType {
+		if exprType != returnType && !canAssign(returnType, exprType, s.Value) {
 			return fmt.Errorf("return type mismatch: expected %s, got %s", typeName(returnType), typeName(exprType))
 		}
 		return nil
@@ -770,6 +777,28 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return c.checkArrayMethod(e.Module, varType, e.Name, e.Args)
 			}
 
+			// User module call: module.func() → look up prefixed name
+			if c.userModules[e.Module] {
+				prefixedName := e.Module + "_" + e.Name
+				sig, ok := c.funcs[prefixedName]
+				if !ok {
+					return 0, fmt.Errorf("undefined function '%s' in module '%s'", e.Name, e.Module)
+				}
+				if len(e.Args) != len(sig.Params) {
+					return 0, fmt.Errorf("%s.%s() takes exactly %d argument(s), got %d", e.Module, e.Name, len(sig.Params), len(e.Args))
+				}
+				for i, arg := range e.Args {
+					argType, err := c.checkExpr(arg)
+					if err != nil {
+						return 0, err
+					}
+					if argType != sig.Params[i] {
+						return 0, fmt.Errorf("%s.%s() argument %d must be %s, got %s", e.Module, e.Name, i+1, typeName(sig.Params[i]), typeName(argType))
+					}
+				}
+				return sig.ReturnType, nil
+			}
+
 			mod, ok := c.imports[e.Module]
 			if !ok {
 				return 0, fmt.Errorf("module '%s' is not imported", e.Module)
@@ -833,7 +862,9 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				case ast.TypeString, ast.TypeInt, ast.TypeBool, ast.TypeLong, ast.TypeDouble:
 					// all valid
 				default:
-					return 0, fmt.Errorf("json.set() value must be a primitive type, got %s", typeName(valType))
+					if !ast.IsArrayType(valType) {
+						return 0, fmt.Errorf("json.set() value must be a primitive type or array, got %s", typeName(valType))
+					}
 				}
 				return ast.TypeString, nil
 			}
@@ -899,15 +930,23 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 						return 0, fmt.Errorf("http.route() argument %d must be string, got %s", i+1, typeName(argType))
 					}
 				}
-				// Check handler (arg 2): accept string literal or function reference (Ident)
+				// Check handler (arg 2): accept string literal, function reference (Ident), or function call
 				var handlerName string
 				switch h := e.Args[2].(type) {
 				case *ast.StringLit:
 					handlerName = h.Value
 				case *ast.Ident:
 					handlerName = h.Name
+				case *ast.CallExpr:
+					if len(h.Args) != 0 {
+						return 0, fmt.Errorf("http.route() handler function must take no arguments")
+					}
+					handlerName = h.Name
+					if h.Module != "" && c.userModules[h.Module] {
+						handlerName = h.Module + "_" + h.Name
+					}
 				default:
-					return 0, fmt.Errorf("http.route() handler (argument 3) must be a function name or string literal")
+					return 0, fmt.Errorf("http.route() handler (argument 3) must be a function name, string literal, or function call")
 				}
 				sig, ok := c.funcs[handlerName]
 				if !ok {
@@ -916,8 +955,8 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if len(sig.Params) != 0 {
 					return 0, fmt.Errorf("http.route() handler '%s' must take no parameters", handlerName)
 				}
-				if sig.ReturnType != ast.TypeString {
-					return 0, fmt.Errorf("http.route() handler '%s' must return string", handlerName)
+				if sig.ReturnType == ast.TypeVoid {
+					return 0, fmt.Errorf("http.route() handler '%s' must have a return type", handlerName)
 				}
 				return ast.TypeVoid, nil
 			}
@@ -1238,6 +1277,9 @@ func (c *Checker) checkArrayMethod(varName string, arrType ast.Type, method stri
 		}
 		return ast.TypeVoid, nil
 	case "contains":
+		if ast.IsStructArrayType(arrType) {
+			return 0, fmt.Errorf("contains() is not supported on struct arrays")
+		}
 		if len(args) != 1 {
 			return 0, fmt.Errorf("%s.contains() takes exactly 1 argument, got %d", varName, len(args))
 		}
@@ -1251,6 +1293,9 @@ func (c *Checker) checkArrayMethod(varName string, arrType ast.Type, method stri
 		}
 		return ast.TypeBool, nil
 	case "indexOf":
+		if ast.IsStructArrayType(arrType) {
+			return 0, fmt.Errorf("indexOf() is not supported on struct arrays")
+		}
 		if len(args) != 1 {
 			return 0, fmt.Errorf("%s.indexOf() takes exactly 1 argument, got %d", varName, len(args))
 		}
@@ -1269,6 +1314,9 @@ func (c *Checker) checkArrayMethod(varName string, arrType ast.Type, method stri
 		}
 		return ast.TypeVoid, nil
 	case "sort":
+		if ast.IsStructArrayType(arrType) {
+			return 0, fmt.Errorf("sort() is not supported on struct arrays")
+		}
 		if len(args) != 1 {
 			return 0, fmt.Errorf("%s.sort() takes exactly 1 argument, got %d", varName, len(args))
 		}
@@ -1414,6 +1462,9 @@ func typeName(t ast.Type) string {
 	case ast.TypeArrayChar:
 		return "char[]"
 	default:
+		if ast.IsStructArrayType(t) {
+			return ast.StructName(ast.ElementType(t)) + "[]"
+		}
 		if ast.IsStructType(t) {
 			return ast.StructName(t)
 		}

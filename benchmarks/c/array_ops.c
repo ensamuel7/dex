@@ -2,7 +2,7 @@
 #include <stdlib.h>
 
 int main() {
-    int cap = 1024;
+    int cap = 8;
     int size = 0;
     int *arr = malloc(cap * sizeof(int));
     for (int i = 0; i < 1000000; i++) {

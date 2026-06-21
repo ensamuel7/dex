@@ -333,6 +333,7 @@ func (s *Server) diagnose(uri string, text string) {
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
 	ast.ResetWeakTypes()
+	ast.ResetStructArrayTypes()
 	stdlib.RegisterAllModuleTypes()
 
 	// Lex

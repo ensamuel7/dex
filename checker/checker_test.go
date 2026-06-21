@@ -18,6 +18,7 @@ func checkSource(t *testing.T, source string) error {
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
 	ast.ResetWeakTypes()
+	ast.ResetStructArrayTypes()
 	stdlib.RegisterAllModuleTypes()
 
 	tokens, err := lexer.New(source).Tokenize()

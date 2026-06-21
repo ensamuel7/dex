@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stddef.h>
 
 // === DexArrayInt ===
 typedef struct {
@@ -501,6 +502,159 @@ void dex_array_char_sort_asc(DexArrayChar* a) {
 
 void dex_array_char_sort_desc(DexArrayChar* a) {
     qsort(a->data, a->len, sizeof(unsigned char), dex_cmp_char_desc);
+}
+
+// === DexArrayStruct (generic struct array) ===
+typedef void (*DexStructElemCleanup)(void* elem);
+
+typedef struct {
+    DexObjHeader hdr;
+    void* data;
+    int len;
+    int cap;
+    size_t elem_size;
+    DexStructElemCleanup cleanup;
+} DexArrayStruct;
+
+static void dex_array_struct_destroy(void* ptr) {
+    DexArrayStruct* a = (DexArrayStruct*)ptr;
+    if (a->cleanup) {
+        for (int i = 0; i < a->len; i++) {
+            a->cleanup((char*)a->data + (size_t)i * a->elem_size);
+        }
+    }
+    free(a->data);
+}
+
+DexArrayStruct* dex_array_struct_new(size_t elem_size, DexStructElemCleanup cleanup) {
+    DexArrayStruct* a = (DexArrayStruct*)dex_obj_alloc(sizeof(DexArrayStruct), dex_array_struct_destroy);
+    a->cap = 8;
+    a->len = 0;
+    a->elem_size = elem_size;
+    a->cleanup = cleanup;
+    a->data = malloc(elem_size * a->cap);
+    if (!a->data) { dex_panic("out of memory"); }
+    return a;
+}
+
+void dex_array_struct_push(DexArrayStruct* a, const void* val) {
+    if (a->len == a->cap) {
+        if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
+        a->cap *= 2;
+        a->data = realloc(a->data, a->elem_size * a->cap);
+        if (!a->data) { dex_panic("out of memory"); }
+    }
+    memcpy((char*)a->data + (size_t)a->len * a->elem_size, val, a->elem_size);
+    a->len++;
+}
+
+void* dex_array_struct_get(DexArrayStruct* a, int index) {
+    return (char*)a->data + (size_t)index * a->elem_size;
+}
+
+void dex_array_struct_pop(DexArrayStruct* a) {
+    if (a->len == 0) { dex_panic("pop from empty array"); }
+    a->len--;
+    if (a->cleanup) {
+        a->cleanup((char*)a->data + (size_t)a->len * a->elem_size);
+    }
+}
+
+void dex_array_struct_remove(DexArrayStruct* a, int index) {
+    if (index < 0 || index >= a->len) { dex_panic("remove index out of bounds"); }
+    if (a->cleanup) {
+        a->cleanup((char*)a->data + (size_t)index * a->elem_size);
+    }
+    memmove((char*)a->data + (size_t)index * a->elem_size,
+            (char*)a->data + (size_t)(index + 1) * a->elem_size,
+            a->elem_size * (a->len - index - 1));
+    a->len--;
+}
+
+void dex_array_struct_reverse(DexArrayStruct* a) {
+    if (a->len <= 1) return;
+    void* tmp = malloc(a->elem_size);
+    if (!tmp) { dex_panic("out of memory"); }
+    for (int i = 0, j = a->len - 1; i < j; i++, j--) {
+        void* pi = (char*)a->data + (size_t)i * a->elem_size;
+        void* pj = (char*)a->data + (size_t)j * a->elem_size;
+        memcpy(tmp, pi, a->elem_size);
+        memcpy(pi, pj, a->elem_size);
+        memcpy(pj, tmp, a->elem_size);
+    }
+    free(tmp);
+}
+
+// === Struct array JSON serialization ===
+// Field descriptor for generic struct-to-JSON serialization
+// kind: 0=int, 1=bool, 2=string, 3=long, 4=double
+typedef struct {
+    const char* name;
+    size_t offset;
+    int kind;
+} DexStructFieldDesc;
+
+const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields) {
+    // Build JSON array of objects
+    size_t cap = 256;
+    char* buf = (char*)malloc(cap);
+    int pos = 0;
+    buf[pos++] = '[';
+    for (int i = 0; i < arr->len; i++) {
+        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        buf[pos++] = '{';
+        void* elem = (char*)arr->data + (size_t)i * elem_size;
+        for (int f = 0; f < num_fields; f++) {
+            if (f > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+            // Ensure capacity
+            if ((size_t)pos + 256 > cap) {
+                cap *= 2;
+                buf = (char*)realloc(buf, cap);
+            }
+            int n = 0;
+            switch (fields[f].kind) {
+            case 0: // int
+                n = snprintf(buf + pos, cap - pos, "\"%s\": %d", fields[f].name, *(int*)((char*)elem + fields[f].offset));
+                break;
+            case 1: // bool
+                n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false");
+                break;
+            case 2: // string
+                { DexString* s = *(DexString**)((char*)elem + fields[f].offset);
+                  n = snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"", fields[f].name, s ? s->data : ""); }
+                break;
+            case 3: // long
+                n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)elem + fields[f].offset));
+                break;
+            case 4: // double
+                n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)elem + fields[f].offset));
+                break;
+            }
+            pos += n;
+            if ((size_t)pos + 256 > cap) {
+                cap *= 2;
+                buf = (char*)realloc(buf, cap);
+            }
+        }
+        buf[pos++] = '}';
+    }
+    buf[pos++] = ']';
+    buf[pos] = '\0';
+
+    // Now set the array string into the object
+    size_t olen = strlen(obj);
+    size_t klen = strlen(key);
+    size_t alen = (size_t)pos;
+    size_t need = olen + klen + alen + 16;
+    char* result = (char*)malloc(need);
+    if (olen == 2) {
+        snprintf(result, need, "{\"%s\": %s}", key, buf);
+    } else {
+        memcpy(result, obj, olen - 1);
+        snprintf(result + olen - 1, need - (olen - 1), ", \"%s\": %s}", key, buf);
+    }
+    free(buf);
+    return result;
 }
 
 // === JSON stringify helpers (still return const char* for stdlib bridging) ===

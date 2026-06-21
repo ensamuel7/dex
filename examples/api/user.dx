@@ -1,0 +1,7 @@
+import "json"
+
+fn list(): string {
+  let response: string = json.new()
+  response = json.set(response, "name", "John Doe")
+  return response
+}

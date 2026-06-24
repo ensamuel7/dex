@@ -10,12 +10,12 @@ fn handle_hello(): string {
   return "{\"message\": \"Hello, World!\"}"
 }
 
-fn handle_json(): string {
-  let response: string = json.new()
-  response = json.set(response, "message", "Hello from Dex!")
-  response = json.set(response, "number", 42)
-  response = json.set(response, "success", true)
-  return response
+fn handle_json(): HttpResponse {
+  let body: string = json.new()
+  body = json.set(body, "message", "Hello from Dex!")
+  body = json.set(body, "number", 42)
+  body = json.set(body, "success", true)
+  return HttpResponse{statusCode: 200, body: body}
 }
 
 function getBinary(): long {

@@ -1720,37 +1720,50 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				handlerName = h.Module + "_" + h.Name
 			}
 		}
-		// Check if handler returns non-string — generate a wrapper that converts to DexString*
+		// Generate a wrapper that returns Dex_HttpResponse for the route handler
 		emitName := handlerName
-		if fn, ok := g.funcs[handlerName]; ok && fn.ReturnType != ast.TypeString {
-			wrapperName := fmt.Sprintf("_dex_route_wrap_%d", g.routeWrapperCount)
-			g.routeWrapperCount++
-			var fmtSpec string
-			switch fn.ReturnType {
-			case ast.TypeInt:
-				fmtSpec = "%d"
-			case ast.TypeLong:
-				fmtSpec = "%ld"
-			case ast.TypeDouble:
-				fmtSpec = "%f"
-			case ast.TypeBool:
-				fmtSpec = "%s"
-			default:
-				fmtSpec = "%d"
-			}
-			var w strings.Builder
-			w.WriteString(fmt.Sprintf("DexString* %s(void) {\n", wrapperName))
-			w.WriteString(fmt.Sprintf("    %s _val = %s();\n", g.cType(fn.ReturnType), handlerName))
-			w.WriteString("    char _buf[64];\n")
-			if fn.ReturnType == ast.TypeBool {
-				w.WriteString("    snprintf(_buf, sizeof(_buf), \"%s\", _val ? \"true\" : \"false\");\n")
+		if fn, ok := g.funcs[handlerName]; ok {
+			// Check if handler already returns HttpResponse — no wrapper needed
+			httpRespType, hasHttpResp := ast.LookupStructType("HttpResponse")
+			if hasHttpResp && fn.ReturnType == httpRespType {
+				// Handler already returns Dex_HttpResponse, use directly
 			} else {
-				w.WriteString(fmt.Sprintf("    snprintf(_buf, sizeof(_buf), \"%s\", _val);\n", fmtSpec))
+				wrapperName := fmt.Sprintf("_dex_route_wrap_%d", g.routeWrapperCount)
+				g.routeWrapperCount++
+				var w strings.Builder
+				w.WriteString(fmt.Sprintf("Dex_HttpResponse %s(void) {\n", wrapperName))
+				if fn.ReturnType == ast.TypeString {
+					// String handler: wrap as {200, result}
+					w.WriteString(fmt.Sprintf("    DexString* _val = %s();\n", handlerName))
+					w.WriteString("    return (Dex_HttpResponse){200, _val};\n")
+				} else {
+					// Primitive handler: convert to string, then wrap
+					var fmtSpec string
+					switch fn.ReturnType {
+					case ast.TypeInt:
+						fmtSpec = "%d"
+					case ast.TypeLong:
+						fmtSpec = "%ld"
+					case ast.TypeDouble:
+						fmtSpec = "%f"
+					case ast.TypeBool:
+						fmtSpec = "%s"
+					default:
+						fmtSpec = "%d"
+					}
+					w.WriteString(fmt.Sprintf("    %s _val = %s();\n", g.cType(fn.ReturnType), handlerName))
+					w.WriteString("    char _buf[64];\n")
+					if fn.ReturnType == ast.TypeBool {
+						w.WriteString("    snprintf(_buf, sizeof(_buf), \"%s\", _val ? \"true\" : \"false\");\n")
+					} else {
+						w.WriteString(fmt.Sprintf("    snprintf(_buf, sizeof(_buf), \"%s\", _val);\n", fmtSpec))
+					}
+					w.WriteString("    return (Dex_HttpResponse){200, dex_string_from_cstr(_buf)};\n")
+				}
+				w.WriteString("}\n")
+				g.spawnWrappers.WriteString(w.String())
+				emitName = wrapperName
 			}
-			w.WriteString("    return dex_string_from_cstr(_buf);\n")
-			w.WriteString("}\n")
-			g.spawnWrappers.WriteString(w.String())
-			emitName = wrapperName
 		}
 		out.WriteString("dex_route(")
 		g.genStringArg(out, e.Args[0])

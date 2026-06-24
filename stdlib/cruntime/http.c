@@ -10,7 +10,7 @@
 #include <signal.h>
 #include <curl/curl.h>
 
-typedef DexString* (*dex_handler_fn)(void);
+typedef Dex_HttpResponse (*dex_handler_fn)(void);
 
 typedef struct {
     const char* method;
@@ -50,6 +50,33 @@ static void dex_send_response(int fd, const char* status, const char* body, int 
     writev(fd, iov, 2);
 }
 
+static const char* dex_http_status_text(int code) {
+    switch (code) {
+    case 200: return "200 OK";
+    case 201: return "201 Created";
+    case 204: return "204 No Content";
+    case 301: return "301 Moved Permanently";
+    case 302: return "302 Found";
+    case 304: return "304 Not Modified";
+    case 400: return "400 Bad Request";
+    case 401: return "401 Unauthorized";
+    case 403: return "403 Forbidden";
+    case 404: return "404 Not Found";
+    case 405: return "405 Method Not Allowed";
+    case 409: return "409 Conflict";
+    case 422: return "422 Unprocessable Entity";
+    case 429: return "429 Too Many Requests";
+    case 500: return "500 Internal Server Error";
+    case 502: return "502 Bad Gateway";
+    case 503: return "503 Service Unavailable";
+    default: {
+        static __thread char status_buf[32];
+        snprintf(status_buf, sizeof(status_buf), "%d", code);
+        return status_buf;
+    }
+    }
+}
+
 static void dex_handle_connection(int client_fd) {
     char buf[4096];
 
@@ -68,19 +95,20 @@ static void dex_handle_connection(int client_fd) {
         if (strstr(buf, "Connection: close")) keep_alive = 0;
 
         // Match route
-        DexString* body_str = NULL;
+        int matched = 0;
         for (int i = 0; i < dex_route_count; i++) {
             if (strcmp(method, dex_routes[i].method) == 0 &&
                 strcmp(path, dex_routes[i].path) == 0) {
-                body_str = dex_routes[i].handler();
+                Dex_HttpResponse resp = dex_routes[i].handler();
+                const char* status = dex_http_status_text(resp.statusCode);
+                dex_send_response(client_fd, status, resp.body->data, keep_alive);
+                dex_release(resp.body);
+                matched = 1;
                 break;
             }
         }
 
-        if (body_str) {
-            dex_send_response(client_fd, "200 OK", body_str->data, keep_alive);
-            dex_release(body_str);
-        } else {
+        if (!matched) {
             dex_send_response(client_fd, "404 Not Found",
                 "{\"error\": \"Not Found\"}", keep_alive);
         }

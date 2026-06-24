@@ -144,6 +144,11 @@
         {
           "name": "support.type.channel.dex",
           "match": "\\b(chan)\\b"
+        },
+        {
+          "comment": "PascalCase identifiers used as struct/type names",
+          "name": "entity.name.type.struct.dex",
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\b"
         }
       ]
     },

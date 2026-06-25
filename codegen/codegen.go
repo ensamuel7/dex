@@ -1733,9 +1733,9 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				var w strings.Builder
 				w.WriteString(fmt.Sprintf("Dex_HttpResponse %s(void) {\n", wrapperName))
 				if fn.ReturnType == ast.TypeString {
-					// String handler: wrap as {200, result}
+					// String handler: wrap as {200, result, "application/json"}
 					w.WriteString(fmt.Sprintf("    DexString* _val = %s();\n", handlerName))
-					w.WriteString("    return (Dex_HttpResponse){200, _val};\n")
+					w.WriteString("    return (Dex_HttpResponse){200, _val, dex_string_from_cstr(\"application/json\")};\n")
 				} else {
 					// Primitive handler: convert to string, then wrap
 					var fmtSpec string
@@ -1758,7 +1758,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					} else {
 						w.WriteString(fmt.Sprintf("    snprintf(_buf, sizeof(_buf), \"%s\", _val);\n", fmtSpec))
 					}
-					w.WriteString("    return (Dex_HttpResponse){200, dex_string_from_cstr(_buf)};\n")
+					w.WriteString("    return (Dex_HttpResponse){200, dex_string_from_cstr(_buf), dex_string_from_cstr(\"application/json\")};\n")
 				}
 				w.WriteString("}\n")
 				g.spawnWrappers.WriteString(w.String())

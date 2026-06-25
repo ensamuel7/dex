@@ -82,3 +82,77 @@ const char* dex_json_set_double(const char* obj, const char* key, double val) {
     }
     return result;
 }
+
+// --- JSON get (parse) ---
+
+// Find the raw value for a key in a JSON object string.
+// Returns pointer into json (or NULL). Does NOT allocate.
+static const char* dex_json_find_value(const char* json, const char* key) {
+    size_t klen = strlen(key);
+    const char* p = json;
+    while (*p) {
+        // Find next quote
+        p = strchr(p, '"');
+        if (!p) return NULL;
+        p++; // skip opening quote
+        // Check if this key matches
+        if (strncmp(p, key, klen) == 0 && p[klen] == '"') {
+            p += klen + 1; // past closing quote
+            // Skip whitespace and colon
+            while (*p == ' ' || *p == '\t' || *p == ':') p++;
+            return p;
+        }
+        // Skip past this quoted string
+        const char* end = strchr(p, '"');
+        if (!end) return NULL;
+        p = end + 1;
+    }
+    return NULL;
+}
+
+const char* dex_json_get(const char* json, const char* key) {
+    const char* val = dex_json_find_value(json, key);
+    if (!val) return strdup("");
+    if (*val == '"') {
+        val++;
+        const char* end = strchr(val, '"');
+        if (!end) return strdup("");
+        size_t len = (size_t)(end - val);
+        char* result = (char*)malloc(len + 1);
+        memcpy(result, val, len);
+        result[len] = '\0';
+        return result;
+    }
+    // Non-string value — return raw up to delimiter
+    const char* end = val;
+    while (*end && *end != ',' && *end != '}' && *end != ']' && *end != ' ' && *end != '\n') end++;
+    size_t len = (size_t)(end - val);
+    char* result = (char*)malloc(len + 1);
+    memcpy(result, val, len);
+    result[len] = '\0';
+    return result;
+}
+
+int dex_json_get_int(const char* json, const char* key) {
+    const char* val = dex_json_find_value(json, key);
+    if (!val) return 0;
+    return atoi(val);
+}
+
+_Bool dex_json_get_bool(const char* json, const char* key) {
+    const char* val = dex_json_find_value(json, key);
+    if (!val) return 0;
+    return strncmp(val, "true", 4) == 0;
+}
+
+long dex_json_get_long(const char* json, const char* key) {
+    const char* val = dex_json_find_value(json, key);
+    if (!val) return 0;
+    return atol(val);
+}
+
+double dex_json_get_double(const char* json, const char* key) {
+    const char* val = dex_json_find_value(json, key);
+    if (!val) return 0.0;
+    return atof(val);
+}

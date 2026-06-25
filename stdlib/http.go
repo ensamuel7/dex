@@ -115,9 +115,11 @@ func init() {
 		Types: []ast.StructDef{
 			{
 				Name: "HttpResponse",
+				Doc:  "Represents an HTTP response returned by client request functions (get, post, put, patch, delete, request).",
 				Fields: []ast.StructField{
-					{Name: "statusCode", Type: ast.TypeInt},
-					{Name: "body", Type: ast.TypeString},
+					{Name: "statusCode", Type: ast.TypeInt, Doc: "HTTP status code (e.g. 200, 404, 500)."},
+					{Name: "body", Type: ast.TypeString, Doc: "Response body content as a string."},
+					{Name: "contentType", Type: ast.TypeString, Doc: "Content-Type header from the response (e.g. \"application/json\"). Optional in struct literals — defaults to \"application/json\" on the server."},
 				},
 			},
 		},

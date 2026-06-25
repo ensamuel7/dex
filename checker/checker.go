@@ -677,7 +677,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			return 0, fmt.Errorf("unknown struct type '%s'", e.Name)
 		}
 		def := ast.GetStructDef(t)
-		if len(e.FieldNames) != len(def.Fields) {
+		if len(e.FieldNames) > len(def.Fields) {
 			return 0, fmt.Errorf("struct '%s' has %d fields, got %d", e.Name, len(def.Fields), len(e.FieldNames))
 		}
 		for i, fn := range e.FieldNames {

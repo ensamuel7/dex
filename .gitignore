@@ -17,6 +17,9 @@ docs/
 *.swp
 *.swo
 
+# Node modules (editors/vscode — users run npm install)
+node_modules/
+
 # OS
 .DS_Store
 

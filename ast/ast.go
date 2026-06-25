@@ -47,11 +47,13 @@ type StructField struct {
 	Type        Type
 	IsPrivate   bool
 	Annotations []string
+	Doc         string // documentation string for hover
 }
 
 type StructDef struct {
 	Name   string
 	Fields []StructField
+	Doc    string // documentation string for hover
 }
 
 // Global struct registry

@@ -628,8 +628,11 @@ HTTP client functions return an `HttpResponse` struct:
 struct HttpResponse {
   statusCode: int
   body: string
+  contentType: string
 }
 ```
+
+The `contentType` field is set automatically for client responses (from the server's `Content-Type` header). In server-side struct literals it is optional — if omitted, defaults to `"application/json"`.
 
 **Convenience methods (headers optional):**
 
@@ -678,6 +681,12 @@ fn main(): void {
   let resp: HttpResponse = http.get("https://api.example.com/data")
   fmt.print(resp.statusCode)
   fmt.print(resp.body)
+  fmt.print(resp.contentType)
+
+  // Parse JSON response
+  let name: string = json.get(resp.body, "name")
+  let count: int = json.getInt(resp.body, "count")
+  let active: bool = json.getBool(resp.body, "active")
 
   // POST with JSON body
   let body: string = json.new()
@@ -726,10 +735,15 @@ obj = json.set(obj, "pi", 3.14)
 |--------------|---------------------------------------------------------------------------------|--------------------------------|
 | `new`        | `new(): string`                                                                 | Create empty `{}`              |
 | `set`        | `set(obj: string, key: string, value: string\|int\|bool\|long\|double): string` | Set a value (type auto-detected) |
-| `setArray`    | `setArray(obj: string, key: string, arr: T[]): string`                           | Set an array value             |
+| `setArray`   | `setArray(obj: string, key: string, arr: T[]): string`                          | Set an array value             |
 | `stringify`  | `stringify(arr: T[]): string`                                                   | Convert an array to JSON string |
+| `get`        | `get(json: string, key: string): string`                                        | Get a string value by key      |
+| `getInt`     | `getInt(json: string, key: string): int`                                        | Get an integer value by key    |
+| `getBool`    | `getBool(json: string, key: string): bool`                                      | Get a boolean value by key     |
+| `getDouble`  | `getDouble(json: string, key: string): double`                                  | Get a double value by key      |
+| `getLong`    | `getLong(json: string, key: string): long`                                      | Get a long integer value by key |
 
-`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`).
+`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
 
 ```dex
 let nums: int[] = [1, 2, 3]

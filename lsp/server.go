@@ -202,6 +202,8 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 		s.handleHover(msg)
 	case "textDocument/completion":
 		s.handleCompletion(msg)
+	case "textDocument/definition":
+		s.handleDefinition(msg)
 	default:
 		// Unknown method — respond with method not found if it has an ID
 		if msg.ID != nil {
@@ -215,8 +217,9 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 func (s *Server) handleInitialize(msg *jsonrpcMessage) {
 	result := map[string]interface{}{
 		"capabilities": map[string]interface{}{
-			"textDocumentSync": 1, // Full document sync
-			"hoverProvider":    true,
+			"textDocumentSync":  1, // Full document sync
+			"hoverProvider":     true,
+			"definitionProvider": true,
 			"completionProvider": map[string]interface{}{
 				"triggerCharacters": []string{"."},
 			},
@@ -319,6 +322,74 @@ func (s *Server) handleCompletion(msg *jsonrpcMessage) {
 
 	items := s.completionsAt(text, params.Position)
 	s.sendResponse(msg.ID, items)
+}
+
+// --- Go to Definition ---
+
+func (s *Server) handleDefinition(msg *jsonrpcMessage) {
+	var params struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+		Position Position `json:"position"`
+	}
+	json.Unmarshal(msg.Params, &params)
+
+	text, ok := s.documents[params.TextDocument.URI]
+	if !ok {
+		s.sendResponse(msg.ID, nil)
+		return
+	}
+
+	lex := lexer.New(text)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		s.sendResponse(msg.ID, nil)
+		return
+	}
+
+	tok := tokenAtPosition(tokens, params.Position)
+	if tok == nil || tok.Kind != token.TokenIdent {
+		s.sendResponse(msg.ID, nil)
+		return
+	}
+
+	name := tok.Value
+
+	// Search for definition in tokens: fn/function <name>, struct <name>, let/const <name>
+	for i := 0; i < len(tokens)-1; i++ {
+		t := tokens[i]
+		next := tokens[i+1]
+
+		if next.Kind != token.TokenIdent || next.Value != name {
+			continue
+		}
+
+		isDef := t.Kind == token.TokenFn || t.Kind == token.TokenFunction ||
+			t.Kind == token.TokenStruct ||
+			t.Kind == token.TokenLet || t.Kind == token.TokenConst
+
+		if !isDef {
+			continue
+		}
+
+		// Don't jump to self (cursor is already on the definition)
+		if next.Line == tok.Line && next.Col == tok.Col {
+			continue
+		}
+
+		s.sendResponse(msg.ID, map[string]interface{}{
+			"uri": params.TextDocument.URI,
+			"range": Range{
+				Start: Position{Line: next.Line - 1, Character: next.Col - 1},
+				End:   Position{Line: next.Line - 1, Character: next.Col - 1 + len(next.Value)},
+			},
+		})
+		return
+	}
+
+	// No definition found (e.g. stdlib types — no source location)
+	s.sendResponse(msg.ID, nil)
 }
 
 // --- Diagnostics ---
@@ -486,10 +557,28 @@ func (s *Server) hoverIdent(text string, tokens []token.Token, tok *token.Token)
 
 	name := tok.Value
 
+	// Check if this identifier is after a dot (field access: object.field)
+	idx := tokenIndex(tokens, tok)
+	if idx >= 2 && tokens[idx-1].Kind == token.TokenDot {
+		objTok := tokens[idx-2]
+		if objTok.Kind == token.TokenIdent {
+			if result := s.hoverFieldAccess(program, objTok.Value, name); result != "" {
+				return result
+			}
+		}
+	}
+
 	// Check if it's a user-defined function name
 	for _, fn := range program.Functions {
 		if fn.Name == name {
 			return formatFunctionHover(&fn)
+		}
+	}
+
+	// Check if it's a user-defined struct name
+	for i := range program.Structs {
+		if program.Structs[i].Name == name {
+			return formatStructHover(&program.Structs[i])
 		}
 	}
 
@@ -501,7 +590,6 @@ func (s *Server) hoverIdent(text string, tokens []token.Token, tok *token.Token)
 	}
 
 	// Check if it's a stdlib function name (after a dot)
-	// Look for module.funcName pattern — check the token before this one
 	for _, imp := range program.Imports {
 		mod := stdlib.Lookup(imp.Path)
 		if mod == nil {
@@ -509,6 +597,19 @@ func (s *Server) hoverIdent(text string, tokens []token.Token, tok *token.Token)
 		}
 		if fdef, ok := mod.Funcs[name]; ok {
 			return formatStdlibFuncHover(imp.Path, name, &fdef)
+		}
+	}
+
+	// Check if it's a stdlib struct type name (e.g. HttpResponse)
+	for _, imp := range program.Imports {
+		mod := stdlib.Lookup(imp.Path)
+		if mod == nil {
+			continue
+		}
+		for i := range mod.Types {
+			if mod.Types[i].Name == name {
+				return formatStructHover(&mod.Types[i])
+			}
 		}
 	}
 
@@ -596,19 +697,139 @@ func formatModuleHover(path string) string {
 
 func formatStdlibFuncHover(moduleName, funcName string, fdef *stdlib.FuncDef) string {
 	var params []string
-	for i, p := range fdef.Params {
-		pname := fmt.Sprintf("arg%d", i+1)
-		if i < len(fdef.ParamNames) {
-			pname = fdef.ParamNames[i]
+
+	if fdef.Params != nil {
+		// Normal function — use actual param types
+		for i, p := range fdef.Params {
+			pname := fmt.Sprintf("arg%d", i+1)
+			if i < len(fdef.ParamNames) {
+				pname = fdef.ParamNames[i]
+			}
+			params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
 		}
-		params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
+	} else {
+		// Special-cased function (Params nil) — use param names with string type
+		for _, pname := range fdef.ParamNames {
+			params = append(params, fmt.Sprintf("%s: %s", pname, "string"))
+		}
 	}
-	sig := fmt.Sprintf("%s.%s(%s): %s", moduleName, funcName, strings.Join(params, ", "), typeName(fdef.ReturnType))
+
+	// Resolve return type — special-cased functions with TypeVoid use module struct type
+	retStr := typeName(fdef.ReturnType)
+	if fdef.ReturnType == ast.TypeVoid && fdef.Params == nil {
+		mod := stdlib.Lookup(moduleName)
+		if mod != nil && len(mod.Types) > 0 {
+			retStr = mod.Types[0].Name
+		}
+	}
+
+	sig := fmt.Sprintf("%s.%s(%s): %s", moduleName, funcName, strings.Join(params, ", "), retStr)
 	doc := "Standard library function."
 	if fdef.Doc != "" {
 		doc = fdef.Doc
 	}
 	return fmt.Sprintf("```dex\n%s\n```\n\n%s", sig, doc)
+}
+
+func formatStructHover(def *ast.StructDef) string {
+	var fields []string
+	for _, f := range def.Fields {
+		fields = append(fields, fmt.Sprintf("    %s: %s", f.Name, typeName(f.Type)))
+	}
+	sig := fmt.Sprintf("struct %s {\n%s\n}", def.Name, strings.Join(fields, "\n"))
+
+	doc := "User-defined struct."
+	if def.Doc != "" {
+		doc = def.Doc
+	}
+
+	var fieldDocs []string
+	for _, f := range def.Fields {
+		entry := fmt.Sprintf("- `%s`: `%s`", f.Name, typeName(f.Type))
+		if f.Doc != "" {
+			entry += " — " + f.Doc
+		}
+		fieldDocs = append(fieldDocs, entry)
+	}
+
+	return fmt.Sprintf("```dex\n%s\n```\n\n%s\n\n**Fields:**\n%s", sig, doc, strings.Join(fieldDocs, "\n"))
+}
+
+func formatFieldHover(structName string, f *ast.StructField) string {
+	header := fmt.Sprintf("```dex\n(field) %s.%s: %s\n```", structName, f.Name, typeName(f.Type))
+	if f.Doc != "" {
+		return header + "\n\n" + f.Doc
+	}
+	return header
+}
+
+func (s *Server) hoverFieldAccess(program *ast.Program, objName, fieldName string) string {
+	objType, ok := findVariableTypeID(program, objName)
+	if !ok || !ast.IsStructType(objType) {
+		return ""
+	}
+
+	def := ast.GetStructDef(objType)
+	if def == nil {
+		return ""
+	}
+
+	for i := range def.Fields {
+		if def.Fields[i].Name == fieldName {
+			return formatFieldHover(def.Name, &def.Fields[i])
+		}
+	}
+	return ""
+}
+
+func tokenIndex(tokens []token.Token, tok *token.Token) int {
+	for i := range tokens {
+		if &tokens[i] == tok {
+			return i
+		}
+	}
+	return -1
+}
+
+func findVariableTypeID(program *ast.Program, name string) (ast.Type, bool) {
+	for _, fn := range program.Functions {
+		for _, p := range fn.Params {
+			if p.Name == name {
+				return p.Type, true
+			}
+		}
+		if t, ok := findLetTypeIDInStmts(fn.Body, name); ok {
+			return t, true
+		}
+	}
+	return 0, false
+}
+
+func findLetTypeIDInStmts(stmts []ast.Stmt, name string) (ast.Type, bool) {
+	for _, stmt := range stmts {
+		switch s := stmt.(type) {
+		case *ast.LetStmt:
+			if s.Name == name {
+				return s.Type, true
+			}
+		case *ast.IfStmt:
+			if t, ok := findLetTypeIDInStmts(s.Then, name); ok {
+				return t, true
+			}
+			if t, ok := findLetTypeIDInStmts(s.Else, name); ok {
+				return t, true
+			}
+		case *ast.WhileStmt:
+			if t, ok := findLetTypeIDInStmts(s.Body, name); ok {
+				return t, true
+			}
+		case *ast.BlockStmt:
+			if t, ok := findLetTypeIDInStmts(s.Stmts, name); ok {
+				return t, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // --- Completion ---

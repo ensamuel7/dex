@@ -31,16 +31,16 @@ void dex_route(const char* method, const char* path, dex_handler_fn handler) {
     }
 }
 
-static void dex_send_response(int fd, const char* status, const char* body, int keep_alive) {
+static void dex_send_response(int fd, const char* status, const char* body, const char* content_type, int keep_alive) {
     int body_len = (int)strlen(body);
     char header[512];
     int hlen = snprintf(header, sizeof(header),
         "HTTP/1.1 %s\r\n"
-        "Content-Type: application/json\r\n"
+        "Content-Type: %s\r\n"
         "Content-Length: %d\r\n"
         "Connection: %s\r\n"
         "\r\n",
-        status, body_len, keep_alive ? "keep-alive" : "close");
+        status, content_type, body_len, keep_alive ? "keep-alive" : "close");
     // Use writev to send header+body in one syscall
     struct iovec iov[2];
     iov[0].iov_base = header;
@@ -101,7 +101,12 @@ static void dex_handle_connection(int client_fd) {
                 strcmp(path, dex_routes[i].path) == 0) {
                 Dex_HttpResponse resp = dex_routes[i].handler();
                 const char* status = dex_http_status_text(resp.statusCode);
-                dex_send_response(client_fd, status, resp.body->data, keep_alive);
+                const char* ct = "application/json";
+                if (resp.contentType && resp.contentType->data[0] != '\0') {
+                    ct = resp.contentType->data;
+                }
+                dex_send_response(client_fd, status, resp.body->data, ct, keep_alive);
+                if (resp.contentType) dex_release(resp.contentType);
                 dex_release(resp.body);
                 matched = 1;
                 break;
@@ -110,7 +115,7 @@ static void dex_handle_connection(int client_fd) {
 
         if (!matched) {
             dex_send_response(client_fd, "404 Not Found",
-                "{\"error\": \"Not Found\"}", keep_alive);
+                "{\"error\": \"Not Found\"}", "application/json", keep_alive);
         }
 
         if (!keep_alive) break;
@@ -296,10 +301,14 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
         resp.statusCode = (int)code;
         resp.body = dex_string_from_cstr(buf.data);
+        char* ct = NULL;
+        curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ct);
+        resp.contentType = dex_string_from_cstr(ct ? ct : "");
         free(buf.data);
     } else {
         resp.statusCode = 0;
         resp.body = dex_string_from_cstr(curl_easy_strerror(res));
+        resp.contentType = dex_string_from_cstr("");
         free(buf.data);
     }
 
@@ -460,10 +469,14 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
         resp.statusCode = (int)code;
         resp.body = dex_string_from_cstr(buf.data);
+        char* ct = NULL;
+        curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ct);
+        resp.contentType = dex_string_from_cstr(ct ? ct : "");
         free(buf.data);
     } else {
         resp.statusCode = 0;
         resp.body = dex_string_from_cstr(curl_easy_strerror(res));
+        resp.contentType = dex_string_from_cstr("");
         free(buf.data);
     }
 

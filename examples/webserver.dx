@@ -1,8 +1,9 @@
 // DexLang Web Server Example
 // Build: dex build examples/webserver.dx
 // Run:   ./webserver
-// Test:  curl http://localhost:8080/hello
-//        curl http://localhost:8080/json
+// Test:  curl http://localhost:8083/hello
+//        curl http://localhost:8083/json
+//        curl http://localhost:8083/html
 import "http"
 import "json"
 
@@ -18,6 +19,10 @@ fn handle_json(): HttpResponse {
   return HttpResponse{statusCode: 200, body: body}
 }
 
+fn handle_html(): HttpResponse {
+  return HttpResponse{statusCode: 200, body: "<h1>Hello from Dex!</h1>", contentType: "text/html"}
+}
+
 function getBinary(): long {
   return 010012001201
 }
@@ -25,6 +30,7 @@ function getBinary(): long {
 fn main(): void {
   http.route("GET", "/hello", handle_hello())
   http.route("GET", "/json", handle_json())
+  http.route("GET", "/html", handle_html())
   http.route("GET", "/get-binary", getBinary())
   http.listen(8083)
 }

@@ -1,0 +1,12 @@
+import "fmt"
+
+struct UserService(dbConnStr: string) {
+  fn getUser(name: string): string {
+    fmt.print("[UserService] querying " + dbConnStr + " for " + name)
+    return "User(" + name + ")"
+  }
+
+  fn getUserName(): string {
+    return "Kweku"
+  }
+}

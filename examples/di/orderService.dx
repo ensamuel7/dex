@@ -1,0 +1,14 @@
+import "fmt"
+import "userService"
+import "notificationService"
+
+// OrderService depends on UserService and NotificationService
+// They are passed in via constructor (DI)
+struct OrderService(userSvc: UserService, notifier: NotificationService) {
+  fn placeOrder(userName: string, item: string): string {
+    let user: string = userSvc.getUser(userName)
+    let msg: string = user + " ordered " + item
+    notifier.notify(userName, msg)
+    return msg
+  }
+}

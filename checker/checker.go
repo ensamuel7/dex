@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/stdlib"
@@ -157,6 +158,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 
 		// Handle type inference
 		if s.Type == ast.TypeInferred {
+			// Cannot infer type from null literal
+			if _, ok := s.Value.(*ast.NullLit); ok {
+				return fmt.Errorf("cannot infer type of null; use explicit type annotation (e.g., let x: int? = null)")
+			}
 			// Cannot infer type from empty array literal
 			if arrLit, ok := s.Value.(*ast.ArrayLitExpr); ok && len(arrLit.Elems) == 0 {
 				return fmt.Errorf("cannot infer type of empty array literal; use explicit type annotation")
@@ -269,7 +274,15 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if condType != ast.TypeBool {
 			return fmt.Errorf("if condition must be bool, got %s", typeName(condType))
 		}
+		// Detect null check pattern for type narrowing
+		varName, isNotNull := extractNullCheck(s.Cond)
 		c.pushScope()
+		if varName != "" && isNotNull {
+			// x != null in then-branch: narrow to inner type
+			if varType, ok := c.resolve(varName); ok && ast.IsOptionalType(varType) {
+				c.define(varName, ast.OptionalInnerType(varType))
+			}
+		}
 		for _, stmt := range s.Then {
 			if err := c.checkStmt(stmt, returnType); err != nil {
 				return err
@@ -278,6 +291,12 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		c.popScope()
 		if s.Else != nil {
 			c.pushScope()
+			if varName != "" && !isNotNull {
+				// x == null in else-branch: narrow to inner type in else
+				if varType, ok := c.resolve(varName); ok && ast.IsOptionalType(varType) {
+					c.define(varName, ast.OptionalInnerType(varType))
+				}
+			}
 			for _, stmt := range s.Else {
 				if err := c.checkStmt(stmt, returnType); err != nil {
 					return err
@@ -446,7 +465,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if err != nil {
 			return err
 		}
-		if exprType != varType {
+		if exprType != varType && !canAssign(varType, exprType, s.Value) {
 			return fmt.Errorf("type mismatch in assignment: expected %s, got %s", typeName(varType), typeName(exprType))
 		}
 		return nil
@@ -551,6 +570,9 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 	case *ast.StringLit:
 		return ast.TypeString, nil
 
+	case *ast.NullLit:
+		return ast.TypeNull, nil
+
 	case *ast.CharLit:
 		return ast.TypeChar, nil
 
@@ -614,6 +636,17 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			return widerNumericType(leftType, rightType), nil
 
 		case ast.BinEq, ast.BinNeq:
+			// Allow null comparisons with optional types
+			if leftType == ast.TypeNull && ast.IsOptionalType(rightType) {
+				e.LeftType = leftType
+				e.RightType = rightType
+				return ast.TypeBool, nil
+			}
+			if rightType == ast.TypeNull && ast.IsOptionalType(leftType) {
+				e.LeftType = leftType
+				e.RightType = rightType
+				return ast.TypeBool, nil
+			}
 			if leftType == rightType {
 				return ast.TypeBool, nil
 			}
@@ -814,6 +847,25 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			varType, isVar := c.resolve(e.Module)
 			if isVar && ast.IsArrayType(varType) {
 				return c.checkArrayMethod(e.Module, varType, e.Name, e.Args)
+			}
+
+			// Resolve dotted field access: self.database -> look up field type
+			// This handles struct methods that call methods on struct-typed fields.
+			if !isVar && strings.Contains(e.Module, ".") {
+				parts := strings.SplitN(e.Module, ".", 2)
+				baseType, baseOk := c.resolve(parts[0])
+				if baseOk && ast.IsStructType(baseType) {
+					structDef := ast.GetStructDef(baseType)
+					if structDef != nil {
+						for _, field := range structDef.Fields {
+							if field.Name == parts[1] {
+								varType = field.Type
+								isVar = true
+								break
+							}
+						}
+					}
+				}
 			}
 
 			// Struct method call: instance.method()
@@ -1286,7 +1338,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if err != nil {
 				return 0, err
 			}
-			if argType != sig.Params[i] {
+			if argType != sig.Params[i] && !canAssign(sig.Params[i], argType, arg) {
 				return 0, fmt.Errorf("argument %d of '%s': expected %s, got %s", i+1, e.Name, typeName(sig.Params[i]), typeName(argType))
 			}
 		}
@@ -1449,7 +1501,35 @@ func (c *Checker) checkArrayMethod(varName string, arrType ast.Type, method stri
 	}
 }
 
+// extractNullCheck detects null comparison patterns in conditions.
+// Returns (varName, isNotNull) where isNotNull=true means "x != null".
+func extractNullCheck(cond ast.Expr) (string, bool) {
+	binExpr, ok := cond.(*ast.BinaryExpr)
+	if !ok {
+		return "", false
+	}
+	if binExpr.Op != ast.BinEq && binExpr.Op != ast.BinNeq {
+		return "", false
+	}
+	// Check x != null or x == null
+	if ident, ok := binExpr.Left.(*ast.Ident); ok {
+		if _, ok := binExpr.Right.(*ast.NullLit); ok {
+			return ident.Name, binExpr.Op == ast.BinNeq
+		}
+	}
+	// Check null != x or null == x
+	if _, ok := binExpr.Left.(*ast.NullLit); ok {
+		if ident, ok := binExpr.Right.(*ast.Ident); ok {
+			return ident.Name, binExpr.Op == ast.BinNeq
+		}
+	}
+	return "", false
+}
+
 func isValidFieldType(t ast.Type) bool {
+	if ast.IsOptionalType(t) {
+		return isValidFieldType(ast.OptionalInnerType(t))
+	}
 	switch t {
 	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar:
 		return true
@@ -1530,6 +1610,21 @@ func canAssign(targetType, exprType ast.Type, expr ast.Expr) bool {
 	if exprType == targetType {
 		return true
 	}
+	// null -> any optional type
+	if exprType == ast.TypeNull && ast.IsOptionalType(targetType) {
+		return true
+	}
+	// T -> T? (wrapping non-optional into optional)
+	if ast.IsOptionalType(targetType) {
+		inner := ast.OptionalInnerType(targetType)
+		if exprType == inner {
+			return true
+		}
+		// Allow widening into optional (e.g. int literal -> long?)
+		if canAssign(inner, exprType, expr) {
+			return true
+		}
+	}
 	// int literal -> long or double
 	if isIntLiteral(expr) && (targetType == ast.TypeLong || targetType == ast.TypeDouble) {
 		return true
@@ -1548,6 +1643,8 @@ func canAssign(targetType, exprType ast.Type, expr ast.Expr) bool {
 
 func typeName(t ast.Type) string {
 	switch t {
+	case ast.TypeNull:
+		return "null"
 	case ast.TypeInt:
 		return "int"
 	case ast.TypeBool:
@@ -1575,6 +1672,9 @@ func typeName(t ast.Type) string {
 	case ast.TypeArrayChar:
 		return "char[]"
 	default:
+		if ast.IsOptionalType(t) {
+			return typeName(ast.OptionalInnerType(t)) + "?"
+		}
 		if ast.IsStructArrayType(t) {
 			return ast.StructName(ast.ElementType(t)) + "[]"
 		}

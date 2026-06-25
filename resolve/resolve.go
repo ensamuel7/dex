@@ -58,7 +58,6 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 		}
 
 		if visited[absPath] {
-			// Already merged — just record the module name
 			if !containsString(program.UserModules, moduleName) {
 				program.UserModules = append(program.UserModules, moduleName)
 			}
@@ -69,97 +68,138 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 			return fmt.Errorf("circular import detected: '%s'", imp.Path)
 		}
 
-		source, err := os.ReadFile(filePath)
-		if err != nil {
-			return fmt.Errorf("cannot open user module '%s': %v", imp.Path, err)
-		}
-
-		// Lex
-		lex := lexer.New(string(source))
-		tokens, err := lex.Tokenize()
-		if err != nil {
-			return fmt.Errorf("%s: %v", filePath, err)
-		}
-
-		// Seed parser with module-provided struct type names
-		modImportPaths := ExtractImportPaths(tokens)
-		typeNames := stdlib.ModuleTypesForImports(modImportPaths)
-
-		// Parse
-		p := parser.New(tokens)
-		for _, name := range typeNames {
-			p.AddStructName(name)
-		}
-		modProgram, err := p.Parse()
-		if err != nil {
-			return fmt.Errorf("%s: %v", filePath, err)
-		}
-
-		// Flatten struct methods in the module (before resolving sub-imports)
-		FlattenStructMethods(modProgram)
-
-		// Mark as processing for circular detection, then resolve sub-imports
-		processing[absPath] = true
-		modDir := filepath.Dir(absPath)
-		if err := resolveImports(modProgram, modDir, visited, processing); err != nil {
+		if err := resolveModuleFile(filePath, absPath, moduleName, program, visited, processing); err != nil {
 			return err
 		}
-		delete(processing, absPath)
-		visited[absPath] = true
+	}
 
-		// Collect module's own function names (before prefixing)
-		modFuncNames := map[string]bool{}
-		for _, fn := range modProgram.Functions {
-			modFuncNames[fn.Name] = true
-		}
+	return nil
+}
 
-		// Prefix functions and rewrite internal calls
-		for i := range modProgram.Functions {
-			fn := &modProgram.Functions[i]
-			if fn.Name == "main" {
-				continue // skip main from user modules
-			}
-			// Prefix function name
-			fn.Name = moduleName + "_" + fn.Name
-			// Rewrite internal unqualified calls in the body
-			for _, stmt := range fn.Body {
-				prefixCallsInStmt(stmt, moduleName, modFuncNames)
-			}
-		}
+// resolveModuleFile resolves a single user module: reads, lexes, resolves sub-imports
+// FIRST (so their struct types are registered), then parses, prefixes, and merges.
+func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Program, visited, processing map[string]bool) error {
+	processing[absPath] = true
 
-		// Merge into main program
-		for _, fn := range modProgram.Functions {
-			if fn.Name == "main" {
-				continue
-			}
-			program.Functions = append(program.Functions, fn)
-		}
-		// Track which module each struct belongs to
-		for _, sd := range modProgram.Structs {
-			if program.StructModule == nil {
-				program.StructModule = make(map[string]string)
-			}
-			program.StructModule[sd.Name] = moduleName
-		}
-		program.Structs = append(program.Structs, modProgram.Structs...)
+	source, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("cannot open user module '%s': %v", filePath, err)
+	}
 
-		// Deduplicate stdlib imports from module
-		for _, modImp := range modProgram.Imports {
-			if stdlib.Lookup(modImp.Path) != nil && !containsImport(program.Imports, modImp.Path) {
-				program.Imports = append(program.Imports, modImp)
-			}
+	// Lex
+	lex := lexer.New(string(source))
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return fmt.Errorf("%s: %v", filePath, err)
+	}
+
+	// Extract import paths from tokens BEFORE parsing
+	importPaths := ExtractImportPaths(tokens)
+
+	// Resolve user sub-imports FIRST so their struct types are registered globally.
+	// This ensures the parser for this module can reference struct types from dependencies.
+	modDir := filepath.Dir(absPath)
+	for _, subPath := range importPaths {
+		if stdlib.Lookup(subPath) != nil {
+			continue
+		}
+		subModuleName := filepath.Base(subPath)
+		subFilePath := filepath.Join(modDir, subPath+".dx")
+		subAbsPath, err := filepath.Abs(subFilePath)
+		if err != nil {
+			return fmt.Errorf("cannot resolve path for import '%s': %v", subPath, err)
 		}
 
-		// Merge user modules from sub-modules
-		for _, subMod := range modProgram.UserModules {
-			if !containsString(program.UserModules, subMod) {
-				program.UserModules = append(program.UserModules, subMod)
+		if visited[subAbsPath] {
+			if !containsString(program.UserModules, subModuleName) {
+				program.UserModules = append(program.UserModules, subModuleName)
 			}
+			continue
+		}
+		if processing[subAbsPath] {
+			return fmt.Errorf("circular import detected: '%s'", subPath)
 		}
 
-		if !containsString(program.UserModules, moduleName) {
-			program.UserModules = append(program.UserModules, moduleName)
+		if err := resolveModuleFile(subFilePath, subAbsPath, subModuleName, program, visited, processing); err != nil {
+			return err
 		}
+	}
+
+	// NOW parse — all dependency struct types are registered globally
+	typeNames := stdlib.ModuleTypesForImports(importPaths)
+	p := parser.New(tokens)
+	for _, name := range typeNames {
+		p.AddStructName(name)
+	}
+	// Seed parser with struct names from already-resolved dependencies
+	for _, name := range ast.AllStructNames() {
+		p.AddStructName(name)
+	}
+	modProgram, err := p.Parse()
+	if err != nil {
+		return fmt.Errorf("%s: %v", filePath, err)
+	}
+
+	// Flatten struct methods
+	FlattenStructMethods(modProgram)
+
+	delete(processing, absPath)
+	visited[absPath] = true
+
+	// Collect this module's own function names (before prefixing)
+	ownFuncNames := map[string]bool{}
+	for _, fn := range modProgram.Functions {
+		ownFuncNames[fn.Name] = true
+	}
+
+	// Prefix only this module's own functions
+	for i := range modProgram.Functions {
+		fn := &modProgram.Functions[i]
+		if fn.Name == "main" || !ownFuncNames[fn.Name] {
+			continue
+		}
+		fn.Name = moduleName + "_" + fn.Name
+		for _, stmt := range fn.Body {
+			prefixCallsInStmt(stmt, moduleName, ownFuncNames)
+		}
+	}
+
+	// Merge functions into program
+	for _, fn := range modProgram.Functions {
+		if fn.Name == "main" {
+			continue
+		}
+		program.Functions = append(program.Functions, fn)
+	}
+
+	// Track which module each struct belongs to
+	for _, sd := range modProgram.Structs {
+		if program.StructModule == nil {
+			program.StructModule = make(map[string]string)
+		}
+		program.StructModule[sd.Name] = moduleName
+	}
+	program.Structs = append(program.Structs, modProgram.Structs...)
+
+	// Merge stdlib imports from this module
+	for _, modImp := range modProgram.Imports {
+		if stdlib.Lookup(modImp.Path) != nil && !containsImport(program.Imports, modImp.Path) {
+			program.Imports = append(program.Imports, modImp)
+		}
+	}
+
+	// Register user sub-module names
+	for _, subPath := range importPaths {
+		if stdlib.Lookup(subPath) == nil {
+			subModName := filepath.Base(subPath)
+			if !containsString(program.UserModules, subModName) {
+				program.UserModules = append(program.UserModules, subModName)
+			}
+		}
+	}
+
+	if !containsString(program.UserModules, moduleName) {
+		program.UserModules = append(program.UserModules, moduleName)
 	}
 
 	return nil
@@ -423,6 +463,12 @@ func rewriteFieldRefsInExpr(expr ast.Expr, fieldNames, localNames map[string]boo
 		}
 		return e
 	case *ast.CallExpr:
+		// Rewrite field-qualified calls: database.query() -> self.database.query()
+		// When Module matches a struct field name, it's a method call on that field,
+		// not a module call. Prefix with "self." so checker/codegen resolve it correctly.
+		if e.Module != "" && fieldNames[e.Module] && !localNames[e.Module] {
+			e.Module = "self." + e.Module
+		}
 		for i, arg := range e.Args {
 			e.Args[i] = rewriteFieldRefsInExpr(arg, fieldNames, localNames)
 		}

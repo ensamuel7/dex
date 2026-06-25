@@ -24,6 +24,7 @@ type Generator struct {
 	usesArena       bool
 	usesDebugCycles bool
 	usesWeakRef     bool
+	usesOptional    bool
 
 	importedModules map[string]*stdlib.Module
 	userModules     map[string]bool
@@ -49,6 +50,10 @@ type Generator struct {
 	isInLoop       bool                 // whether we're inside a loop body
 	loopDepth      int                  // scope depth at loop entry (for break/continue cleanup)
 	varAnnotations map[string][]string  // per-variable annotation tracking
+
+	// Type narrowing for optional types in null checks
+	narrowedVars   map[string]string   // varName -> narrowed C var name in current scope
+	narrowStack    []map[string]string // stack of narrowedVars snapshots for scope management
 }
 
 func New() *Generator {
@@ -63,6 +68,7 @@ func New() *Generator {
 		varTypes:        make(map[string]ast.Type),
 		funcTypedefs:    make(map[ast.Type]string),
 		varAnnotations:  make(map[string][]string),
+		narrowedVars:    make(map[string]string),
 	}
 }
 
@@ -95,6 +101,34 @@ func (g *Generator) registerScopeVar(name string, typ ast.Type) {
 }
 
 func (g *Generator) emitReleaseVar(out *strings.Builder, prefix, name string, typ ast.Type) {
+	if ast.IsOptionalType(typ) {
+		inner := ast.OptionalInnerType(typ)
+		if ast.IsValueType(inner) {
+			// Value-type optional: no cleanup needed
+			return
+		}
+		if ast.IsHeapType(inner) {
+			// Heap-type optional: guard with null check
+			out.WriteString(fmt.Sprintf("%sif (%s) { dex_release(%s); }\n", prefix, name, name))
+			return
+		}
+		if ast.IsStructType(inner) {
+			// Struct-type optional: free heap fields then free pointer
+			def := ast.GetStructDef(inner)
+			if def != nil {
+				out.WriteString(fmt.Sprintf("%sif (%s) {\n", prefix, name))
+				for _, f := range def.Fields {
+					if ast.NeedsRelease(f.Type) {
+						g.emitReleaseVar(out, prefix+"    ", name+"->"+f.Name, f.Type)
+					}
+				}
+				out.WriteString(fmt.Sprintf("%s    free(%s);\n", prefix, name))
+				out.WriteString(fmt.Sprintf("%s}\n", prefix))
+			}
+			return
+		}
+		return
+	}
 	if ast.IsHeapType(typ) {
 		annots := g.varAnnotations[name]
 		if ast.HasAnnotation(annots, ast.AnnotOwned) {
@@ -266,8 +300,16 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 	}
 
-	if g.usesBool {
+	if g.usesBool || g.usesOptional {
 		inc := "#include <stdbool.h>"
+		if !emittedIncludes[inc] {
+			emittedIncludes[inc] = true
+			out.WriteString(inc + "\n")
+		}
+	}
+
+	if g.usesOptional {
+		inc := "#include <stdlib.h>"
 		if !emittedIncludes[inc] {
 			emittedIncludes[inc] = true
 			out.WriteString(inc + "\n")
@@ -346,6 +388,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit cycle debug runtime (for #[debug(cycles)] annotations)
 	if g.usesDebugCycles {
 		out.WriteString(CycleDebugRuntime)
+	}
+
+	// Emit optional runtime (value-type optional wrappers)
+	if g.usesOptional {
+		out.WriteString(OptionalRuntime)
 	}
 
 	// Emit struct typedefs (module-provided types first, then user-defined)
@@ -549,6 +596,11 @@ func (g *Generator) scan(program *ast.Program) {
 }
 
 func (g *Generator) scanType(t ast.Type) {
+	if ast.IsOptionalType(t) {
+		g.usesOptional = true
+		g.scanType(ast.OptionalInnerType(t))
+		return
+	}
 	if t == ast.TypeBool {
 		g.usesBool = true
 	}
@@ -689,6 +741,8 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 	case *ast.ReceiveExpr:
 		g.usesConcurrency = true
 		g.scanExpr(e.Source)
+	case *ast.NullLit:
+		// null literal — optional usage detected via type scanning
 	}
 }
 
@@ -704,6 +758,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.currentFn = fn
 	g.isInLoop = false
 	g.loopDepth = 0
+	g.narrowedVars = make(map[string]string)
 
 	// Register params (not tracked in scope — callee-borrows convention)
 	for _, p := range fn.Params {
@@ -876,6 +931,64 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			}
 			break
 		}
+		// Special case for optional type declarations
+		if ast.IsOptionalType(s.Type) {
+			g.usesOptional = true
+			inner := ast.OptionalInnerType(s.Type)
+			_, isNull := s.Value.(*ast.NullLit)
+			// Check if the RHS already produces the optional type (e.g., calling a function that returns T?)
+			valType := g.typeOfExpr(s.Value)
+			valIsOptional := valType == s.Type
+			if ast.IsValueType(inner) {
+				ctyp := g.cType(s.Type)
+				if isNull {
+					out.WriteString(fmt.Sprintf("%s%s %s = {0};\n", prefix, ctyp, s.Name))
+				} else if valIsOptional {
+					out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
+					g.genExpr(out, s.Value)
+					out.WriteString(";\n")
+				} else {
+					out.WriteString(fmt.Sprintf("%s%s %s = {1, ", prefix, ctyp, s.Name))
+					g.genExpr(out, s.Value)
+					out.WriteString("};\n")
+				}
+			} else if ast.IsStructType(inner) {
+				ctyp := g.cType(s.Type) // Dex_Foo*
+				if isNull {
+					out.WriteString(fmt.Sprintf("%s%s %s = NULL;\n", prefix, ctyp, s.Name))
+				} else {
+					innerCType := "Dex_" + ast.StructName(inner)
+					out.WriteString(fmt.Sprintf("%s%s %s = (%s*)malloc(sizeof(%s));\n", prefix, ctyp, s.Name, innerCType, innerCType))
+					out.WriteString(fmt.Sprintf("%s*%s = ", prefix, s.Name))
+					g.genExpr(out, s.Value)
+					out.WriteString(";\n")
+				}
+			} else {
+				// Heap type (string, array, etc.) — same pointer, NULL = absent
+				ctyp := g.cType(s.Type)
+				if isNull {
+					out.WriteString(fmt.Sprintf("%s%s %s = NULL;\n", prefix, ctyp, s.Name))
+				} else if inner == ast.TypeString {
+					// Handle string optional like regular string init
+					if strLit, ok := s.Value.(*ast.StringLit); ok {
+						out.WriteString(fmt.Sprintf("%s%s %s = dex_string_from_lit(%q);\n", prefix, ctyp, s.Name, strLit.Value))
+					} else {
+						out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
+						g.genExpr(out, s.Value)
+						out.WriteString(";\n")
+						if _, ok := s.Value.(*ast.Ident); ok {
+							out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, s.Name))
+						}
+					}
+				} else {
+					out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
+					g.genExpr(out, s.Value)
+					out.WriteString(";\n")
+				}
+			}
+			g.registerScopeVar(s.Name, s.Type)
+			break
+		}
 		// Special case for weak reference declarations
 		if ast.IsWeakType(s.Type) {
 			out.WriteString(fmt.Sprintf("%sDexWeakRef* %s = dex_weak_new(", prefix, s.Name))
@@ -899,6 +1012,47 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 
 	case *ast.ReturnStmt:
 		retType := g.currentFn.ReturnType
+		if ast.IsOptionalType(retType) {
+			inner := ast.OptionalInnerType(retType)
+			_, isNull := s.Value.(*ast.NullLit)
+			if ast.IsValueType(inner) {
+				ctyp := g.cType(retType)
+				if isNull {
+					g.emitCleanupAll(out, prefix, "")
+					out.WriteString(fmt.Sprintf("%sreturn (%s){0};\n", prefix, ctyp))
+				} else {
+					out.WriteString(fmt.Sprintf("%s%s _ret_tmp = (%s){1, ", prefix, ctyp, ctyp))
+					g.genExpr(out, s.Value)
+					out.WriteString("};\n")
+					g.emitCleanupAll(out, prefix, "")
+					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
+				}
+			} else {
+				// Heap/struct optional: NULL for null, value otherwise
+				if isNull {
+					g.emitCleanupAll(out, prefix, "")
+					out.WriteString(fmt.Sprintf("%sreturn NULL;\n", prefix))
+				} else if ast.IsHeapType(inner) || ast.IsHeapType(retType) {
+					if ident, ok := s.Value.(*ast.Ident); ok {
+						out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, ident.Name))
+						g.emitCleanupAll(out, prefix, "")
+						out.WriteString(fmt.Sprintf("%sreturn %s;\n", prefix, ident.Name))
+					} else {
+						ctyp := g.cType(retType)
+						out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
+						g.genExpr(out, s.Value)
+						out.WriteString(";\n")
+						g.emitCleanupAll(out, prefix, "")
+						out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
+					}
+				} else {
+					out.WriteString(fmt.Sprintf("%sreturn ", prefix))
+					g.genExpr(out, s.Value)
+					out.WriteString(";\n")
+				}
+			}
+			break
+		}
 		if ast.IsHeapType(retType) {
 			// Retain the return value, clean up everything else, then return
 			if ident, ok := s.Value.(*ast.Ident); ok {
@@ -960,6 +1114,56 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 
 	case *ast.AssignStmt:
 		varType := g.varTypes[s.Name]
+		if ast.IsOptionalType(varType) {
+			inner := ast.OptionalInnerType(varType)
+			_, isNull := s.Value.(*ast.NullLit)
+			if ast.IsValueType(inner) {
+				ctyp := g.cType(varType)
+				if isNull {
+					out.WriteString(fmt.Sprintf("%s%s = (%s){0};\n", prefix, s.Name, ctyp))
+				} else {
+					out.WriteString(fmt.Sprintf("%s%s = (%s){1, ", prefix, s.Name, ctyp))
+					g.genExpr(out, s.Value)
+					out.WriteString("};\n")
+				}
+			} else if ast.IsStructType(inner) {
+				if isNull {
+					innerCType := "Dex_" + ast.StructName(inner)
+					out.WriteString(fmt.Sprintf("%sif (%s) { free(%s); } %s = NULL;\n", prefix, s.Name, s.Name, s.Name))
+					_ = innerCType
+				} else {
+					innerCType := "Dex_" + ast.StructName(inner)
+					out.WriteString(fmt.Sprintf("%sif (!%s) { %s = (%s*)malloc(sizeof(%s)); }\n", prefix, s.Name, s.Name, innerCType, innerCType))
+					out.WriteString(fmt.Sprintf("%s*%s = ", prefix, s.Name))
+					g.genExpr(out, s.Value)
+					out.WriteString(";\n")
+				}
+			} else {
+				// Heap type optional (string, array, etc.)
+				if isNull {
+					if ast.NeedsRelease(inner) {
+						out.WriteString(fmt.Sprintf("%sif (%s) { dex_release(%s); } %s = NULL;\n", prefix, s.Name, s.Name, s.Name))
+					} else {
+						out.WriteString(fmt.Sprintf("%s%s = NULL;\n", prefix, s.Name))
+					}
+				} else {
+					if ast.NeedsRelease(inner) {
+						out.WriteString(fmt.Sprintf("%s{ %s _dex_old = %s; %s = ", prefix, g.cType(varType), s.Name, s.Name))
+						g.genExpr(out, s.Value)
+						out.WriteString(";")
+						if _, ok := s.Value.(*ast.Ident); ok {
+							out.WriteString(fmt.Sprintf(" dex_retain(%s);", s.Name))
+						}
+						out.WriteString(" if (_dex_old) { dex_release(_dex_old); } }\n")
+					} else {
+						out.WriteString(fmt.Sprintf("%s%s = ", prefix, s.Name))
+						g.genExpr(out, s.Value)
+						out.WriteString(";\n")
+					}
+				}
+			}
+			break
+		}
 		if ast.IsHeapType(varType) {
 			// For heap-typed reassignment: old = var; var = new_val; release(old);
 			out.WriteString(fmt.Sprintf("%s{ %s _dex_old = %s; %s = ", prefix, g.cType(varType), s.Name, s.Name))
@@ -981,15 +1185,27 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		g.genExprNoParen(out, s.Cond)
 		out.WriteString(") {\n")
 		g.pushScope()
+		// Detect null check for type narrowing
+		varName, isNotNull := extractNullCheckCodegen(s.Cond)
+		if varName != "" && isNotNull {
+			g.emitNarrowing(out, prefix+"    ", varName)
+		}
 		for _, stmt := range s.Then {
 			g.genStmt(out, stmt, indent+1)
 		}
+		g.clearNarrowing(varName)
 		g.popScope(out, prefix+"    ")
 		if s.Else != nil {
 			out.WriteString(fmt.Sprintf("%s} else {\n", prefix))
 			g.pushScope()
+			if varName != "" && !isNotNull {
+				g.emitNarrowing(out, prefix+"    ", varName)
+			}
 			for _, stmt := range s.Else {
 				g.genStmt(out, stmt, indent+1)
+			}
+			if varName != "" && !isNotNull {
+				g.clearNarrowing(varName)
 			}
 			g.popScope(out, prefix+"    ")
 		}
@@ -1180,6 +1396,50 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	}
 }
 
+// extractNullCheckCodegen detects null comparison patterns in conditions for codegen narrowing.
+func extractNullCheckCodegen(cond ast.Expr) (string, bool) {
+	binExpr, ok := cond.(*ast.BinaryExpr)
+	if !ok {
+		return "", false
+	}
+	if binExpr.Op != ast.BinEq && binExpr.Op != ast.BinNeq {
+		return "", false
+	}
+	if ident, ok := binExpr.Left.(*ast.Ident); ok {
+		if _, ok := binExpr.Right.(*ast.NullLit); ok {
+			return ident.Name, binExpr.Op == ast.BinNeq
+		}
+	}
+	if _, ok := binExpr.Left.(*ast.NullLit); ok {
+		if ident, ok := binExpr.Right.(*ast.Ident); ok {
+			return ident.Name, binExpr.Op == ast.BinNeq
+		}
+	}
+	return "", false
+}
+
+// emitNarrowing emits a narrowed variable declaration for an optional variable
+// and registers it in the narrowedVars map so genExpr uses the narrowed name.
+func (g *Generator) emitNarrowing(out *strings.Builder, prefix, varName string) {
+	varType, ok := g.varTypes[varName]
+	if !ok || !ast.IsOptionalType(varType) {
+		return
+	}
+	inner := ast.OptionalInnerType(varType)
+	if ast.IsValueType(inner) {
+		narrowedName := "_narrow_" + varName
+		out.WriteString(fmt.Sprintf("%s%s %s = %s.value;\n", prefix, g.cType(inner), narrowedName, varName))
+		g.narrowedVars[varName] = narrowedName
+	}
+	// For heap types (string, array), no narrowing needed — same pointer
+	// For struct types, no narrowing needed — it's already a pointer
+}
+
+// clearNarrowing removes a variable from the narrowedVars map.
+func (g *Generator) clearNarrowing(varName string) {
+	delete(g.narrowedVars, varName)
+}
+
 // genForInit generates the init part of a for loop (no trailing semicolon).
 func (g *Generator) genForInit(out *strings.Builder, stmt ast.Stmt) {
 	switch s := stmt.(type) {
@@ -1271,10 +1531,22 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	case *ast.StringLit:
 		out.WriteString(fmt.Sprintf("dex_string_from_lit(%q)", e.Value))
 
+	case *ast.NullLit:
+		out.WriteString("NULL")
+
 	case *ast.Ident:
-		out.WriteString(e.Name)
+		if narrowed, ok := g.narrowedVars[e.Name]; ok {
+			out.WriteString(narrowed)
+		} else {
+			out.WriteString(e.Name)
+		}
 
 	case *ast.BinaryExpr:
+		// Check if this is a null comparison
+		if g.isNullComparison(e) {
+			g.genNullComparison(out, e, true)
+			return
+		}
 		// Check if this is a string operation
 		if g.isStringExpr(e.Left) || g.isStringExpr(e.Right) {
 			switch e.Op {
@@ -2142,13 +2414,50 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	// User-defined function call
 	out.WriteString(e.Name)
 	out.WriteString("(")
+	fn, hasFn := g.funcs[e.Name]
 	for i, arg := range e.Args {
 		if i > 0 {
 			out.WriteString(", ")
 		}
-		g.genExpr(out, arg)
+		// Wrap argument for optional parameters if needed
+		if hasFn && i < len(fn.Params) && ast.IsOptionalType(fn.Params[i].Type) {
+			g.genOptionalArg(out, arg, fn.Params[i].Type)
+		} else {
+			g.genExpr(out, arg)
+		}
 	}
 	out.WriteString(")")
+}
+
+// genOptionalArg generates an argument expression, wrapping it for optional parameters if needed.
+func (g *Generator) genOptionalArg(out *strings.Builder, arg ast.Expr, paramType ast.Type) {
+	inner := ast.OptionalInnerType(paramType)
+	_, isNull := arg.(*ast.NullLit)
+	argType := g.typeOfExpr(arg)
+
+	// If the argument is already the optional type, emit directly
+	if argType == paramType {
+		g.genExpr(out, arg)
+		return
+	}
+
+	if ast.IsValueType(inner) {
+		ctyp := g.cType(paramType)
+		if isNull {
+			out.WriteString(fmt.Sprintf("(%s){0}", ctyp))
+		} else {
+			out.WriteString(fmt.Sprintf("(%s){1, ", ctyp))
+			g.genExpr(out, arg)
+			out.WriteString("}")
+		}
+	} else {
+		// Heap/struct optional: NULL for null, value otherwise
+		if isNull {
+			out.WriteString("NULL")
+		} else {
+			g.genExpr(out, arg)
+		}
+	}
 }
 
 // genStringArg generates a string argument for a stdlib function, extracting ->data
@@ -2418,6 +2727,8 @@ func (g *Generator) collectUsedVarsExpr(expr ast.Expr, used map[string]bool) {
 		g.collectUsedVarsExpr(e.Source, used)
 	case *ast.ChannelExpr:
 		// no vars
+	case *ast.NullLit:
+		// no vars
 	}
 }
 
@@ -2426,6 +2737,11 @@ func (g *Generator) collectUsedVarsExpr(expr ast.Expr, used map[string]bool) {
 func (g *Generator) genExprNoParen(out *strings.Builder, expr ast.Expr) {
 	switch e := expr.(type) {
 	case *ast.BinaryExpr:
+		// Check null comparison in no-paren context
+		if g.isNullComparison(e) {
+			g.genNullComparison(out, e, false)
+			return
+		}
 		// Check string comparison in no-paren context too
 		if g.isStringExpr(e.Left) || g.isStringExpr(e.Right) {
 			switch e.Op {
@@ -2478,6 +2794,62 @@ func (g *Generator) genExprNoParen(out *strings.Builder, expr ast.Expr) {
 		}
 	default:
 		g.genExpr(out, expr)
+	}
+}
+
+// isNullComparison checks if a binary expression is a null comparison.
+func (g *Generator) isNullComparison(e *ast.BinaryExpr) bool {
+	if e.Op != ast.BinEq && e.Op != ast.BinNeq {
+		return false
+	}
+	_, leftNull := e.Left.(*ast.NullLit)
+	_, rightNull := e.Right.(*ast.NullLit)
+	return leftNull || rightNull
+}
+
+// genNullComparison emits a null comparison for optional types.
+func (g *Generator) genNullComparison(out *strings.Builder, e *ast.BinaryExpr, withParen bool) {
+	var nonNullExpr ast.Expr
+	if _, ok := e.Left.(*ast.NullLit); ok {
+		nonNullExpr = e.Right
+	} else {
+		nonNullExpr = e.Left
+	}
+
+	// Determine the type of the non-null side
+	nonNullType := g.typeOfExpr(nonNullExpr)
+	isEq := e.Op == ast.BinEq
+
+	if ast.IsOptionalType(nonNullType) {
+		inner := ast.OptionalInnerType(nonNullType)
+		if ast.IsValueType(inner) {
+			// Value-type optional: check .has_value
+			if withParen {
+				out.WriteString("(")
+			}
+			if isEq {
+				out.WriteString("!")
+			}
+			g.genExpr(out, nonNullExpr)
+			out.WriteString(".has_value")
+			if withParen {
+				out.WriteString(")")
+			}
+			return
+		}
+	}
+	// Heap/struct optional: check == NULL or != NULL
+	if withParen {
+		out.WriteString("(")
+	}
+	g.genExpr(out, nonNullExpr)
+	if isEq {
+		out.WriteString(" == NULL")
+	} else {
+		out.WriteString(" != NULL")
+	}
+	if withParen {
+		out.WriteString(")")
 	}
 }
 
@@ -2550,6 +2922,28 @@ func (g *Generator) cType(t ast.Type) string {
 	case ast.TypeArrayChar:
 		return "DexArrayChar*"
 	default:
+		if ast.IsOptionalType(t) {
+			inner := ast.OptionalInnerType(t)
+			if ast.IsValueType(inner) {
+				switch inner {
+				case ast.TypeInt:
+					return "DexOptInt"
+				case ast.TypeBool:
+					return "DexOptBool"
+				case ast.TypeLong:
+					return "DexOptLong"
+				case ast.TypeDouble:
+					return "DexOptDouble"
+				case ast.TypeChar:
+					return "DexOptChar"
+				}
+			}
+			if ast.IsStructType(inner) {
+				return "Dex_" + ast.StructName(inner) + "*"
+			}
+			// Heap types (string, arrays, channels, etc.) — same pointer type, NULL = absent
+			return g.cType(inner)
+		}
 		if ast.IsStructArrayType(t) {
 			return "DexArrayStruct*"
 		}
@@ -2778,6 +3172,8 @@ func (g *Generator) structArrayNeedsCleanup(elemType ast.Type) bool {
 // typeOfExpr returns the type of an expression based on available information.
 func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 	switch e := expr.(type) {
+	case *ast.NullLit:
+		return ast.TypeNull
 	case *ast.CharLit:
 		return ast.TypeChar
 	case *ast.IntLit:

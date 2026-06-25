@@ -384,7 +384,16 @@ func (p *Parser) parseType() (ast.Type, error) {
 	if p.check(token.TokenLBracket) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenRBracket {
 		p.advance() // consume '['
 		p.advance() // consume ']'
-		return ast.ArrayTypeOf(base), nil
+		base = ast.ArrayTypeOf(base)
+	}
+
+	// Check for ? suffix to make optional type
+	if p.check(token.TokenQuestion) {
+		if ast.IsOptionalType(base) {
+			return 0, p.errorf("double-optional types are not allowed")
+		}
+		p.advance() // consume '?'
+		return ast.OptionalTypeOf(base), nil
 	}
 
 	return base, nil
@@ -497,6 +506,11 @@ func (p *Parser) parseLetStmt() (ast.Stmt, error) {
 	typ, err := p.parseType()
 	if err != nil {
 		return nil, err
+	}
+
+	// Optional types without initializer default to null
+	if ast.IsOptionalType(typ) && !p.check(token.TokenAssign) {
+		return &ast.LetStmt{Name: name, Type: typ, Value: &ast.NullLit{}}, nil
 	}
 
 	if err := p.expect(token.TokenAssign); err != nil {
@@ -1092,6 +1106,10 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 	case token.TokenFalse:
 		p.advance()
 		return &ast.BoolLit{Value: false}, nil
+
+	case token.TokenNull:
+		p.advance()
+		return &ast.NullLit{}, nil
 
 	case token.TokenLBracket:
 		// Array literal: [expr, expr, ...]

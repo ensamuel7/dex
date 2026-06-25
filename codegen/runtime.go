@@ -25,3 +25,6 @@ var ArenaRuntime string
 
 //go:embed cruntime/cycles.c
 var CycleDebugRuntime string
+
+//go:embed cruntime/optionals.c
+var OptionalRuntime string

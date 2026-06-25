@@ -1,0 +1,170 @@
+import "fmt"
+
+// Test 1: int? with null
+fn testIntOptionalNull(): void {
+    let x: int?
+    assert(x == null)
+}
+
+// Test 2: int? with value
+fn testIntOptionalValue(): void {
+    let x: int? = 5
+    assert(x != null)
+    if (x != null) {
+        assert(x == 5)
+    }
+}
+
+// Test 3: string? with null
+fn testStringOptionalNull(): void {
+    let s: string? = null
+    assert(s == null)
+}
+
+// Test 4: string? with value
+fn testStringOptionalValue(): void {
+    let s: string? = "hello"
+    assert(s != null)
+    if (s != null) {
+        assert(s == "hello")
+    }
+}
+
+// Test 5: reassignment to null
+fn testReassignToNull(): void {
+    let x: int? = 5
+    assert(x != null)
+    x = null
+    assert(x == null)
+}
+
+// Test 6: reassignment from null to value
+fn testReassignFromNull(): void {
+    let x: int? = null
+    assert(x == null)
+    x = 42
+    assert(x != null)
+    if (x != null) {
+        assert(x == 42)
+    }
+}
+
+// Test 7: bool? optional
+fn testBoolOptional(): void {
+    let b: bool? = true
+    assert(b != null)
+    if (b != null) {
+        assert(b == true)
+    }
+    b = null
+    assert(b == null)
+}
+
+// Test 8: double? optional
+fn testDoubleOptional(): void {
+    let d: double? = 3.14
+    assert(d != null)
+    d = null
+    assert(d == null)
+}
+
+// Test 9: function returning optional
+fn maybeInt(flag: bool): int? {
+    if (flag) {
+        return 42
+    }
+    return null
+}
+
+fn testFunctionReturningOptional(): void {
+    let a: int? = maybeInt(true)
+    assert(a != null)
+    if (a != null) {
+        assert(a == 42)
+    }
+
+    let b: int? = maybeInt(false)
+    assert(b == null)
+}
+
+// Test 10: function returning string?
+fn maybeString(flag: bool): string? {
+    if (flag) {
+        return "yes"
+    }
+    return null
+}
+
+fn testFunctionReturningStringOptional(): void {
+    let a: string? = maybeString(true)
+    assert(a != null)
+    if (a != null) {
+        assert(a == "yes")
+    }
+
+    let b: string? = maybeString(false)
+    assert(b == null)
+}
+
+// Test 11: null check with reversed order (null != x)
+fn testReversedNullCheck(): void {
+    let x: int? = 10
+    if (null != x) {
+        assert(x == 10)
+    }
+}
+
+// Test 12: function accepting optional parameter
+fn showOptional(val: int?): bool {
+    if (val != null) {
+        return true
+    }
+    return false
+}
+
+fn testOptionalParam(): void {
+    assert(showOptional(5) == true)
+    assert(showOptional(null) == false)
+}
+
+// Test 13: long? optional
+fn testLongOptional(): void {
+    let l: long? = 1000000
+    assert(l != null)
+    if (l != null) {
+        assert(l == 1000000)
+    }
+    l = null
+    assert(l == null)
+}
+
+// Test 14: string? reassignment
+fn testStringReassign(): void {
+    let s: string? = "first"
+    assert(s != null)
+    s = "second"
+    assert(s != null)
+    if (s != null) {
+        assert(s == "second")
+    }
+    s = null
+    assert(s == null)
+}
+
+fn main(): void {
+    testIntOptionalNull()
+    testIntOptionalValue()
+    testStringOptionalNull()
+    testStringOptionalValue()
+    testReassignToNull()
+    testReassignFromNull()
+    testBoolOptional()
+    testDoubleOptional()
+    testFunctionReturningOptional()
+    testFunctionReturningStringOptional()
+    testReversedNullCheck()
+    testOptionalParam()
+    testLongOptional()
+    testStringReassign()
+    fmt.print("All optional tests passed!")
+}

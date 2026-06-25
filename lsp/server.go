@@ -408,6 +408,7 @@ func (s *Server) diagnose(uri string, text string) {
 	ast.ResetTaskTypes()
 	ast.ResetWeakTypes()
 	ast.ResetStructArrayTypes()
+	ast.ResetOptionalTypes()
 	stdlib.RegisterAllModuleTypes()
 
 	// Lex
@@ -1043,6 +1044,9 @@ func typeName(t ast.Type) string {
 	case ast.TypeArrayChar:
 		return "char[]"
 	default:
+		if ast.IsOptionalType(t) {
+			return typeName(ast.OptionalInnerType(t)) + "?"
+		}
 		if ast.IsStructType(t) {
 			return ast.StructName(t)
 		}

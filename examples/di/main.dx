@@ -1,0 +1,16 @@
+import "fmt"
+import "userService"
+import "notificationService"
+import "orderService"
+
+fn main(): void {
+  // main is the composition root — creates everything and wires dependencies
+  let userSvc = userService.UserService("postgres://localhost/myapp")
+  let notifier = notificationService.NotificationService("email-service")
+
+  // orderService receives both as constructor args (DI)
+  let orderSvc = orderService.OrderService(userSvc, notifier)
+
+  fmt.print("--- Placing order ---")
+  fmt.print(orderSvc.placeOrder("kweku", "MacBook Pro"))
+}

@@ -89,6 +89,63 @@ Append `[]` to a primitive type to make an array type.
 
 Variables can have explicit type annotations or use type inference (see Variables section).
 
+### Optional types
+
+Append `?` to any type to make it optional. Optional types can hold either a value of the inner type or `null`.
+
+```dex
+let x: int? = 5       // has a value
+let y: int? = null     // no value
+let z: int?            // defaults to null (no initializer needed)
+let s: string? = null  // optional string
+```
+
+| Type       | Description              |
+|------------|--------------------------|
+| `int?`     | Optional integer         |
+| `long?`    | Optional long integer    |
+| `double?`  | Optional double          |
+| `bool?`    | Optional boolean         |
+| `string?`  | Optional string          |
+| `char?`    | Optional character       |
+
+**Null checks and type narrowing:**
+
+Use `== null` or `!= null` to check if an optional has a value. Inside an `if` block guarded by a null check, the variable is automatically narrowed to the inner (non-optional) type.
+
+```dex
+let x: int? = 5
+if (x != null) {
+    // x is narrowed to int here
+    let y: int = x + 1
+}
+```
+
+**Functions with optional types:**
+
+Functions can accept and return optional types.
+
+```dex
+fn findUser(id: int): string? {
+    if (id == 1) {
+        return "Alice"
+    }
+    return null
+}
+
+fn greet(name: string?): void {
+    if (name != null) {
+        fmt.print(name)
+    }
+}
+```
+
+**Rules:**
+- `null` can only be assigned to optional types (`T?`), not plain types (`T`).
+- A value of type `T` can be assigned to a variable of type `T?` (automatic wrapping).
+- Double-optional types (`T??`) are not allowed.
+- There is no force-unwrap operator; use null checks for safe access.
+
 ---
 
 ## Variables

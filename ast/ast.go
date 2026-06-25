@@ -24,6 +24,10 @@ const (
 // The checker resolves this to the actual type from the RHS expression.
 const TypeInferred Type = -1
 
+// TypeNull is a sentinel type for null literal expressions.
+// Used during type checking; null can only be assigned to optional types.
+const TypeNull Type = -2
+
 // Struct type system: dynamic IDs starting at 1000
 const TypeStructBase Type = 1000
 
@@ -41,6 +45,9 @@ const TypeWeakBase Type = 5000
 
 // Struct array type system: dynamic IDs starting at 6000
 const TypeStructArrayBase Type = 6000
+
+// Optional type system: dynamic IDs starting at 7000
+const TypeOptionalBase Type = 7000
 
 type StructField struct {
 	Name        string
@@ -83,6 +90,15 @@ func RegisterStructType(def StructDef) Type {
 func LookupStructType(name string) (Type, bool) {
 	id, ok := structByName[name]
 	return id, ok
+}
+
+// AllStructNames returns the names of all registered struct types.
+func AllStructNames() []string {
+	names := make([]string, 0, len(structByName))
+	for name := range structByName {
+		names = append(names, name)
+	}
+	return names
 }
 
 func GetStructDef(t Type) *StructDef {
@@ -250,6 +266,9 @@ func IsHeapType(t Type) bool {
 }
 
 func NeedsRelease(t Type) bool {
+	if IsOptionalType(t) {
+		return NeedsRelease(OptionalInnerType(t))
+	}
 	if IsHeapType(t) {
 		return true
 	}
@@ -657,7 +676,7 @@ func StructArrayTypeOf(elemType Type) Type {
 }
 
 func IsStructArrayType(t Type) bool {
-	return t >= TypeStructArrayBase
+	return t >= TypeStructArrayBase && t < TypeOptionalBase
 }
 
 func StructArrayElemType(t Type) Type {
@@ -667,6 +686,53 @@ func StructArrayElemType(t Type) Type {
 	}
 	return structArrayTypes[idx]
 }
+
+// Optional type registry
+var (
+	optionalTypes   []Type        // inner type for each optional type ID
+	optionalByInner map[Type]Type // inner type → optional type ID
+)
+
+func init() {
+	ResetOptionalTypes()
+}
+
+func ResetOptionalTypes() {
+	optionalTypes = nil
+	optionalByInner = make(map[Type]Type)
+}
+
+func OptionalTypeOf(innerType Type) Type {
+	if id, ok := optionalByInner[innerType]; ok {
+		return id
+	}
+	id := TypeOptionalBase + Type(len(optionalTypes))
+	optionalByInner[innerType] = id
+	optionalTypes = append(optionalTypes, innerType)
+	return id
+}
+
+func IsOptionalType(t Type) bool {
+	return t >= TypeOptionalBase
+}
+
+func OptionalInnerType(t Type) Type {
+	idx := int(t - TypeOptionalBase)
+	if idx < 0 || idx >= len(optionalTypes) {
+		return TypeVoid
+	}
+	return optionalTypes[idx]
+}
+
+// IsValueType returns true if the type is a value type (not heap-allocated).
+func IsValueType(t Type) bool {
+	return t == TypeInt || t == TypeBool || t == TypeLong || t == TypeDouble || t == TypeChar
+}
+
+// NullLit represents the null literal expression.
+type NullLit struct{}
+
+func (e *NullLit) exprNode() {}
 
 // Annotation constants
 const (

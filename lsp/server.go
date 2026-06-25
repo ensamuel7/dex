@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/ensamuel7/dex/checker"
 	"github.com/ensamuel7/dex/lexer"
 	"github.com/ensamuel7/dex/parser"
+	"github.com/ensamuel7/dex/resolve"
 	"github.com/ensamuel7/dex/stdlib"
 	"github.com/ensamuel7/dex/token"
 )
@@ -291,7 +294,7 @@ func (s *Server) handleHover(msg *jsonrpcMessage) {
 		return
 	}
 
-	content := s.hoverAt(text, params.Position)
+	content := s.hoverAt(params.TextDocument.URI, text, params.Position)
 	if content == "" {
 		s.sendResponse(msg.ID, nil)
 		return
@@ -426,6 +429,12 @@ func (s *Server) diagnose(uri string, text string) {
 		return
 	}
 
+	// Resolve user modules so the checker doesn't flag them as unknown
+	resolve.FlattenStructMethods(program)
+	filePath := uriToPath(uri)
+	sourceDir := filepath.Dir(filePath)
+	_ = resolve.ResolveUserModules(program, sourceDir)
+
 	// Type check
 	ch := checker.New()
 	if err := ch.Check(program); err != nil {
@@ -483,7 +492,7 @@ func (s *Server) publishDiagnostics(uri string, diagnostics []Diagnostic) {
 
 // --- Hover ---
 
-func (s *Server) hoverAt(text string, pos Position) string {
+func (s *Server) hoverAt(uri string, text string, pos Position) string {
 	// Tokenize to find what's at the cursor
 	lex := lexer.New(text)
 	tokens, err := lex.Tokenize()
@@ -516,7 +525,7 @@ func (s *Server) hoverAt(text string, pos Position) string {
 	case token.TokenWhile:
 		return "**keyword** `while`\n\nLoop while condition is `bool` true."
 	case token.TokenImport:
-		return "**keyword** `import`\n\nImports a standard library module."
+		return "**keyword** `import`\n\nImports a module."
 	case token.TokenIntKw:
 		return "**type** `int`\n\nSigned integer (C `int`)."
 	case token.TokenBool:
@@ -534,7 +543,7 @@ func (s *Server) hoverAt(text string, pos Position) string {
 	case token.TokenTrue, token.TokenFalse:
 		return "**constant** `bool`\n\nBoolean literal."
 	case token.TokenIdent:
-		return s.hoverIdent(text, tokens, tok)
+		return s.hoverIdent(uri, text, tokens, tok)
 	case token.TokenString:
 		return fmt.Sprintf("**string literal**\n\n`\"%s\"`", tok.Value)
 	case token.TokenInt:
@@ -546,7 +555,7 @@ func (s *Server) hoverAt(text string, pos Position) string {
 	return ""
 }
 
-func (s *Server) hoverIdent(text string, tokens []token.Token, tok *token.Token) string {
+func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *token.Token) string {
 	// Parse the file for function/variable info
 	p := parser.New(tokens)
 	seedParserModuleTypes(p, tokens)
@@ -554,6 +563,12 @@ func (s *Server) hoverIdent(text string, tokens []token.Token, tok *token.Token)
 	if err != nil {
 		return ""
 	}
+
+	// Resolve user modules for cross-module hover info
+	resolve.FlattenStructMethods(program)
+	filePath := uriToPath(uri)
+	sourceDir := filepath.Dir(filePath)
+	_ = resolve.ResolveUserModules(program, sourceDir)
 
 	name := tok.Value
 
@@ -582,21 +597,30 @@ func (s *Server) hoverIdent(text string, tokens []token.Token, tok *token.Token)
 		}
 	}
 
-	// Check if it's a module name
+	// Check if it's a module name (by path or alias)
 	for _, imp := range program.Imports {
-		if imp.Path == name {
+		modName := importModuleName(imp)
+		if modName == name {
 			return formatModuleHover(imp.Path)
+		}
+	}
+
+	// Check if it's a user module name
+	for _, userMod := range program.UserModules {
+		if userMod == name {
+			return fmt.Sprintf("**module** `%s`\n\nUser module.", name)
 		}
 	}
 
 	// Check if it's a stdlib function name (after a dot)
 	for _, imp := range program.Imports {
+		modName := importModuleName(imp)
 		mod := stdlib.Lookup(imp.Path)
 		if mod == nil {
 			continue
 		}
 		if fdef, ok := mod.Funcs[name]; ok {
-			return formatStdlibFuncHover(imp.Path, name, &fdef)
+			return formatStdlibFuncHover(modName, name, &fdef)
 		}
 	}
 
@@ -854,7 +878,7 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 		words := strings.Fields(before)
 		if len(words) > 0 {
 			moduleName := words[len(words)-1]
-			return s.moduleCompletions(moduleName)
+			return s.moduleCompletions(moduleName, text)
 		}
 	}
 
@@ -914,7 +938,7 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 			// Imported module names
 			for _, imp := range program.Imports {
 				items = append(items, CompletionItem{
-					Label:  imp.Path,
+					Label:  importModuleName(imp),
 					Kind:   CompletionKindModule,
 					Detail: "Module",
 				})
@@ -925,8 +949,14 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 	return items
 }
 
-func (s *Server) moduleCompletions(moduleName string) []CompletionItem {
+func (s *Server) moduleCompletions(moduleName string, text string) []CompletionItem {
 	mod := stdlib.Lookup(moduleName)
+	// If direct lookup fails, check if moduleName is an alias
+	if mod == nil {
+		if resolved := resolveAliasToPath(moduleName, text); resolved != "" {
+			mod = stdlib.Lookup(resolved)
+		}
+	}
 	if mod != nil {
 		var items []CompletionItem
 		for name, fdef := range mod.Funcs {
@@ -1032,4 +1062,45 @@ func seedParserModuleTypes(p *parser.Parser, tokens []token.Token) {
 	for _, name := range stdlib.ModuleTypesForImports(importPaths) {
 		p.AddStructName(name)
 	}
+}
+
+// uriToPath converts a file:// URI to a local file path.
+func uriToPath(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil {
+		// Fallback: strip file:// prefix
+		return strings.TrimPrefix(uri, "file://")
+	}
+	return u.Path
+}
+
+// importModuleName returns the effective name used to reference a module:
+// the alias if set, otherwise the last path segment.
+func importModuleName(imp ast.Import) string {
+	if imp.Alias != "" {
+		return imp.Alias
+	}
+	return imp.Path
+}
+
+// resolveAliasToPath scans the text for import declarations and returns the
+// original path for a given alias name, or "" if not found.
+func resolveAliasToPath(alias string, text string) string {
+	lex := lexer.New(text)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return ""
+	}
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
+			path := tokens[i+1].Value
+			// Check for 'as "alias"' after the path
+			if i+3 < len(tokens) && tokens[i+2].Kind == token.TokenAs && tokens[i+3].Kind == token.TokenString {
+				if tokens[i+3].Value == alias {
+					return path
+				}
+			}
+		}
+	}
+	return ""
 }

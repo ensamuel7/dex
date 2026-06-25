@@ -51,9 +51,11 @@ type StructField struct {
 }
 
 type StructDef struct {
-	Name   string
-	Fields []StructField
-	Doc    string // documentation string for hover
+	Name              string
+	Fields            []StructField
+	Methods           []Function    // methods declared inside the struct body
+	ConstructorParams []StructField // auto-constructor params: struct Foo(x: int) { ... }
+	Doc               string        // documentation string for hover
 }
 
 // Global struct registry
@@ -340,14 +342,16 @@ const (
 )
 
 type Import struct {
-	Path string
+	Path  string
+	Alias string // if set, use as module name instead of filepath.Base(Path)
 }
 
 type Program struct {
-	Imports     []Import
-	Structs     []StructDef
-	Functions   []Function
-	UserModules []string // module names (last path segment) of resolved user imports
+	Imports      []Import
+	Structs      []StructDef
+	Functions    []Function
+	UserModules  []string          // module names (last path segment) of resolved user imports
+	StructModule map[string]string // structName -> moduleName (for cross-module structs)
 }
 
 type Function struct {
@@ -527,6 +531,9 @@ type CallExpr struct {
 	Name         string
 	Args         []Expr
 	ResolvedType Type // set by checker for return-type polymorphism (e.g. db.col)
+	IsMethodCall bool // set by checker: instance.method() call
+	IsConstructor bool // set by checker: StructName(args) constructor call
+	StructType   Type // set by checker: the struct type for method/constructor calls
 }
 
 type ArrayLitExpr struct {

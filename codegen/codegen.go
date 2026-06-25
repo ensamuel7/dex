@@ -27,6 +27,7 @@ type Generator struct {
 
 	importedModules map[string]*stdlib.Module
 	userModules     map[string]bool
+	structModules   map[string]string // structName -> moduleName
 
 	funcs      map[string]*ast.Function
 	strVars    map[string]bool      // variables known to be string type
@@ -54,6 +55,7 @@ func New() *Generator {
 	return &Generator{
 		importedModules: make(map[string]*stdlib.Module),
 		userModules:     make(map[string]bool),
+		structModules:   make(map[string]string),
 		funcs:           make(map[string]*ast.Function),
 		strVars:         make(map[string]bool),
 		arrVars:         make(map[string]ast.Type),
@@ -214,13 +216,22 @@ func (g *Generator) Generate(program *ast.Program) string {
 	for _, imp := range program.Imports {
 		mod := stdlib.Lookup(imp.Path)
 		if mod != nil {
-			g.importedModules[imp.Path] = mod
+			key := imp.Path
+			if imp.Alias != "" {
+				key = imp.Alias
+			}
+			g.importedModules[key] = mod
 		}
 	}
 
 	// Register user modules
 	for _, modName := range program.UserModules {
 		g.userModules[modName] = true
+	}
+
+	// Register struct module mapping
+	for sName, modName := range program.StructModule {
+		g.structModules[sName] = modName
 	}
 
 	// Index functions
@@ -465,6 +476,42 @@ func (g *Generator) Generate(program *ast.Program) string {
 				out.WriteString("void")
 			}
 			out.WriteString(");\n")
+		}
+		out.WriteString("\n")
+	}
+
+	// Emit forward declarations for flattened struct method functions
+	hasStructMethods := false
+	for _, sd := range program.Structs {
+		if len(sd.Methods) > 0 {
+			hasStructMethods = true
+			break
+		}
+	}
+	if hasStructMethods {
+		for _, fn := range program.Functions {
+			if fn.Name == "main" {
+				continue
+			}
+			// Check if this is a flattened struct method
+			for _, sd := range program.Structs {
+				prefix := sd.Name + "_"
+				if len(sd.Methods) > 0 && strings.HasPrefix(fn.Name, prefix) {
+					retType := g.cType(fn.ReturnType)
+					out.WriteString(fmt.Sprintf("%s %s(", retType, fn.Name))
+					for i, p := range fn.Params {
+						if i > 0 {
+							out.WriteString(", ")
+						}
+						out.WriteString(fmt.Sprintf("%s %s", g.cType(p.Type), p.Name))
+					}
+					if len(fn.Params) == 0 {
+						out.WriteString("void")
+					}
+					out.WriteString(");\n")
+					break
+				}
+			}
 		}
 		out.WriteString("\n")
 	}
@@ -1393,6 +1440,40 @@ func (g *Generator) genStringData(out *strings.Builder, expr ast.Expr) {
 }
 
 func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
+	// Constructor call: emit struct literal from positional args
+	if e.IsConstructor {
+		structDef := ast.GetStructDef(e.StructType)
+		out.WriteString(fmt.Sprintf("(Dex_%s){ ", structDef.Name))
+		for i, cp := range structDef.ConstructorParams {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(fmt.Sprintf(".%s = ", cp.Name))
+			g.genExpr(out, e.Args[i])
+		}
+		out.WriteString(" }")
+		return
+	}
+
+	// Method call: emit flattened function with instance as first arg
+	if e.IsMethodCall {
+		structDef := ast.GetStructDef(e.StructType)
+		flatName := structDef.Name + "_" + e.Name
+		// Check if struct belongs to a user module (needs module prefix)
+		if modName, ok := g.structModules[structDef.Name]; ok {
+			flatName = modName + "_" + flatName
+		}
+		out.WriteString(flatName)
+		out.WriteString("(")
+		out.WriteString(e.Module) // the instance variable name
+		for _, arg := range e.Args {
+			out.WriteString(", ")
+			g.genExpr(out, arg)
+		}
+		out.WriteString(")")
+		return
+	}
+
 	// User module call: emit prefixed function name
 	if e.Module != "" && g.userModules[e.Module] {
 		out.WriteString(e.Module + "_" + e.Name)
@@ -2720,6 +2801,23 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			return ast.FuncTypeOf(paramTypes, fn.ReturnType)
 		}
 	case *ast.CallExpr:
+		// Constructor call returns the struct type
+		if e.IsConstructor {
+			return e.StructType
+		}
+		// Method call: look up flattened function return type
+		if e.IsMethodCall {
+			structDef := ast.GetStructDef(e.StructType)
+			if structDef != nil {
+				flatName := structDef.Name + "_" + e.Name
+				if modName, ok := g.structModules[structDef.Name]; ok {
+					flatName = modName + "_" + flatName
+				}
+				if fn, ok := g.funcs[flatName]; ok {
+					return fn.ReturnType
+				}
+			}
+		}
 		// Polymorphic return type: db.col and http client functions use ResolvedType
 		if e.ResolvedType != 0 {
 			return e.ResolvedType

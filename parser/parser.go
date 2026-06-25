@@ -35,7 +35,16 @@ func (p *Parser) Parse() (*ast.Program, error) {
 		}
 		path := p.current().Value
 		p.advance()
-		program.Imports = append(program.Imports, ast.Import{Path: path})
+		var alias string
+		if p.check(token.TokenAs) {
+			p.advance() // consume 'as'
+			if !p.check(token.TokenString) {
+				return nil, p.errorf("expected string after 'as'")
+			}
+			alias = p.current().Value
+			p.advance()
+		}
+		program.Imports = append(program.Imports, ast.Import{Path: path, Alias: alias})
 	}
 
 	// Parse struct definitions (with optional annotations and access modifiers)
@@ -93,24 +102,75 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 		return nil, err
 	}
 
+	// Check for auto-constructor syntax: struct Foo(x: int, y: string) { ... }
+	var constructorParams []ast.StructField
+	if p.check(token.TokenLParen) {
+		p.advance() // consume '('
+		if !p.check(token.TokenRParen) {
+			for {
+				paramName, err := p.expectIdent()
+				if err != nil {
+					return nil, err
+				}
+				if err := p.expect(token.TokenColon); err != nil {
+					return nil, err
+				}
+				paramType, err := p.parseType()
+				if err != nil {
+					return nil, err
+				}
+				constructorParams = append(constructorParams, ast.StructField{Name: paramName, Type: paramType})
+				if !p.match(token.TokenComma) {
+					break
+				}
+			}
+		}
+		if err := p.expect(token.TokenRParen); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := p.expect(token.TokenLBrace); err != nil {
 		return nil, err
 	}
 
 	var fields []ast.StructField
-	for !p.check(token.TokenRBrace) && !p.atEnd() {
-		// Collect optional annotations on field
-		fieldAnnotations := p.collectAnnotations()
+	var methods []ast.Function
 
-		// Check for optional access modifier on field
-		fieldPrivate := false
+	// Constructor params become fields
+	for _, cp := range constructorParams {
+		fields = append(fields, cp)
+	}
+
+	for !p.check(token.TokenRBrace) && !p.atEnd() {
+		// Collect optional annotations
+		annotations := p.collectAnnotations()
+
+		// Check for optional access modifier
+		isPrivate := false
+		isPublic := false
 		if p.check(token.TokenPrivate) {
-			fieldPrivate = true
+			isPrivate = true
 			p.advance()
 		} else if p.check(token.TokenPublic) {
+			isPublic = true
 			p.advance()
 		}
 
+		// Check if this is a method (fn/function keyword)
+		if p.check(token.TokenFn) || p.check(token.TokenFunction) {
+			fn, err := p.parseFunction()
+			if err != nil {
+				return nil, err
+			}
+			fn.IsPrivate = isPrivate
+			fn.Annotations = annotations
+			methods = append(methods, *fn)
+			_ = isPublic
+			continue
+		}
+
+		// Otherwise it's a field
 		fieldName, err := p.expectIdent()
 		if err != nil {
 			return nil, err
@@ -122,7 +182,7 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 		if err != nil {
 			return nil, err
 		}
-		fields = append(fields, ast.StructField{Name: fieldName, Type: fieldType, IsPrivate: fieldPrivate, Annotations: fieldAnnotations})
+		fields = append(fields, ast.StructField{Name: fieldName, Type: fieldType, IsPrivate: isPrivate, Annotations: annotations})
 	}
 
 	if err := p.expect(token.TokenRBrace); err != nil {
@@ -131,9 +191,9 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 
 	p.structNames[name] = true
 	// Register in the global struct registry so parseType can resolve the type ID
-	ast.RegisterStructType(ast.StructDef{Name: name, Fields: fields})
+	ast.RegisterStructType(ast.StructDef{Name: name, Fields: fields, ConstructorParams: constructorParams})
 
-	return &ast.StructDef{Name: name, Fields: fields}, nil
+	return &ast.StructDef{Name: name, Fields: fields, Methods: methods, ConstructorParams: constructorParams}, nil
 }
 
 func (p *Parser) parseFunction() (*ast.Function, error) {

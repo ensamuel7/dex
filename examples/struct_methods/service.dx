@@ -1,0 +1,19 @@
+import "fmt"
+
+struct Counter(start: int) {
+  fn increment(): int {
+    return start + 1
+  }
+
+  fn add(n: int): int {
+    return start + n
+  }
+
+  fn value(): int {
+    return start
+  }
+}
+
+fn greet(): string {
+  return "hello from service"
+}

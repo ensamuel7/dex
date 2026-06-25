@@ -1,0 +1,32 @@
+struct Point(x: int, y: int) {
+  fn sum(): int {
+    return x + y
+  }
+
+  fn scale(factor: int): int {
+    return x * factor + y * factor
+  }
+}
+
+struct Config {
+  name: string
+  value: int
+}
+
+fn main(): void {
+  let p = Point(3, 4)
+  assert(p.sum() == 7)
+  assert(p.scale(2) == 14)
+  assert(p.x == 3)
+  assert(p.y == 4)
+
+  let cfg = Config { name: "test", value: 42 }
+  assert(cfg.value == 42)
+
+  let p2 = Point(0, 0)
+  assert(p2.sum() == 0)
+  assert(p2.scale(100) == 0)
+
+  let p3 = Point(1, -1)
+  assert(p3.sum() == 0)
+}

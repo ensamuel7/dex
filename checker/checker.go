@@ -21,13 +21,20 @@ type Checker struct {
 	imports          map[string]*stdlib.Module
 	userModules      map[string]bool
 	loopDepth        int
+
+	structMethods      map[string]map[string]funcSig // structName -> methodName -> sig
+	structConstructors map[string][]ast.Type          // structName -> constructor param types
+	structModule       map[string]string              // structName -> moduleName (for cross-module structs)
 }
 
 func New() *Checker {
 	return &Checker{
-		funcs:       make(map[string]funcSig),
-		imports:     make(map[string]*stdlib.Module),
-		userModules: make(map[string]bool),
+		funcs:              make(map[string]funcSig),
+		imports:            make(map[string]*stdlib.Module),
+		userModules:        make(map[string]bool),
+		structMethods:      make(map[string]map[string]funcSig),
+		structConstructors: make(map[string][]ast.Type),
+		structModule:       make(map[string]string),
 	}
 }
 
@@ -43,7 +50,11 @@ func (c *Checker) Check(program *ast.Program) error {
 		if mod == nil {
 			return fmt.Errorf("unknown import '%s'", imp.Path)
 		}
-		c.imports[imp.Path] = mod
+		key := imp.Path
+		if imp.Alias != "" {
+			key = imp.Alias
+		}
+		c.imports[key] = mod
 	}
 
 	// Validate struct definitions
@@ -63,6 +74,34 @@ func (c *Checker) Check(program *ast.Program) error {
 				return fmt.Errorf("invalid type for field '%s' in struct '%s'", f.Name, sd.Name)
 			}
 		}
+	}
+
+	// Register struct methods and constructor params
+	for _, sd := range program.Structs {
+		if len(sd.ConstructorParams) > 0 {
+			var paramTypes []ast.Type
+			for _, cp := range sd.ConstructorParams {
+				paramTypes = append(paramTypes, cp.Type)
+			}
+			c.structConstructors[sd.Name] = paramTypes
+		}
+		if len(sd.Methods) > 0 {
+			methods := make(map[string]funcSig)
+			for _, m := range sd.Methods {
+				var mParamTypes []ast.Type
+				for _, p := range m.Params {
+					mParamTypes = append(mParamTypes, p.Type)
+				}
+				methods[m.Name] = funcSig{Params: mParamTypes, ReturnType: m.ReturnType, IsPrivate: m.IsPrivate}
+			}
+			c.structMethods[sd.Name] = methods
+		}
+
+	}
+
+	// Populate struct module mapping from program
+	for sName, modName := range program.StructModule {
+		c.structModule[sName] = modName
 	}
 
 	// First pass: register all function signatures
@@ -777,6 +816,57 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return c.checkArrayMethod(e.Module, varType, e.Name, e.Args)
 			}
 
+			// Struct method call: instance.method()
+			if isVar && ast.IsStructType(varType) {
+				structDef := ast.GetStructDef(varType)
+				if structDef != nil {
+					if methods, ok := c.structMethods[structDef.Name]; ok {
+						if methodSig, ok := methods[e.Name]; ok {
+							e.IsMethodCall = true
+							e.StructType = varType
+							if len(e.Args) != len(methodSig.Params) {
+								return 0, fmt.Errorf("%s.%s() takes exactly %d argument(s), got %d", e.Module, e.Name, len(methodSig.Params), len(e.Args))
+							}
+							for i, arg := range e.Args {
+								argType, err := c.checkExpr(arg)
+								if err != nil {
+									return 0, err
+								}
+								if argType != methodSig.Params[i] {
+									return 0, fmt.Errorf("%s.%s() argument %d must be %s, got %s", e.Module, e.Name, i+1, typeName(methodSig.Params[i]), typeName(argType))
+								}
+							}
+							return methodSig.ReturnType, nil
+						}
+					}
+				}
+			}
+
+			// Constructor call from user module: module.StructName(args)
+			if c.userModules[e.Module] {
+				if ctorParams, ok := c.structConstructors[e.Name]; ok {
+					e.IsConstructor = true
+					structType, stOk := ast.LookupStructType(e.Name)
+					if !stOk {
+						return 0, fmt.Errorf("unknown struct type '%s'", e.Name)
+					}
+					e.StructType = structType
+					if len(e.Args) != len(ctorParams) {
+						return 0, fmt.Errorf("%s() constructor takes exactly %d argument(s), got %d", e.Name, len(ctorParams), len(e.Args))
+					}
+					for i, arg := range e.Args {
+						argType, err := c.checkExpr(arg)
+						if err != nil {
+							return 0, err
+						}
+						if !canAssign(ctorParams[i], argType, arg) {
+							return 0, fmt.Errorf("%s() constructor argument %d must be %s, got %s", e.Name, i+1, typeName(ctorParams[i]), typeName(argType))
+						}
+					}
+					return structType, nil
+				}
+			}
+
 			// User module call: module.func() → look up prefixed name
 			if c.userModules[e.Module] {
 				prefixedName := e.Module + "_" + e.Name
@@ -1158,6 +1248,29 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 			}
 			return fnReturn, nil
+		}
+
+		// Unqualified constructor call: StructName(args)
+		if ctorParams, hasCtor := c.structConstructors[e.Name]; hasCtor {
+			e.IsConstructor = true
+			structType, stOk := ast.LookupStructType(e.Name)
+			if !stOk {
+				return 0, fmt.Errorf("unknown struct type '%s'", e.Name)
+			}
+			e.StructType = structType
+			if len(e.Args) != len(ctorParams) {
+				return 0, fmt.Errorf("%s() constructor takes exactly %d argument(s), got %d", e.Name, len(ctorParams), len(e.Args))
+			}
+			for i, arg := range e.Args {
+				argType, err := c.checkExpr(arg)
+				if err != nil {
+					return 0, err
+				}
+				if !canAssign(ctorParams[i], argType, arg) {
+					return 0, fmt.Errorf("%s() constructor argument %d must be %s, got %s", e.Name, i+1, typeName(ctorParams[i]), typeName(argType))
+				}
+			}
+			return structType, nil
 		}
 
 		// Unqualified call: user-defined function

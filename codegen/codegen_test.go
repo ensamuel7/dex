@@ -21,6 +21,7 @@ func generate(t *testing.T, source string) string {
 	ast.ResetWeakTypes()
 	ast.ResetStructArrayTypes()
 	ast.ResetOptionalTypes()
+	ast.ResetRefTypes()
 	stdlib.RegisterAllModuleTypes()
 
 	tokens, err := lexer.New(source).Tokenize()

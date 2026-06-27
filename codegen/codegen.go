@@ -989,6 +989,15 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			g.registerScopeVar(s.Name, s.Type)
 			break
 		}
+		// Special case for ref type declarations
+		if ast.IsRefType(s.Type) {
+			ctyp := g.cType(s.Type)
+			out.WriteString(fmt.Sprintf("%s%s %s = &", prefix, ctyp, s.Name))
+			g.genExpr(out, s.Value)
+			out.WriteString(";\n")
+			g.varTypes[s.Name] = s.Type
+			break
+		}
 		// Special case for weak reference declarations
 		if ast.IsWeakType(s.Type) {
 			out.WriteString(fmt.Sprintf("%sDexWeakRef* %s = dex_weak_new(", prefix, s.Name))
@@ -1357,7 +1366,12 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	case *ast.FieldAssignStmt:
 		out.WriteString(prefix)
 		g.genExpr(out, s.Object)
-		out.WriteString(fmt.Sprintf(".%s = ", s.Field))
+		objType := g.typeOfExpr(s.Object)
+		if ast.IsRefType(objType) {
+			out.WriteString(fmt.Sprintf("->%s = ", s.Field))
+		} else {
+			out.WriteString(fmt.Sprintf(".%s = ", s.Field))
+		}
 		g.genExpr(out, s.Value)
 		out.WriteString(";\n")
 		// Emit cycle check if debug(cycles) is enabled and field is heap-typed
@@ -1657,18 +1671,37 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	case *ast.StructLitExpr:
 		cName := "Dex_" + e.Name
 		out.WriteString(fmt.Sprintf("(%s){ ", cName))
+		structType, _ := ast.LookupStructType(e.Name)
+		structDef := ast.GetStructDef(structType)
 		for i, fn := range e.FieldNames {
 			if i > 0 {
 				out.WriteString(", ")
 			}
 			out.WriteString(fmt.Sprintf(".%s = ", fn))
+			// Insert & for ref-typed fields (only if arg is not already a ref)
+			if structDef != nil {
+				for _, f := range structDef.Fields {
+					if f.Name == fn && ast.IsRefType(f.Type) {
+						argType := g.typeOfExpr(e.FieldValues[i])
+						if !ast.IsRefType(argType) {
+							out.WriteString("&")
+						}
+						break
+					}
+				}
+			}
 			g.genExpr(out, e.FieldValues[i])
 		}
 		out.WriteString(" }")
 
 	case *ast.FieldAccessExpr:
 		g.genExpr(out, e.Object)
-		out.WriteString(fmt.Sprintf(".%s", e.Field))
+		objType := g.typeOfExpr(e.Object)
+		if ast.IsRefType(objType) {
+			out.WriteString(fmt.Sprintf("->%s", e.Field))
+		} else {
+			out.WriteString(fmt.Sprintf(".%s", e.Field))
+		}
 
 	case *ast.CallExpr:
 		g.genCallExpr(out, e)
@@ -1700,6 +1733,38 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	}
 }
 
+// resolveFieldChainType resolves the type of a dotted field chain like "self.database".
+func (g *Generator) resolveFieldChainType(chain string) ast.Type {
+	if !strings.Contains(chain, ".") {
+		if t, ok := g.varTypes[chain]; ok {
+			return t
+		}
+		return ast.TypeVoid
+	}
+	parts := strings.SplitN(chain, ".", 2)
+	baseType, ok := g.varTypes[parts[0]]
+	if !ok {
+		return ast.TypeVoid
+	}
+	// Unwrap ref type
+	if ast.IsRefType(baseType) {
+		baseType = ast.RefInnerType(baseType)
+	}
+	if !ast.IsStructType(baseType) {
+		return ast.TypeVoid
+	}
+	def := ast.GetStructDef(baseType)
+	if def == nil {
+		return ast.TypeVoid
+	}
+	for _, f := range def.Fields {
+		if f.Name == parts[1] {
+			return f.Type
+		}
+	}
+	return ast.TypeVoid
+}
+
 // genStringData generates the raw C string (->data) for use in strcmp etc.
 func (g *Generator) genStringData(out *strings.Builder, expr ast.Expr) {
 	if _, ok := expr.(*ast.StringLit); ok {
@@ -1721,6 +1786,12 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString(", ")
 			}
 			out.WriteString(fmt.Sprintf(".%s = ", cp.Name))
+			if ast.IsRefType(cp.Type) {
+				argType := g.typeOfExpr(e.Args[i])
+				if !ast.IsRefType(argType) {
+					out.WriteString("&")
+				}
+			}
 			g.genExpr(out, e.Args[i])
 		}
 		out.WriteString(" }")
@@ -1737,6 +1808,11 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		}
 		out.WriteString(flatName)
 		out.WriteString("(")
+		// If instance is a ref type, dereference for value self param
+		instanceType := g.resolveFieldChainType(e.Module)
+		if ast.IsRefType(instanceType) {
+			out.WriteString("*")
+		}
 		out.WriteString(e.Module) // the instance variable name
 		for _, arg := range e.Args {
 			out.WriteString(", ")
@@ -1750,9 +1826,16 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	if e.Module != "" && g.userModules[e.Module] {
 		out.WriteString(e.Module + "_" + e.Name)
 		out.WriteString("(")
+		modFn, hasModFn := g.funcs[e.Module+"_"+e.Name]
 		for i, arg := range e.Args {
 			if i > 0 {
 				out.WriteString(", ")
+			}
+			if hasModFn && i < len(modFn.Params) && ast.IsRefType(modFn.Params[i].Type) {
+				argType := g.typeOfExpr(arg)
+				if !ast.IsRefType(argType) {
+					out.WriteString("&")
+				}
 			}
 			g.genExpr(out, arg)
 		}
@@ -2422,6 +2505,14 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		// Wrap argument for optional parameters if needed
 		if hasFn && i < len(fn.Params) && ast.IsOptionalType(fn.Params[i].Type) {
 			g.genOptionalArg(out, arg, fn.Params[i].Type)
+		} else if hasFn && i < len(fn.Params) && ast.IsRefType(fn.Params[i].Type) {
+			// Insert & when passing struct value to ref-typed param
+			// but not if the arg is already a ref type
+			argType := g.typeOfExpr(arg)
+			if !ast.IsRefType(argType) {
+				out.WriteString("&")
+			}
+			g.genExpr(out, arg)
 		} else {
 			g.genExpr(out, arg)
 		}
@@ -2959,6 +3050,12 @@ func (g *Generator) cType(t ast.Type) string {
 		if ast.IsWeakType(t) {
 			return "DexWeakRef*"
 		}
+		if ast.IsRefType(t) {
+			inner := ast.RefInnerType(t)
+			if ast.IsStructType(inner) {
+				return "Dex_" + ast.StructName(inner) + "*"
+			}
+		}
 		return "void"
 	}
 }
@@ -3255,6 +3352,10 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		}
 	case *ast.FieldAccessExpr:
 		objType := g.typeOfExpr(e.Object)
+		// Unwrap ref type for field access
+		if ast.IsRefType(objType) {
+			objType = ast.RefInnerType(objType)
+		}
 		if ast.IsStructType(objType) {
 			def := ast.GetStructDef(objType)
 			if def != nil {

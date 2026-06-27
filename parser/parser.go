@@ -291,6 +291,33 @@ func (p *Parser) parseParams() ([]ast.Param, error) {
 }
 
 func (p *Parser) parseType() (ast.Type, error) {
+	// Reject &&Type (double-ref) — tokenized as TokenAnd
+	if p.check(token.TokenAnd) {
+		return 0, p.errorf("double-reference types (&&) are not allowed")
+	}
+	// Check for &Type reference prefix
+	if p.check(token.TokenAmpersand) {
+		p.advance() // consume '&'
+		// Reject &&Type (double-ref) in case tokenizer split them
+		if p.check(token.TokenAmpersand) {
+			return 0, p.errorf("double-reference types (&&) are not allowed")
+		}
+		// Only struct types can be referenced
+		if !p.check(token.TokenIdent) {
+			return 0, p.errorf("reference types (&) are only allowed on struct types")
+		}
+		name := p.current().Value
+		if !p.structNames[name] {
+			return 0, p.errorf("reference types (&) are only allowed on struct types, got '%s'", name)
+		}
+		p.advance()
+		t, ok := ast.LookupStructType(name)
+		if !ok {
+			return 0, p.errorf("unknown struct type '%s'", name)
+		}
+		return ast.RefTypeOf(t), nil
+	}
+
 	tok := p.current()
 	var base ast.Type
 	switch tok.Kind {

@@ -71,6 +71,7 @@ const (
 	TokenWeak
 	TokenQuestion
 	TokenNull
+	TokenAmpersand
 	TokenEOF
 )
 

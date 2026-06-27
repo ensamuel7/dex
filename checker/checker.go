@@ -500,6 +500,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if err != nil {
 			return err
 		}
+		// Unwrap ref type for field assignment
+		if ast.IsRefType(objType) {
+			objType = ast.RefInnerType(objType)
+		}
 		if !ast.IsStructType(objType) {
 			return fmt.Errorf("field assignment requires a struct type, got %s", typeName(objType))
 		}
@@ -779,6 +783,10 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		if err != nil {
 			return 0, err
 		}
+		// Unwrap ref type for field access
+		if ast.IsRefType(objType) {
+			objType = ast.RefInnerType(objType)
+		}
 		if !ast.IsStructType(objType) {
 			return 0, fmt.Errorf("field access requires a struct type, got %s", typeName(objType))
 		}
@@ -854,6 +862,10 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if !isVar && strings.Contains(e.Module, ".") {
 				parts := strings.SplitN(e.Module, ".", 2)
 				baseType, baseOk := c.resolve(parts[0])
+				// Unwrap ref type for dotted path resolution
+				if baseOk && ast.IsRefType(baseType) {
+					baseType = ast.RefInnerType(baseType)
+				}
 				if baseOk && ast.IsStructType(baseType) {
 					structDef := ast.GetStructDef(baseType)
 					if structDef != nil {
@@ -868,6 +880,10 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 			}
 
+			// Unwrap ref type for method calls
+			if isVar && ast.IsRefType(varType) {
+				varType = ast.RefInnerType(varType)
+			}
 			// Struct method call: instance.method()
 			if isVar && ast.IsStructType(varType) {
 				structDef := ast.GetStructDef(varType)
@@ -1530,6 +1546,9 @@ func isValidFieldType(t ast.Type) bool {
 	if ast.IsOptionalType(t) {
 		return isValidFieldType(ast.OptionalInnerType(t))
 	}
+	if ast.IsRefType(t) {
+		return ast.IsStructType(ast.RefInnerType(t))
+	}
 	switch t {
 	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar:
 		return true
@@ -1637,6 +1656,10 @@ func canAssign(targetType, exprType ast.Type, expr ast.Expr) bool {
 	if ast.IsWeakType(targetType) && exprType == ast.WeakInnerType(targetType) {
 		return true
 	}
+	// T -> &T (implicit address-of: pass struct value to ref param)
+	if ast.IsRefType(targetType) && exprType == ast.RefInnerType(targetType) {
+		return true
+	}
 	// float literal -> double (already types as double, but keep for clarity)
 	return false
 }
@@ -1672,6 +1695,9 @@ func typeName(t ast.Type) string {
 	case ast.TypeArrayChar:
 		return "char[]"
 	default:
+		if ast.IsRefType(t) {
+			return "&" + typeName(ast.RefInnerType(t))
+		}
 		if ast.IsOptionalType(t) {
 			return typeName(ast.OptionalInnerType(t)) + "?"
 		}

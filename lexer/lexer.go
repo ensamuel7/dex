@@ -193,6 +193,10 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 			tokens = append(tokens, token.Token{Kind: token.TokenQuestion, Value: "?", Line: startLine, Col: startCol})
 			l.advance()
 			continue
+		case '&':
+			tokens = append(tokens, token.Token{Kind: token.TokenAmpersand, Value: "&", Line: startLine, Col: startCol})
+			l.advance()
+			continue
 		}
 
 		// String literals

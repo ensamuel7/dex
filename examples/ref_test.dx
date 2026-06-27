@@ -1,0 +1,63 @@
+import "fmt"
+
+struct User {
+  name: string
+  age: int
+
+  fn greet(): string {
+    return "Hi " + name
+  }
+}
+
+struct Database {
+  host: string
+}
+
+struct Service {
+  db: &Database
+}
+
+// Test 1: ref param mutation
+fn updateName(user: &User): void {
+  user.name = "updated"
+}
+
+// Test 2: ref field access
+fn getName(user: &User): string {
+  return user.name
+}
+
+// Test 3: method call on ref
+fn greetRef(user: &User): string {
+  return user.greet()
+}
+
+// Test 4: get host through ref field
+fn getHost(db: &Database): string {
+  return db.host
+}
+
+fn main(): void {
+  // Test ref param mutation
+  let u = User { name: "alice", age: 30 }
+  updateName(u)
+  assert(u.name == "updated")
+
+  // Test ref field access
+  let u2 = User { name: "bob", age: 25 }
+  let n = getName(u2)
+  assert(n == "bob")
+
+  // Test method call on ref
+  let u3 = User { name: "carol", age: 20 }
+  let greeting = greetRef(u3)
+  assert(greeting == "Hi carol")
+
+  // Test struct with ref field (DI pattern)
+  let db = Database { host: "localhost" }
+  let svc = Service { db: db }
+  let host = getHost(svc.db)
+  assert(host == "localhost")
+
+  fmt.print("All ref tests passed")
+}

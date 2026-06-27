@@ -49,6 +49,9 @@ const TypeStructArrayBase Type = 6000
 // Optional type system: dynamic IDs starting at 7000
 const TypeOptionalBase Type = 7000
 
+// Reference type system: dynamic IDs starting at 8000
+const TypeRefBase Type = 8000
+
 type StructField struct {
 	Name        string
 	Type        Type
@@ -713,7 +716,7 @@ func OptionalTypeOf(innerType Type) Type {
 }
 
 func IsOptionalType(t Type) bool {
-	return t >= TypeOptionalBase
+	return t >= TypeOptionalBase && t < TypeRefBase
 }
 
 func OptionalInnerType(t Type) Type {
@@ -722,6 +725,43 @@ func OptionalInnerType(t Type) Type {
 		return TypeVoid
 	}
 	return optionalTypes[idx]
+}
+
+// Reference type registry
+var (
+	refTypes   []Type        // inner type for each ref type ID
+	refByInner map[Type]Type // inner type → ref type ID
+)
+
+func init() {
+	ResetRefTypes()
+}
+
+func ResetRefTypes() {
+	refTypes = nil
+	refByInner = make(map[Type]Type)
+}
+
+func RefTypeOf(innerType Type) Type {
+	if id, ok := refByInner[innerType]; ok {
+		return id
+	}
+	id := TypeRefBase + Type(len(refTypes))
+	refByInner[innerType] = id
+	refTypes = append(refTypes, innerType)
+	return id
+}
+
+func IsRefType(t Type) bool {
+	return t >= TypeRefBase
+}
+
+func RefInnerType(t Type) Type {
+	idx := int(t - TypeRefBase)
+	if idx < 0 || idx >= len(refTypes) {
+		return TypeVoid
+	}
+	return refTypes[idx]
 }
 
 // IsValueType returns true if the type is a value type (not heap-allocated).

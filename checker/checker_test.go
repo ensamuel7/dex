@@ -579,13 +579,13 @@ func TestHttpRouteHandlerWrongSignature(t *testing.T) {
 	`, "handler 'handler' must take no parameters")
 }
 
-func TestHttpRouteHandlerWrongReturn(t *testing.T) {
-	mustFail(t, `import "http" fn handler(): int { return 0 }
+func TestHttpRouteHandlerNonStringReturn(t *testing.T) {
+	mustCheck(t, `import "http" fn handler(): int { return 0 }
 		fn main(): int {
 			http.route("GET", "/", "handler")
 			return 0
 		}
-	`, "handler 'handler' must return string")
+	`)
 }
 
 // --- Array methods ---

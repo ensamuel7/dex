@@ -484,31 +484,40 @@ func (p *Parser) parseStmt() (ast.Stmt, error) {
 	case token.TokenForeach:
 		return p.parseForeachStmt()
 	case token.TokenBreak:
+		pos := p.nodePos()
 		p.advance()
-		return &ast.BreakStmt{}, nil
+		return &ast.BreakStmt{Pos: pos}, nil
 	case token.TokenContinue:
+		pos := p.nodePos()
 		p.advance()
-		return &ast.ContinueStmt{}, nil
+		return &ast.ContinueStmt{Pos: pos}, nil
 	case token.TokenLBrace:
+		pos := p.nodePos()
 		p.advance()
 		stmts, err := p.parseBlock()
 		if err != nil {
 			return nil, err
 		}
-		return &ast.BlockStmt{Stmts: stmts}, nil
+		return &ast.BlockStmt{Pos: pos, Stmts: stmts}, nil
 	case token.TokenSpawn:
 		// spawn as statement (fire-and-forget): parse as ExprStmt wrapping SpawnExpr
+		pos := p.nodePos()
 		expr, err := p.parseSpawnExpr()
 		if err != nil {
 			return nil, err
 		}
-		return &ast.ExprStmt{Expr: expr}, nil
+		return &ast.ExprStmt{Pos: pos, Expr: expr}, nil
+	case token.TokenTry:
+		return p.parseTryStmt()
+	case token.TokenThrow:
+		return p.parseThrowStmt()
 	default:
 		return p.parseExprStmt()
 	}
 }
 
 func (p *Parser) parseLetStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
 	p.advance() // consume 'let'
 
 	name, err := p.expectIdent()
@@ -523,7 +532,7 @@ func (p *Parser) parseLetStmt() (ast.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ast.LetStmt{Name: name, Type: ast.TypeInferred, Value: value}, nil
+		return &ast.LetStmt{Pos: pos, Name: name, Type: ast.TypeInferred, Value: value}, nil
 	}
 
 	if err := p.expect(token.TokenColon); err != nil {
@@ -537,7 +546,7 @@ func (p *Parser) parseLetStmt() (ast.Stmt, error) {
 
 	// Optional types without initializer default to null
 	if ast.IsOptionalType(typ) && !p.check(token.TokenAssign) {
-		return &ast.LetStmt{Name: name, Type: typ, Value: &ast.NullLit{}}, nil
+		return &ast.LetStmt{Pos: pos, Name: name, Type: typ, Value: &ast.NullLit{}}, nil
 	}
 
 	if err := p.expect(token.TokenAssign); err != nil {
@@ -549,10 +558,11 @@ func (p *Parser) parseLetStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 
-	return &ast.LetStmt{Name: name, Type: typ, Value: value}, nil
+	return &ast.LetStmt{Pos: pos, Name: name, Type: typ, Value: value}, nil
 }
 
 func (p *Parser) parseConstStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
 	p.advance() // consume 'const'
 
 	name, err := p.expectIdent()
@@ -567,7 +577,7 @@ func (p *Parser) parseConstStmt() (ast.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ast.LetStmt{Name: name, Type: ast.TypeInferred, Value: value, IsConst: true}, nil
+		return &ast.LetStmt{Pos: pos, Name: name, Type: ast.TypeInferred, Value: value, IsConst: true}, nil
 	}
 
 	if err := p.expect(token.TokenColon); err != nil {
@@ -588,21 +598,28 @@ func (p *Parser) parseConstStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 
-	return &ast.LetStmt{Name: name, Type: typ, Value: value, IsConst: true}, nil
+	return &ast.LetStmt{Pos: pos, Name: name, Type: typ, Value: value, IsConst: true}, nil
 }
 
 func (p *Parser) parseReturnStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
 	p.advance() // consume 'return'
+
+	// Bare return (no expression) for void functions
+	if p.check(token.TokenRBrace) || p.check(token.TokenEOF) {
+		return &ast.ReturnStmt{Pos: pos, Value: nil}, nil
+	}
 
 	value, err := p.parseExpr(0)
 	if err != nil {
 		return nil, err
 	}
 
-	return &ast.ReturnStmt{Value: value}, nil
+	return &ast.ReturnStmt{Pos: pos, Value: value}, nil
 }
 
 func (p *Parser) parseIfStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
 	p.advance() // consume 'if'
 
 	if err := p.expect(token.TokenLParen); err != nil {
@@ -647,10 +664,11 @@ func (p *Parser) parseIfStmt() (ast.Stmt, error) {
 		}
 	}
 
-	return &ast.IfStmt{Cond: cond, Then: then, Else: elseBlock}, nil
+	return &ast.IfStmt{Pos: pos, Cond: cond, Then: then, Else: elseBlock}, nil
 }
 
 func (p *Parser) parseWhileStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
 	p.advance() // consume 'while'
 
 	if err := p.expect(token.TokenLParen); err != nil {
@@ -675,10 +693,11 @@ func (p *Parser) parseWhileStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 
-	return &ast.WhileStmt{Cond: cond, Body: body}, nil
+	return &ast.WhileStmt{Pos: pos, Cond: cond, Body: body}, nil
 }
 
 func (p *Parser) parseForStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
 	p.advance() // consume 'for'
 
 	if err := p.expect(token.TokenLParen); err != nil {
@@ -724,7 +743,7 @@ func (p *Parser) parseForStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 
-	return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
+	return &ast.ForStmt{Pos: pos, Init: init, Cond: cond, Post: post, Body: body}, nil
 }
 
 func (p *Parser) parseForInit() (ast.Stmt, error) {
@@ -735,6 +754,7 @@ func (p *Parser) parseForInit() (ast.Stmt, error) {
 		return p.parseConstStmt()
 	}
 	// Simple assignment: ident = expr
+	pos := p.nodePos()
 	name, err := p.expectIdent()
 	if err != nil {
 		return nil, err
@@ -746,10 +766,11 @@ func (p *Parser) parseForInit() (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ast.AssignStmt{Name: name, Value: value}, nil
+	return &ast.AssignStmt{Pos: pos, Name: name, Value: value}, nil
 }
 
 func (p *Parser) parseForPost() (ast.Stmt, error) {
+	pos := p.nodePos()
 	name, err := p.expectIdent()
 	if err != nil {
 		return nil, err
@@ -758,37 +779,38 @@ func (p *Parser) parseForPost() (ast.Stmt, error) {
 	switch p.current().Kind {
 	case token.TokenPlusPlus:
 		p.advance()
-		return &ast.IncrementStmt{Name: name}, nil
+		return &ast.IncrementStmt{Pos: pos, Name: name}, nil
 	case token.TokenMinusMinus:
 		p.advance()
-		return &ast.DecrementStmt{Name: name}, nil
+		return &ast.DecrementStmt{Pos: pos, Name: name}, nil
 	case token.TokenPlusAssign:
 		p.advance()
 		value, err := p.parseExpr(0)
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CompoundAssignStmt{Name: name, Op: ast.BinAdd, Value: value}, nil
+		return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinAdd, Value: value}, nil
 	case token.TokenMinusAssign:
 		p.advance()
 		value, err := p.parseExpr(0)
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CompoundAssignStmt{Name: name, Op: ast.BinSub, Value: value}, nil
+		return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinSub, Value: value}, nil
 	case token.TokenAssign:
 		p.advance()
 		value, err := p.parseExpr(0)
 		if err != nil {
 			return nil, err
 		}
-		return &ast.AssignStmt{Name: name, Value: value}, nil
+		return &ast.AssignStmt{Pos: pos, Name: name, Value: value}, nil
 	default:
 		return nil, p.errorf("expected '++', '--', '+=', '-=', or '=' in for loop post statement")
 	}
 }
 
 func (p *Parser) parseForeachStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
 	p.advance() // consume 'foreach'
 
 	if err := p.expect(token.TokenLParen); err != nil {
@@ -840,6 +862,7 @@ func (p *Parser) parseForeachStmt() (ast.Stmt, error) {
 	}
 
 	return &ast.ForeachStmt{
+		Pos:      pos,
 		Iterable: iterable,
 		IndexVar: indexVar,
 		ValueVar: valueVar,
@@ -847,10 +870,109 @@ func (p *Parser) parseForeachStmt() (ast.Stmt, error) {
 	}, nil
 }
 
+func (p *Parser) parseTryStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
+	p.advance() // consume 'try'
+
+	if err := p.expect(token.TokenLBrace); err != nil {
+		return nil, err
+	}
+
+	body, err := p.parseBlock()
+	if err != nil {
+		return nil, err
+	}
+
+	var catchVar string
+	var catchBody []ast.Stmt
+	var finallyBody []ast.Stmt
+
+	// Optional catch clause
+	if p.check(token.TokenCatch) {
+		p.advance() // consume 'catch'
+
+		if err := p.expect(token.TokenLParen); err != nil {
+			return nil, err
+		}
+
+		name, err := p.expectIdent()
+		if err != nil {
+			return nil, err
+		}
+		catchVar = name
+
+		if err := p.expect(token.TokenColon); err != nil {
+			return nil, err
+		}
+
+		// Must be Exception type
+		typeName, err := p.expectIdent()
+		if err != nil {
+			return nil, err
+		}
+		if typeName != "Exception" {
+			return nil, p.errorf("catch clause must use Exception type, got '%s'", typeName)
+		}
+
+		if err := p.expect(token.TokenRParen); err != nil {
+			return nil, err
+		}
+
+		if err := p.expect(token.TokenLBrace); err != nil {
+			return nil, err
+		}
+
+		catchBody, err = p.parseBlock()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Optional finally clause
+	if p.check(token.TokenFinally) {
+		p.advance() // consume 'finally'
+
+		if err := p.expect(token.TokenLBrace); err != nil {
+			return nil, err
+		}
+
+		finallyBody, err = p.parseBlock()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Must have at least one of catch or finally
+	if catchBody == nil && finallyBody == nil {
+		return nil, p.errorf("try statement must have at least a catch or finally clause")
+	}
+
+	return &ast.TryCatchStmt{
+		Pos:         pos,
+		Body:        body,
+		CatchVar:    catchVar,
+		CatchBody:   catchBody,
+		FinallyBody: finallyBody,
+	}, nil
+}
+
+func (p *Parser) parseThrowStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
+	p.advance() // consume 'throw'
+
+	value, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.ThrowStmt{Pos: pos, Value: value}, nil
+}
+
 func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 	// Check for send(value) or send(channel, value)
 	if p.check(token.TokenIdent) && p.current().Value == "send" &&
 		p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenLParen {
+		pos := p.nodePos()
 		p.advance() // consume 'send'
 		p.advance() // consume '('
 		first, err := p.parseExpr(0)
@@ -866,13 +988,13 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 			if err := p.expect(token.TokenRParen); err != nil {
 				return nil, err
 			}
-			return &ast.SendStmt{Target: first, Value: second}, nil
+			return &ast.SendStmt{Pos: pos, Target: first, Value: second}, nil
 		}
 		// send(value) — implicit target
 		if err := p.expect(token.TokenRParen); err != nil {
 			return nil, err
 		}
-		return &ast.SendStmt{Target: nil, Value: first}, nil
+		return &ast.SendStmt{Pos: pos, Target: nil, Value: first}, nil
 	}
 
 	// Check for close(expr) — parse as CallExpr
@@ -883,6 +1005,7 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 		p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenDot &&
 		p.pos+2 < len(p.tokens) && p.tokens[p.pos+2].Kind == token.TokenIdent &&
 		p.pos+3 < len(p.tokens) && p.tokens[p.pos+3].Kind == token.TokenAssign {
+		pos := p.nodePos()
 		objName := p.current().Value
 		p.advance() // consume ident
 		p.advance() // consume '.'
@@ -894,7 +1017,8 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 			return nil, err
 		}
 		return &ast.FieldAssignStmt{
-			Object: &ast.Ident{Name: objName},
+			Pos:    pos,
+			Object: &ast.Ident{Pos: pos, Name: objName},
 			Field:  fieldName,
 			Value:  value,
 		}, nil
@@ -903,6 +1027,7 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 	// Check for index assignment: ident[expr] = expr
 	if p.check(token.TokenIdent) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenLBracket {
 		saved := p.pos
+		pos := p.nodePos()
 		name := p.current().Value
 		p.advance() // consume ident
 		p.advance() // consume '['
@@ -919,7 +1044,8 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 					return nil, err
 				}
 				return &ast.IndexAssignStmt{
-					Array: &ast.Ident{Name: name},
+					Pos:   pos,
+					Array: &ast.Ident{Pos: pos, Name: name},
 					Index: index,
 					Value: value,
 				}, nil
@@ -933,17 +1059,18 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 
 	// Check for increment/decrement/compound assign: ident++ / ident-- / ident += expr / ident -= expr
 	if p.check(token.TokenIdent) && p.pos+1 < len(p.tokens) {
+		pos := p.nodePos()
 		switch p.tokens[p.pos+1].Kind {
 		case token.TokenPlusPlus:
 			name := p.current().Value
 			p.advance() // consume ident
 			p.advance() // consume '++'
-			return &ast.IncrementStmt{Name: name}, nil
+			return &ast.IncrementStmt{Pos: pos, Name: name}, nil
 		case token.TokenMinusMinus:
 			name := p.current().Value
 			p.advance() // consume ident
 			p.advance() // consume '--'
-			return &ast.DecrementStmt{Name: name}, nil
+			return &ast.DecrementStmt{Pos: pos, Name: name}, nil
 		case token.TokenPlusAssign:
 			name := p.current().Value
 			p.advance() // consume ident
@@ -952,7 +1079,7 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &ast.CompoundAssignStmt{Name: name, Op: ast.BinAdd, Value: value}, nil
+			return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinAdd, Value: value}, nil
 		case token.TokenMinusAssign:
 			name := p.current().Value
 			p.advance() // consume ident
@@ -961,12 +1088,13 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &ast.CompoundAssignStmt{Name: name, Op: ast.BinSub, Value: value}, nil
+			return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinSub, Value: value}, nil
 		}
 	}
 
 	// Check for assignment: ident = expr
 	if p.check(token.TokenIdent) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenAssign {
+		pos := p.nodePos()
 		name := p.current().Value
 		p.advance() // consume ident
 		p.advance() // consume '='
@@ -974,14 +1102,15 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ast.AssignStmt{Name: name, Value: value}, nil
+		return &ast.AssignStmt{Pos: pos, Name: name, Value: value}, nil
 	}
 
+	pos := p.nodePos()
 	expr, err := p.parseExpr(0)
 	if err != nil {
 		return nil, err
 	}
-	return &ast.ExprStmt{Expr: expr}, nil
+	return &ast.ExprStmt{Pos: pos, Expr: expr}, nil
 }
 
 // Pratt-style precedence climbing
@@ -1049,6 +1178,7 @@ func (p *Parser) parseExpr(minPrec int) (ast.Expr, error) {
 	}
 
 	for {
+		opPos := p.nodePos()
 		op := p.current().Kind
 		prec := precedence(op)
 		if prec <= minPrec {
@@ -1063,6 +1193,7 @@ func (p *Parser) parseExpr(minPrec int) (ast.Expr, error) {
 		}
 
 		left = &ast.BinaryExpr{
+			Pos:   opPos,
 			Op:    tokenToBinOp(op),
 			Left:  left,
 			Right: right,
@@ -1074,21 +1205,23 @@ func (p *Parser) parseExpr(minPrec int) (ast.Expr, error) {
 
 func (p *Parser) parseUnary() (ast.Expr, error) {
 	if p.check(token.TokenMinus) {
+		pos := p.nodePos()
 		p.advance()
 		operand, err := p.parseUnary()
 		if err != nil {
 			return nil, err
 		}
-		return &ast.UnaryExpr{Op: ast.UnaryNeg, Operand: operand}, nil
+		return &ast.UnaryExpr{Pos: pos, Op: ast.UnaryNeg, Operand: operand}, nil
 	}
 
 	if p.check(token.TokenBang) {
+		pos := p.nodePos()
 		p.advance()
 		operand, err := p.parseUnary()
 		if err != nil {
 			return nil, err
 		}
-		return &ast.UnaryExpr{Op: ast.UnaryNot, Operand: operand}, nil
+		return &ast.UnaryExpr{Pos: pos, Op: ast.UnaryNot, Operand: operand}, nil
 	}
 
 	return p.parsePrimary()
@@ -1096,6 +1229,7 @@ func (p *Parser) parseUnary() (ast.Expr, error) {
 
 func (p *Parser) parsePrimary() (ast.Expr, error) {
 	tok := p.current()
+	pos := p.nodePos()
 
 	switch tok.Kind {
 	case token.TokenInt:
@@ -1104,7 +1238,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		if err != nil {
 			return nil, p.errorf("invalid integer literal: %s", tok.Value)
 		}
-		return &ast.IntLit{Value: val}, nil
+		return &ast.IntLit{Pos: pos, Value: val}, nil
 
 	case token.TokenFloat:
 		p.advance()
@@ -1112,11 +1246,11 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		if err != nil {
 			return nil, p.errorf("invalid float literal: %s", tok.Value)
 		}
-		return &ast.FloatLit{Value: val}, nil
+		return &ast.FloatLit{Pos: pos, Value: val}, nil
 
 	case token.TokenString:
 		p.advance()
-		return &ast.StringLit{Value: tok.Value}, nil
+		return &ast.StringLit{Pos: pos, Value: tok.Value}, nil
 
 	case token.TokenChar:
 		p.advance()
@@ -1124,19 +1258,19 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		if len(runes) != 1 {
 			return nil, p.errorf("invalid char literal")
 		}
-		return &ast.CharLit{Value: runes[0]}, nil
+		return &ast.CharLit{Pos: pos, Value: runes[0]}, nil
 
 	case token.TokenTrue:
 		p.advance()
-		return &ast.BoolLit{Value: true}, nil
+		return &ast.BoolLit{Pos: pos, Value: true}, nil
 
 	case token.TokenFalse:
 		p.advance()
-		return &ast.BoolLit{Value: false}, nil
+		return &ast.BoolLit{Pos: pos, Value: false}, nil
 
 	case token.TokenNull:
 		p.advance()
-		return &ast.NullLit{}, nil
+		return &ast.NullLit{Pos: pos}, nil
 
 	case token.TokenLBracket:
 		// Array literal: [expr, expr, ...]
@@ -1157,7 +1291,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		if err := p.expect(token.TokenRBracket); err != nil {
 			return nil, err
 		}
-		return &ast.ArrayLitExpr{Elems: elems}, nil
+		return &ast.ArrayLitExpr{Pos: pos, Elems: elems}, nil
 
 	case token.TokenSpawn:
 		return p.parseSpawnExpr()
@@ -1176,7 +1310,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRParen); err != nil {
 				return nil, err
 			}
-			return &ast.ReceiveExpr{Source: source}, nil
+			return &ast.ReceiveExpr{Pos: pos, Source: source}, nil
 		}
 
 		// Check for channel(type)
@@ -1190,7 +1324,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRParen); err != nil {
 				return nil, err
 			}
-			return &ast.ChannelExpr{ElemType: elemType}, nil
+			return &ast.ChannelExpr{Pos: pos, ElemType: elemType}, nil
 		}
 
 		p.advance()
@@ -1223,7 +1357,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRBrace); err != nil {
 				return nil, err
 			}
-			return &ast.StructLitExpr{Name: name, FieldNames: fieldNames, FieldValues: fieldValues}, nil
+			return &ast.StructLitExpr{Pos: pos, Name: name, FieldNames: fieldNames, FieldValues: fieldValues}, nil
 		}
 
 		// Check for qualified call or field access: ident.something
@@ -1243,10 +1377,10 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				if err := p.expect(token.TokenRParen); err != nil {
 					return nil, err
 				}
-				return &ast.CallExpr{Module: name, Name: memberName, Args: args}, nil
+				return &ast.CallExpr{Pos: pos, Module: name, Name: memberName, Args: args}, nil
 			}
 			// Otherwise it's a field access
-			return &ast.FieldAccessExpr{Object: &ast.Ident{Name: name}, Field: memberName}, nil
+			return &ast.FieldAccessExpr{Pos: pos, Object: &ast.Ident{Pos: pos, Name: name}, Field: memberName}, nil
 		}
 
 		// Check for index expression: ident[expr]
@@ -1259,7 +1393,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRBracket); err != nil {
 				return nil, err
 			}
-			return &ast.IndexExpr{Array: &ast.Ident{Name: name}, Index: index}, nil
+			return &ast.IndexExpr{Pos: pos, Array: &ast.Ident{Pos: pos, Name: name}, Index: index}, nil
 		}
 
 		// Check for function call
@@ -1272,10 +1406,10 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRParen); err != nil {
 				return nil, err
 			}
-			return &ast.CallExpr{Name: name, Args: args}, nil
+			return &ast.CallExpr{Pos: pos, Name: name, Args: args}, nil
 		}
 
-		return &ast.Ident{Name: name}, nil
+		return &ast.Ident{Pos: pos, Name: name}, nil
 
 	case token.TokenLParen:
 		p.advance()
@@ -1294,6 +1428,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 }
 
 func (p *Parser) parseSpawnExpr() (ast.Expr, error) {
+	pos := p.nodePos()
 	p.advance() // consume 'spawn'
 
 	// spawn { body }
@@ -1303,7 +1438,7 @@ func (p *Parser) parseSpawnExpr() (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ast.SpawnExpr{Body: body}, nil
+		return &ast.SpawnExpr{Pos: pos, Body: body}, nil
 	}
 
 	// spawn fn(args) — parse a call expression
@@ -1314,7 +1449,7 @@ func (p *Parser) parseSpawnExpr() (ast.Expr, error) {
 	if _, ok := callExpr.(*ast.CallExpr); !ok {
 		return nil, p.errorf("spawn expression must be followed by a block or function call")
 	}
-	return &ast.SpawnExpr{Call: callExpr}, nil
+	return &ast.SpawnExpr{Pos: pos, Call: callExpr}, nil
 }
 
 func (p *Parser) parseArgs() ([]ast.Expr, error) {
@@ -1372,7 +1507,7 @@ func (p *Parser) match(kind token.TokenKind) bool {
 
 func (p *Parser) expect(kind token.TokenKind) error {
 	if !p.check(kind) {
-		return p.errorf("expected %d, got '%s'", kind, p.current().Value)
+		return p.errorf("expected %s, got '%s'", kind, p.current().Value)
 	}
 	p.advance()
 	return nil
@@ -1400,4 +1535,10 @@ func (p *Parser) errorf(format string, args ...interface{}) error {
 	tok := p.current()
 	prefix := fmt.Sprintf("%d:%d: ", tok.Line, tok.Col)
 	return fmt.Errorf(prefix+format, args...)
+}
+
+// pos returns the current token's position as an ast.Pos.
+func (p *Parser) nodePos() ast.Pos {
+	tok := p.current()
+	return ast.Pos{Line: tok.Line, Col: tok.Col}
 }

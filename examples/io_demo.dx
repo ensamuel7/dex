@@ -1,0 +1,21 @@
+import "io"
+import "fmt"
+
+// Interactive IO demo — requires stdin input
+fn main(): void {
+    io.prompt("Enter your name: ")
+    let name: string = io.readLine()
+    fmt.print("Hello, " + name + "!")
+
+    io.prompt("Enter your age: ")
+    let age: int = io.readInt()
+    fmt.print(age)
+
+    io.prompt("Enter a price: ")
+    let price: double = io.readDouble()
+    fmt.print(price)
+
+    io.prompt("Are you sure? (true/false): ")
+    let sure: bool = io.readBool()
+    fmt.print(sure)
+}

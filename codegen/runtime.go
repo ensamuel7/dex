@@ -28,3 +28,6 @@ var CycleDebugRuntime string
 
 //go:embed cruntime/optionals.c
 var OptionalRuntime string
+
+//go:embed cruntime/exceptions.c
+var ExceptionRuntime string

@@ -409,7 +409,10 @@ func (s *Server) diagnose(uri string, text string) {
 	ast.ResetWeakTypes()
 	ast.ResetStructArrayTypes()
 	ast.ResetOptionalTypes()
+	ast.ResetRefTypes()
+	ast.ResetFuncTypes()
 	stdlib.RegisterAllModuleTypes()
+	ast.RegisterExceptionType()
 
 	// Lex
 	lex := lexer.New(text)
@@ -541,6 +544,14 @@ func (s *Server) hoverAt(uri string, text string, pos Position) string {
 		return "**type** `char`\n\nSingle character (C `unsigned char`)."
 	case token.TokenChar:
 		return fmt.Sprintf("**char literal** `char`\n\n`'%s'`", tok.Value)
+	case token.TokenTry:
+		return "**keyword** `try`\n\nStarts a try-catch-finally block for exception handling."
+	case token.TokenCatch:
+		return "**keyword** `catch`\n\nCatches an exception thrown in a `try` block. Syntax: `catch (e: Exception) { ... }`"
+	case token.TokenFinally:
+		return "**keyword** `finally`\n\nBlock that always executes after `try` or `catch`, used for cleanup."
+	case token.TokenThrow:
+		return "**keyword** `throw`\n\nThrows an exception. Syntax: `throw Exception(\"message\")`"
 	case token.TokenTrue, token.TokenFalse:
 		return "**constant** `bool`\n\nBoolean literal."
 	case token.TokenIdent:
@@ -683,6 +694,19 @@ func findLetInStmts(stmts []ast.Stmt, name string) string {
 			}
 		case *ast.BlockStmt:
 			if t := findLetInStmts(s.Stmts, name); t != "" {
+				return t
+			}
+		case *ast.TryCatchStmt:
+			if s.CatchVar == name {
+				return "Exception"
+			}
+			if t := findLetInStmts(s.Body, name); t != "" {
+				return t
+			}
+			if t := findLetInStmts(s.CatchBody, name); t != "" {
+				return t
+			}
+			if t := findLetInStmts(s.FinallyBody, name); t != "" {
 				return t
 			}
 		}
@@ -852,6 +876,21 @@ func findLetTypeIDInStmts(stmts []ast.Stmt, name string) (ast.Type, bool) {
 			if t, ok := findLetTypeIDInStmts(s.Stmts, name); ok {
 				return t, true
 			}
+		case *ast.TryCatchStmt:
+			if s.CatchVar == name {
+				if excType, ok := ast.LookupStructType("Exception"); ok {
+					return excType, true
+				}
+			}
+			if t, ok := findLetTypeIDInStmts(s.Body, name); ok {
+				return t, true
+			}
+			if t, ok := findLetTypeIDInStmts(s.CatchBody, name); ok {
+				return t, true
+			}
+			if t, ok := findLetTypeIDInStmts(s.FinallyBody, name); ok {
+				return t, true
+			}
 		}
 	}
 	return 0, false
@@ -903,6 +942,10 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 		{"private", "Private access modifier"},
 		{"true", "Boolean true"},
 		{"false", "Boolean false"},
+		{"try", "Try-catch block"},
+		{"catch", "Catch exception"},
+		{"finally", "Finally block"},
+		{"throw", "Throw exception"},
 	} {
 		items = append(items, CompletionItem{
 			Label:  kw.label,
@@ -1066,6 +1109,7 @@ func seedParserModuleTypes(p *parser.Parser, tokens []token.Token) {
 	for _, name := range stdlib.ModuleTypesForImports(importPaths) {
 		p.AddStructName(name)
 	}
+	p.AddStructName("Exception") // built-in Exception type
 }
 
 // uriToPath converts a file:// URI to a local file path.

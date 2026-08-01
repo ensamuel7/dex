@@ -50,6 +50,10 @@ fn main(): void {
 | `private`  | Mark function/struct/field as private |
 | `spawn`    | Launch a concurrent task             |
 | `chan`      | Channel type annotation              |
+| `try`      | Start a try-catch-finally block      |
+| `catch`    | Handle an exception in a try block   |
+| `finally`  | Cleanup block that always runs       |
+| `throw`    | Throw an exception                   |
 | `int`      | Signed integer type                  |
 | `long`     | Signed long integer type             |
 | `double`   | Double-precision floating point type |
@@ -612,6 +616,83 @@ let ch: chan int = channel(int)
 
 ---
 
+## Error Handling
+
+DexLang supports structured exception handling with `try`, `catch`, `finally`, and `throw`.
+
+### Exception Type
+
+`Exception` is a built-in struct type, always available without imports:
+
+```dex
+// Built-in definition:
+// struct Exception {
+//     message: string
+// }
+```
+
+### Throwing Exceptions
+
+Use `throw` to raise an exception:
+
+```dex
+throw Exception("something went wrong")
+```
+
+If an exception is not caught, the program prints the message to stderr and exits with code 1.
+
+### Try-Catch-Finally
+
+```dex
+try {
+    // code that may throw
+    throw Exception("oops")
+} catch (e: Exception) {
+    // handle the exception
+    fmt.print(e.message)
+} finally {
+    // always runs after try or catch
+    fmt.print("cleanup")
+}
+```
+
+- At least one of `catch` or `finally` is required.
+- Only a single `catch` clause is supported, and it must use the `Exception` type.
+- The `finally` block always executes, whether or not an exception was thrown.
+
+### Try-Finally (Re-throw)
+
+If a `try` block has only `finally` (no `catch`), the exception is re-thrown after the finally block runs:
+
+```dex
+try {
+    throw Exception("error")
+} finally {
+    fmt.print("cleanup runs first")
+}
+// exception propagates here
+```
+
+### Cross-Function Exceptions
+
+Exceptions propagate through function calls:
+
+```dex
+fn risky(): void {
+    throw Exception("from risky")
+}
+
+fn main(): void {
+    try {
+        risky()
+    } catch (e: Exception) {
+        fmt.print(e.message)  // "from risky"
+    }
+}
+```
+
+---
+
 ## Comments
 
 Single-line comments only:
@@ -916,6 +997,57 @@ let elapsed: long = time.now() - start
 | `now`     | `now(): long`           | Current time in milliseconds         |
 | `nowNs`  | `nowNs(): long`        | Current time in nanoseconds          |
 | `sleep`   | `sleep(ms: int): void`  | Sleep for specified milliseconds     |
+
+### io
+
+Read user input from stdin.
+
+```dex
+import "io"
+
+io.prompt("Enter name: ")
+let name: string = io.readLine()
+
+io.prompt("Enter age: ")
+let age: int = io.readInt()
+```
+
+| Function     | Signature                       | Description                                         |
+|--------------|---------------------------------|-----------------------------------------------------|
+| `prompt`     | `prompt(message: string): void` | Print a message without newline and flush stdout     |
+| `readLine`   | `readLine(): string`            | Read a line from stdin (strips trailing newline)     |
+| `readInt`    | `readInt(): int`                | Read and parse an integer from stdin                 |
+| `readDouble` | `readDouble(): double`          | Read and parse a double from stdin                   |
+| `readBool`   | `readBool(): bool`              | Read a boolean from stdin ("true"/"false", case-insensitive) |
+
+### os
+
+System interaction: environment variables, process control, command execution.
+
+```dex
+import "os"
+
+let home: string = os.env("HOME")
+let result: ExecResult = os.exec("ls -la")
+fmt.print(result.output)
+os.exit(0)
+```
+
+`os.exec` returns an `ExecResult` struct:
+
+```dex
+struct ExecResult {
+  exitCode: int
+  output: string
+  error: string
+}
+```
+
+| Function | Signature                       | Description                                        |
+|----------|---------------------------------|----------------------------------------------------|
+| `env`    | `env(name: string): string`     | Read an environment variable (empty string if unset) |
+| `exit`   | `exit(code: int): void`         | Exit the process with the given status code        |
+| `exec`   | `exec(command: string): ExecResult` | Run a shell command and return the result      |
 
 ---
 

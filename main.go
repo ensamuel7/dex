@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -20,7 +21,24 @@ import (
 	"github.com/ensamuel7/dex/resolve"
 	"github.com/ensamuel7/dex/stdlib"
 	"github.com/fsnotify/fsnotify"
+	"golang.org/x/term"
 )
+
+// formatError applies ANSI color formatting to compiler error messages on TTY.
+// Pattern: "filename:line:col: message" → bold location, red "error:", normal message
+var errorLocPattern = regexp.MustCompile(`^(.+?:\d+:\d+:)\s*(.*)$`)
+
+func formatError(msg string) string {
+	if !term.IsTerminal(int(os.Stderr.Fd())) {
+		return msg
+	}
+	if m := errorLocPattern.FindStringSubmatch(msg); m != nil {
+		loc := m[1]
+		rest := m[2]
+		return fmt.Sprintf("\033[1m%s\033[0m \033[31merror:\033[0m %s", loc, rest)
+	}
+	return msg
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -70,7 +88,7 @@ func main() {
 	case "build":
 		binaryPath, err := build(filename)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, formatError(err.Error()))
 			os.Exit(1)
 		}
 		fmt.Printf("Built: %s\n", binaryPath)
@@ -78,7 +96,7 @@ func main() {
 	case "run":
 		binaryPath, err := build(filename)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, formatError(err.Error()))
 			os.Exit(1)
 		}
 		defer os.Remove(binaryPath)
@@ -137,7 +155,7 @@ func runTests() {
 	for _, file := range files {
 		binaryPath, err := build(file)
 		if err != nil {
-			fmt.Printf("FAIL: %s\n  %v\n", file, err)
+			fmt.Printf("FAIL: %s\n  %s\n", file, formatError(err.Error()))
 			failed++
 			continue
 		}
@@ -236,7 +254,7 @@ func dev(filename string) {
 		fmt.Println("[dev] building...")
 		bp, err := build(filename)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[dev] build error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[dev] build error: %s\n", formatError(err.Error()))
 			fmt.Println("[dev] waiting for changes...")
 			return
 		}
@@ -320,6 +338,9 @@ func build(filename string) (string, error) {
 	// Register module-provided struct types (e.g. HttpResponse)
 	stdlib.RegisterAllModuleTypes()
 
+	// Register built-in Exception type for error handling
+	ast.RegisterExceptionType()
+
 	source, err := os.ReadFile(filename)
 	if err != nil {
 		return "", fmt.Errorf("%s: %v", filename, err)
@@ -341,6 +362,7 @@ func build(filename string) (string, error) {
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
+	p.AddStructName("Exception") // built-in Exception type
 	program, err := p.Parse()
 	if err != nil {
 		return "", fmt.Errorf("%s:%v", filename, err)

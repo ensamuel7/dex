@@ -133,7 +133,11 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
     <a onclick="show('types-variables')">Types &amp; Variables</a>
     <a onclick="show('operators-math')">Operators &amp; Math</a>
     <a onclick="show('functions-control')">Functions &amp; Control Flow</a>
+    <a onclick="show('optional-types')">Optional Types</a>
+    <a onclick="show('constants')">Constants</a>
+    <a onclick="show('access-modifiers')">Access Modifiers</a>
     <a onclick="show('concurrency')">Concurrency</a>
+    <a onclick="show('error-handling')">Error Handling</a>
     <div class="section-label label-data">Data Structures</div>
     <a onclick="show('arrays')">Arrays</a>
     <a onclick="show('structs')">Structs</a>
@@ -143,6 +147,8 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
     <a onclick="show('mod-json')">json</a>
     <a onclick="show('mod-http')">http</a>
     <a onclick="show('mod-file')">file</a>
+    <a onclick="show('mod-math')">math</a>
+    <a onclick="show('mod-time')">time</a>
     <a onclick="show('database')">db</a>
     <div class="section-label label-internals">Internals</div>
     <a onclick="show('ast')">AST</a>
@@ -409,6 +415,116 @@ for (let i = 0; i &lt; 10; i++) {
 <p><code>break</code> and <code>continue</code> work inside <code>while</code>, <code>for</code>, and <code>foreach</code> loops. Using them outside a loop is a compile error.</p>
 </section>
 
+<!-- Optional Types -->
+<section id="optional-types" class="page-section">
+<h2>Optional Types</h2>
+<p>Append <code>?</code> to any type to make it optional. Optional types can hold either a value of the inner type or <code>null</code>.</p>
+<pre><code>let x: int? = 5        // has a value
+let y: int? = null      // no value
+let z: int?             // defaults to null
+let s: string? = null   // optional string</code></pre>
+
+<h3>Available Optional Types</h3>
+<table>
+<tr><th>Type</th><th>Description</th></tr>
+<tr><td><code>int?</code></td><td>Optional integer</td></tr>
+<tr><td><code>long?</code></td><td>Optional long integer</td></tr>
+<tr><td><code>double?</code></td><td>Optional double</td></tr>
+<tr><td><code>bool?</code></td><td>Optional boolean</td></tr>
+<tr><td><code>string?</code></td><td>Optional string</td></tr>
+<tr><td><code>char?</code></td><td>Optional character</td></tr>
+</table>
+
+<h3>Null Checks &amp; Type Narrowing</h3>
+<p>Use <code>== null</code> or <code>!= null</code> to check if an optional has a value. Inside an <code>if</code> block guarded by a null check, the variable is automatically narrowed to the inner (non-optional) type.</p>
+<pre><code>let x: int? = 5
+if (x != null) {
+    // x is narrowed to int here
+    let y: int = x + 1
+}</code></pre>
+
+<h3>Functions with Optional Types</h3>
+<p>Functions can accept and return optional types:</p>
+<pre><code>fn findUser(id: int): string? {
+    if (id == 1) {
+        return "Alice"
+    }
+    return null
+}
+
+fn greet(name: string?): void {
+    if (name != null) {
+        fmt.print(name)
+    }
+}</code></pre>
+
+<h3>Rules</h3>
+<table>
+<tr><th>Rule</th><th>Example</th></tr>
+<tr><td><code>null</code> can only be assigned to optional types</td><td><code>let x: int = null</code> — compile error</td></tr>
+<tr><td>A value of <code>T</code> can be assigned to <code>T?</code></td><td><code>let x: int? = 42</code> — OK (automatic wrapping)</td></tr>
+<tr><td>Double-optional types are not allowed</td><td><code>let x: int?? = null</code> — compile error</td></tr>
+<tr><td>No force-unwrap operator</td><td>Use null checks for safe access</td></tr>
+</table>
+</section>
+
+<!-- Constants -->
+<section id="constants" class="page-section">
+<h2>Constants</h2>
+<p>Declare immutable variables with <code>const</code>. Constants cannot be reassigned, incremented, decremented, or modified with compound assignment after initialization.</p>
+<pre><code>const pi = 3.14
+const max_size: int = 100
+const name: string = "DexLang"</code></pre>
+<p><code>const</code> supports the same syntax as <code>let</code> — both explicit type annotations and type inference work.</p>
+
+<h3>Immutability</h3>
+<p>Attempting to modify a const variable is a compile error:</p>
+<pre><code>const x = 42
+x = 10        // ERROR: cannot reassign const variable 'x'
+x++           // ERROR: cannot modify const variable 'x'
+x += 5        // ERROR: cannot modify const variable 'x'</code></pre>
+</section>
+
+<!-- Access Modifiers -->
+<section id="access-modifiers" class="page-section">
+<h2>Access Modifiers</h2>
+<p>Functions, structs, and struct fields can be marked <code>public</code> or <code>private</code>. By default, all functions and structs are public — the <code>public</code> keyword is optional and exists only for explicitness.</p>
+
+<table>
+<tr><th>Modifier</th><th>Effect</th></tr>
+<tr><td>(none)</td><td>Public (default)</td></tr>
+<tr><td><code>public</code></td><td>Public (explicit, same as default)</td></tr>
+<tr><td><code>private</code></td><td>Restricted to the defining module</td></tr>
+</table>
+
+<h3>Functions</h3>
+<pre><code>// Public by default
+fn helper(): int {
+    return 42
+}
+
+// Explicit public (same as default)
+public fn also_public(): int {
+    return 42
+}
+
+// Private — restricted access
+private fn internal_helper(): int {
+    return 99
+}</code></pre>
+
+<h3>Structs and Fields</h3>
+<p>Structs are public by default. Individual fields can be marked <code>private</code>:</p>
+<pre><code>struct User {
+    name: string
+    private password: string
+}
+
+private struct InternalConfig {
+    debug: bool
+}</code></pre>
+</section>
+
 <!-- Arrays -->
 <section id="arrays" class="page-section">
 <h2>Arrays</h2>
@@ -473,9 +589,11 @@ import "json"</code></pre>
 <tr><th>Module</th><th>Description</th><th>Functions</th></tr>
 <tr><td><code><a onclick="show('mod-fmt')" style="cursor:pointer">fmt</a></code></td><td>Formatted output to stdout</td><td><code>print</code></td></tr>
 <tr><td><code><a onclick="show('mod-json')" style="cursor:pointer">json</a></code></td><td>Build and serialize JSON objects</td><td><code>new</code>, <code>set</code>, <code>setArray</code>, <code>stringify</code></td></tr>
-<tr><td><code><a onclick="show('mod-http')" style="cursor:pointer">http</a></code></td><td>Built-in HTTP server</td><td><code>route</code>, <code>listen</code></td></tr>
+<tr><td><code><a onclick="show('mod-http')" style="cursor:pointer">http</a></code></td><td>HTTP server and client</td><td><code>route</code>, <code>listen</code>, <code>get</code>, <code>post</code>, <code>put</code>, <code>delete</code>, <code>request</code>, ...</td></tr>
 <tr><td><code><a onclick="show('database')" style="cursor:pointer">db</a></code></td><td>Database access (SQLite, PostgreSQL, MySQL, MongoDB)</td><td><code>open</code>, <code>exec</code>, <code>query</code>, <code>next</code>, <code>col</code>, <code>free</code>, <code>close</code></td></tr>
 <tr><td><code><a onclick="show('mod-file')" style="cursor:pointer">file</a></code></td><td>Filesystem operations and file uploads</td><td><code>read</code>, <code>write</code>, <code>append</code>, <code>exists</code>, <code>remove</code>, <code>rename</code>, <code>upload</code></td></tr>
+<tr><td><code><a onclick="show('mod-math')" style="cursor:pointer">math</a></code></td><td>Mathematical functions and constants</td><td><code>pi</code>, <code>e</code>, <code>sin</code>, <code>cos</code>, <code>sqrt</code>, <code>pow</code>, <code>floor</code>, <code>ceil</code>, <code>round</code>, <code>abs</code>, <code>min</code>, <code>max</code>, ...</td></tr>
+<tr><td><code><a onclick="show('mod-time')" style="cursor:pointer">time</a></code></td><td>Time measurement and sleeping</td><td><code>now</code>, <code>nowNs</code>, <code>sleep</code></td></tr>
 </table>
 
 <h3>Quick Reference</h3>
@@ -676,6 +794,64 @@ let task = spawn {
 let result = receive(task)  // 20</code></pre>
 </section>
 
+<!-- Error Handling -->
+<section id="error-handling" class="page-section">
+<h2>Error Handling</h2>
+
+<p>DexLang provides structured exception handling with <code>try</code>, <code>catch</code>, <code>finally</code>, and <code>throw</code>. Exceptions use the built-in <code>Exception</code> type.</p>
+
+<h3>Exception Type</h3>
+<p><code>Exception</code> is a built-in struct with a single field:</p>
+<pre><code>// Built-in (always available, no import needed)
+// struct Exception(message: string) {
+//     message: string
+// }</code></pre>
+
+<h3>Throwing Exceptions</h3>
+<p>Use <code>throw</code> to raise an exception with a message:</p>
+<pre><code>throw Exception("something went wrong")</code></pre>
+
+<h3>Try-Catch-Finally</h3>
+<p>Use <code>try</code> to wrap code that may throw, <code>catch</code> to handle exceptions, and <code>finally</code> for cleanup that always runs:</p>
+<pre><code>import "fmt"
+
+fn main(): void {
+    try {
+        throw Exception("oops")
+    } catch (e: Exception) {
+        fmt.print(e.message)  // "oops"
+    } finally {
+        fmt.print("cleanup")
+    }
+}</code></pre>
+
+<h3>Try-Finally (No Catch)</h3>
+<p>If only <code>finally</code> is used without <code>catch</code>, the exception is re-thrown after the finally block runs:</p>
+<pre><code>try {
+    throw Exception("error")
+} finally {
+    fmt.print("always runs")
+}
+// exception propagates after finally</code></pre>
+
+<h3>Cross-Function Exceptions</h3>
+<p>Exceptions propagate through function calls:</p>
+<pre><code>fn risky(): void {
+    throw Exception("from risky")
+}
+
+fn main(): void {
+    try {
+        risky()
+    } catch (e: Exception) {
+        fmt.print(e.message)  // "from risky"
+    }
+}</code></pre>
+
+<h3>Unhandled Exceptions</h3>
+<p>If an exception is not caught, the program prints the error message to stderr and exits with code 1.</p>
+</section>
+
 <!-- fmt module -->
 <section id="mod-fmt" class="page-section">
 <h2>fmt<span class="badge">module</span></h2>
@@ -758,10 +934,12 @@ fn main(): void {
 <!-- http module -->
 <section id="mod-http" class="page-section">
 <h2>http<span class="badge">module</span></h2>
-<p>The <code>http</code> module provides a built-in HTTP server. Routes map HTTP methods and paths to handler functions.</p>
+<p>The <code>http</code> module provides a built-in HTTP server and a full HTTP client. Routes map HTTP methods and paths to handler functions. Client functions send requests and return <code>HttpResponse</code> structs.</p>
 <pre><code>import "http"</code></pre>
 
-<h3>route</h3>
+<h3>Server</h3>
+
+<h4>route</h4>
 <div class="func-card"><div class="sig"><span class="module">http</span>.route(<span class="ptype">method: string, path: string, handler: string</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Register a route handler. The handler is referenced by name as a string literal. Handler functions must take no parameters and return <code>string</code> (the HTTP response body).</p>
 <pre><code>fn my_handler(): string {
@@ -772,14 +950,68 @@ fn main(): void {
     http.route("GET", "/api", "my_handler")
     http.listen(3000)
 }</code></pre>
-<p>The handler name must be a string literal — it is resolved to a function pointer at compile time. The handler function is validated by the checker: it must exist, take no parameters, and return <code>string</code>.</p>
+<p>The handler name must be a string literal — it is resolved to a function pointer at compile time.</p>
 
-<h3>listen</h3>
+<h4>listen</h4>
 <div class="func-card"><div class="sig"><span class="module">http</span>.listen(<span class="ptype">port: int</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Start the HTTP server on the given port. This call blocks — it runs the server event loop indefinitely.</p>
 <pre><code>http.listen(8080)  // server listens on http://localhost:8080</code></pre>
 
-<h3>Full example</h3>
+<h3>Client</h3>
+<p>Client functions send HTTP requests and return an <code>HttpResponse</code> struct. Requires <code>libcurl</code> at compile time.</p>
+
+<h4>HttpResponse</h4>
+<p>All client request functions return an <code>HttpResponse</code> with three fields:</p>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>statusCode</code></td><td><code>int</code></td><td>HTTP status code (e.g. 200, 404, 500)</td></tr>
+<tr><td><code>body</code></td><td><code>string</code></td><td>Response body content</td></tr>
+<tr><td><code>contentType</code></td><td><code>string</code></td><td>Content-Type header from the response</td></tr>
+</table>
+
+<h4>Request Functions</h4>
+<div class="func-card"><div class="sig"><span class="module">http</span>.get(<span class="ptype">url: string, [headers: string]</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">http</span>.post(<span class="ptype">url: string, body: string, [headers: string]</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">http</span>.put(<span class="ptype">url: string, body: string, [headers: string]</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">http</span>.patch(<span class="ptype">url: string, body: string, [headers: string]</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">http</span>.delete(<span class="ptype">url: string, [headers: string]</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">http</span>.request(<span class="ptype">method: string, url: string, body: string, headers: string</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
+<p>The <code>headers</code> parameter is optional for <code>get</code>, <code>post</code>, <code>put</code>, <code>patch</code>, and <code>delete</code>. Use <code>request</code> for full control over method and headers.</p>
+
+<pre><code>// Simple GET
+let resp: HttpResponse = http.get("https://api.example.com/data")
+fmt.print(resp.statusCode)
+fmt.print(resp.body)
+
+// POST with JSON body
+let body: string = json.new()
+body = json.set(body, "name", "Alice")
+let r: HttpResponse = http.post("https://api.example.com", body)</code></pre>
+
+<h4>Headers</h4>
+<p>Headers can be provided in two formats:</p>
+<div class="func-card"><div class="sig"><span class="module">http</span>.header(<span class="ptype">headers: string, key: string, value: string</span>) <span class="ret">-&gt; string</span></div></div>
+<pre><code>// JSON approach — auto-detected when string starts with {
+let headers: string = json.new()
+headers = json.set(headers, "Authorization", "Bearer token")
+let r: HttpResponse = http.get("https://api.example.com", headers)
+
+// Header builder approach
+let h: string = http.header("", "Authorization", "Bearer token")
+h = http.header(h, "Content-Type", "application/json")
+let r2: HttpResponse = http.post("https://api.example.com", body, h)</code></pre>
+
+<h4>Multipart Form Data</h4>
+<div class="func-card"><div class="sig"><span class="module">http</span>.formNew() <span class="ret">-&gt; string</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">http</span>.formField(<span class="ptype">form: string, name: string, value: string</span>) <span class="ret">-&gt; string</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">http</span>.formFile(<span class="ptype">form: string, name: string, path: string</span>) <span class="ret">-&gt; string</span></div></div>
+<div class="func-card"><div class="sig"><span class="module">http</span>.postForm(<span class="ptype">url: string, form: string, [headers: string]</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
+<pre><code>let form: string = http.formNew()
+form = http.formField(form, "name", "Alice")
+form = http.formFile(form, "avatar", "/path/to/photo.jpg")
+let r: HttpResponse = http.postForm("https://api.example.com/upload", form)</code></pre>
+
+<h3>Server example</h3>
 <pre><code>import "http"
 import "json"
 
@@ -868,6 +1100,113 @@ fn main(): void {
     if (file.exists("hello.txt")) {
         file.remove("hello.txt")
     }
+}</code></pre>
+</section>
+
+<!-- math module -->
+<section id="mod-math" class="page-section">
+<h2>math<span class="badge">module</span></h2>
+<p>The <code>math</code> module provides mathematical functions and constants. All functions operate on <code>double</code> values.</p>
+<pre><code>import "math"</code></pre>
+
+<h3>Constants</h3>
+<div class="func-card"><div class="sig"><span class="module">math</span>.pi() <span class="ret">-&gt; double</span></div></div>
+<p>Return the value of pi (3.14159...).</p>
+
+<div class="func-card"><div class="sig"><span class="module">math</span>.e() <span class="ret">-&gt; double</span></div></div>
+<p>Return Euler's number (2.71828...).</p>
+
+<pre><code>let pi: double = math.pi()     // 3.14159...
+let euler: double = math.e()   // 2.71828...</code></pre>
+
+<h3>Trigonometric</h3>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>math.sin(x: double): double</code></td><td>Sine of x (radians)</td></tr>
+<tr><td><code>math.cos(x: double): double</code></td><td>Cosine of x (radians)</td></tr>
+<tr><td><code>math.tan(x: double): double</code></td><td>Tangent of x (radians)</td></tr>
+<tr><td><code>math.asin(x: double): double</code></td><td>Arc sine of x</td></tr>
+<tr><td><code>math.acos(x: double): double</code></td><td>Arc cosine of x</td></tr>
+<tr><td><code>math.atan(x: double): double</code></td><td>Arc tangent of x</td></tr>
+</table>
+
+<h3>Power, Root &amp; Logarithm</h3>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>math.sqrt(x: double): double</code></td><td>Square root</td></tr>
+<tr><td><code>math.pow(base: double, exp: double): double</code></td><td>Exponentiation</td></tr>
+<tr><td><code>math.exp(x: double): double</code></td><td>e raised to x</td></tr>
+<tr><td><code>math.log(x: double): double</code></td><td>Natural logarithm</td></tr>
+<tr><td><code>math.log2(x: double): double</code></td><td>Base-2 logarithm</td></tr>
+<tr><td><code>math.log10(x: double): double</code></td><td>Base-10 logarithm</td></tr>
+</table>
+
+<h3>Rounding &amp; Absolute Value</h3>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>math.floor(x: double): double</code></td><td>Round down to nearest integer</td></tr>
+<tr><td><code>math.ceil(x: double): double</code></td><td>Round up to nearest integer</td></tr>
+<tr><td><code>math.round(x: double): double</code></td><td>Round to nearest integer</td></tr>
+<tr><td><code>math.abs(x: double): double</code></td><td>Absolute value</td></tr>
+</table>
+
+<h3>Comparison</h3>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>math.min(a: double, b: double): double</code></td><td>Return the smaller of a and b</td></tr>
+<tr><td><code>math.max(a: double, b: double): double</code></td><td>Return the larger of a and b</td></tr>
+</table>
+
+<h3>Full example</h3>
+<pre><code>import "math"
+import "fmt"
+
+fn main(): void {
+    let pi: double = math.pi()
+    let root: double = math.sqrt(16.0)    // 4.0
+    let val: double = math.pow(2.0, 10.0) // 1024.0
+    let angle: double = math.sin(pi / 2.0) // 1.0
+
+    fmt.print(math.floor(3.7))   // 3.0
+    fmt.print(math.ceil(3.2))    // 4.0
+    fmt.print(math.abs(-5.0))    // 5.0
+    fmt.print(math.min(3.0, 7.0)) // 3.0
+}</code></pre>
+</section>
+
+<!-- time module -->
+<section id="mod-time" class="page-section">
+<h2>time<span class="badge">module</span></h2>
+<p>The <code>time</code> module provides functions for measuring time and sleeping.</p>
+<pre><code>import "time"</code></pre>
+
+<h3>now</h3>
+<div class="func-card"><div class="sig"><span class="module">time</span>.now() <span class="ret">-&gt; long</span></div></div>
+<p>Return the current Unix timestamp in seconds.</p>
+
+<h3>nowNs</h3>
+<div class="func-card"><div class="sig"><span class="module">time</span>.nowNs() <span class="ret">-&gt; long</span></div></div>
+<p>Return the current Unix timestamp in nanoseconds. Useful for high-resolution timing.</p>
+
+<h3>sleep</h3>
+<div class="func-card"><div class="sig"><span class="module">time</span>.sleep(<span class="ptype">ms: int</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Sleep for the specified number of milliseconds.</p>
+
+<h3>Full example</h3>
+<pre><code>import "time"
+import "fmt"
+
+fn main(): void {
+    let start: long = time.now()
+    time.sleep(100)  // sleep 100ms
+    let elapsed: long = time.now() - start
+    fmt.print(elapsed)
+
+    // High-resolution timing
+    let t1: long = time.nowNs()
+    // ... do work ...
+    let t2: long = time.nowNs()
+    fmt.print(t2 - t1)  // nanoseconds elapsed
 }</code></pre>
 </section>
 
@@ -1066,7 +1405,11 @@ var sectionNames = {
   'types-variables': 'Types & Variables',
   'operators-math': 'Operators & Math',
   'functions-control': 'Functions & Control Flow',
+  'optional-types': 'Optional Types',
+  'constants': 'Constants',
+  'access-modifiers': 'Access Modifiers',
   'concurrency': 'Concurrency',
+  'error-handling': 'Error Handling',
   'arrays': 'Arrays',
   'structs': 'Structs',
   'stdlib': 'Standard Library',
@@ -1074,6 +1417,8 @@ var sectionNames = {
   'mod-json': 'json Module',
   'mod-http': 'http Module',
   'mod-file': 'file Module',
+  'mod-math': 'math Module',
+  'mod-time': 'time Module',
   'database': 'db Module',
   'ast': 'AST',
   'lexer': 'Lexer & Tokens',
@@ -1182,7 +1527,7 @@ function handleSearch() {
 /* --- Syntax Highlighting --- */
 function hlEsc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function highlightAll(){
-  var kwSet={fn:1,'function':1,let:1,'if':1,'else':1,'while':1,'for':1,foreach:1,'return':1,'import':1,struct:1,assert:1,spawn:1,send:1,receive:1,channel:1,close:1,as:1,'break':1,'continue':1};
+  var kwSet={fn:1,'function':1,let:1,'if':1,'else':1,'while':1,'for':1,foreach:1,'return':1,'import':1,struct:1,assert:1,spawn:1,send:1,receive:1,channel:1,close:1,as:1,'break':1,'continue':1,'try':1,'catch':1,'finally':1,'throw':1};
   var tySet={int:1,long:1,'double':1,bool:1,string:1,'void':1,chan:1};
   document.querySelectorAll('pre > code').forEach(function(block){
     if(block.closest('.install'))return;

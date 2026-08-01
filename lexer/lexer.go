@@ -273,19 +273,28 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 		if ch == '#' && l.pos+1 < len(l.source) && l.source[l.pos+1] == '[' {
 			l.advance() // consume '#'
 			l.advance() // consume '['
-			depth := 1
+			bracketDepth := 1
+			parenDepth := 0
 			var content []rune
-			for l.pos < len(l.source) && depth > 0 {
+			for l.pos < len(l.source) && bracketDepth > 0 {
 				c := l.source[l.pos]
-				if c == '[' || c == '(' {
-					depth++
-				} else if c == ']' {
-					depth--
-					if depth == 0 {
-						break
-					}
+				if c == '[' {
+					bracketDepth++
+				} else if c == '(' {
+					parenDepth++
 				} else if c == ')' {
-					// only decrement if we had a matching '('
+					if parenDepth > 0 {
+						parenDepth--
+					}
+				} else if c == ']' {
+					if parenDepth > 0 {
+						// inside parens, treat ']' as content
+					} else {
+						bracketDepth--
+						if bracketDepth == 0 {
+							break
+						}
+					}
 				}
 				content = append(content, c)
 				l.advance()

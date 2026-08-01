@@ -303,12 +303,11 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
         resp.body = dex_string_from_cstr(buf.data);
         char* ct = NULL;
         curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ct);
-        resp.contentType = dex_string_from_cstr(ct ? ct : "");
-        free(buf.data);
+        resp.contentType = dex_string_from_lit(ct ? ct : "");
     } else {
         resp.statusCode = 0;
-        resp.body = dex_string_from_cstr(curl_easy_strerror(res));
-        resp.contentType = dex_string_from_cstr("");
+        resp.body = dex_string_from_lit(curl_easy_strerror(res));
+        resp.contentType = dex_string_from_lit("");
         free(buf.data);
     }
 

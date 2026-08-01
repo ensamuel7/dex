@@ -48,6 +48,7 @@ dex build examples/hello.dx
 
 ```dex
 import "fmt"
+import "math"
 
 struct Point {
     x: int
@@ -144,10 +145,7 @@ fn main(): void {
 }
 ```
 
-```bash
-dex test                          # run all tests
-dex test examples/loops_test.dx   # run a specific test
-```
+See the [Language Reference](LANGUAGE.md#testing) for the full testing specification.
 
 ## Editor Support
 
@@ -159,25 +157,11 @@ dex lsp
 
 ## How It Compiles
 
-```
-.dx source -> lexer -> parser -> type checker -> C codegen -> gcc -> binary
-```
-
-The compiler is written in Go. The generated C links against a small runtime for the HTTP server, JSON handling, and database drivers.
+DexLang compiles `.dx` source to native binaries through C. See the [Language Reference](LANGUAGE.md#compilation) for the full compilation pipeline.
 
 ## Project Layout
 
-```
-ast/        AST node definitions and type system
-lexer/      Tokenizer
-parser/     Parser
-checker/    Type checker and semantic analysis
-codegen/    C code generation
-stdlib/     Standard library (Go definitions + C runtime)
-lsp/        Language server
-editors/    Editor extensions
-examples/   Example programs
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md#project-structure) for the full directory structure.
 
 ---
 

@@ -2,6 +2,12 @@ package ast
 
 import "fmt"
 
+// Pos represents a source position (line and column).
+type Pos struct {
+	Line int
+	Col  int
+}
+
 type Type int
 
 const (
@@ -404,6 +410,7 @@ type Expr interface {
 // Statements
 
 type LetStmt struct {
+	Pos         Pos
 	Name        string
 	Type        Type
 	Value       Expr
@@ -412,50 +419,63 @@ type LetStmt struct {
 }
 
 type ReturnStmt struct {
+	Pos   Pos
 	Value Expr
 }
 
 type ExprStmt struct {
+	Pos  Pos
 	Expr Expr
 }
 
 type IfStmt struct {
+	Pos  Pos
 	Cond Expr
 	Then []Stmt
 	Else []Stmt
 }
 
 type WhileStmt struct {
+	Pos  Pos
 	Cond Expr
 	Body []Stmt
 }
 
 type BlockStmt struct {
+	Pos   Pos
 	Stmts []Stmt
 }
 
 type AssignStmt struct {
+	Pos   Pos
 	Name  string
 	Value Expr
 }
 
 type IndexAssignStmt struct {
+	Pos   Pos
 	Array Expr
 	Index Expr
 	Value Expr
 }
 
 type FieldAssignStmt struct {
+	Pos    Pos
 	Object Expr
 	Field  string
 	Value  Expr
 }
 
-type BreakStmt struct{}
+type BreakStmt struct {
+	Pos Pos
+}
 
-type ContinueStmt struct{}
+type ContinueStmt struct {
+	Pos Pos
+}
 
 type ForStmt struct {
+	Pos  Pos
 	Init Stmt
 	Cond Expr
 	Post Stmt
@@ -463,6 +483,7 @@ type ForStmt struct {
 }
 
 type ForeachStmt struct {
+	Pos      Pos
 	Iterable Expr
 	IndexVar string
 	ValueVar string
@@ -470,14 +491,17 @@ type ForeachStmt struct {
 }
 
 type IncrementStmt struct {
+	Pos  Pos
 	Name string
 }
 
 type DecrementStmt struct {
+	Pos  Pos
 	Name string
 }
 
 type CompoundAssignStmt struct {
+	Pos   Pos
 	Name  string
 	Op    BinOp
 	Value Expr
@@ -502,39 +526,78 @@ func (s *CompoundAssignStmt) stmtNode() {}
 
 // SendStmt — send(value) or send(channel, value)
 type SendStmt struct {
+	Pos    Pos
 	Target Expr // nil for implicit (send to own task handle), non-nil for channel
 	Value  Expr
 }
 
 func (s *SendStmt) stmtNode() {}
 
+// TryCatchStmt — try { ... } catch (e: Exception) { ... } finally { ... }
+type TryCatchStmt struct {
+	Pos         Pos
+	Body        []Stmt // try body
+	CatchVar    string // variable name in catch clause (empty if no catch)
+	CatchBody   []Stmt // catch body (nil if no catch)
+	FinallyBody []Stmt // finally body (nil if no finally)
+}
+
+func (s *TryCatchStmt) stmtNode() {}
+
+// ThrowStmt — throw Exception("message")
+type ThrowStmt struct {
+	Pos   Pos
+	Value Expr
+}
+
+func (s *ThrowStmt) stmtNode() {}
+
+// RegisterExceptionType registers the built-in Exception struct type if not already registered.
+func RegisterExceptionType() {
+	if _, exists := LookupStructType("Exception"); !exists {
+		RegisterStructType(StructDef{
+			Name:              "Exception",
+			Fields:            []StructField{{Name: "message", Type: TypeString}},
+			ConstructorParams: []StructField{{Name: "message", Type: TypeString}},
+			Doc:               "Built-in exception type for error handling.",
+		})
+	}
+}
+
 // Expressions
 
 type IntLit struct {
+	Pos   Pos
 	Value int
 }
 
 type FloatLit struct {
+	Pos   Pos
 	Value float64
 }
 
 type BoolLit struct {
+	Pos   Pos
 	Value bool
 }
 
 type StringLit struct {
+	Pos   Pos
 	Value string
 }
 
 type CharLit struct {
+	Pos   Pos
 	Value rune
 }
 
 type Ident struct {
+	Pos  Pos
 	Name string
 }
 
 type BinaryExpr struct {
+	Pos           Pos
 	Op            BinOp
 	Left          Expr
 	Right         Expr
@@ -544,11 +607,13 @@ type BinaryExpr struct {
 }
 
 type UnaryExpr struct {
+	Pos     Pos
 	Op      UnaryOp
 	Operand Expr
 }
 
 type CallExpr struct {
+	Pos          Pos
 	Module       string // empty = user-defined function, "http"/"json"/"fmt" = stdlib
 	Name         string
 	Args         []Expr
@@ -559,22 +624,26 @@ type CallExpr struct {
 }
 
 type ArrayLitExpr struct {
+	Pos      Pos
 	ElemType Type
 	Elems    []Expr
 }
 
 type IndexExpr struct {
+	Pos   Pos
 	Array Expr
 	Index Expr
 }
 
 type StructLitExpr struct {
+	Pos         Pos
 	Name        string
 	FieldNames  []string
 	FieldValues []Expr
 }
 
 type FieldAccessExpr struct {
+	Pos    Pos
 	Object Expr
 	Field  string
 }
@@ -595,6 +664,7 @@ func (e *FieldAccessExpr) exprNode() {}
 
 // SpawnExpr — spawn { body } or spawn fn(args)
 type SpawnExpr struct {
+	Pos        Pos
 	Body       []Stmt // block spawn: spawn { ... }
 	Call       Expr   // call spawn: spawn fn(args) — must be *CallExpr
 	ReturnType Type   // filled by checker: what send() sends or function returns
@@ -604,6 +674,7 @@ func (e *SpawnExpr) exprNode() {}
 
 // ChannelExpr — channel(type) creates a new channel
 type ChannelExpr struct {
+	Pos      Pos
 	ElemType Type
 }
 
@@ -611,6 +682,7 @@ func (e *ChannelExpr) exprNode() {}
 
 // ReceiveExpr — receive(handle_or_channel)
 type ReceiveExpr struct {
+	Pos    Pos
 	Source Expr
 }
 
@@ -770,7 +842,9 @@ func IsValueType(t Type) bool {
 }
 
 // NullLit represents the null literal expression.
-type NullLit struct{}
+type NullLit struct {
+	Pos Pos
+}
 
 func (e *NullLit) exprNode() {}
 

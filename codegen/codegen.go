@@ -25,6 +25,9 @@ type Generator struct {
 	usesDebugCycles bool
 	usesWeakRef     bool
 	usesOptional    bool
+	usesExceptions  bool
+
+	tryCatchCounter int
 
 	importedModules map[string]*stdlib.Module
 	userModules     map[string]bool
@@ -218,6 +221,22 @@ func (g *Generator) stmtUsesRegion(stmt ast.Stmt) bool {
 				return true
 			}
 		}
+	case *ast.TryCatchStmt:
+		for _, st := range s.Body {
+			if g.stmtUsesRegion(st) {
+				return true
+			}
+		}
+		for _, st := range s.CatchBody {
+			if g.stmtUsesRegion(st) {
+				return true
+			}
+		}
+		for _, st := range s.FinallyBody {
+			if g.stmtUsesRegion(st) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -393,6 +412,18 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit optional runtime (value-type optional wrappers)
 	if g.usesOptional {
 		out.WriteString(OptionalRuntime)
+	}
+
+	// Emit exception runtime (setjmp/longjmp-based)
+	if g.usesExceptions {
+		out.WriteString(ExceptionRuntime)
+	}
+
+	// Emit built-in Exception struct typedef (before module/user struct typedefs)
+	if g.usesExceptions {
+		out.WriteString("typedef struct {\n")
+		out.WriteString("    DexString* message;\n")
+		out.WriteString("} Dex_Exception;\n")
 	}
 
 	// Emit struct typedefs (module-provided types first, then user-defined)
@@ -633,7 +664,9 @@ func (g *Generator) scanStmt(stmt ast.Stmt) {
 			g.usesDebugCycles = true
 		}
 	case *ast.ReturnStmt:
-		g.scanExpr(s.Value)
+		if s.Value != nil {
+			g.scanExpr(s.Value)
+		}
 	case *ast.ExprStmt:
 		g.scanExpr(s.Expr)
 	case *ast.AssignStmt:
@@ -682,6 +715,22 @@ func (g *Generator) scanStmt(stmt ast.Stmt) {
 		}
 		g.scanExpr(s.Value)
 		g.usesConcurrency = true
+	case *ast.TryCatchStmt:
+		g.usesExceptions = true
+		g.usesString = true
+		for _, stmt := range s.Body {
+			g.scanStmt(stmt)
+		}
+		for _, stmt := range s.CatchBody {
+			g.scanStmt(stmt)
+		}
+		for _, stmt := range s.FinallyBody {
+			g.scanStmt(stmt)
+		}
+	case *ast.ThrowStmt:
+		g.usesExceptions = true
+		g.usesString = true
+		g.scanExpr(s.Value)
 	}
 }
 
@@ -1020,6 +1069,12 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		}
 
 	case *ast.ReturnStmt:
+		// Bare return (no value) — void function
+		if s.Value == nil {
+			g.emitCleanupAll(out, prefix, "")
+			out.WriteString(fmt.Sprintf("%sreturn;\n", prefix))
+			break
+		}
 		retType := g.currentFn.ReturnType
 		if ast.IsOptionalType(retType) {
 			inner := ast.OptionalInnerType(retType)
@@ -1407,6 +1462,87 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			out.WriteString("_ch")
 		}
 		out.WriteString(", &_send_val); }\n")
+
+	case *ast.ThrowStmt:
+		// Extract message from Exception constructor: Exception("msg") -> _dex_throw(msg)
+		out.WriteString(fmt.Sprintf("%s_dex_throw(", prefix))
+		if call, ok := s.Value.(*ast.CallExpr); ok && call.Name == "Exception" && len(call.Args) == 1 {
+			// Direct constructor call: extract message arg
+			if strLit, ok := call.Args[0].(*ast.StringLit); ok {
+				out.WriteString(fmt.Sprintf("%q", strLit.Value))
+			} else {
+				// Expression that produces a DexString — extract ->data
+				out.WriteString("(")
+				g.genExpr(out, call.Args[0])
+				out.WriteString(")->data")
+			}
+		} else {
+			// General expression that produces an Exception struct — extract .message->data
+			out.WriteString("(")
+			g.genExpr(out, s.Value)
+			out.WriteString(").message->data")
+		}
+		out.WriteString(");\n")
+
+	case *ast.TryCatchStmt:
+		id := g.tryCatchCounter
+		g.tryCatchCounter++
+		hasCatch := s.CatchBody != nil
+		hasFinally := s.FinallyBody != nil
+
+		// Push exception frame
+		out.WriteString(fmt.Sprintf("%s_dex_exc_top++;\n", prefix))
+		out.WriteString(fmt.Sprintf("%svolatile int _dex_exc_%d_caught = 0;\n", prefix, id))
+		out.WriteString(fmt.Sprintf("%sif (setjmp(_dex_exc_stack[_dex_exc_top].env) == 0) {\n", prefix))
+		out.WriteString(fmt.Sprintf("%s    _dex_exc_stack[_dex_exc_top].active = 0;\n", prefix))
+
+		// Try body
+		g.pushScope()
+		for _, stmt := range s.Body {
+			g.genStmt(out, stmt, indent+1)
+		}
+		g.popScope(out, prefix+"    ")
+		out.WriteString(fmt.Sprintf("%s} else {\n", prefix))
+		out.WriteString(fmt.Sprintf("%s    _dex_exc_%d_caught = 1;\n", prefix, id))
+		out.WriteString(fmt.Sprintf("%s}\n", prefix))
+
+		// Pop exception frame
+		out.WriteString(fmt.Sprintf("%s_dex_exc_top--;\n", prefix))
+
+		// Catch block
+		if hasCatch {
+			out.WriteString(fmt.Sprintf("%sif (_dex_exc_%d_caught) {\n", prefix, id))
+			// Create Exception struct with message from exception stack
+			out.WriteString(fmt.Sprintf("%s    DexString* %s_msg = dex_string_from_lit(_dex_exc_stack[_dex_exc_top + 1].message);\n", prefix, s.CatchVar))
+			out.WriteString(fmt.Sprintf("%s    Dex_Exception %s = { .message = %s_msg };\n", prefix, s.CatchVar, s.CatchVar))
+
+			g.pushScope()
+			excType, _ := ast.LookupStructType("Exception")
+			g.varTypes[s.CatchVar] = excType
+			g.structVars[s.CatchVar] = excType
+			g.registerScopeVar(s.CatchVar+"_msg", ast.TypeString)
+			for _, stmt := range s.CatchBody {
+				g.genStmt(out, stmt, indent+1)
+			}
+			g.popScope(out, prefix+"    ")
+			out.WriteString(fmt.Sprintf("%s}\n", prefix))
+		}
+
+		// Finally block
+		if hasFinally {
+			g.pushScope()
+			for _, stmt := range s.FinallyBody {
+				g.genStmt(out, stmt, indent)
+			}
+			g.popScope(out, prefix)
+		}
+
+		// If no catch clause, re-throw after finally
+		if !hasCatch {
+			out.WriteString(fmt.Sprintf("%sif (_dex_exc_%d_caught) {\n", prefix, id))
+			out.WriteString(fmt.Sprintf("%s    _dex_throw(_dex_exc_stack[_dex_exc_top + 1].message);\n", prefix))
+			out.WriteString(fmt.Sprintf("%s}\n", prefix))
+		}
 	}
 }
 
@@ -2171,7 +2307,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				if fn.ReturnType == ast.TypeString {
 					// String handler: wrap as {200, result, "application/json"}
 					w.WriteString(fmt.Sprintf("    DexString* _val = %s();\n", handlerName))
-					w.WriteString("    return (Dex_HttpResponse){200, _val, dex_string_from_cstr(\"application/json\")};\n")
+					w.WriteString("    return (Dex_HttpResponse){200, _val, dex_string_from_lit(\"application/json\")};\n")
 				} else {
 					// Primitive handler: convert to string, then wrap
 					var fmtSpec string
@@ -2194,7 +2330,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					} else {
 						w.WriteString(fmt.Sprintf("    snprintf(_buf, sizeof(_buf), \"%s\", _val);\n", fmtSpec))
 					}
-					w.WriteString("    return (Dex_HttpResponse){200, dex_string_from_cstr(_buf), dex_string_from_cstr(\"application/json\")};\n")
+					w.WriteString("    return (Dex_HttpResponse){200, dex_string_from_lit(_buf), dex_string_from_lit(\"application/json\")};\n")
 				}
 				w.WriteString("}\n")
 				g.spawnWrappers.WriteString(w.String())
@@ -2207,6 +2343,14 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		g.genStringArg(out, e.Args[1])
 		out.WriteString(", ")
 		out.WriteString(emitName)
+		out.WriteString(")")
+		return
+	}
+
+	// os.exec — returns ExecResult struct
+	if e.Module == "os" && e.Name == "exec" {
+		out.WriteString("dex_os_exec(")
+		g.genStringArg(out, e.Args[0])
 		out.WriteString(")")
 		return
 	}
@@ -2659,10 +2803,14 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 
 		// Call the function
 		retType := e.ReturnType
+		callName := call.Name
+		if call.Module != "" {
+			callName = call.Module + "_" + call.Name
+		}
 		if retType != ast.TypeVoid {
-			g.spawnWrappers.WriteString(fmt.Sprintf("    %s _ret = %s(", g.cType(retType), call.Name))
+			g.spawnWrappers.WriteString(fmt.Sprintf("    %s _ret = %s(", g.cType(retType), callName))
 		} else {
-			g.spawnWrappers.WriteString(fmt.Sprintf("    %s(", call.Name))
+			g.spawnWrappers.WriteString(fmt.Sprintf("    %s(", callName))
 		}
 		for i := range call.Args {
 			if i > 0 {
@@ -2729,7 +2877,9 @@ func (g *Generator) collectUsedVars(stmts []ast.Stmt, used, defined map[string]b
 		case *ast.ExprStmt:
 			g.collectUsedVarsExpr(s.Expr, used)
 		case *ast.ReturnStmt:
-			g.collectUsedVarsExpr(s.Value, used)
+			if s.Value != nil {
+				g.collectUsedVarsExpr(s.Value, used)
+			}
 		case *ast.AssignStmt:
 			g.collectUsedVarsExpr(s.Value, used)
 			used[s.Name] = true
@@ -3012,6 +3162,8 @@ func (g *Generator) cType(t ast.Type) string {
 		return "unsigned char"
 	case ast.TypeArrayChar:
 		return "DexArrayChar*"
+	case ast.TypeVoid:
+		return "void"
 	default:
 		if ast.IsOptionalType(t) {
 			inner := ast.OptionalInnerType(t)
@@ -3252,20 +3404,6 @@ func (g *Generator) structArrayCleanupFunc(elemType ast.Type) string {
 	return "NULL"
 }
 
-// structArrayNeedsCleanup returns true if the struct has heap fields that need cleanup.
-func (g *Generator) structArrayNeedsCleanup(elemType ast.Type) bool {
-	def := ast.GetStructDef(elemType)
-	if def == nil {
-		return false
-	}
-	for _, f := range def.Fields {
-		if ast.NeedsRelease(f.Type) {
-			return true
-		}
-	}
-	return false
-}
-
 // typeOfExpr returns the type of an expression based on available information.
 func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 	switch e := expr.(type) {
@@ -3336,6 +3474,13 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 	case *ast.BinaryExpr:
 		if e.Op == ast.BinAdd && g.isStringExpr(e.Left) {
 			return ast.TypeString
+		}
+		// Comparison and logical operators return bool
+		switch e.Op {
+		case ast.BinEq, ast.BinNeq, ast.BinStrictEq, ast.BinStrictNeq,
+			ast.BinLt, ast.BinGt, ast.BinLte, ast.BinGte,
+			ast.BinAnd, ast.BinOr:
+			return ast.TypeBool
 		}
 		return g.typeOfExpr(e.Left)
 	case *ast.UnaryExpr:

@@ -81,6 +81,8 @@ const (
 	TokenSwitch
 	TokenCase
 	TokenDefault
+	TokenEnum
+	TokenMap
 	TokenEOF
 )
 
@@ -245,6 +247,10 @@ func (k TokenKind) String() string {
 		return "case"
 	case TokenDefault:
 		return "default"
+	case TokenEnum:
+		return "enum"
+	case TokenMap:
+		return "map"
 	case TokenEOF:
 		return "end of file"
 	default:
@@ -290,4 +296,6 @@ var Keywords = map[string]TokenKind{
 	"switch":   TokenSwitch,
 	"case":     TokenCase,
 	"default":  TokenDefault,
+	"enum":     TokenEnum,
+	"map":      TokenMap,
 }

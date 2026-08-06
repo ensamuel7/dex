@@ -73,6 +73,7 @@ const (
 	CompletionKindModule   = 9
 	CompletionKindKeyword  = 14
 	CompletionKindType     = 25 // TypeParameter
+	CompletionKindValue    = 12 // Value (LSP EnumMember)
 )
 
 // --- Server ---
@@ -556,6 +557,12 @@ func typeName(t ast.Type) string {
 		}
 		if ast.IsStructType(t) {
 			return ast.StructName(t)
+		}
+		if ast.IsEnumType(t) {
+			return ast.EnumName(t)
+		}
+		if ast.IsMapType(t) {
+			return "map[" + typeName(ast.MapKeyType(t)) + ", " + typeName(ast.MapValueType(t)) + "]"
 		}
 		return "unknown"
 	}

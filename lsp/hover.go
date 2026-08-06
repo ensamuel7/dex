@@ -69,6 +69,10 @@ func (s *Server) hoverAt(uri string, text string, pos Position) string {
 		return "**keyword** `finally`\n\nBlock that always executes after `try` or `catch`, used for cleanup."
 	case token.TokenThrow:
 		return "**keyword** `throw`\n\nThrows an exception. Syntax: `throw Exception(\"message\")`"
+	case token.TokenEnum:
+		return "**keyword** `enum`\n\nDeclares an enumerated type. Variants are integer constants.\n\nSyntax: `enum Name { Variant1 Variant2 ... }`"
+	case token.TokenMap:
+		return "**keyword** `map`\n\nHash map type. Syntax: `map[keyType, valueType]`\n\nMethods: `set`, `get`, `has`, `remove`, `len`, `keys`, `values`"
 	case token.TokenSwitch:
 		return "**keyword** `switch`\n\nSwitch statement for multi-way branching. Syntax: `switch (expr) { case val: { ... } default: { ... } }`"
 	case token.TokenCase:
@@ -129,6 +133,13 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 	for i := range program.Structs {
 		if program.Structs[i].Name == name {
 			return formatStructHover(&program.Structs[i])
+		}
+	}
+
+	// Check if it's a user-defined enum name
+	for i := range program.Enums {
+		if program.Enums[i].Name == name {
+			return formatEnumHover(&program.Enums[i])
 		}
 	}
 
@@ -334,6 +345,15 @@ func formatStructHover(def *ast.StructDef) string {
 	}
 
 	return fmt.Sprintf("```dex\n%s\n```\n\n%s\n\n**Fields:**\n%s", sig, doc, strings.Join(fieldDocs, "\n"))
+}
+
+func formatEnumHover(def *ast.EnumDef) string {
+	var variants []string
+	for _, v := range def.Variants {
+		variants = append(variants, "    "+v)
+	}
+	sig := fmt.Sprintf("enum %s {\n%s\n}", def.Name, strings.Join(variants, "\n"))
+	return fmt.Sprintf("```dex\n%s\n```\n\nEnum type with %d variant(s).", sig, len(def.Variants))
 }
 
 func formatFieldHover(structName string, f *ast.StructField) string {

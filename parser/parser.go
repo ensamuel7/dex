@@ -12,10 +12,11 @@ type Parser struct {
 	tokens      []token.Token
 	pos         int
 	structNames map[string]bool
+	enumNames   map[string]bool
 }
 
 func New(tokens []token.Token) *Parser {
-	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool)}
+	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool), enumNames: make(map[string]bool)}
 }
 
 // AddStructName registers a struct name so the parser recognizes it as a type.
@@ -47,15 +48,23 @@ func (p *Parser) Parse() (*ast.Program, error) {
 		program.Imports = append(program.Imports, ast.Import{Path: path, Alias: alias})
 	}
 
-	// Parse struct definitions (with optional annotations and access modifiers)
-	for p.isStructDefAhead() {
-		annotations := p.collectAnnotations()
-		sd, err := p.parseStructDef()
-		if err != nil {
-			return nil, err
+	// Parse struct and enum definitions (with optional annotations and access modifiers)
+	for p.isStructDefAhead() || p.isEnumDefAhead() {
+		if p.isEnumDefAhead() {
+			ed, err := p.parseEnumDef()
+			if err != nil {
+				return nil, err
+			}
+			program.Enums = append(program.Enums, *ed)
+		} else {
+			annotations := p.collectAnnotations()
+			sd, err := p.parseStructDef()
+			if err != nil {
+				return nil, err
+			}
+			_ = annotations // struct-level annotations reserved for future use
+			program.Structs = append(program.Structs, *sd)
 		}
-		_ = annotations // struct-level annotations reserved for future use
-		program.Structs = append(program.Structs, *sd)
 	}
 
 	for !p.atEnd() {
@@ -87,6 +96,53 @@ func (p *Parser) isStructDefAhead() bool {
 		return true
 	}
 	return false
+}
+
+// isEnumDefAhead returns true if the current token is the 'enum' keyword.
+func (p *Parser) isEnumDefAhead() bool {
+	i := p.pos
+	for i < len(p.tokens) && p.tokens[i].Kind == token.TokenAnnotation {
+		i++
+	}
+	return i < len(p.tokens) && p.tokens[i].Kind == token.TokenEnum
+}
+
+func (p *Parser) parseEnumDef() (*ast.EnumDef, error) {
+	// Skip any annotations (reserved for future use)
+	p.collectAnnotations()
+
+	p.advance() // consume 'enum'
+
+	name, err := p.expectIdent()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.expect(token.TokenLBrace); err != nil {
+		return nil, err
+	}
+
+	var variants []string
+	for !p.check(token.TokenRBrace) && !p.atEnd() {
+		variant, err := p.expectIdent()
+		if err != nil {
+			return nil, err
+		}
+		variants = append(variants, variant)
+	}
+
+	if err := p.expect(token.TokenRBrace); err != nil {
+		return nil, err
+	}
+
+	if len(variants) == 0 {
+		return nil, p.errorf("enum '%s' must have at least one variant", name)
+	}
+
+	p.enumNames[name] = true
+	ast.RegisterEnumType(ast.EnumDef{Name: name, Variants: variants})
+
+	return &ast.EnumDef{Name: name, Variants: variants}, nil
 }
 
 func (p *Parser) parseStructDef() (*ast.StructDef, error) {
@@ -391,6 +447,26 @@ func (p *Parser) parseType() (ast.Type, error) {
 			return 0, err
 		}
 		return ast.FuncTypeOf(paramTypes, retType), nil
+	case token.TokenMap:
+		p.advance() // consume 'map'
+		if err := p.expect(token.TokenLBracket); err != nil {
+			return 0, p.errorf("expected '[' after 'map'")
+		}
+		keyType, err := p.parseType()
+		if err != nil {
+			return 0, err
+		}
+		if err := p.expect(token.TokenComma); err != nil {
+			return 0, p.errorf("expected ',' in map type")
+		}
+		valType, err := p.parseType()
+		if err != nil {
+			return 0, err
+		}
+		if err := p.expect(token.TokenRBracket); err != nil {
+			return 0, p.errorf("expected ']' after map value type")
+		}
+		return ast.MapTypeOf(keyType, valType), nil
 	case token.TokenIdent:
 		name := tok.Value
 		if p.structNames[name] {
@@ -398,6 +474,13 @@ func (p *Parser) parseType() (ast.Type, error) {
 			t, ok := ast.LookupStructType(name)
 			if !ok {
 				return 0, p.errorf("unknown struct type '%s'", name)
+			}
+			base = t
+		} else if p.enumNames[name] {
+			p.advance()
+			t, ok := ast.LookupEnumType(name)
+			if !ok {
+				return 0, p.errorf("unknown enum type '%s'", name)
 			}
 			base = t
 		} else {
@@ -1357,6 +1440,15 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		p.advance()
 		return &ast.NullLit{Pos: pos}, nil
 
+	case token.TokenLBrace:
+		// Empty map literal: {}
+		if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenRBrace {
+			p.advance() // consume '{'
+			p.advance() // consume '}'
+			return &ast.MapLitExpr{Pos: pos}, nil
+		}
+		return nil, p.errorf("unexpected '{'")
+
 	case token.TokenLBracket:
 		// Array literal: [expr, expr, ...]
 		p.advance() // consume '['
@@ -1410,6 +1502,18 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				return nil, err
 			}
 			return &ast.ChannelExpr{Pos: pos, ElemType: elemType}, nil
+		}
+
+		// Check for enum access: EnumName.Variant (before advance)
+		if p.enumNames[name] && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenDot {
+			p.advance() // consume enum name
+			p.advance() // consume '.'
+			variant, err := p.expectIdent()
+			if err != nil {
+				return nil, err
+			}
+			enumType, _ := ast.LookupEnumType(name)
+			return &ast.EnumAccessExpr{Pos: pos, EnumName: name, Variant: variant, EnumType: enumType}, nil
 		}
 
 		p.advance()

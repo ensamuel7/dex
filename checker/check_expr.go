@@ -182,8 +182,19 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		if err != nil {
 			return 0, err
 		}
+		if ast.IsMapType(arrType) {
+			idxType, err := c.checkExpr(e.Index)
+			if err != nil {
+				return 0, err
+			}
+			keyType := ast.MapKeyType(arrType)
+			if idxType != keyType {
+				return 0, c.errAt(e.Pos, "map key must be %s, got %s", typeName(keyType), typeName(idxType))
+			}
+			return ast.MapValueType(arrType), nil
+		}
 		if !ast.IsArrayType(arrType) {
-			return 0, c.errAt(e.Pos, "index operator requires an array type, got %s", typeName(arrType))
+			return 0, c.errAt(e.Pos, "index operator requires an array or map type, got %s", typeName(arrType))
 		}
 		idxType, err := c.checkExpr(e.Index)
 		if err != nil {
@@ -282,6 +293,27 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 	case *ast.ChannelExpr:
 		return ast.ChanTypeOf(e.ElemType), nil
 
+	case *ast.EnumAccessExpr:
+		def := ast.GetEnumDef(e.EnumType)
+		if def == nil {
+			return 0, c.errAt(e.Pos, "unknown enum type '%s'", e.EnumName)
+		}
+		found := false
+		for _, v := range def.Variants {
+			if v == e.Variant {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0, c.errAt(e.Pos, "enum '%s' has no variant '%s'", e.EnumName, e.Variant)
+		}
+		return e.EnumType, nil
+
+	case *ast.MapLitExpr:
+		// Empty map literal — type must be inferred from context (LetStmt handles this)
+		return 0, c.errAt(e.Pos, "cannot infer type of empty map literal")
+
 	case *ast.ReceiveExpr:
 		srcType, err := c.checkExpr(e.Source)
 		if err != nil {
@@ -304,6 +336,15 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				retType, err := c.checkArrayMethod(e.Module, varType, e.Name, e.Args)
 				if err != nil {
 					return 0, c.errAt(e.Pos, "%s", err)
+				}
+				return retType, nil
+			}
+
+			// Check if module is a map variable (map method call)
+			if isVar && ast.IsMapType(varType) {
+				retType, err := c.checkMapMethod(e.Module, varType, e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
 				}
 				return retType, nil
 			}
@@ -432,7 +473,8 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 					return 0, err
 				}
 				if argType != ast.TypeInt && argType != ast.TypeLong && argType != ast.TypeDouble &&
-					argType != ast.TypeString && argType != ast.TypeBool && argType != ast.TypeChar {
+					argType != ast.TypeString && argType != ast.TypeBool && argType != ast.TypeChar &&
+					!ast.IsEnumType(argType) {
 					return 0, c.errAt(e.Pos, "fmt.print() argument must be a primitive type, got %s", typeName(argType))
 				}
 				return ast.TypeVoid, nil
@@ -1036,6 +1078,92 @@ func (c *Checker) checkStringMethod(varName, method string, args []ast.Expr, pos
 	}
 }
 
+// checkMapMethod validates a method call on a map variable.
+func (c *Checker) checkMapMethod(varName string, mapType ast.Type, method string, args []ast.Expr, pos ast.Pos) (ast.Type, error) {
+	keyType := ast.MapKeyType(mapType)
+	valType := ast.MapValueType(mapType)
+
+	switch method {
+	case "set":
+		if len(args) != 2 {
+			return 0, c.errAt(pos, "%s.set() takes exactly 2 arguments, got %d", varName, len(args))
+		}
+		argKeyType, err := c.checkExpr(args[0])
+		if err != nil {
+			return 0, err
+		}
+		if argKeyType != keyType {
+			return 0, c.errAt(pos, "%s.set() key must be %s, got %s", varName, typeName(keyType), typeName(argKeyType))
+		}
+		argValType, err := c.checkExpr(args[1])
+		if err != nil {
+			return 0, err
+		}
+		if argValType != valType {
+			return 0, c.errAt(pos, "%s.set() value must be %s, got %s", varName, typeName(valType), typeName(argValType))
+		}
+		return ast.TypeVoid, nil
+	case "get":
+		if len(args) != 1 {
+			return 0, c.errAt(pos, "%s.get() takes exactly 1 argument, got %d", varName, len(args))
+		}
+		argType, err := c.checkExpr(args[0])
+		if err != nil {
+			return 0, err
+		}
+		if argType != keyType {
+			return 0, c.errAt(pos, "%s.get() key must be %s, got %s", varName, typeName(keyType), typeName(argType))
+		}
+		return valType, nil
+	case "has":
+		if len(args) != 1 {
+			return 0, c.errAt(pos, "%s.has() takes exactly 1 argument, got %d", varName, len(args))
+		}
+		argType, err := c.checkExpr(args[0])
+		if err != nil {
+			return 0, err
+		}
+		if argType != keyType {
+			return 0, c.errAt(pos, "%s.has() key must be %s, got %s", varName, typeName(keyType), typeName(argType))
+		}
+		return ast.TypeBool, nil
+	case "remove":
+		if len(args) != 1 {
+			return 0, c.errAt(pos, "%s.remove() takes exactly 1 argument, got %d", varName, len(args))
+		}
+		argType, err := c.checkExpr(args[0])
+		if err != nil {
+			return 0, err
+		}
+		if argType != keyType {
+			return 0, c.errAt(pos, "%s.remove() key must be %s, got %s", varName, typeName(keyType), typeName(argType))
+		}
+		return ast.TypeVoid, nil
+	case "len":
+		if len(args) != 0 {
+			return 0, c.errAt(pos, "%s.len() takes no arguments, got %d", varName, len(args))
+		}
+		return ast.TypeInt, nil
+	case "clear":
+		if len(args) != 0 {
+			return 0, c.errAt(pos, "%s.clear() takes no arguments, got %d", varName, len(args))
+		}
+		return ast.TypeVoid, nil
+	case "keys":
+		if len(args) != 0 {
+			return 0, c.errAt(pos, "%s.keys() takes no arguments, got %d", varName, len(args))
+		}
+		return ast.ArrayTypeOf(keyType), nil
+	case "values":
+		if len(args) != 0 {
+			return 0, c.errAt(pos, "%s.values() takes no arguments, got %d", varName, len(args))
+		}
+		return ast.ArrayTypeOf(valType), nil
+	default:
+		return 0, c.errAt(pos, "undefined method '%s' on map type", method)
+	}
+}
+
 // extractNullCheck detects null comparison patterns in conditions.
 // Returns (varName, isNotNull) where isNotNull=true means "x != null".
 func extractNullCheck(cond ast.Expr) (string, bool) {
@@ -1072,7 +1200,7 @@ func isValidFieldType(t ast.Type) bool {
 	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar:
 		return true
 	default:
-		return ast.IsStructType(t)
+		return ast.IsStructType(t) || ast.IsEnumType(t) || ast.IsMapType(t)
 	}
 }
 
@@ -1090,7 +1218,7 @@ func isNumericType(t ast.Type) bool {
 
 func isPrimitiveType(t ast.Type) bool {
 	return t == ast.TypeInt || t == ast.TypeBool || t == ast.TypeString ||
-		t == ast.TypeChar || t == ast.TypeLong || t == ast.TypeDouble
+		t == ast.TypeChar || t == ast.TypeLong || t == ast.TypeDouble || ast.IsEnumType(t)
 }
 
 // isIntLiteral returns true if the expression is an integer literal.
@@ -1246,6 +1374,12 @@ func typeName(t ast.Type) string {
 		}
 		if ast.IsWeakType(t) {
 			return "weak<" + typeName(ast.WeakInnerType(t)) + ">"
+		}
+		if ast.IsEnumType(t) {
+			return ast.EnumName(t)
+		}
+		if ast.IsMapType(t) {
+			return "map[" + typeName(ast.MapKeyType(t)) + ", " + typeName(ast.MapValueType(t)) + "]"
 		}
 		return "unknown"
 	}

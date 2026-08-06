@@ -12,6 +12,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.strVars = make(map[string]bool)
 	g.arrVars = make(map[string]ast.Type)
 	g.structVars = make(map[string]ast.Type)
+	g.mapVars = make(map[string]ast.Type)
 	g.varTypes = make(map[string]ast.Type)
 	g.varAnnotations = make(map[string][]string)
 	g.foreachCounter = 0
@@ -32,6 +33,9 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		}
 		if ast.IsStructType(p.Type) {
 			g.structVars[p.Name] = p.Type
+		}
+		if ast.IsMapType(p.Type) {
+			g.mapVars[p.Name] = p.Type
 		}
 	}
 
@@ -102,6 +106,16 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		}
 		if ast.IsStructType(s.Type) {
 			g.structVars[s.Name] = s.Type
+		}
+		if ast.IsMapType(s.Type) {
+			g.mapVars[s.Name] = s.Type
+		}
+		// Special case for map literal: let m: map[K,V] = {}
+		if _, ok := s.Value.(*ast.MapLitExpr); ok {
+			suffix := g.mapSuffix(s.Type)
+			out.WriteString(fmt.Sprintf("%s%s %s = dex_map_%s_new();\n", prefix, g.cType(s.Type), s.Name, suffix))
+			g.registerScopeVar(s.Name, s.Type)
+			break
 		}
 		// Special case for channel/task types: let ch = channel(int), let t = spawn { ... }
 		if ast.IsChanType(s.Type) || ast.IsTaskType(s.Type) {
@@ -598,6 +612,17 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 
 	case *ast.IndexAssignStmt:
 		arrType := g.typeOfExpr(s.Array)
+		if ast.IsMapType(arrType) {
+			suffix := g.mapSuffix(arrType)
+			out.WriteString(fmt.Sprintf("%sdex_map_%s_set(", prefix, suffix))
+			g.genExpr(out, s.Array)
+			out.WriteString(", ")
+			g.genExpr(out, s.Index)
+			out.WriteString(", ")
+			g.genExpr(out, s.Value)
+			out.WriteString(");\n")
+			break
+		}
 		if ast.IsStructArrayType(arrType) {
 			elemType := ast.ElementType(arrType)
 			elemCType := g.cType(elemType)

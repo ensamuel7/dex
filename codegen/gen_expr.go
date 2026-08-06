@@ -132,8 +132,18 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		out.WriteString(")")
 
 	case *ast.IndexExpr:
-		// Check if this is a struct array index
+		// Check if this is a map index
 		arrType := g.typeOfExpr(e.Array)
+		if ast.IsMapType(arrType) {
+			suffix := g.mapSuffix(arrType)
+			out.WriteString(fmt.Sprintf("dex_map_%s_get(", suffix))
+			g.genExpr(out, e.Array)
+			out.WriteString(", ")
+			g.genExpr(out, e.Index)
+			out.WriteString(")")
+			break
+		}
+		// Check if this is a struct array index
 		if ast.IsStructArrayType(arrType) {
 			elemType := ast.ElementType(arrType)
 			elemCType := g.cType(elemType)
@@ -207,6 +217,13 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	case *ast.ChannelExpr:
 		ctyp := g.cType(e.ElemType)
 		out.WriteString(fmt.Sprintf("dex_chan_new(sizeof(%s), 64)", ctyp))
+
+	case *ast.EnumAccessExpr:
+		out.WriteString(fmt.Sprintf("Dex_%s_%s", e.EnumName, e.Variant))
+
+	case *ast.MapLitExpr:
+		// Empty map literal in non-let context (shouldn't normally happen)
+		out.WriteString("/* map literal */")
 
 	case *ast.ReceiveExpr:
 		// receive in expression context — should typically be handled by LetStmt
@@ -876,6 +893,58 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
+	// Check if this is a map method call (e.Module is a variable name or field chain)
+	if e.Module != "" {
+		mapType, isMap := g.mapVars[e.Module]
+		// Field chain resolution: e.g., self.myMap → look up field type
+		if !isMap && strings.Contains(e.Module, ".") {
+			chainType := g.resolveFieldChainType(e.Module)
+			if ast.IsMapType(chainType) {
+				mapType = chainType
+				isMap = true
+			}
+		}
+		if isMap {
+			suffix := g.mapSuffix(mapType)
+			switch e.Name {
+			case "set":
+				out.WriteString(fmt.Sprintf("dex_map_%s_set(%s, ", suffix, e.Module))
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(")")
+				return
+			case "get":
+				out.WriteString(fmt.Sprintf("dex_map_%s_get(%s, ", suffix, e.Module))
+				g.genExpr(out, e.Args[0])
+				out.WriteString(")")
+				return
+			case "has":
+				out.WriteString(fmt.Sprintf("dex_map_%s_has(%s, ", suffix, e.Module))
+				g.genExpr(out, e.Args[0])
+				out.WriteString(")")
+				return
+			case "remove":
+				out.WriteString(fmt.Sprintf("dex_map_%s_remove(%s, ", suffix, e.Module))
+				g.genExpr(out, e.Args[0])
+				out.WriteString(")")
+				return
+			case "len":
+				out.WriteString(fmt.Sprintf("dex_map_%s_len(%s)", suffix, e.Module))
+				return
+			case "clear":
+				out.WriteString(fmt.Sprintf("dex_map_%s_clear(%s)", suffix, e.Module))
+				return
+			case "keys":
+				out.WriteString(fmt.Sprintf("dex_map_%s_keys(%s)", suffix, e.Module))
+				return
+			case "values":
+				out.WriteString(fmt.Sprintf("dex_map_%s_values(%s)", suffix, e.Module))
+				return
+			}
+		}
+	}
+
 	// Check if this is an array method call (e.Module is a variable name)
 	if e.Module != "" {
 		if arrType, ok := g.arrVars[e.Module]; ok {
@@ -1394,6 +1463,10 @@ func (g *Generator) collectUsedVarsExpr(expr ast.Expr, used map[string]bool) {
 		// no vars
 	case *ast.NullLit:
 		// no vars
+	case *ast.EnumAccessExpr:
+		// no vars
+	case *ast.MapLitExpr:
+		// no vars
 	}
 }
 
@@ -1528,6 +1601,25 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 		if e.ResolvedType != 0 {
 			return e.ResolvedType == ast.TypeString
 		}
+		// Map method calls: get() on a map with string values
+		if e.Module != "" {
+			if mapType, ok := g.mapVars[e.Module]; ok {
+				if e.Name == "get" {
+					return ast.MapValueType(mapType) == ast.TypeString
+				}
+				return false
+			}
+			// Field chain map access (e.g., self.myMap.get("key"))
+			if strings.Contains(e.Module, ".") {
+				chainType := g.resolveFieldChainType(e.Module)
+				if ast.IsMapType(chainType) {
+					if e.Name == "get" {
+						return ast.MapValueType(chainType) == ast.TypeString
+					}
+					return false
+				}
+			}
+		}
 		// String methods that return strings
 		if e.Module != "" && g.strVars[e.Module] {
 			switch e.Name {
@@ -1551,8 +1643,11 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 	case *ast.Ident:
 		return g.strVars[e.Name]
 	case *ast.IndexExpr:
-		// Check if indexing a string array
+		// Check if indexing a map with string values
 		if ident, ok := e.Array.(*ast.Ident); ok {
+			if mapType, ok := g.mapVars[ident.Name]; ok {
+				return ast.MapValueType(mapType) == ast.TypeString
+			}
 			if arrType, ok := g.arrVars[ident.Name]; ok {
 				return arrType == ast.TypeArrayString
 			}

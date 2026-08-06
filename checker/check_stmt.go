@@ -55,6 +55,20 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			return c.errAt(s.Pos, "%s", err)
 		}
 
+		// Handle empty map literal: infer key/value types from declared type
+		if mapLit, ok := s.Value.(*ast.MapLitExpr); ok {
+			if !ast.IsMapType(s.Type) {
+				return c.errAt(s.Pos, "cannot assign empty map literal to non-map type %s", typeName(s.Type))
+			}
+			mapLit.MapType = s.Type
+			c.define(s.Name, s.Type)
+			c.defineAnnotations(s.Name, s.Annotations)
+			if s.IsConst {
+				c.defineConst(s.Name)
+			}
+			return nil
+		}
+
 		// Handle empty array literal: infer element type from declared type
 		if arrLit, ok := s.Value.(*ast.ArrayLitExpr); ok && len(arrLit.Elems) == 0 {
 			if !ast.IsArrayType(s.Type) {
@@ -350,8 +364,27 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if err != nil {
 			return err
 		}
+		if ast.IsMapType(arrType) {
+			idxType, err := c.checkExpr(s.Index)
+			if err != nil {
+				return err
+			}
+			keyType := ast.MapKeyType(arrType)
+			if idxType != keyType {
+				return c.errAt(s.Pos, "map key must be %s, got %s", typeName(keyType), typeName(idxType))
+			}
+			valType, err := c.checkExpr(s.Value)
+			if err != nil {
+				return err
+			}
+			expectedValType := ast.MapValueType(arrType)
+			if valType != expectedValType && !canAssign(expectedValType, valType, s.Value) {
+				return c.errAt(s.Pos, "type mismatch in map assignment: expected %s, got %s", typeName(expectedValType), typeName(valType))
+			}
+			return nil
+		}
 		if !ast.IsArrayType(arrType) {
-			return c.errAt(s.Pos, "index assignment requires an array type, got %s", typeName(arrType))
+			return c.errAt(s.Pos, "index assignment requires an array or map type, got %s", typeName(arrType))
 		}
 		idxType, err := c.checkExpr(s.Index)
 		if err != nil {

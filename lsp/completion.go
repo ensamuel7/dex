@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/lexer"
 	"github.com/ensamuel7/dex/parser"
 	"github.com/ensamuel7/dex/stdlib"
@@ -60,6 +61,8 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 		{"switch", "Switch statement"},
 		{"case", "Case branch"},
 		{"default", "Default branch"},
+		{"enum", "Enum type declaration"},
+		{"map", "Map type"},
 	} {
 		items = append(items, CompletionItem{
 			Label:  kw.label,
@@ -93,6 +96,15 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 				})
 			}
 
+			// Enum names and variants
+			for _, ed := range program.Enums {
+				items = append(items, CompletionItem{
+					Label:  ed.Name,
+					Kind:   CompletionKindType,
+					Detail: "Enum type",
+				})
+			}
+
 			// Imported module names
 			for _, imp := range program.Imports {
 				items = append(items, CompletionItem{
@@ -108,6 +120,22 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 }
 
 func (s *Server) moduleCompletions(moduleName string, text string) []CompletionItem {
+	// Check if moduleName is an enum type — offer variant completions
+	if enumType, ok := ast.LookupEnumType(moduleName); ok {
+		def := ast.GetEnumDef(enumType)
+		if def != nil {
+			var items []CompletionItem
+			for _, v := range def.Variants {
+				items = append(items, CompletionItem{
+					Label:  v,
+					Kind:   CompletionKindValue,
+					Detail: moduleName + "." + v,
+				})
+			}
+			return items
+		}
+	}
+
 	mod := stdlib.Lookup(moduleName)
 	// If direct lookup fails, check if moduleName is an alias
 	if mod == nil {
@@ -158,5 +186,13 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 		{Label: "substring", Kind: CompletionKindFunction, Detail: "(start: int, end: int): string", Documentation: "Return a substring from start to end (exclusive)."},
 		{Label: "replace", Kind: CompletionKindFunction, Detail: "(old: string, new: string): string", Documentation: "Replace all occurrences of old with new."},
 		{Label: "charAt", Kind: CompletionKindFunction, Detail: "(index: int): char", Documentation: "Return the character at the given index."},
+		// Map methods
+		{Label: "set", Kind: CompletionKindFunction, Detail: "(key, value): void", Documentation: "Set a key-value pair in the map."},
+		{Label: "get", Kind: CompletionKindFunction, Detail: "(key): value", Documentation: "Get the value for a key."},
+		{Label: "has", Kind: CompletionKindFunction, Detail: "(key): bool", Documentation: "Check if a key exists in the map."},
+		{Label: "remove", Kind: CompletionKindFunction, Detail: "(key): void", Documentation: "Remove a key-value pair from the map."},
+		{Label: "clear", Kind: CompletionKindFunction, Detail: "(): void", Documentation: "Remove all entries from the map."},
+		{Label: "keys", Kind: CompletionKindFunction, Detail: "(): key[]", Documentation: "Return an array of all keys."},
+		{Label: "values", Kind: CompletionKindFunction, Detail: "(): value[]", Documentation: "Return an array of all values."},
 	}
 }

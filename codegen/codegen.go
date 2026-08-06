@@ -27,6 +27,7 @@ type Generator struct {
 	usesOptional    bool
 	usesExceptions    bool
 	usesStringMethods bool
+	usesMap           bool
 
 	tryCatchCounter int
 	switchCounter   int
@@ -39,6 +40,7 @@ type Generator struct {
 	strVars    map[string]bool      // variables known to be string type
 	arrVars    map[string]ast.Type   // variables known to be array type (name -> array type)
 	structVars map[string]ast.Type   // variables known to be struct type
+	mapVars    map[string]ast.Type   // variables known to be map type (name -> map type)
 	varTypes   map[string]ast.Type   // all variable types for this function scope
 
 	foreachCounter     int            // unique counter for foreach loop variables
@@ -70,6 +72,7 @@ func New() *Generator {
 		strVars:         make(map[string]bool),
 		arrVars:         make(map[string]ast.Type),
 		structVars:      make(map[string]ast.Type),
+		mapVars:         make(map[string]ast.Type),
 		varTypes:        make(map[string]ast.Type),
 		funcTypedefs:    make(map[ast.Type]string),
 		varAnnotations:  make(map[string][]string),
@@ -316,6 +319,12 @@ func (g *Generator) Generate(program *ast.Program) string {
 		g.usesArray = true
 	}
 
+	// Maps need string and array runtimes (for keys/values returning arrays, string keys)
+	if g.usesMap {
+		g.usesString = true
+		g.usesArray = true
+	}
+
 	// Arrays depend on the string runtime (DexArrayString uses DexString)
 	if g.usesArray {
 		g.usesString = true
@@ -420,6 +429,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString(StringMethodsRuntime)
 	}
 
+	// Emit map runtime (needs DexString, DexArray for keys/values)
+	if g.usesMap {
+		out.WriteString(MapRuntime)
+	}
+
 	// Emit concurrency runtime
 	if g.usesConcurrency {
 		out.WriteString(ConcurrencyRuntime)
@@ -468,6 +482,17 @@ func (g *Generator) Generate(program *ast.Program) string {
 			out.WriteString(fmt.Sprintf("    %s %s;\n", g.cType(f.Type), f.Name))
 		}
 		out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
+	}
+	// Emit enum typedefs
+	for _, ed := range program.Enums {
+		out.WriteString("typedef enum { ")
+		for i, v := range ed.Variants {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(fmt.Sprintf("Dex_%s_%s = %d", ed.Name, v, i))
+		}
+		out.WriteString(fmt.Sprintf(" } Dex_%s;\n", ed.Name))
 	}
 	// Emit cleanup functions for structs that have heap fields (used by struct arrays)
 	for _, sd := range program.Structs {
@@ -675,6 +700,9 @@ func (g *Generator) scanType(t ast.Type) {
 		g.usesWeakRef = true
 		g.usesRefcount = true
 	}
+	if ast.IsMapType(t) {
+		g.usesMap = true
+	}
 }
 
 func (g *Generator) scanStmt(stmt ast.Stmt) {
@@ -841,6 +869,10 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		g.scanExpr(e.Source)
 	case *ast.NullLit:
 		// null literal — optional usage detected via type scanning
+	case *ast.EnumAccessExpr:
+		// no-op: enum values are compile-time constants
+	case *ast.MapLitExpr:
+		g.usesMap = true
 	}
 }
 

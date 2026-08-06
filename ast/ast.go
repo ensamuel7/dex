@@ -58,6 +58,12 @@ const TypeOptionalBase Type = 7000
 // Reference type system: dynamic IDs starting at 8000
 const TypeRefBase Type = 8000
 
+// Map type system: dynamic IDs starting at 9000
+const TypeMapBase Type = 9000
+
+// Enum type system: dynamic IDs starting at 10000
+const TypeEnumBase Type = 10000
+
 type StructField struct {
 	Name        string
 	Type        Type
@@ -271,7 +277,7 @@ func FuncTypeReturn(t Type) Type {
 }
 
 func IsHeapType(t Type) bool {
-	return t == TypeString || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t)
+	return t == TypeString || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t)
 }
 
 func NeedsRelease(t Type) bool {
@@ -377,6 +383,7 @@ type Import struct {
 type Program struct {
 	Imports      []Import
 	Structs      []StructDef
+	Enums        []EnumDef
 	Functions    []Function
 	UserModules  []string          // module names (last path segment) of resolved user imports
 	StructModule map[string]string // structName -> moduleName (for cross-module structs)
@@ -842,7 +849,7 @@ func RefTypeOf(innerType Type) Type {
 }
 
 func IsRefType(t Type) bool {
-	return t >= TypeRefBase
+	return t >= TypeRefBase && t < TypeMapBase
 }
 
 func RefInnerType(t Type) Type {
@@ -855,7 +862,7 @@ func RefInnerType(t Type) Type {
 
 // IsValueType returns true if the type is a value type (not heap-allocated).
 func IsValueType(t Type) bool {
-	return t == TypeInt || t == TypeBool || t == TypeLong || t == TypeDouble || t == TypeChar
+	return t == TypeInt || t == TypeBool || t == TypeLong || t == TypeDouble || t == TypeChar || IsEnumType(t)
 }
 
 // NullLit represents the null literal expression.
@@ -864,6 +871,139 @@ type NullLit struct {
 }
 
 func (e *NullLit) exprNode() {}
+
+// Map type registry
+type MapTypeInfo struct {
+	KeyType   Type
+	ValueType Type
+}
+
+var (
+	mapTypes    []MapTypeInfo
+	mapTypeKeys map[string]Type
+)
+
+func init() {
+	ResetMapTypes()
+}
+
+func ResetMapTypes() {
+	mapTypes = nil
+	mapTypeKeys = make(map[string]Type)
+}
+
+func mapTypeKey(keyType, valueType Type) string {
+	return fmt.Sprintf("map[%d,%d]", int(keyType), int(valueType))
+}
+
+func MapTypeOf(keyType, valueType Type) Type {
+	key := mapTypeKey(keyType, valueType)
+	if id, ok := mapTypeKeys[key]; ok {
+		return id
+	}
+	id := TypeMapBase + Type(len(mapTypes))
+	mapTypeKeys[key] = id
+	mapTypes = append(mapTypes, MapTypeInfo{KeyType: keyType, ValueType: valueType})
+	return id
+}
+
+func IsMapType(t Type) bool {
+	return t >= TypeMapBase && t < TypeEnumBase
+}
+
+func MapKeyType(t Type) Type {
+	idx := int(t - TypeMapBase)
+	if idx < 0 || idx >= len(mapTypes) {
+		return TypeVoid
+	}
+	return mapTypes[idx].KeyType
+}
+
+func MapValueType(t Type) Type {
+	idx := int(t - TypeMapBase)
+	if idx < 0 || idx >= len(mapTypes) {
+		return TypeVoid
+	}
+	return mapTypes[idx].ValueType
+}
+
+// MapLitExpr represents an empty map literal: {}
+type MapLitExpr struct {
+	Pos     Pos
+	MapType Type // set by checker from declared type context
+}
+
+func (e *MapLitExpr) exprNode() {}
+
+// Enum type registry
+type EnumDef struct {
+	Name     string
+	Variants []string
+}
+
+var (
+	enumDefs   []EnumDef
+	enumByName map[string]Type
+)
+
+func init() {
+	ResetEnumTypes()
+}
+
+func ResetEnumTypes() {
+	enumDefs = nil
+	enumByName = make(map[string]Type)
+}
+
+func RegisterEnumType(def EnumDef) Type {
+	id := TypeEnumBase + Type(len(enumDefs))
+	enumByName[def.Name] = id
+	enumDefs = append(enumDefs, def)
+	return id
+}
+
+func LookupEnumType(name string) (Type, bool) {
+	id, ok := enumByName[name]
+	return id, ok
+}
+
+func GetEnumDef(t Type) *EnumDef {
+	idx := int(t - TypeEnumBase)
+	if idx < 0 || idx >= len(enumDefs) {
+		return nil
+	}
+	return &enumDefs[idx]
+}
+
+func IsEnumType(t Type) bool {
+	return t >= TypeEnumBase
+}
+
+func EnumName(t Type) string {
+	def := GetEnumDef(t)
+	if def == nil {
+		return "unknown"
+	}
+	return def.Name
+}
+
+func AllEnumNames() []string {
+	names := make([]string, 0, len(enumByName))
+	for name := range enumByName {
+		names = append(names, name)
+	}
+	return names
+}
+
+// EnumAccessExpr represents accessing an enum variant: Color.Red
+type EnumAccessExpr struct {
+	Pos      Pos
+	EnumName string
+	Variant  string
+	EnumType Type
+}
+
+func (e *EnumAccessExpr) exprNode() {}
 
 // Annotation constants
 const (

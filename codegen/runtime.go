@@ -34,3 +34,6 @@ var ExceptionRuntime string
 
 //go:embed cruntime/string_methods.c
 var StringMethodsRuntime string
+
+//go:embed cruntime/maps.c
+var MapRuntime string

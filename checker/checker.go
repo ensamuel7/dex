@@ -85,6 +85,21 @@ func (c *Checker) Check(program *ast.Program) error {
 		}
 	}
 
+	// Validate enum definitions
+	for _, ed := range program.Enums {
+		if seen[ed.Name] {
+			return fmt.Errorf("duplicate type name '%s'", ed.Name)
+		}
+		seen[ed.Name] = true
+		variantNames := map[string]bool{}
+		for _, v := range ed.Variants {
+			if variantNames[v] {
+				return fmt.Errorf("duplicate variant '%s' in enum '%s'", v, ed.Name)
+			}
+			variantNames[v] = true
+		}
+	}
+
 	// Register struct methods and constructor params
 	for _, sd := range program.Structs {
 		if len(sd.ConstructorParams) > 0 {

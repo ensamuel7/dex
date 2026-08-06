@@ -309,6 +309,99 @@ In single-file mode, privacy is tracked in the AST but not enforced (since all c
 
 ---
 
+## Enums
+
+Enums define named sets of integer constants.
+
+### Enum definition
+
+```dex
+enum Color {
+    Red
+    Green
+    Blue
+}
+```
+
+Variants are assigned sequential integer values starting at 0.
+
+### Enum usage
+
+```dex
+let c: Color = Color.Red
+
+if (c == Color.Green) {
+    fmt.print("green")
+}
+
+switch (c) {
+    case Color.Red: {
+        fmt.print("red")
+    }
+    case Color.Green, Color.Blue: {
+        fmt.print("not red")
+    }
+}
+```
+
+Enums are value types (integers) — no heap allocation or refcounting needed.
+
+---
+
+## Maps
+
+Maps are hash tables with typed keys and values. They are heap-allocated with reference counting.
+
+### Supported key types
+
+- `string`
+- `int`
+
+### Supported value types
+
+- `int`, `bool`, `string`, `long`, `double`, `char`
+
+### Map creation
+
+```dex
+let m: map[string, int] = {}
+let m2: map[int, string] = {}
+```
+
+### Method API
+
+```dex
+m.set("alice", 100)
+let v: int = m.get("alice")
+let exists: bool = m.has("alice")
+m.remove("alice")
+let n: int = m.len()
+m.clear()              // remove all entries
+let k: string[] = m.keys()
+let vals: int[] = m.values()
+```
+
+### Bracket syntax
+
+```dex
+m["bob"] = 200
+let v2: int = m["bob"]
+```
+
+### Map methods
+
+| Method         | Description                     | Returns      |
+|----------------|---------------------------------|--------------|
+| `.set(key, value)` | Set a key-value pair       | `void`       |
+| `.get(key)`    | Get value by key (zero if missing) | value type |
+| `.has(key)`    | Check if key exists             | `bool`       |
+| `.remove(key)` | Remove a key-value pair         | `void`       |
+| `.len()`       | Get number of entries           | `int`        |
+| `.keys()`      | Get array of all keys           | `key[]`      |
+| `.values()`    | Get array of all values         | `value[]`    |
+
+---
+
 ## Arrays
 
 ### Array literals

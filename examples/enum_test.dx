@@ -1,0 +1,69 @@
+import "fmt"
+
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+enum Direction {
+    North
+    South
+    East
+    West
+}
+
+fn main(): void {
+    // Basic enum creation and comparison
+    let c: Color = Color.Red
+    assert(c == Color.Red)
+    assert(c != Color.Green)
+    assert(c != Color.Blue)
+
+    // Assign different variant
+    let g: Color = Color.Green
+    assert(g == Color.Green)
+    assert(g != Color.Red)
+
+    // Enum in if statement
+    if (c == Color.Red) {
+        fmt.print("red")
+    }
+
+    // Enum comparison between same type
+    assert(c != g)
+
+    // Enum in switch statement
+    let d: Direction = Direction.East
+    switch (d) {
+        case Direction.North: {
+            assert(false)
+        }
+        case Direction.East: {
+            fmt.print("east")
+        }
+        case Direction.South, Direction.West: {
+            assert(false)
+        }
+    }
+
+    // Multiple enums in switch with default
+    let c2: Color = Color.Blue
+    switch (c2) {
+        case Color.Red: {
+            assert(false)
+        }
+        case Color.Green: {
+            assert(false)
+        }
+        default: {
+            fmt.print("blue")
+        }
+    }
+
+    // Enum reassignment
+    let mut: Color = Color.Red
+    mut = Color.Blue
+    assert(mut == Color.Blue)
+    assert(mut != Color.Red)
+}

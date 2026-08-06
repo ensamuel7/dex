@@ -1,0 +1,80 @@
+import "fmt"
+
+fn main(): void {
+    // String-keyed map with int values
+    let m: map[string, int] = {}
+    m.set("alice", 100)
+    m.set("bob", 200)
+
+    let v1: int = m.get("alice")
+    assert(v1 == 100)
+
+    let v2: int = m.get("bob")
+    assert(v2 == 200)
+
+    // Bracket syntax for set
+    m["charlie"] = 300
+    let v3: int = m["charlie"]
+    assert(v3 == 300)
+
+    // has
+    assert(m.has("alice"))
+    assert(!m.has("dave"))
+
+    // len
+    assert(m.len() == 3)
+
+    // remove
+    m.remove("bob")
+    assert(!m.has("bob"))
+    assert(m.len() == 2)
+
+    // overwrite existing key
+    m.set("alice", 999)
+    assert(m.get("alice") == 999)
+
+    // Int-keyed map with string values
+    let m2: map[int, string] = {}
+    m2[1] = "one"
+    m2[2] = "two"
+    assert(m2.has(1))
+    assert(m2.has(2))
+    assert(m2.len() == 2)
+
+    // Int-keyed map with int values
+    let m3: map[int, int] = {}
+    m3.set(10, 100)
+    m3.set(20, 200)
+    assert(m3.get(10) == 100)
+    assert(m3[20] == 200)
+    assert(m3.len() == 2)
+
+    // String-keyed map with bool values
+    let flags: map[string, bool] = {}
+    flags.set("active", true)
+    flags.set("admin", false)
+    assert(flags.get("active") == true)
+    assert(flags.get("admin") == false)
+
+    // keys and values
+    let m4: map[string, int] = {}
+    m4.set("x", 10)
+    m4.set("y", 20)
+    let k: string[] = m4.keys()
+    assert(k.len() == 2)
+    let vals: int[] = m4.values()
+    assert(vals.len() == 2)
+
+    // clear
+    m4.clear()
+    assert(m4.len() == 0)
+    assert(!m4.has("x"))
+    assert(!m4.has("y"))
+
+    // map works after clear
+    m4.set("z", 30)
+    assert(m4.len() == 1)
+    assert(m4.get("z") == 30)
+
+    fmt.print("all map tests passed")
+}

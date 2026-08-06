@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/stdlib"
@@ -78,6 +79,12 @@ func (g *Generator) cType(t ast.Type) string {
 			if ast.IsStructType(inner) {
 				return "Dex_" + ast.StructName(inner) + "*"
 			}
+		}
+		if ast.IsEnumType(t) {
+			return "Dex_" + ast.EnumName(t)
+		}
+		if ast.IsMapType(t) {
+			return "DexMap_" + g.mapSuffix(t) + "*"
 		}
 		return "void"
 	}
@@ -275,6 +282,41 @@ func (g *Generator) structArrayCleanupFunc(elemType ast.Type) string {
 	return "NULL"
 }
 
+// mapSuffix returns the suffix for map C functions (e.g. "str_int")
+func (g *Generator) mapSuffix(t ast.Type) string {
+	return g.mapKeySuffix(ast.MapKeyType(t)) + "_" + g.mapValSuffix(ast.MapValueType(t))
+}
+
+func (g *Generator) mapKeySuffix(t ast.Type) string {
+	switch t {
+	case ast.TypeString:
+		return "str"
+	case ast.TypeInt:
+		return "int"
+	default:
+		return "int"
+	}
+}
+
+func (g *Generator) mapValSuffix(t ast.Type) string {
+	switch t {
+	case ast.TypeInt:
+		return "int"
+	case ast.TypeBool:
+		return "bool"
+	case ast.TypeString:
+		return "str"
+	case ast.TypeLong:
+		return "long"
+	case ast.TypeDouble:
+		return "double"
+	case ast.TypeChar:
+		return "char"
+	default:
+		return "int"
+	}
+}
+
 // typeOfExpr returns the type of an expression based on available information.
 func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 	switch e := expr.(type) {
@@ -303,6 +345,45 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			return ast.FuncTypeOf(paramTypes, fn.ReturnType)
 		}
 	case *ast.CallExpr:
+		// Map method calls
+		if e.Module != "" {
+			if mapType, ok := g.mapVars[e.Module]; ok {
+				switch e.Name {
+				case "get":
+					return ast.MapValueType(mapType)
+				case "has":
+					return ast.TypeBool
+				case "len":
+					return ast.TypeInt
+				case "set", "remove", "clear":
+					return ast.TypeVoid
+				case "keys":
+					return ast.ArrayTypeOf(ast.MapKeyType(mapType))
+				case "values":
+					return ast.ArrayTypeOf(ast.MapValueType(mapType))
+				}
+			}
+			// Check field chain for map method calls (e.g., self.myMap.get("key"))
+			if strings.Contains(e.Module, ".") {
+				chainType := g.resolveFieldChainType(e.Module)
+				if ast.IsMapType(chainType) {
+					switch e.Name {
+					case "get":
+						return ast.MapValueType(chainType)
+					case "has":
+						return ast.TypeBool
+					case "len":
+						return ast.TypeInt
+					case "set", "remove", "clear":
+						return ast.TypeVoid
+					case "keys":
+						return ast.ArrayTypeOf(ast.MapKeyType(chainType))
+					case "values":
+						return ast.ArrayTypeOf(ast.MapValueType(chainType))
+					}
+				}
+			}
+		}
 		// String method calls
 		if e.Module != "" && g.strVars[e.Module] {
 			switch e.Name {
@@ -373,6 +454,9 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		return g.typeOfExpr(e.Operand)
 	case *ast.IndexExpr:
 		if ident, ok := e.Array.(*ast.Ident); ok {
+			if mapType, ok := g.mapVars[ident.Name]; ok {
+				return ast.MapValueType(mapType)
+			}
 			if arrType, ok := g.arrVars[ident.Name]; ok {
 				return ast.ElementType(arrType)
 			}
@@ -409,6 +493,10 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		if ast.IsTaskType(srcType) {
 			return ast.TaskReturnType(srcType)
 		}
+	case *ast.EnumAccessExpr:
+		return e.EnumType
+	case *ast.MapLitExpr:
+		return e.MapType
 	}
 	return ast.TypeVoid
 }

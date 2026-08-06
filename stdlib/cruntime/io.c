@@ -1,4 +1,13 @@
-// DexLang IO runtime — stdin input functions
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+static void dex_io_flush_line(void) {
+    int ch;
+    while ((ch = getchar()) != '\n' && ch != EOF) {}
+}
 
 static void dex_io_prompt(const char* msg) {
     printf("%s", msg);
@@ -13,52 +22,34 @@ static char* dex_io_read_line(void) {
         free(line);
         return strdup("");
     }
-    // Strip trailing newline
-    if (nread > 0 && line[nread - 1] == '\n') {
-        line[nread - 1] = '\0';
-        nread--;
-    }
-    // Strip trailing carriage return (Windows line endings)
-    if (nread > 0 && line[nread - 1] == '\r') {
-        line[nread - 1] = '\0';
-        nread--;
-    }
+    if (nread > 0 && line[nread - 1] == '\n') line[--nread] = '\0';
+    if (nread > 0 && line[nread - 1] == '\r') line[--nread] = '\0';
     return line;
 }
 
 static int dex_io_read_int(void) {
     int value = 0;
-    if (scanf("%d", &value) != 1) {
-        value = 0;
-    }
-    // Consume trailing newline
-    int ch;
-    while ((ch = getchar()) != '\n' && ch != EOF) {}
+    scanf("%d", &value);
+    dex_io_flush_line();
     return value;
 }
 
 static double dex_io_read_double(void) {
     double value = 0.0;
-    if (scanf("%lf", &value) != 1) {
-        value = 0.0;
-    }
-    // Consume trailing newline
-    int ch;
-    while ((ch = getchar()) != '\n' && ch != EOF) {}
+    scanf("%lf", &value);
+    dex_io_flush_line();
     return value;
 }
 
 static int dex_io_read_bool(void) {
     char buf[16];
     if (scanf("%15s", buf) != 1) {
+        dex_io_flush_line();
         return 0;
     }
-    // Consume trailing newline
-    int ch;
-    while ((ch = getchar()) != '\n' && ch != EOF) {}
-    // Case-insensitive comparison
+    dex_io_flush_line();
     for (int i = 0; buf[i]; i++) {
         buf[i] = tolower((unsigned char)buf[i]);
     }
-    return strcmp(buf, "true") == 0 ? 1 : 0;
+    return strcmp(buf, "true") == 0;
 }

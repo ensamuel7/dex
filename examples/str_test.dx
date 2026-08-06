@@ -1,0 +1,39 @@
+import "str"
+
+fn main(): void {
+    // fromInt
+    let s1: string = str.fromInt(42)
+    assert(s1 == "42")
+
+    // fromLong
+    let s2: string = str.fromLong(1000000)
+    assert(s2 == "1000000")
+
+    // fromDouble
+    let s3: string = str.fromDouble(3.14)
+    assert(s3 == "3.14")
+
+    // fromBool
+    let s4: string = str.fromBool(true)
+    assert(s4 == "true")
+    let s5: string = str.fromBool(false)
+    assert(s5 == "false")
+
+    // toInt
+    let n: int = str.toInt("42")
+    assert(n == 42)
+
+    // toLong
+    let l: long = str.toLong("1000000")
+    assert(l == 1000000)
+
+    // toDouble
+    let d: double = str.toDouble("3.14")
+    assert(d == 3.14)
+
+    // Round-trip: int -> string -> int
+    let original: int = 123
+    let asStr: string = str.fromInt(original)
+    let back: int = str.toInt(asStr)
+    assert(back == original)
+}

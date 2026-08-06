@@ -54,6 +54,9 @@ fn main(): void {
 | `catch`    | Handle an exception in a try block   |
 | `finally`  | Cleanup block that always runs       |
 | `throw`    | Throw an exception                   |
+| `switch`   | Multi-way branch statement           |
+| `case`     | Case branch in a switch              |
+| `default`  | Default branch in a switch           |
 | `int`      | Signed integer type                  |
 | `long`     | Signed long integer type             |
 | `double`   | Double-precision floating point type |
@@ -345,6 +348,36 @@ items.push(20)
 let count: int = items.len()  // 2
 ```
 
+### String methods
+
+String variables have built-in methods for common text operations.
+
+| Method                     | Description                                  | Returns    |
+|----------------------------|----------------------------------------------|------------|
+| `.len()`                   | Get the length of the string                 | `int`      |
+| `.contains(sub)`           | Check if string contains a substring         | `bool`     |
+| `.startsWith(prefix)`      | Check if string starts with prefix           | `bool`     |
+| `.endsWith(suffix)`        | Check if string ends with suffix             | `bool`     |
+| `.indexOf(sub)`            | Find index of substring (-1 if not found)    | `int`      |
+| `.toLower()`               | Return lowercase copy                        | `string`   |
+| `.toUpper()`               | Return uppercase copy                        | `string`   |
+| `.trim()`                  | Remove leading/trailing whitespace           | `string`   |
+| `.split(delimiter)`        | Split into array by delimiter                | `string[]` |
+| `.substring(start, end)`   | Extract substring (start inclusive, end exclusive) | `string`   |
+| `.replace(old, new)`       | Replace all occurrences                      | `string`   |
+| `.charAt(index)`           | Get character at index                       | `char`     |
+
+```dex
+let s: string = "Hello, World"
+let n: int = s.len()              // 12
+let b: bool = s.contains("World") // true
+let lo: string = s.toLower()      // "hello, world"
+let parts: string[] = s.split(",")// ["Hello", " World"]
+let sub: string = s.substring(0, 5) // "Hello"
+let r: string = s.replace("World", "Dex") // "Hello, Dex"
+let c: char = s.charAt(0)         // 'H'
+```
+
 ---
 
 ## Functions
@@ -510,6 +543,42 @@ for(let i = 0; i < 10; i++) {
 ```
 
 `break` and `continue` work inside `while`, `for`, and `foreach` loops. Using them outside a loop is a compile error.
+
+### switch
+
+Multi-way branching on a value. Supports `int`, `string`, `char`, `long`, `double`, and `bool` tag types. Cases use colon syntax with brace-delimited bodies. Multiple values per case are separated by commas.
+
+```dex
+switch (action) {
+    case "BootNotification": {
+        fmt.print("Boot!")
+    }
+    case "Heartbeat", "StatusNotification": {
+        fmt.print("Alive")
+    }
+    default: {
+        fmt.print("Unknown")
+    }
+}
+```
+
+Integer switch:
+
+```dex
+switch (code) {
+    case 200: {
+        fmt.print("OK")
+    }
+    case 404: {
+        fmt.print("Not Found")
+    }
+    default: {
+        fmt.print("Other")
+    }
+}
+```
+
+The `default` branch is optional. Each case body has its own scope. There is no fallthrough — only the matched case executes.
 
 ---
 
@@ -1048,6 +1117,29 @@ struct ExecResult {
 | `env`    | `env(name: string): string`     | Read an environment variable (empty string if unset) |
 | `exit`   | `exit(code: int): void`         | Exit the process with the given status code        |
 | `exec`   | `exec(command: string): ExecResult` | Run a shell command and return the result      |
+
+### str
+
+Type conversion utilities for converting between strings and numeric/boolean types.
+
+```dex
+import "str"
+
+let s: string = str.fromInt(42)       // "42"
+let n: int = str.toInt("42")          // 42
+let d: double = str.toDouble("3.14")  // 3.14
+let b: string = str.fromBool(true)    // "true"
+```
+
+| Function     | Signature                          | Description                           |
+|--------------|------------------------------------|---------------------------------------|
+| `fromInt`    | `fromInt(n: int): string`          | Convert an integer to string          |
+| `fromLong`   | `fromLong(n: long): string`        | Convert a long to string              |
+| `fromDouble` | `fromDouble(d: double): string`    | Convert a double to string            |
+| `fromBool`   | `fromBool(b: bool): string`        | Convert a boolean to `"true"`/`"false"` |
+| `toInt`      | `toInt(s: string): int`            | Parse a string as an integer          |
+| `toLong`     | `toLong(s: string): long`          | Parse a string as a long              |
+| `toDouble`   | `toDouble(s: string): double`      | Parse a string as a double            |
 
 ---
 

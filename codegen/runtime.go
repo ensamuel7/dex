@@ -31,3 +31,6 @@ var OptionalRuntime string
 
 //go:embed cruntime/exceptions.c
 var ExceptionRuntime string
+
+//go:embed cruntime/string_methods.c
+var StringMethodsRuntime string

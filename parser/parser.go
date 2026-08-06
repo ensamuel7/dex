@@ -511,6 +511,8 @@ func (p *Parser) parseStmt() (ast.Stmt, error) {
 		return p.parseTryStmt()
 	case token.TokenThrow:
 		return p.parseThrowStmt()
+	case token.TokenSwitch:
+		return p.parseSwitchStmt()
 	default:
 		return p.parseExprStmt()
 	}
@@ -966,6 +968,89 @@ func (p *Parser) parseThrowStmt() (ast.Stmt, error) {
 	}
 
 	return &ast.ThrowStmt{Pos: pos, Value: value}, nil
+}
+
+func (p *Parser) parseSwitchStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
+	p.advance() // consume 'switch'
+
+	if err := p.expect(token.TokenLParen); err != nil {
+		return nil, err
+	}
+
+	tag, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.expect(token.TokenRParen); err != nil {
+		return nil, err
+	}
+
+	if err := p.expect(token.TokenLBrace); err != nil {
+		return nil, err
+	}
+
+	var cases []ast.SwitchCase
+	var defaultBody []ast.Stmt
+
+	for !p.check(token.TokenRBrace) && !p.atEnd() {
+		if p.check(token.TokenCase) {
+			casePos := p.nodePos()
+			p.advance() // consume 'case'
+
+			// Parse one or more comma-separated values
+			var values []ast.Expr
+			for {
+				val, err := p.parseExpr(0)
+				if err != nil {
+					return nil, err
+				}
+				values = append(values, val)
+				if !p.match(token.TokenComma) {
+					break
+				}
+			}
+
+			if err := p.expect(token.TokenColon); err != nil {
+				return nil, err
+			}
+
+			if err := p.expect(token.TokenLBrace); err != nil {
+				return nil, err
+			}
+
+			body, err := p.parseBlock()
+			if err != nil {
+				return nil, err
+			}
+
+			cases = append(cases, ast.SwitchCase{Pos: casePos, Values: values, Body: body})
+		} else if p.check(token.TokenDefault) {
+			p.advance() // consume 'default'
+
+			if err := p.expect(token.TokenColon); err != nil {
+				return nil, err
+			}
+
+			if err := p.expect(token.TokenLBrace); err != nil {
+				return nil, err
+			}
+
+			defaultBody, err = p.parseBlock()
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, p.errorf("expected 'case' or 'default' in switch statement, got '%s'", p.current().Value)
+		}
+	}
+
+	if err := p.expect(token.TokenRBrace); err != nil {
+		return nil, err
+	}
+
+	return &ast.SwitchStmt{Pos: pos, Tag: tag, Cases: cases, Default: defaultBody}, nil
 }
 
 func (p *Parser) parseExprStmt() (ast.Stmt, error) {

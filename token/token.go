@@ -78,6 +78,9 @@ const (
 	TokenCatch
 	TokenFinally
 	TokenThrow
+	TokenSwitch
+	TokenCase
+	TokenDefault
 	TokenEOF
 )
 
@@ -236,6 +239,12 @@ func (k TokenKind) String() string {
 		return "finally"
 	case TokenThrow:
 		return "throw"
+	case TokenSwitch:
+		return "switch"
+	case TokenCase:
+		return "case"
+	case TokenDefault:
+		return "default"
 	case TokenEOF:
 		return "end of file"
 	default:
@@ -278,4 +287,7 @@ var Keywords = map[string]TokenKind{
 	"catch":    TokenCatch,
 	"finally":  TokenFinally,
 	"throw":    TokenThrow,
+	"switch":   TokenSwitch,
+	"case":     TokenCase,
+	"default":  TokenDefault,
 }

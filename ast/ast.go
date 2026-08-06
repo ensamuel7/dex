@@ -552,6 +552,23 @@ type ThrowStmt struct {
 
 func (s *ThrowStmt) stmtNode() {}
 
+// SwitchCase — a single case arm in a switch statement
+type SwitchCase struct {
+	Pos    Pos
+	Values []Expr // one or more match values (e.g. "foo", "bar")
+	Body   []Stmt
+}
+
+// SwitchStmt — switch (tag) { case val: { ... } default: { ... } }
+type SwitchStmt struct {
+	Pos     Pos
+	Tag     Expr
+	Cases   []SwitchCase
+	Default []Stmt // nil if no default
+}
+
+func (s *SwitchStmt) stmtNode() {}
+
 // RegisterExceptionType registers the built-in Exception struct type if not already registered.
 func RegisterExceptionType() {
 	if _, exists := LookupStructType("Exception"); !exists {

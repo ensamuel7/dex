@@ -29,7 +29,7 @@ func init() {
 			},
 			// os.exec is special-cased in checker/codegen (like http.get)
 			"exec": {
-				Params:     nil,
+				Params:     nil, // special-cased in checker/codegen
 				ParamNames: []string{"command"},
 				ReturnType: ast.TypeVoid, // actual return type resolved by checker
 				CName:      "",
@@ -47,7 +47,6 @@ func init() {
 				},
 			},
 		},
-		CRuntime:  osRuntime,
-		CIncludes: "#include <stdlib.h>\n#include <stdio.h>\n#include <string.h>\n",
+		CRuntime: osRuntime,
 	})
 }

@@ -1,0 +1,57 @@
+fn main(): void {
+    let s: string = "Hello, World"
+
+    // len
+    assert(s.len() == 12)
+
+    // contains
+    assert(s.contains("World") == true)
+    assert(s.contains("xyz") == false)
+
+    // startsWith / endsWith
+    assert(s.startsWith("Hello") == true)
+    assert(s.startsWith("World") == false)
+    assert(s.endsWith("World") == true)
+    assert(s.endsWith("Hello") == false)
+
+    // indexOf
+    assert(s.indexOf("World") == 7)
+    assert(s.indexOf("xyz") == -1)
+
+    // toLower / toUpper
+    let lo: string = s.toLower()
+    assert(lo == "hello, world")
+    let up: string = s.toUpper()
+    assert(up == "HELLO, WORLD")
+
+    // trim
+    let padded: string = "  hello  "
+    let trimmed: string = padded.trim()
+    assert(trimmed == "hello")
+
+    // substring
+    let sub: string = s.substring(0, 5)
+    assert(sub == "Hello")
+
+    // replace
+    let r: string = s.replace("World", "Dex")
+    assert(r == "Hello, Dex")
+
+    // charAt
+    let c: char = s.charAt(0)
+    assert(c == 'H')
+
+    // split
+    let csv: string = "a,b,c"
+    let parts: string[] = csv.split(",")
+    assert(parts.len() == 3)
+    assert(parts[0] == "a")
+    assert(parts[1] == "b")
+    assert(parts[2] == "c")
+
+    // empty string edge cases
+    let empty: string = ""
+    assert(empty.len() == 0)
+    assert(empty.contains("") == true)
+    assert(empty.trim() == "")
+}

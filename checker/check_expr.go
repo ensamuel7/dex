@@ -1348,7 +1348,11 @@ func typeName(t ast.Type) string {
 			return typeName(ast.OptionalInnerType(t)) + "?"
 		}
 		if ast.IsStructArrayType(t) {
-			return ast.StructName(ast.ElementType(t)) + "[]"
+			elemType := ast.ElementType(t)
+			if ast.IsEnumType(elemType) {
+				return ast.EnumName(elemType) + "[]"
+			}
+			return ast.StructName(elemType) + "[]"
 		}
 		if ast.IsStructType(t) {
 			return ast.StructName(t)

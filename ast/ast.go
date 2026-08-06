@@ -344,6 +344,9 @@ func ArrayTypeOf(elem Type) Type {
 		if IsStructType(elem) {
 			return StructArrayTypeOf(elem)
 		}
+		if IsEnumType(elem) {
+			return StructArrayTypeOf(elem)
+		}
 		return TypeVoid
 	}
 }

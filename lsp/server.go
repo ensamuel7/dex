@@ -412,6 +412,8 @@ func (s *Server) diagnose(uri string, text string) {
 	ast.ResetOptionalTypes()
 	ast.ResetRefTypes()
 	ast.ResetFuncTypes()
+	ast.ResetMapTypes()
+	ast.ResetEnumTypes()
 	stdlib.RegisterAllModuleTypes()
 	ast.RegisterExceptionType()
 
@@ -554,6 +556,13 @@ func typeName(t ast.Type) string {
 	default:
 		if ast.IsOptionalType(t) {
 			return typeName(ast.OptionalInnerType(t)) + "?"
+		}
+		if ast.IsStructArrayType(t) {
+			elemType := ast.ElementType(t)
+			if ast.IsEnumType(elemType) {
+				return ast.EnumName(elemType) + "[]"
+			}
+			return ast.StructName(elemType) + "[]"
 		}
 		if ast.IsStructType(t) {
 			return ast.StructName(t)

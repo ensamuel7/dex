@@ -66,4 +66,24 @@ fn main(): void {
     mut = Color.Blue
     assert(mut == Color.Blue)
     assert(mut != Color.Red)
+
+    // Enum arrays
+    let colors: Color[] = []
+    colors.push(Color.Red)
+    colors.push(Color.Green)
+    colors.push(Color.Blue)
+    assert(colors.len() == 3)
+
+    let first: Color = colors[0]
+    assert(first == Color.Red)
+    assert(colors[1] == Color.Green)
+    assert(colors[2] == Color.Blue)
+
+    // Enum array pop and remove
+    colors.remove(1)
+    assert(colors.len() == 2)
+    assert(colors[0] == Color.Red)
+    assert(colors[1] == Color.Blue)
+
+    fmt.print("all enum tests passed")
 }

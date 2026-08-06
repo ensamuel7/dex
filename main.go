@@ -334,6 +334,9 @@ func build(filename string) (string, error) {
 	ast.ResetStructArrayTypes()
 	ast.ResetOptionalTypes()
 	ast.ResetRefTypes()
+	ast.ResetFuncTypes()
+	ast.ResetMapTypes()
+	ast.ResetEnumTypes()
 
 	// Register module-provided struct types (e.g. HttpResponse)
 	stdlib.RegisterAllModuleTypes()

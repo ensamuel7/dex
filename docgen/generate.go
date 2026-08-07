@@ -195,6 +195,8 @@ func Generate(projectRoot string) (string, error) {
 				paramStr = "int|long|double|string|bool"
 			} else if name == "json" && fnName == "set" {
 				paramStr = "string, string, int|long|double|string|bool"
+			} else if name == "json" && fnName == "arrayPush" {
+				paramStr = "arr: string, value: int|long|double|string|bool"
 			} else if name == "db" && fnName == "col" {
 				paramStr = "int, int"
 				retType = "int|string|double|bool"
@@ -255,6 +257,10 @@ func Generate(projectRoot string) (string, error) {
 					retType = "string"
 				case "close":
 					paramStr = "conn: Conn"
+				case "handleConnect":
+					paramStr = "handler: fn(ws.Conn, string): void"
+				case "handleDisconnect":
+					paramStr = "handler: fn(ws.Conn): void"
 				}
 			} else {
 				params := make([]string, len(fd.Params))

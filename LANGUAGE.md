@@ -1065,8 +1065,37 @@ obj = json.set(obj, "pi", 3.14)
 | `getBool`    | `getBool(json: string, key: string): bool`                                      | Get a boolean value by key     |
 | `getDouble`  | `getDouble(json: string, key: string): double`                                  | Get a double value by key      |
 | `getLong`    | `getLong(json: string, key: string): long`                                      | Get a long integer value by key |
+| `arrayNew`     | `arrayNew(): string`                                                          | Create empty JSON array `[]`   |
+| `arrayLen`     | `arrayLen(json: string): int`                                                 | Get length of a JSON array     |
+| `arrayGet`     | `arrayGet(json: string, index: int): string`                                  | Get element at index (strings unquoted) |
+| `arrayGetRaw`  | `arrayGetRaw(json: string, index: int): string`                               | Get raw element at index (strings keep quotes) |
+| `arrayPush`    | `arrayPush(arr: string, value: string\|int\|bool\|long\|double): string`      | Append a primitive value to a JSON array |
+| `arrayPushObj` | `arrayPushObj(arr: string, obj: string): string`                              | Append a JSON object/array to a JSON array |
 
 `set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
+
+**JSON Arrays** — for working with JSON arrays as strings (useful for protocols like OCPP that use JSON arrays as message format):
+
+```dex
+// Build a JSON array
+let arr: string = json.arrayNew()
+arr = json.arrayPush(arr, 2)
+arr = json.arrayPush(arr, "abc123")
+arr = json.arrayPush(arr, "BootNotification")
+let payload: string = json.new()
+payload = json.set(payload, "vendor", "Dex")
+arr = json.arrayPushObj(arr, payload)
+// arr is now: [2, "abc123", "BootNotification", {"vendor": "Dex"}]
+
+// Parse a JSON array
+let msgType: string = json.arrayGet(arr, 0)    // "2"
+let msgId: string = json.arrayGet(arr, 1)      // "abc123"
+let action: string = json.arrayGet(arr, 2)     // "BootNotification"
+let body: string = json.arrayGet(arr, 3)       // {"vendor": "Dex"}
+let len: int = json.arrayLen(arr)              // 4
+```
+
+**JSON Objects:**
 
 ```dex
 let nums: int[] = [1, 2, 3]
@@ -1185,6 +1214,9 @@ let elapsed: long = time.now() - start
 | `setTimeout`    | `setTimeout(fn, ms: int): void`  | Call a function once after `ms` milliseconds     |
 | `setInterval`   | `setInterval(fn, ms: int): int`  | Call a function every `ms` milliseconds; returns timer ID |
 | `clearInterval` | `clearInterval(id: int): void`   | Stop a repeating interval by timer ID            |
+| `format`        | `format(timestamp: long, layout: string): string` | Format a Unix timestamp (seconds). Use `"iso8601"` for ISO 8601 format, or strftime patterns. |
+| `isoNow`        | `isoNow(): string`               | Current time as ISO 8601 string (UTC)            |
+| `unixNow`       | `unixNow(): long`                | Current Unix timestamp in seconds (wall clock)   |
 
 **Timer/Interval example:**
 
@@ -1222,29 +1254,44 @@ import "ws"
 struct Conn {
   fd: int          // socket file descriptor
   isServer: int    // 1 if server-side, 0 if client-side
+  ssl: long        // SSL pointer (0 if plain ws://)
 }
 ```
 
 #### Server
 
-| Function        | Signature                         | Description                               |
-|-----------------|-----------------------------------|-------------------------------------------|
-| `handleMessage` | `handleMessage(fn): void`         | Register message handler                  |
-| `listen`        | `listen(port: int): void`         | Start WebSocket server on port            |
+| Function           | Signature                         | Description                               |
+|--------------------|-----------------------------------|-------------------------------------------|
+| `handleMessage`    | `handleMessage(fn): void`         | Register message handler                  |
+| `handleConnect`    | `handleConnect(fn): void`         | Register connect handler (called with path) |
+| `handleDisconnect` | `handleDisconnect(fn): void`      | Register disconnect handler               |
+| `setProtocol`      | `setProtocol(protocol: string): void` | Set WebSocket subprotocol for handshakes |
+| `listen`           | `listen(port: int): void`         | Start WebSocket server on port            |
 
-Message handlers must take `(conn: ws.Conn, msg: string)` and return `void`.
+Message handlers must take `(conn: ws.Conn, msg: string)` and return `void`. Connect handlers take `(conn: ws.Conn, path: string)`. Disconnect handlers take `(conn: ws.Conn)`.
 
 ```dex
 import "ws"
 import "fmt"
+
+fn onConnect(conn: ws.Conn, path: string): void {
+  fmt.print("client connected on path: " + path)
+}
 
 fn onMessage(conn: ws.Conn, msg: string): void {
   fmt.print("got: " + msg)
   ws.send(conn, "echo: " + msg)
 }
 
+fn onDisconnect(conn: ws.Conn): void {
+  fmt.print("client disconnected")
+}
+
 fn main(): void {
+  ws.setProtocol("ocpp1.6")
+  ws.handleConnect(onConnect)
   ws.handleMessage(onMessage)
+  ws.handleDisconnect(onDisconnect)
   ws.listen(9090)
 }
 ```
@@ -1253,7 +1300,7 @@ fn main(): void {
 
 | Function  | Signature                          | Description                                |
 |-----------|------------------------------------|--------------------------------------------|
-| `connect` | `connect(url: string): ws.Conn`    | Connect to a WebSocket server              |
+| `connect` | `connect(url: string): ws.Conn`    | Connect to a WebSocket server (`ws://` or `wss://`) |
 | `send`    | `send(conn: ws.Conn, msg: string): void` | Send text message on connection      |
 | `receive` | `receive(conn: ws.Conn): string`   | Receive text message (blocking)            |
 | `close`   | `close(conn: ws.Conn): void`       | Close connection                           |
@@ -1269,7 +1316,24 @@ fn main(): void {
 }
 ```
 
-The WebSocket implementation supports text frames, automatic ping/pong handling, and proper client-side frame masking per RFC 6455. Each server connection runs on a separate thread.
+The `connect` function supports both `ws://` (plain) and `wss://` (TLS). TLS is handled via OpenSSL when available; if OpenSSL is not installed, `ws://` still works. For production deployments, a common pattern is to use a reverse proxy (nginx/caddy) for TLS termination.
+
+The WebSocket implementation supports text frames, automatic ping/pong handling, and proper client-side frame masking per RFC 6455.
+
+### crypto
+
+Cryptographic utility functions.
+
+```dex
+import "crypto"
+
+let id: string = crypto.uuid()
+// e.g. "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
+```
+
+| Function | Signature         | Description                          |
+|----------|-------------------|--------------------------------------|
+| `uuid`   | `uuid(): string`  | Generate a random UUID v4 string     |
 
 ### io
 

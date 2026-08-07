@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <netinet/in.h>
@@ -77,110 +79,226 @@ static const char* dex_http_status_text(int code) {
     }
 }
 
-static void dex_handle_connection(int client_fd) {
-    char buf[8192];
+/* ── HTTP connection state machine (event-loop driven) ────────────── */
 
-    for (;;) {
-        int n = (int)read(client_fd, buf, sizeof(buf) - 1);
-        if (n <= 0) break;
-        buf[n] = '\0';
+typedef enum {
+    HTTP_READING_HEADERS,
+    HTTP_READING_BODY,
+    HTTP_DISPATCHED,
+    HTTP_WRITING,
+    HTTP_DONE
+} DexHttpState;
 
-        // Parse method and path from request line
-        char method[16] = {0};
-        char raw_path[2048] = {0};
-        sscanf(buf, "%15s %2047s", method, raw_path);
+typedef struct DexHttpConn {
+    int           fd;
+    DexHttpState  state;
 
-        // Split path and query string at '?'
-        char path[2048] = {0};
-        char query[2048] = {0};
-        char* qmark = strchr(raw_path, '?');
-        if (qmark) {
-            size_t plen = (size_t)(qmark - raw_path);
-            memcpy(path, raw_path, plen);
-            path[plen] = '\0';
-            strncpy(query, qmark + 1, sizeof(query) - 1);
-        } else {
-            strncpy(path, raw_path, sizeof(path) - 1);
-        }
+    /* Read buffer (request accumulation) */
+    char*         read_buf;
+    int           read_len;
+    int           read_cap;
 
-        // Check for keep-alive (HTTP/1.1 defaults to keep-alive)
-        int keep_alive = (strstr(buf, "HTTP/1.1") != NULL);
-        if (strstr(buf, "Connection: close")) keep_alive = 0;
+    /* Parsed request fields (populated after headers complete) */
+    char          method[16];
+    char          path[2048];
+    char          query[2048];
+    int           content_length;
+    int           headers_end;     /* offset of body start in read_buf */
+    int           keep_alive;
 
-        // Parse Content-Length to read body
-        char body_buf[4096] = {0};
-        const char* cl_header = strstr(buf, "Content-Length:");
-        if (!cl_header) cl_header = strstr(buf, "content-length:");
-        if (cl_header) {
-            int content_length = atoi(cl_header + 15);
-            if (content_length > 0 && content_length < (int)sizeof(body_buf)) {
-                // Find end of headers (\r\n\r\n)
-                const char* body_start = strstr(buf, "\r\n\r\n");
-                if (body_start) {
-                    body_start += 4;
-                    int already_read = n - (int)(body_start - buf);
-                    if (already_read > 0) {
-                        int to_copy = already_read < content_length ? already_read : content_length;
-                        memcpy(body_buf, body_start, to_copy);
-                        // Read remaining body if needed
-                        int remaining = content_length - to_copy;
-                        if (remaining > 0 && to_copy + remaining < (int)sizeof(body_buf)) {
-                            int r = (int)read(client_fd, body_buf + to_copy, remaining);
-                            if (r > 0) body_buf[to_copy + r] = '\0';
-                        }
-                        body_buf[content_length] = '\0';
-                    }
-                }
-            }
-        }
+    /* Write buffer (response) */
+    char*         write_buf;
+    int           write_len;
+    int           write_pos;       /* how much has been flushed */
 
-        // Build HttpRequest struct
-        Dex_HttpRequest req;
-        req.method = dex_string_from_lit(method);
-        req.path = dex_string_from_lit(path);
-        req.body = dex_string_from_lit(body_buf);
-        req.query = dex_string_from_lit(query);
+    /* Linked list for completed queue */
+    struct DexHttpConn* next;
+} DexHttpConn;
 
-        // Match route (compare against path without query string)
-        int matched = 0;
-        for (int i = 0; i < dex_route_count; i++) {
-            if (strcmp(method, dex_routes[i].method) == 0 &&
-                strcmp(path, dex_routes[i].path) == 0) {
-                Dex_HttpResponse resp = dex_routes[i].handler(req);
-                const char* status = dex_http_status_text(resp.statusCode);
-                const char* ct = "application/json";
-                if (resp.contentType && resp.contentType->data[0] != '\0') {
-                    ct = resp.contentType->data;
-                }
-                dex_send_response(client_fd, status, resp.body->data, ct, keep_alive);
-                if (resp.contentType) dex_release(resp.contentType);
-                dex_release(resp.body);
-                matched = 1;
-                break;
-            }
-        }
+/* Global event-loop state for HTTP server */
+static DexEventLoop*  dex_http_loop  = NULL;
+static DexThreadPool* dex_http_pool  = NULL;
+static DexNotifyPipe  dex_http_notify;
 
-        // Release request strings
-        dex_release(req.method);
-        dex_release(req.path);
-        dex_release(req.body);
-        dex_release(req.query);
+/* Completed connections queue (worker → event loop) */
+static DexHttpConn*   dex_http_completed_head = NULL;
+static pthread_mutex_t dex_http_completed_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-        if (!matched) {
-            dex_send_response(client_fd, "404 Not Found",
-                "{\"error\": \"Not Found\"}", "application/json", keep_alive);
-        }
+/* Connection table indexed by fd */
+#define DEX_HTTP_MAX_FD 65536
+static DexHttpConn*   dex_http_conn_table[DEX_HTTP_MAX_FD];
 
-        if (!keep_alive) break;
+static DexHttpConn* dex_http_conn_new(int fd) {
+    DexHttpConn* conn = (DexHttpConn*)calloc(1, sizeof(DexHttpConn));
+    conn->fd = fd;
+    conn->state = HTTP_READING_HEADERS;
+    conn->read_cap = 8192;
+    conn->read_buf = (char*)malloc(conn->read_cap);
+    conn->read_len = 0;
+    conn->content_length = -1;
+    conn->headers_end = -1;
+    conn->keep_alive = 1;
+    if (fd >= 0 && fd < DEX_HTTP_MAX_FD) {
+        dex_http_conn_table[fd] = conn;
     }
-    close(client_fd);
+    return conn;
 }
 
-static void* dex_worker(void* arg) {
-    int client_fd = *(int*)arg;
-    free(arg);
-    dex_handle_connection(client_fd);
-    return NULL;
+static void dex_http_conn_free(DexHttpConn* conn) {
+    if (!conn) return;
+    if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD) {
+        dex_http_conn_table[conn->fd] = NULL;
+    }
+    free(conn->read_buf);
+    free(conn->write_buf);
+    free(conn);
+}
+
+static void dex_http_conn_reset(DexHttpConn* conn) {
+    /* Reset for keep-alive: reuse fd and buffers */
+    conn->state = HTTP_READING_HEADERS;
+    conn->read_len = 0;
+    conn->content_length = -1;
+    conn->headers_end = -1;
+    conn->keep_alive = 1;
+    memset(conn->method, 0, sizeof(conn->method));
+    memset(conn->path, 0, sizeof(conn->path));
+    memset(conn->query, 0, sizeof(conn->query));
+    free(conn->write_buf);
+    conn->write_buf = NULL;
+    conn->write_len = 0;
+    conn->write_pos = 0;
+}
+
+/* Try to parse headers from the read buffer. Returns 1 if complete. */
+static int dex_http_try_parse_headers(DexHttpConn* conn) {
+    /* Look for \r\n\r\n */
+    char* end = NULL;
+    for (int i = 0; i <= conn->read_len - 4; i++) {
+        if (conn->read_buf[i] == '\r' && conn->read_buf[i+1] == '\n' &&
+            conn->read_buf[i+2] == '\r' && conn->read_buf[i+3] == '\n') {
+            end = conn->read_buf + i;
+            break;
+        }
+    }
+    if (!end) return 0;
+
+    conn->headers_end = (int)(end - conn->read_buf) + 4;
+
+    /* Null-terminate for parsing (temporary) */
+    char save = conn->read_buf[conn->headers_end];
+    conn->read_buf[conn->headers_end] = '\0';
+
+    /* Parse method and path from request line */
+    char raw_path[2048] = {0};
+    sscanf(conn->read_buf, "%15s %2047s", conn->method, raw_path);
+
+    /* Split path and query at '?' */
+    char* qmark = strchr(raw_path, '?');
+    if (qmark) {
+        size_t plen = (size_t)(qmark - raw_path);
+        if (plen >= sizeof(conn->path)) plen = sizeof(conn->path) - 1;
+        memcpy(conn->path, raw_path, plen);
+        conn->path[plen] = '\0';
+        strncpy(conn->query, qmark + 1, sizeof(conn->query) - 1);
+    } else {
+        strncpy(conn->path, raw_path, sizeof(conn->path) - 1);
+    }
+
+    /* Check keep-alive */
+    conn->keep_alive = (strstr(conn->read_buf, "HTTP/1.1") != NULL);
+    if (strstr(conn->read_buf, "Connection: close")) conn->keep_alive = 0;
+
+    /* Parse Content-Length */
+    const char* cl = strstr(conn->read_buf, "Content-Length:");
+    if (!cl) cl = strstr(conn->read_buf, "content-length:");
+    if (cl) {
+        conn->content_length = atoi(cl + 15);
+    } else {
+        conn->content_length = 0;
+    }
+
+    conn->read_buf[conn->headers_end] = save;
+    return 1;
+}
+
+/* Build the write buffer for a response */
+static void dex_http_build_response(DexHttpConn* conn, const char* status,
+                                     const char* body, const char* content_type) {
+    int body_len = (int)strlen(body);
+    int needed = 512 + body_len;
+    conn->write_buf = (char*)malloc(needed);
+    int hlen = snprintf(conn->write_buf, needed,
+        "HTTP/1.1 %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %d\r\n"
+        "Connection: %s\r\n"
+        "\r\n",
+        status, content_type, body_len, conn->keep_alive ? "keep-alive" : "close");
+    memcpy(conn->write_buf + hlen, body, body_len);
+    conn->write_len = hlen + body_len;
+    conn->write_pos = 0;
+}
+
+/* Worker function: run handler, build response, enqueue for event loop */
+static void dex_http_worker_func(void* arg) {
+    DexHttpConn* conn = (DexHttpConn*)arg;
+
+    /* Extract body from read buffer */
+    char* body_data = "";
+    int body_len = 0;
+    if (conn->content_length > 0 && conn->headers_end >= 0) {
+        body_data = conn->read_buf + conn->headers_end;
+        body_len = conn->read_len - conn->headers_end;
+        if (body_len > conn->content_length) body_len = conn->content_length;
+        body_data[body_len] = '\0';
+    }
+
+    /* Build HttpRequest struct */
+    Dex_HttpRequest req;
+    req.method = dex_string_from_lit(conn->method);
+    req.path = dex_string_from_lit(conn->path);
+    req.body = dex_string_from_lit(body_data);
+    req.query = dex_string_from_lit(conn->query);
+
+    /* Match route */
+    int matched = 0;
+    for (int i = 0; i < dex_route_count; i++) {
+        if (strcmp(conn->method, dex_routes[i].method) == 0 &&
+            strcmp(conn->path, dex_routes[i].path) == 0) {
+            Dex_HttpResponse resp = dex_routes[i].handler(req);
+            const char* status = dex_http_status_text(resp.statusCode);
+            const char* ct = "application/json";
+            if (resp.contentType && resp.contentType->data[0] != '\0') {
+                ct = resp.contentType->data;
+            }
+            dex_http_build_response(conn, status, resp.body->data, ct);
+            if (resp.contentType) dex_release(resp.contentType);
+            dex_release(resp.body);
+            matched = 1;
+            break;
+        }
+    }
+
+    /* Release request strings */
+    dex_release(req.method);
+    dex_release(req.path);
+    dex_release(req.body);
+    dex_release(req.query);
+
+    if (!matched) {
+        dex_http_build_response(conn, "404 Not Found",
+            "{\"error\": \"Not Found\"}", "application/json");
+    }
+
+    conn->state = HTTP_WRITING;
+
+    /* Enqueue into completed list and signal event loop */
+    pthread_mutex_lock(&dex_http_completed_mutex);
+    conn->next = dex_http_completed_head;
+    dex_http_completed_head = conn;
+    pthread_mutex_unlock(&dex_http_completed_mutex);
+    dex_notify_pipe_signal(&dex_http_notify);
 }
 
 static volatile int dex_server_fd = -1;
@@ -216,20 +334,137 @@ void dex_listen(int port) {
         perror("listen"); close(server_fd); return;
     }
 
+    dex_set_nonblocking(server_fd);
+
+    /* Initialize event loop, thread pool, and notify pipe */
+    dex_http_loop = dex_ev_create(1024);
+    dex_http_pool = dex_pool_create(0); /* auto-size */
+    dex_notify_pipe_init(&dex_http_notify);
+    memset(dex_http_conn_table, 0, sizeof(dex_http_conn_table));
+
+    /* Register server fd for accept events */
+    dex_ev_add(dex_http_loop, server_fd, DEX_EV_READ, NULL);
+
+    /* Register notify pipe for worker completions */
+    dex_ev_add(dex_http_loop, dex_http_notify.read_fd, DEX_EV_READ, (void*)(intptr_t)-2);
+
     printf("Dex server listening on port %d\n", port);
     fflush(stdout);
 
-    while (1) {
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-        int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
-        if (client_fd < 0) continue;
+    DexEvent events[256];
 
-        int* fd_ptr = (int*)malloc(sizeof(int));
-        *fd_ptr = client_fd;
-        pthread_t tid;
-        pthread_create(&tid, NULL, dex_worker, fd_ptr);
-        pthread_detach(tid);
+    for (;;) {
+        int n = dex_ev_wait(dex_http_loop, events, 256, -1);
+
+        for (int i = 0; i < n; i++) {
+            DexEvent* ev = &events[i];
+
+            /* Server fd: accept new connections */
+            if (ev->user_data == NULL) {
+                for (;;) {
+                    struct sockaddr_in client_addr;
+                    socklen_t client_len = sizeof(client_addr);
+                    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+                    if (client_fd < 0) break;
+                    dex_set_nonblocking(client_fd);
+                    DexHttpConn* conn = dex_http_conn_new(client_fd);
+                    dex_ev_add(dex_http_loop, client_fd, DEX_EV_READ, conn);
+                }
+                continue;
+            }
+
+            /* Notify pipe: drain and process completed connections */
+            if (ev->user_data == (void*)(intptr_t)-2) {
+                dex_notify_pipe_drain(&dex_http_notify);
+
+                /* Dequeue all completed connections */
+                pthread_mutex_lock(&dex_http_completed_mutex);
+                DexHttpConn* completed = dex_http_completed_head;
+                dex_http_completed_head = NULL;
+                pthread_mutex_unlock(&dex_http_completed_mutex);
+
+                while (completed) {
+                    DexHttpConn* next = completed->next;
+                    completed->next = NULL;
+                    /* Register fd for write */
+                    dex_ev_add(dex_http_loop, completed->fd, DEX_EV_WRITE, completed);
+                    completed = next;
+                }
+                continue;
+            }
+
+            /* Client connection */
+            DexHttpConn* conn = (DexHttpConn*)ev->user_data;
+
+            if (ev->events & DEX_EV_ERROR) {
+                dex_ev_del(dex_http_loop, conn->fd);
+                close(conn->fd);
+                dex_http_conn_free(conn);
+                continue;
+            }
+
+            /* Readable: accumulate request data */
+            if ((ev->events & DEX_EV_READ) && (conn->state == HTTP_READING_HEADERS || conn->state == HTTP_READING_BODY)) {
+                /* Grow buffer if needed */
+                if (conn->read_len >= conn->read_cap - 1) {
+                    conn->read_cap *= 2;
+                    conn->read_buf = (char*)realloc(conn->read_buf, conn->read_cap);
+                }
+                int r = (int)read(conn->fd, conn->read_buf + conn->read_len,
+                                  conn->read_cap - conn->read_len - 1);
+                if (r <= 0) {
+                    /* Connection closed or error */
+                    dex_ev_del(dex_http_loop, conn->fd);
+                    close(conn->fd);
+                    dex_http_conn_free(conn);
+                    continue;
+                }
+                conn->read_len += r;
+                conn->read_buf[conn->read_len] = '\0';
+
+                if (conn->state == HTTP_READING_HEADERS) {
+                    if (dex_http_try_parse_headers(conn)) {
+                        conn->state = HTTP_READING_BODY;
+                    }
+                }
+
+                if (conn->state == HTTP_READING_BODY) {
+                    int body_received = conn->read_len - conn->headers_end;
+                    if (body_received >= conn->content_length) {
+                        /* Request complete — dispatch to worker pool */
+                        conn->state = HTTP_DISPATCHED;
+                        dex_ev_del(dex_http_loop, conn->fd);
+                        dex_pool_submit(dex_http_pool, dex_http_worker_func, conn);
+                    }
+                }
+            }
+
+            /* Writable: flush response */
+            if ((ev->events & DEX_EV_WRITE) && conn->state == HTTP_WRITING) {
+                int remaining = conn->write_len - conn->write_pos;
+                if (remaining > 0) {
+                    int w = (int)write(conn->fd, conn->write_buf + conn->write_pos, remaining);
+                    if (w <= 0) {
+                        dex_ev_del(dex_http_loop, conn->fd);
+                        close(conn->fd);
+                        dex_http_conn_free(conn);
+                        continue;
+                    }
+                    conn->write_pos += w;
+                }
+                if (conn->write_pos >= conn->write_len) {
+                    /* Response fully sent */
+                    dex_ev_del(dex_http_loop, conn->fd);
+                    if (conn->keep_alive) {
+                        dex_http_conn_reset(conn);
+                        dex_ev_add(dex_http_loop, conn->fd, DEX_EV_READ, conn);
+                    } else {
+                        close(conn->fd);
+                        dex_http_conn_free(conn);
+                    }
+                }
+            }
+        }
     }
 }
 

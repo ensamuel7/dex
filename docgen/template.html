@@ -149,6 +149,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
     <a onclick="show('mod-file')">file</a>
     <a onclick="show('mod-math')">math</a>
     <a onclick="show('mod-time')">time</a>
+    <a onclick="show('mod-ws')">ws</a>
     <a onclick="show('database')">db</a>
     <div class="section-label label-internals">Internals</div>
     <a onclick="show('ast')">AST</a>
@@ -593,7 +594,8 @@ import "json"</code></pre>
 <tr><td><code><a onclick="show('database')" style="cursor:pointer">db</a></code></td><td>Database access (SQLite, PostgreSQL, MySQL, MongoDB)</td><td><code>open</code>, <code>exec</code>, <code>query</code>, <code>next</code>, <code>col</code>, <code>free</code>, <code>close</code></td></tr>
 <tr><td><code><a onclick="show('mod-file')" style="cursor:pointer">file</a></code></td><td>Filesystem operations and file uploads</td><td><code>read</code>, <code>write</code>, <code>append</code>, <code>exists</code>, <code>remove</code>, <code>rename</code>, <code>upload</code></td></tr>
 <tr><td><code><a onclick="show('mod-math')" style="cursor:pointer">math</a></code></td><td>Mathematical functions and constants</td><td><code>pi</code>, <code>e</code>, <code>sin</code>, <code>cos</code>, <code>sqrt</code>, <code>pow</code>, <code>floor</code>, <code>ceil</code>, <code>round</code>, <code>abs</code>, <code>min</code>, <code>max</code>, ...</td></tr>
-<tr><td><code><a onclick="show('mod-time')" style="cursor:pointer">time</a></code></td><td>Time measurement and sleeping</td><td><code>now</code>, <code>nowNs</code>, <code>sleep</code></td></tr>
+<tr><td><code><a onclick="show('mod-time')" style="cursor:pointer">time</a></code></td><td>Time measurement, sleeping, and scheduled execution</td><td><code>now</code>, <code>nowNs</code>, <code>sleep</code>, <code>setTimeout</code>, <code>setInterval</code>, <code>clearInterval</code></td></tr>
+<tr><td><code><a onclick="show('mod-ws')" style="cursor:pointer">ws</a></code></td><td>WebSocket server and client (RFC 6455)</td><td><code>handleMessage</code>, <code>listen</code>, <code>connect</code>, <code>send</code>, <code>receive</code>, <code>close</code></td></tr>
 </table>
 
 <h3>Quick Reference</h3>
@@ -940,22 +942,43 @@ fn main(): void {
 <h3>Server</h3>
 
 <h4>route</h4>
-<div class="func-card"><div class="sig"><span class="module">http</span>.route(<span class="ptype">method: string, path: string, handler: string</span>) <span class="ret">-&gt; void</span></div></div>
-<p>Register a route handler. The handler is referenced by name as a string literal. Handler functions must take no parameters and return <code>string</code> (the HTTP response body).</p>
-<pre><code>fn my_handler(): string {
-    return "{\"ok\": true}"
-}
+<div class="func-card"><div class="sig"><span class="module">http</span>.route(<span class="ptype">method: string, path: string, handler: fn</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Register a route handler. The handler is referenced by function name. Handlers can take <strong>0 parameters</strong> (backward-compatible) or <strong>1 parameter</strong> of type <code>http.HttpRequest</code>. They must return a non-void type (typically <code>HttpResponse</code> or <code>string</code>).</p>
 
-fn main(): void {
-    http.route("GET", "/api", "my_handler")
-    http.listen(3000)
-}</code></pre>
-<p>The handler name must be a string literal — it is resolved to a function pointer at compile time.</p>
+<h4>response</h4>
+<div class="func-card"><div class="sig"><span class="module">http</span>.response(<span class="ptype">statusCode: int, body: string, contentType: string</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
+<p>Convenience function to create an <code>HttpResponse</code> struct.</p>
 
 <h4>listen</h4>
 <div class="func-card"><div class="sig"><span class="module">http</span>.listen(<span class="ptype">port: int</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Start the HTTP server on the given port. This call blocks — it runs the server event loop indefinitely.</p>
-<pre><code>http.listen(8080)  // server listens on http://localhost:8080</code></pre>
+
+<h4>HttpRequest</h4>
+<p>Handlers that take a parameter receive an <code>HttpRequest</code> struct with these fields:</p>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>method</code></td><td><code>string</code></td><td>HTTP method (e.g. "GET", "POST")</td></tr>
+<tr><td><code>path</code></td><td><code>string</code></td><td>Request path (e.g. "/api/foo")</td></tr>
+<tr><td><code>body</code></td><td><code>string</code></td><td>Request body (empty string if none)</td></tr>
+<tr><td><code>query</code></td><td><code>string</code></td><td>Raw query string after '?' (empty if none)</td></tr>
+</table>
+
+<pre><code>// Handler with request context
+fn handlePost(req: http.HttpRequest): http.HttpResponse {
+    let body: string = req.body
+    return http.response(200, body, "text/plain")
+}
+
+// Handler without request context (backward-compatible)
+fn handleGet(): string {
+    return "{\"ok\": true}"
+}
+
+fn main(): void {
+    http.route("POST", "/echo", handlePost)
+    http.route("GET", "/api", handleGet)
+    http.listen(3000)
+}</code></pre>
 
 <h3>Client</h3>
 <p>Client functions send HTTP requests and return an <code>HttpResponse</code> struct. Requires <code>libcurl</code> at compile time.</p>
@@ -1027,9 +1050,14 @@ fn handle_json(): string {
     return response
 }
 
+fn handle_echo(req: http.HttpRequest): http.HttpResponse {
+    return http.response(200, req.body, "text/plain")
+}
+
 fn main(): void {
-    http.route("GET", "/hello", "handle_hello")
-    http.route("GET", "/json", "handle_json")
+    http.route("GET", "/hello", handle_hello)
+    http.route("GET", "/json", handle_json)
+    http.route("POST", "/echo", handle_echo)
     http.listen(8080)
 }</code></pre>
 </section>
@@ -1177,22 +1205,40 @@ fn main(): void {
 <!-- time module -->
 <section id="mod-time" class="page-section">
 <h2>time<span class="badge">module</span></h2>
-<p>The <code>time</code> module provides functions for measuring time and sleeping.</p>
+<p>The <code>time</code> module provides functions for measuring time, sleeping, and scheduling repeated or delayed function execution.</p>
 <pre><code>import "time"</code></pre>
 
-<h3>now</h3>
+<h3>Measurement</h3>
+
+<h4>now</h4>
 <div class="func-card"><div class="sig"><span class="module">time</span>.now() <span class="ret">-&gt; long</span></div></div>
 <p>Return the current Unix timestamp in seconds.</p>
 
-<h3>nowNs</h3>
+<h4>nowNs</h4>
 <div class="func-card"><div class="sig"><span class="module">time</span>.nowNs() <span class="ret">-&gt; long</span></div></div>
 <p>Return the current Unix timestamp in nanoseconds. Useful for high-resolution timing.</p>
 
-<h3>sleep</h3>
+<h3>Sleeping</h3>
+
+<h4>sleep</h4>
 <div class="func-card"><div class="sig"><span class="module">time</span>.sleep(<span class="ptype">ms: int</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Sleep for the specified number of milliseconds.</p>
 
-<h3>Full example</h3>
+<h3>Timers</h3>
+
+<h4>setTimeout</h4>
+<div class="func-card"><div class="sig"><span class="module">time</span>.setTimeout(<span class="ptype">fn: fn(): void, ms: int</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Call a function once after the specified number of milliseconds. The callback runs on a separate thread.</p>
+
+<h4>setInterval</h4>
+<div class="func-card"><div class="sig"><span class="module">time</span>.setInterval(<span class="ptype">fn: fn(): void, ms: int</span>) <span class="ret">-&gt; int</span></div></div>
+<p>Call a function repeatedly every specified number of milliseconds. Returns a timer ID that can be passed to <code>clearInterval</code> to stop it. The callback runs on a separate thread.</p>
+
+<h4>clearInterval</h4>
+<div class="func-card"><div class="sig"><span class="module">time</span>.clearInterval(<span class="ptype">id: int</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Stop a repeating interval by its timer ID (returned by <code>setInterval</code>).</p>
+
+<h3>Examples</h3>
 <pre><code>import "time"
 import "fmt"
 
@@ -1207,6 +1253,91 @@ fn main(): void {
     // ... do work ...
     let t2: long = time.nowNs()
     fmt.print(t2 - t1)  // nanoseconds elapsed
+}</code></pre>
+
+<pre><code>import "time"
+import "fmt"
+
+fn heartbeat(): void {
+    fmt.print("tick")
+}
+
+fn main(): void {
+    time.setTimeout(heartbeat, 5000)                // call once after 5s
+    let id: int = time.setInterval(heartbeat, 1000) // call every 1s
+    time.sleep(10000)
+    time.clearInterval(id)                          // stop interval
+}</code></pre>
+</section>
+
+<!-- ws module -->
+<section id="mod-ws" class="page-section">
+<h2>ws<span class="badge">module</span></h2>
+<p>The <code>ws</code> module provides WebSocket server and client functionality using RFC 6455. It supports text frames, automatic ping/pong handling, and proper client-side frame masking.</p>
+<pre><code>import "ws"</code></pre>
+
+<h3>Types</h3>
+
+<h4>Conn</h4>
+<p>A WebSocket connection handle:</p>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>fd</code></td><td><code>int</code></td><td>Socket file descriptor</td></tr>
+<tr><td><code>isServer</code></td><td><code>int</code></td><td>1 if server-side, 0 if client-side</td></tr>
+</table>
+
+<h3>Server</h3>
+
+<h4>handleMessage</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.handleMessage(<span class="ptype">handler: fn(ws.Conn, string): void</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Register a callback function to handle incoming WebSocket messages. The handler receives the connection and the message text. Must be called before <code>listen</code>.</p>
+
+<h4>listen</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.listen(<span class="ptype">port: int</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Start the WebSocket server on the given port. This call blocks. Each incoming connection is handled on a separate thread.</p>
+
+<h3>Client</h3>
+
+<h4>connect</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.connect(<span class="ptype">url: string</span>) <span class="ret">-&gt; Conn</span></div></div>
+<p>Connect to a WebSocket server. The URL should be in <code>ws://host:port/path</code> format. Returns a <code>Conn</code> handle for sending and receiving.</p>
+
+<h4>send</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.send(<span class="ptype">conn: Conn, msg: string</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Send a text message on a WebSocket connection.</p>
+
+<h4>receive</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.receive(<span class="ptype">conn: Conn</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Receive a text message from a WebSocket connection. This call blocks until a message is available.</p>
+
+<h4>close</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.close(<span class="ptype">conn: Conn</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Close a WebSocket connection. Sends a close frame and shuts down the socket.</p>
+
+<h3>Server example</h3>
+<pre><code>import "ws"
+import "fmt"
+
+fn onMessage(conn: ws.Conn, msg: string): void {
+    fmt.print("got: " + msg)
+    ws.send(conn, "echo: " + msg)
+}
+
+fn main(): void {
+    ws.handleMessage(onMessage)
+    ws.listen(9090)
+}</code></pre>
+
+<h3>Client example</h3>
+<pre><code>import "ws"
+import "fmt"
+
+fn main(): void {
+    let conn: ws.Conn = ws.connect("ws://localhost:9090")
+    ws.send(conn, "hello")
+    let reply: string = ws.receive(conn)
+    fmt.print(reply)
+    ws.close(conn)
 }</code></pre>
 </section>
 
@@ -1419,6 +1550,7 @@ var sectionNames = {
   'mod-file': 'file Module',
   'mod-math': 'math Module',
   'mod-time': 'time Module',
+  'mod-ws': 'ws Module',
   'database': 'db Module',
   'ast': 'AST',
   'lexer': 'Lexer & Tokens',

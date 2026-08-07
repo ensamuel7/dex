@@ -37,3 +37,6 @@ var StringMethodsRuntime string
 
 //go:embed cruntime/maps.c
 var MapRuntime string
+
+//go:embed cruntime/event_loop.c
+var EventLoopRuntime string

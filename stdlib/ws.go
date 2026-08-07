@@ -55,6 +55,27 @@ func init() {
 				CName:      "",
 				Doc:        "Close a WebSocket connection.",
 			},
+			"handleConnect": {
+				Params:     nil,
+				ParamNames: []string{"handler"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Register a connect handler fn(conn: ws.Conn, path: string): void.",
+			},
+			"handleDisconnect": {
+				Params:     nil,
+				ParamNames: []string{"handler"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Register a disconnect handler fn(conn: ws.Conn): void.",
+			},
+			"setProtocol": {
+				Params:     []ast.Type{ast.TypeString},
+				ParamNames: []string{"protocol"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_ws_set_protocol",
+				Doc:        "Set the WebSocket subprotocol for server and client handshakes.",
+			},
 		},
 		Types: []ast.StructDef{
 			{
@@ -63,6 +84,7 @@ func init() {
 				Fields: []ast.StructField{
 					{Name: "fd", Type: ast.TypeInt, Doc: "Socket file descriptor."},
 					{Name: "isServer", Type: ast.TypeInt, Doc: "1 if server-side, 0 if client-side."},
+					{Name: "ssl", Type: ast.TypeLong, Doc: "SSL pointer (cast to long), 0 if plain."},
 				},
 			},
 		},

@@ -546,6 +546,31 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return e.ResolvedType, nil
 			}
 
+			// Special case: json.arrayPush(arr, value) — polymorphic value type
+			if e.Module == "json" && e.Name == "arrayPush" {
+				if len(e.Args) != 2 {
+					return 0, c.errAt(e.Pos, "json.arrayPush() takes exactly 2 arguments, got %d", len(e.Args))
+				}
+				arrType, err := c.checkExpr(e.Args[0])
+				if err != nil {
+					return 0, err
+				}
+				if arrType != ast.TypeString {
+					return 0, c.errAt(e.Pos, "json.arrayPush() argument 1 must be string, got %s", typeName(arrType))
+				}
+				valType, err := c.checkExpr(e.Args[1])
+				if err != nil {
+					return 0, err
+				}
+				switch valType {
+				case ast.TypeString, ast.TypeInt, ast.TypeBool, ast.TypeLong, ast.TypeDouble:
+					// all valid
+				default:
+					return 0, c.errAt(e.Pos, "json.arrayPush() value must be a primitive type, got %s", typeName(valType))
+				}
+				return ast.TypeString, nil
+			}
+
 			// Special case: json.setArray(obj, key, array) -> string
 			if e.Module == "json" && e.Name == "setArray" {
 				if len(e.Args) != 3 {
@@ -700,6 +725,89 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 				if sig.ReturnType != ast.TypeVoid {
 					return 0, c.errAt(e.Pos, "ws.handleMessage() handler '%s' must return void", handlerName)
+				}
+				return ast.TypeVoid, nil
+			}
+
+			// Special case: ws.handleConnect(handler) — validate handler signature fn(ws.Conn, string): void
+			if e.Module == "ws" && e.Name == "handleConnect" {
+				if len(e.Args) != 1 {
+					return 0, c.errAt(e.Pos, "ws.handleConnect() takes exactly 1 argument, got %d", len(e.Args))
+				}
+				var handlerName string
+				switch h := e.Args[0].(type) {
+				case *ast.Ident:
+					handlerName = h.Name
+				case *ast.CallExpr:
+					if len(h.Args) != 0 {
+						return 0, c.errAt(e.Pos, "ws.handleConnect() handler must take exactly 2 parameters")
+					}
+					handlerName = h.Name
+					if h.Module != "" && c.userModules[h.Module] {
+						handlerName = h.Module + "_" + h.Name
+					}
+				default:
+					return 0, c.errAt(e.Pos, "ws.handleConnect() argument must be a function name")
+				}
+				sig, ok := c.funcs[handlerName]
+				if !ok {
+					return 0, c.errAt(e.Pos, "ws.handleConnect() handler '%s' is not a defined function", handlerName)
+				}
+				if len(sig.Params) != 2 {
+					return 0, c.errAt(e.Pos, "ws.handleConnect() handler '%s' must take 2 parameters (ws.Conn, string), got %d", handlerName, len(sig.Params))
+				}
+				wsConnType, hasConn := ast.LookupStructType("Conn")
+				if !hasConn {
+					return 0, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+				}
+				if sig.Params[0] != wsConnType {
+					return 0, c.errAt(e.Pos, "ws.handleConnect() handler '%s' parameter 1 must be ws.Conn, got %s", handlerName, typeName(sig.Params[0]))
+				}
+				if sig.Params[1] != ast.TypeString {
+					return 0, c.errAt(e.Pos, "ws.handleConnect() handler '%s' parameter 2 must be string, got %s", handlerName, typeName(sig.Params[1]))
+				}
+				if sig.ReturnType != ast.TypeVoid {
+					return 0, c.errAt(e.Pos, "ws.handleConnect() handler '%s' must return void", handlerName)
+				}
+				return ast.TypeVoid, nil
+			}
+
+			// Special case: ws.handleDisconnect(handler) — validate handler signature fn(ws.Conn): void
+			if e.Module == "ws" && e.Name == "handleDisconnect" {
+				if len(e.Args) != 1 {
+					return 0, c.errAt(e.Pos, "ws.handleDisconnect() takes exactly 1 argument, got %d", len(e.Args))
+				}
+				var handlerName string
+				switch h := e.Args[0].(type) {
+				case *ast.Ident:
+					handlerName = h.Name
+				case *ast.CallExpr:
+					if len(h.Args) != 0 {
+						return 0, c.errAt(e.Pos, "ws.handleDisconnect() handler must take exactly 1 parameter")
+					}
+					handlerName = h.Name
+					if h.Module != "" && c.userModules[h.Module] {
+						handlerName = h.Module + "_" + h.Name
+					}
+				default:
+					return 0, c.errAt(e.Pos, "ws.handleDisconnect() argument must be a function name")
+				}
+				sig, ok := c.funcs[handlerName]
+				if !ok {
+					return 0, c.errAt(e.Pos, "ws.handleDisconnect() handler '%s' is not a defined function", handlerName)
+				}
+				if len(sig.Params) != 1 {
+					return 0, c.errAt(e.Pos, "ws.handleDisconnect() handler '%s' must take 1 parameter (ws.Conn), got %d", handlerName, len(sig.Params))
+				}
+				wsConnType, hasConn := ast.LookupStructType("Conn")
+				if !hasConn {
+					return 0, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+				}
+				if sig.Params[0] != wsConnType {
+					return 0, c.errAt(e.Pos, "ws.handleDisconnect() handler '%s' parameter 1 must be ws.Conn, got %s", handlerName, typeName(sig.Params[0]))
+				}
+				if sig.ReturnType != ast.TypeVoid {
+					return 0, c.errAt(e.Pos, "ws.handleDisconnect() handler '%s' must return void", handlerName)
 				}
 				return ast.TypeVoid, nil
 			}

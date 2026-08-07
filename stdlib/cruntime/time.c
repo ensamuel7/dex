@@ -83,3 +83,32 @@ void dex_time_clear_interval(int id) {
         dex_timers[id]->cancelled = 1;
     }
 }
+
+// --- Time formatting ---
+#include <stdio.h>
+
+const char* dex_time_format(long timestamp, const char* layout) {
+    time_t t = (time_t)timestamp;
+    struct tm* tm_info = gmtime(&t);
+    if (!tm_info) return strdup("");
+    char* result = (char*)malloc(64);
+    if (strcmp(layout, "iso8601") == 0 || strcmp(layout, "ISO8601") == 0) {
+        strftime(result, 64, "%Y-%m-%dT%H:%M:%SZ", tm_info);
+    } else {
+        strftime(result, 64, layout, tm_info);
+    }
+    return result;
+}
+
+const char* dex_time_iso_now(void) {
+    time_t t = time(NULL);
+    struct tm* tm_info = gmtime(&t);
+    if (!tm_info) return strdup("");
+    char* result = (char*)malloc(64);
+    strftime(result, 64, "%Y-%m-%dT%H:%M:%SZ", tm_info);
+    return result;
+}
+
+long dex_time_unix_now(void) {
+    return (long)time(NULL);
+}

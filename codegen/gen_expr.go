@@ -515,6 +515,41 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
+	// json.arrayPush(arr, value) — polymorphic: dispatch by value type
+	if e.Module == "json" && e.Name == "arrayPush" {
+		valType := g.typeOfExpr(e.Args[1])
+		var fn string
+		switch valType {
+		case ast.TypeInt:
+			fn = "dex_json_array_push_int"
+		case ast.TypeBool:
+			fn = "dex_json_array_push_bool"
+		case ast.TypeLong:
+			fn = "dex_json_array_push_long"
+		case ast.TypeDouble:
+			fn = "dex_json_array_push_double"
+		default:
+			fn = "dex_json_array_push_str"
+		}
+		out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", fn))
+		g.genExpr(out, e.Args[0])
+		out.WriteString("->data, ")
+		if valType == ast.TypeString {
+			g.genExpr(out, e.Args[1])
+			out.WriteString("->data")
+		} else {
+			g.genExpr(out, e.Args[1])
+		}
+		out.WriteString("))")
+		return
+	}
+
+	// json.arrayNew() — returns const char*, wrap
+	if e.Module == "json" && e.Name == "arrayNew" {
+		out.WriteString("dex_string_from_cstr(dex_json_array_new())")
+		return
+	}
+
 	// json.set(obj, key, value) — polymorphic: dispatch by value type
 	if e.Module == "json" && e.Name == "set" {
 		valType := g.typeOfExpr(e.Args[2])
@@ -762,6 +797,40 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			}
 		}
 		out.WriteString("dex_ws_on_message = ")
+		out.WriteString(handlerName)
+		return
+	}
+
+	// ws.handleConnect(handler) — register connect callback
+	if e.Module == "ws" && e.Name == "handleConnect" {
+		var handlerName string
+		switch h := e.Args[0].(type) {
+		case *ast.Ident:
+			handlerName = h.Name
+		case *ast.CallExpr:
+			handlerName = h.Name
+			if h.Module != "" && g.userModules[h.Module] {
+				handlerName = h.Module + "_" + h.Name
+			}
+		}
+		out.WriteString("dex_ws_on_connect = ")
+		out.WriteString(handlerName)
+		return
+	}
+
+	// ws.handleDisconnect(handler) — register disconnect callback
+	if e.Module == "ws" && e.Name == "handleDisconnect" {
+		var handlerName string
+		switch h := e.Args[0].(type) {
+		case *ast.Ident:
+			handlerName = h.Name
+		case *ast.CallExpr:
+			handlerName = h.Name
+			if h.Module != "" && g.userModules[h.Module] {
+				handlerName = h.Module + "_" + h.Name
+			}
+		}
+		out.WriteString("dex_ws_on_disconnect = ")
 		out.WriteString(handlerName)
 		return
 	}

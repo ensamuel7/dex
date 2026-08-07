@@ -28,6 +28,7 @@ type Generator struct {
 	usesExceptions    bool
 	usesStringMethods bool
 	usesMap           bool
+	usesEventLoop     bool
 
 	tryCatchCounter int
 	switchCounter   int
@@ -330,6 +331,14 @@ func (g *Generator) Generate(program *ast.Program) string {
 		g.usesString = true
 	}
 
+	// Event loop is needed when HTTP or WebSocket server modules are imported
+	for _, imp := range program.Imports {
+		if imp.Path == "http" || imp.Path == "ws" {
+			g.usesEventLoop = true
+			break
+		}
+	}
+
 	// Refcount is needed whenever strings, arrays, or concurrency is used
 	g.usesRefcount = g.usesString || g.usesArray || g.usesConcurrency
 
@@ -515,6 +524,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 	}
 
+	// Emit event loop runtime (must come before HTTP/WS module runtimes)
+	if g.usesEventLoop {
+		out.WriteString(EventLoopRuntime)
+	}
+
 	// Emit C runtime from imported modules
 	for _, mod := range g.importedModules {
 		if mod.CRuntime != "" {
@@ -567,9 +581,15 @@ func (g *Generator) Generate(program *ast.Program) string {
 			if fn.Name == "main" {
 				continue
 			}
+			// handleMessage / handleConnect: fn(ws.Conn, string): void
 			if len(fn.Params) == 2 && fn.Params[0].Type == wsConnType && fn.Params[1].Type == ast.TypeString {
 				out.WriteString(fmt.Sprintf("%s %s(Dex_Conn %s, DexString* %s);\n",
 					g.cType(fn.ReturnType), fn.Name, fn.Params[0].Name, fn.Params[1].Name))
+			}
+			// handleDisconnect: fn(ws.Conn): void
+			if len(fn.Params) == 1 && fn.Params[0].Type == wsConnType {
+				out.WriteString(fmt.Sprintf("%s %s(Dex_Conn %s);\n",
+					g.cType(fn.ReturnType), fn.Name, fn.Params[0].Name))
 			}
 		}
 		out.WriteString("\n")

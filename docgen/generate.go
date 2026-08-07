@@ -199,8 +199,13 @@ func Generate(projectRoot string) (string, error) {
 				paramStr = "int, int"
 				retType = "int|string|double|bool"
 			} else if name == "http" && fd.Params == nil {
-				// HTTP client special-cased functions
+				// HTTP special-cased functions
 				switch fnName {
+				case "route":
+					paramStr = "method: string, path: string, handler: fn"
+				case "response":
+					paramStr = "statusCode: int, body: string, contentType: string"
+					retType = "HttpResponse"
 				case "get":
 					paramStr = "string, [string]"
 					retType = "HttpResponse"
@@ -225,6 +230,31 @@ func Generate(projectRoot string) (string, error) {
 				case "postForm":
 					paramStr = "string, string, [string]"
 					retType = "HttpResponse"
+				}
+			} else if name == "time" && fd.Params == nil {
+				// Timer special-cased functions
+				switch fnName {
+				case "setTimeout":
+					paramStr = "fn: fn(): void, ms: int"
+				case "setInterval":
+					paramStr = "fn: fn(): void, ms: int"
+					retType = "int"
+				}
+			} else if name == "ws" && fd.Params == nil {
+				// WebSocket special-cased functions
+				switch fnName {
+				case "handleMessage":
+					paramStr = "handler: fn(ws.Conn, string): void"
+				case "connect":
+					paramStr = "url: string"
+					retType = "Conn"
+				case "send":
+					paramStr = "conn: Conn, msg: string"
+				case "receive":
+					paramStr = "conn: Conn"
+					retType = "string"
+				case "close":
+					paramStr = "conn: Conn"
 				}
 			} else {
 				params := make([]string, len(fd.Params))

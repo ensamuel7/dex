@@ -75,6 +75,47 @@ func init() {
 				CName:      "dex_json_get_long",
 				Doc:        "Get a long integer value from a JSON object by key. Returns 0 if key not found.",
 			},
+			"arrayNew": {
+				Params:     []ast.Type{},
+				ReturnType: ast.TypeString,
+				CName:      "dex_json_array_new",
+				Doc:        "Create a new empty JSON array string.",
+			},
+			"arrayLen": {
+				Params:     []ast.Type{ast.TypeString},
+				ParamNames: []string{"json"},
+				ReturnType: ast.TypeInt,
+				CName:      "dex_json_array_len",
+				Doc:        "Get the length of a JSON array string.",
+			},
+			"arrayGet": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeInt},
+				ParamNames: []string{"json", "index"},
+				ReturnType: ast.TypeString,
+				CName:      "dex_json_array_get",
+				Doc:        "Get element at index from a JSON array. Strings are unquoted; objects/arrays returned as-is.",
+			},
+			"arrayGetRaw": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeInt},
+				ParamNames: []string{"json", "index"},
+				ReturnType: ast.TypeString,
+				CName:      "dex_json_array_get_raw",
+				Doc:        "Get raw element at index from a JSON array (strings keep quotes).",
+			},
+			"arrayPush": {
+				Params:     nil, // polymorphic — special-cased in checker/codegen
+				ParamNames: []string{"arr", "value"},
+				ReturnType: ast.TypeString,
+				CName:      "",
+				Doc:        "Append a value to a JSON array. Value can be string, int, long, double, or bool.",
+			},
+			"arrayPushObj": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeString},
+				ParamNames: []string{"arr", "obj"},
+				ReturnType: ast.TypeString,
+				CName:      "dex_json_array_push_obj",
+				Doc:        "Append a JSON object/array string to a JSON array.",
+			},
 		},
 		CRuntime: jsonRuntime,
 	})

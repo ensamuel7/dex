@@ -1,0 +1,20 @@
+import "http"
+import "fmt"
+
+fn handlePost(req: http.HttpRequest): http.HttpResponse {
+    let body: string = req.body
+    let method: string = req.method
+    let path: string = req.path
+    let query: string = req.query
+    return http.response(200, body, "text/plain")
+}
+
+fn handleGet(): string {
+    return "hello"
+}
+
+fn main(): void {
+    http.route("POST", "/echo", handlePost)
+    http.route("GET", "/hello", handleGet)
+    fmt.print("HTTP request context test compiled successfully")
+}

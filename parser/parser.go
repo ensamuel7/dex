@@ -483,6 +483,21 @@ func (p *Parser) parseType() (ast.Type, error) {
 				return 0, p.errorf("unknown enum type '%s'", name)
 			}
 			base = t
+		} else if p.pos+2 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenDot && p.tokens[p.pos+2].Kind == token.TokenIdent {
+			// Module-qualified type: module.TypeName (e.g. http.HttpRequest, ws.Conn)
+			qualifiedName := p.tokens[p.pos+2].Value
+			if p.structNames[qualifiedName] {
+				p.advance() // consume module name
+				p.advance() // consume '.'
+				p.advance() // consume type name
+				t, ok := ast.LookupStructType(qualifiedName)
+				if !ok {
+					return 0, p.errorf("unknown struct type '%s.%s'", name, qualifiedName)
+				}
+				base = t
+			} else {
+				return 0, p.errorf("unknown type '%s.%s'", name, qualifiedName)
+			}
 		} else {
 			return 0, p.errorf("unknown type '%s'", name)
 		}

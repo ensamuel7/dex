@@ -111,6 +111,13 @@ func init() {
 				CName:      "dex_file_upload",
 				Doc:        "Upload a file to the given URL and return the response.",
 			},
+			"response": {
+				Params:     nil,
+				ParamNames: []string{"statusCode", "body", "contentType"},
+				ReturnType: ast.TypeVoid, // actual return type resolved by checker
+				CName:      "",
+				Doc:        "Create an HttpResponse with the given status code, body, and content type.",
+			},
 		},
 		Types: []ast.StructDef{
 			{
@@ -120,6 +127,16 @@ func init() {
 					{Name: "statusCode", Type: ast.TypeInt, Doc: "HTTP status code (e.g. 200, 404, 500)."},
 					{Name: "body", Type: ast.TypeString, Doc: "Response body content as a string."},
 					{Name: "contentType", Type: ast.TypeString, Doc: "Content-Type header from the response (e.g. \"application/json\"). Optional in struct literals — defaults to \"application/json\" on the server."},
+				},
+			},
+			{
+				Name: "HttpRequest",
+				Doc:  "Represents an incoming HTTP request passed to route handlers.",
+				Fields: []ast.StructField{
+					{Name: "method", Type: ast.TypeString, Doc: "HTTP method (e.g. \"GET\", \"POST\")."},
+					{Name: "path", Type: ast.TypeString, Doc: "Request path (e.g. \"/api/foo\")."},
+					{Name: "body", Type: ast.TypeString, Doc: "Request body (empty string if none)."},
+					{Name: "query", Type: ast.TypeString, Doc: "Raw query string after '?' (empty if none)."},
 				},
 			},
 		},

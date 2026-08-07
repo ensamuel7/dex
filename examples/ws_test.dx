@@ -1,0 +1,12 @@
+import "ws"
+import "fmt"
+
+fn onMessage(conn: ws.Conn, msg: string): void {
+    fmt.print("got: " + msg)
+    ws.send(conn, "echo: " + msg)
+}
+
+fn main(): void {
+    ws.handleMessage(onMessage)
+    fmt.print("WebSocket module compiled successfully")
+}

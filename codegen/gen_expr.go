@@ -668,24 +668,38 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				handlerName = h.Module + "_" + h.Name
 			}
 		}
-		// Generate a wrapper that returns Dex_HttpResponse for the route handler
+		// All wrappers now accept Dex_HttpRequest _req to match the new handler typedef.
+		// For 0-param handlers, the wrapper ignores _req.
+		// For 1-param handlers taking HttpRequest, the wrapper passes _req through.
 		emitName := handlerName
 		if fn, ok := g.funcs[handlerName]; ok {
-			// Check if handler already returns HttpResponse — no wrapper needed
 			httpRespType, hasHttpResp := ast.LookupStructType("HttpResponse")
-			if hasHttpResp && fn.ReturnType == httpRespType {
-				// Handler already returns Dex_HttpResponse, use directly
+			httpReqType, _ := ast.LookupStructType("HttpRequest")
+			handlerTakesReq := len(fn.Params) == 1 && fn.Params[0].Type == httpReqType
+
+			if hasHttpResp && fn.ReturnType == httpRespType && handlerTakesReq {
+				// Handler takes HttpRequest and returns HttpResponse — use directly
 			} else {
 				wrapperName := fmt.Sprintf("_dex_route_wrap_%d", g.routeWrapperCount)
 				g.routeWrapperCount++
 				var w strings.Builder
-				w.WriteString(fmt.Sprintf("Dex_HttpResponse %s(void) {\n", wrapperName))
-				if fn.ReturnType == ast.TypeString {
-					// String handler: wrap as {200, result, "application/json"}
-					w.WriteString(fmt.Sprintf("    DexString* _val = %s();\n", handlerName))
+				w.WriteString(fmt.Sprintf("Dex_HttpResponse %s(Dex_HttpRequest _req) {\n", wrapperName))
+
+				// Build the handler call
+				var callStr string
+				if handlerTakesReq {
+					callStr = fmt.Sprintf("%s(_req)", handlerName)
+				} else {
+					callStr = fmt.Sprintf("%s()", handlerName)
+				}
+
+				if hasHttpResp && fn.ReturnType == httpRespType {
+					// Handler returns HttpResponse but takes no request — call and return
+					w.WriteString(fmt.Sprintf("    return %s;\n", callStr))
+				} else if fn.ReturnType == ast.TypeString {
+					w.WriteString(fmt.Sprintf("    DexString* _val = %s;\n", callStr))
 					w.WriteString("    return (Dex_HttpResponse){200, _val, dex_string_from_lit(\"application/json\")};\n")
 				} else {
-					// Primitive handler: convert to string, then wrap
 					var fmtSpec string
 					switch fn.ReturnType {
 					case ast.TypeInt:
@@ -699,7 +713,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					default:
 						fmtSpec = "%d"
 					}
-					w.WriteString(fmt.Sprintf("    %s _val = %s();\n", g.cType(fn.ReturnType), handlerName))
+					w.WriteString(fmt.Sprintf("    %s _val = %s;\n", g.cType(fn.ReturnType), callStr))
 					w.WriteString("    char _buf[64];\n")
 					if fn.ReturnType == ast.TypeBool {
 						w.WriteString("    snprintf(_buf, sizeof(_buf), \"%s\", _val ? \"true\" : \"false\");\n")
@@ -719,6 +733,93 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		g.genStringArg(out, e.Args[1])
 		out.WriteString(", ")
 		out.WriteString(emitName)
+		out.WriteString(")")
+		return
+	}
+
+	// http.response(statusCode, body, contentType) -> HttpResponse struct literal
+	if e.Module == "http" && e.Name == "response" {
+		out.WriteString("(Dex_HttpResponse){")
+		g.genExpr(out, e.Args[0])
+		out.WriteString(", ")
+		g.genExpr(out, e.Args[1])
+		out.WriteString(", ")
+		g.genExpr(out, e.Args[2])
+		out.WriteString("}")
+		return
+	}
+
+	// ws.handleMessage(handler) — register message callback
+	if e.Module == "ws" && e.Name == "handleMessage" {
+		var handlerName string
+		switch h := e.Args[0].(type) {
+		case *ast.Ident:
+			handlerName = h.Name
+		case *ast.CallExpr:
+			handlerName = h.Name
+			if h.Module != "" && g.userModules[h.Module] {
+				handlerName = h.Module + "_" + h.Name
+			}
+		}
+		out.WriteString("dex_ws_on_message = ")
+		out.WriteString(handlerName)
+		return
+	}
+
+	// ws.connect(url) -> Dex_Conn
+	if e.Module == "ws" && e.Name == "connect" {
+		out.WriteString("dex_ws_connect(")
+		g.genStringArg(out, e.Args[0])
+		out.WriteString(")")
+		return
+	}
+
+	// ws.send(conn, msg)
+	if e.Module == "ws" && e.Name == "send" {
+		out.WriteString("dex_ws_send(")
+		g.genExpr(out, e.Args[0])
+		out.WriteString(", ")
+		g.genStringArg(out, e.Args[1])
+		out.WriteString(")")
+		return
+	}
+
+	// ws.receive(conn) -> DexString*
+	if e.Module == "ws" && e.Name == "receive" {
+		out.WriteString("dex_ws_receive(")
+		g.genExpr(out, e.Args[0])
+		out.WriteString(")")
+		return
+	}
+
+	// ws.close(conn)
+	if e.Module == "ws" && e.Name == "close" {
+		out.WriteString("dex_ws_close(")
+		g.genExpr(out, e.Args[0])
+		out.WriteString(")")
+		return
+	}
+
+	// time.setTimeout / time.setInterval — resolve function name, emit C call
+	if e.Module == "time" && (e.Name == "setTimeout" || e.Name == "setInterval") {
+		var handlerName string
+		switch h := e.Args[0].(type) {
+		case *ast.Ident:
+			handlerName = h.Name
+		case *ast.CallExpr:
+			handlerName = h.Name
+			if h.Module != "" && g.userModules[h.Module] {
+				handlerName = h.Module + "_" + h.Name
+			}
+		}
+		if e.Name == "setTimeout" {
+			out.WriteString("dex_time_set_timeout(")
+		} else {
+			out.WriteString("dex_time_set_interval(")
+		}
+		out.WriteString(handlerName)
+		out.WriteString(", ")
+		g.genExpr(out, e.Args[1])
 		out.WriteString(")")
 		return
 	}

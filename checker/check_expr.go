@@ -612,11 +612,220 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if !ok {
 					return 0, c.errAt(e.Pos, "http.route() handler '%s' is not a defined function", handlerName)
 				}
-				if len(sig.Params) != 0 {
-					return 0, c.errAt(e.Pos, "http.route() handler '%s' must take no parameters", handlerName)
+				// Allow 0-param handlers or 1-param handlers taking http.HttpRequest
+				if len(sig.Params) == 0 {
+					// OK: no-param handler (backward compat)
+				} else if len(sig.Params) == 1 {
+					httpReqType, hasReq := ast.LookupStructType("HttpRequest")
+					if !hasReq {
+						return 0, c.errAt(e.Pos, "HttpRequest type not registered (internal error)")
+					}
+					if sig.Params[0] != httpReqType {
+						return 0, c.errAt(e.Pos, "http.route() handler '%s' parameter must be http.HttpRequest, got %s", handlerName, typeName(sig.Params[0]))
+					}
+				} else {
+					return 0, c.errAt(e.Pos, "http.route() handler '%s' must take 0 or 1 parameter (http.HttpRequest)", handlerName)
 				}
 				if sig.ReturnType == ast.TypeVoid {
 					return 0, c.errAt(e.Pos, "http.route() handler '%s' must have a return type", handlerName)
+				}
+				return ast.TypeVoid, nil
+			}
+
+			// Special case: http.response(statusCode, body, contentType) -> HttpResponse
+			if e.Module == "http" && e.Name == "response" {
+				httpRespType, ok := ast.LookupStructType("HttpResponse")
+				if !ok {
+					return 0, c.errAt(e.Pos, "HttpResponse type not registered (internal error)")
+				}
+				if len(e.Args) != 3 {
+					return 0, c.errAt(e.Pos, "http.response() takes exactly 3 arguments, got %d", len(e.Args))
+				}
+				arg0Type, err := c.checkExpr(e.Args[0])
+				if err != nil {
+					return 0, err
+				}
+				if arg0Type != ast.TypeInt {
+					return 0, c.errAt(e.Pos, "http.response() argument 1 must be int, got %s", typeName(arg0Type))
+				}
+				for i := 1; i < 3; i++ {
+					argType, err := c.checkExpr(e.Args[i])
+					if err != nil {
+						return 0, err
+					}
+					if argType != ast.TypeString {
+						return 0, c.errAt(e.Pos, "http.response() argument %d must be string, got %s", i+1, typeName(argType))
+					}
+				}
+				e.ResolvedType = httpRespType
+				return httpRespType, nil
+			}
+
+			// Special case: ws.handleMessage(handler) — validate handler signature
+			if e.Module == "ws" && e.Name == "handleMessage" {
+				if len(e.Args) != 1 {
+					return 0, c.errAt(e.Pos, "ws.handleMessage() takes exactly 1 argument, got %d", len(e.Args))
+				}
+				var handlerName string
+				switch h := e.Args[0].(type) {
+				case *ast.Ident:
+					handlerName = h.Name
+				case *ast.CallExpr:
+					if len(h.Args) != 0 {
+						return 0, c.errAt(e.Pos, "ws.handleMessage() handler must take exactly 2 parameters")
+					}
+					handlerName = h.Name
+					if h.Module != "" && c.userModules[h.Module] {
+						handlerName = h.Module + "_" + h.Name
+					}
+				default:
+					return 0, c.errAt(e.Pos, "ws.handleMessage() argument must be a function name")
+				}
+				sig, ok := c.funcs[handlerName]
+				if !ok {
+					return 0, c.errAt(e.Pos, "ws.handleMessage() handler '%s' is not a defined function", handlerName)
+				}
+				if len(sig.Params) != 2 {
+					return 0, c.errAt(e.Pos, "ws.handleMessage() handler '%s' must take 2 parameters (ws.Conn, string), got %d", handlerName, len(sig.Params))
+				}
+				wsConnType, hasConn := ast.LookupStructType("Conn")
+				if !hasConn {
+					return 0, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+				}
+				if sig.Params[0] != wsConnType {
+					return 0, c.errAt(e.Pos, "ws.handleMessage() handler '%s' parameter 1 must be ws.Conn, got %s", handlerName, typeName(sig.Params[0]))
+				}
+				if sig.Params[1] != ast.TypeString {
+					return 0, c.errAt(e.Pos, "ws.handleMessage() handler '%s' parameter 2 must be string, got %s", handlerName, typeName(sig.Params[1]))
+				}
+				if sig.ReturnType != ast.TypeVoid {
+					return 0, c.errAt(e.Pos, "ws.handleMessage() handler '%s' must return void", handlerName)
+				}
+				return ast.TypeVoid, nil
+			}
+
+			// Special case: ws.connect(url) -> ws.Conn
+			if e.Module == "ws" && e.Name == "connect" {
+				wsConnType, ok := ast.LookupStructType("Conn")
+				if !ok {
+					return 0, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+				}
+				if len(e.Args) != 1 {
+					return 0, c.errAt(e.Pos, "ws.connect() takes exactly 1 argument, got %d", len(e.Args))
+				}
+				argType, err := c.checkExpr(e.Args[0])
+				if err != nil {
+					return 0, err
+				}
+				if argType != ast.TypeString {
+					return 0, c.errAt(e.Pos, "ws.connect() argument must be string, got %s", typeName(argType))
+				}
+				e.ResolvedType = wsConnType
+				return wsConnType, nil
+			}
+
+			// Special case: ws.send(conn, msg)
+			if e.Module == "ws" && e.Name == "send" {
+				if len(e.Args) != 2 {
+					return 0, c.errAt(e.Pos, "ws.send() takes exactly 2 arguments, got %d", len(e.Args))
+				}
+				wsConnType, ok := ast.LookupStructType("Conn")
+				if !ok {
+					return 0, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+				}
+				arg0Type, err := c.checkExpr(e.Args[0])
+				if err != nil {
+					return 0, err
+				}
+				if arg0Type != wsConnType {
+					return 0, c.errAt(e.Pos, "ws.send() argument 1 must be ws.Conn, got %s", typeName(arg0Type))
+				}
+				arg1Type, err := c.checkExpr(e.Args[1])
+				if err != nil {
+					return 0, err
+				}
+				if arg1Type != ast.TypeString {
+					return 0, c.errAt(e.Pos, "ws.send() argument 2 must be string, got %s", typeName(arg1Type))
+				}
+				return ast.TypeVoid, nil
+			}
+
+			// Special case: ws.receive(conn) -> string
+			if e.Module == "ws" && e.Name == "receive" {
+				if len(e.Args) != 1 {
+					return 0, c.errAt(e.Pos, "ws.receive() takes exactly 1 argument, got %d", len(e.Args))
+				}
+				wsConnType, ok := ast.LookupStructType("Conn")
+				if !ok {
+					return 0, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+				}
+				argType, err := c.checkExpr(e.Args[0])
+				if err != nil {
+					return 0, err
+				}
+				if argType != wsConnType {
+					return 0, c.errAt(e.Pos, "ws.receive() argument must be ws.Conn, got %s", typeName(argType))
+				}
+				return ast.TypeString, nil
+			}
+
+			// Special case: ws.close(conn)
+			if e.Module == "ws" && e.Name == "close" {
+				if len(e.Args) != 1 {
+					return 0, c.errAt(e.Pos, "ws.close() takes exactly 1 argument, got %d", len(e.Args))
+				}
+				wsConnType, ok := ast.LookupStructType("Conn")
+				if !ok {
+					return 0, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+				}
+				argType, err := c.checkExpr(e.Args[0])
+				if err != nil {
+					return 0, err
+				}
+				if argType != wsConnType {
+					return 0, c.errAt(e.Pos, "ws.close() argument must be ws.Conn, got %s", typeName(argType))
+				}
+				return ast.TypeVoid, nil
+			}
+
+			// Special case: time.setTimeout(fn, ms) and time.setInterval(fn, ms)
+			if e.Module == "time" && (e.Name == "setTimeout" || e.Name == "setInterval") {
+				if len(e.Args) != 2 {
+					return 0, c.errAt(e.Pos, "time.%s() takes exactly 2 arguments, got %d", e.Name, len(e.Args))
+				}
+				// Arg 0: function name (Ident or CallExpr with 0 args)
+				var handlerName string
+				switch h := e.Args[0].(type) {
+				case *ast.Ident:
+					handlerName = h.Name
+				case *ast.CallExpr:
+					if len(h.Args) != 0 {
+						return 0, c.errAt(e.Pos, "time.%s() callback must take no arguments", e.Name)
+					}
+					handlerName = h.Name
+					if h.Module != "" && c.userModules[h.Module] {
+						handlerName = h.Module + "_" + h.Name
+					}
+				default:
+					return 0, c.errAt(e.Pos, "time.%s() argument 1 must be a function name", e.Name)
+				}
+				sig, ok := c.funcs[handlerName]
+				if !ok {
+					return 0, c.errAt(e.Pos, "time.%s() callback '%s' is not a defined function", e.Name, handlerName)
+				}
+				if len(sig.Params) != 0 {
+					return 0, c.errAt(e.Pos, "time.%s() callback '%s' must take no parameters", e.Name, handlerName)
+				}
+				// Arg 1: milliseconds (int)
+				msType, err := c.checkExpr(e.Args[1])
+				if err != nil {
+					return 0, err
+				}
+				if msType != ast.TypeInt {
+					return 0, c.errAt(e.Pos, "time.%s() argument 2 must be int, got %s", e.Name, typeName(msType))
+				}
+				if e.Name == "setInterval" {
+					return ast.TypeInt, nil
 				}
 				return ast.TypeVoid, nil
 			}

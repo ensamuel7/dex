@@ -10,7 +10,7 @@
 #include <signal.h>
 #include <curl/curl.h>
 
-typedef Dex_HttpResponse (*dex_handler_fn)(void);
+typedef Dex_HttpResponse (*dex_handler_fn)(Dex_HttpRequest);
 
 typedef struct {
     const char* method;
@@ -78,7 +78,7 @@ static const char* dex_http_status_text(int code) {
 }
 
 static void dex_handle_connection(int client_fd) {
-    char buf[4096];
+    char buf[8192];
 
     for (;;) {
         int n = (int)read(client_fd, buf, sizeof(buf) - 1);
@@ -87,19 +87,66 @@ static void dex_handle_connection(int client_fd) {
 
         // Parse method and path from request line
         char method[16] = {0};
-        char path[256] = {0};
-        sscanf(buf, "%15s %255s", method, path);
+        char raw_path[2048] = {0};
+        sscanf(buf, "%15s %2047s", method, raw_path);
+
+        // Split path and query string at '?'
+        char path[2048] = {0};
+        char query[2048] = {0};
+        char* qmark = strchr(raw_path, '?');
+        if (qmark) {
+            size_t plen = (size_t)(qmark - raw_path);
+            memcpy(path, raw_path, plen);
+            path[plen] = '\0';
+            strncpy(query, qmark + 1, sizeof(query) - 1);
+        } else {
+            strncpy(path, raw_path, sizeof(path) - 1);
+        }
 
         // Check for keep-alive (HTTP/1.1 defaults to keep-alive)
         int keep_alive = (strstr(buf, "HTTP/1.1") != NULL);
         if (strstr(buf, "Connection: close")) keep_alive = 0;
 
-        // Match route
+        // Parse Content-Length to read body
+        char body_buf[4096] = {0};
+        const char* cl_header = strstr(buf, "Content-Length:");
+        if (!cl_header) cl_header = strstr(buf, "content-length:");
+        if (cl_header) {
+            int content_length = atoi(cl_header + 15);
+            if (content_length > 0 && content_length < (int)sizeof(body_buf)) {
+                // Find end of headers (\r\n\r\n)
+                const char* body_start = strstr(buf, "\r\n\r\n");
+                if (body_start) {
+                    body_start += 4;
+                    int already_read = n - (int)(body_start - buf);
+                    if (already_read > 0) {
+                        int to_copy = already_read < content_length ? already_read : content_length;
+                        memcpy(body_buf, body_start, to_copy);
+                        // Read remaining body if needed
+                        int remaining = content_length - to_copy;
+                        if (remaining > 0 && to_copy + remaining < (int)sizeof(body_buf)) {
+                            int r = (int)read(client_fd, body_buf + to_copy, remaining);
+                            if (r > 0) body_buf[to_copy + r] = '\0';
+                        }
+                        body_buf[content_length] = '\0';
+                    }
+                }
+            }
+        }
+
+        // Build HttpRequest struct
+        Dex_HttpRequest req;
+        req.method = dex_string_from_lit(method);
+        req.path = dex_string_from_lit(path);
+        req.body = dex_string_from_lit(body_buf);
+        req.query = dex_string_from_lit(query);
+
+        // Match route (compare against path without query string)
         int matched = 0;
         for (int i = 0; i < dex_route_count; i++) {
             if (strcmp(method, dex_routes[i].method) == 0 &&
                 strcmp(path, dex_routes[i].path) == 0) {
-                Dex_HttpResponse resp = dex_routes[i].handler();
+                Dex_HttpResponse resp = dex_routes[i].handler(req);
                 const char* status = dex_http_status_text(resp.statusCode);
                 const char* ct = "application/json";
                 if (resp.contentType && resp.contentType->data[0] != '\0') {
@@ -112,6 +159,12 @@ static void dex_handle_connection(int client_fd) {
                 break;
             }
         }
+
+        // Release request strings
+        dex_release(req.method);
+        dex_release(req.path);
+        dex_release(req.body);
+        dex_release(req.query);
 
         if (!matched) {
             dex_send_response(client_fd, "404 Not Found",

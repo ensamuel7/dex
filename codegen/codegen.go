@@ -546,9 +546,30 @@ func (g *Generator) Generate(program *ast.Program) string {
 
 	// Forward declarations for handler functions used by HTTP
 	if _, ok := g.importedModules["http"]; ok {
+		httpReqType, _ := ast.LookupStructType("HttpRequest")
 		for _, fn := range program.Functions {
-			if len(fn.Params) == 0 && fn.Name != "main" {
+			if fn.Name == "main" {
+				continue
+			}
+			if len(fn.Params) == 0 {
 				out.WriteString(fmt.Sprintf("%s %s(void);\n", g.cType(fn.ReturnType), fn.Name))
+			} else if len(fn.Params) == 1 && fn.Params[0].Type == httpReqType {
+				out.WriteString(fmt.Sprintf("%s %s(Dex_HttpRequest %s);\n", g.cType(fn.ReturnType), fn.Name, fn.Params[0].Name))
+			}
+		}
+		out.WriteString("\n")
+	}
+
+	// Forward declarations for handler functions used by WebSocket
+	if _, ok := g.importedModules["ws"]; ok {
+		wsConnType, _ := ast.LookupStructType("Conn")
+		for _, fn := range program.Functions {
+			if fn.Name == "main" {
+				continue
+			}
+			if len(fn.Params) == 2 && fn.Params[0].Type == wsConnType && fn.Params[1].Type == ast.TypeString {
+				out.WriteString(fmt.Sprintf("%s %s(Dex_Conn %s, DexString* %s);\n",
+					g.cType(fn.ReturnType), fn.Name, fn.Params[0].Name, fn.Params[1].Name))
 			}
 		}
 		out.WriteString("\n")

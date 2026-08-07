@@ -902,20 +902,43 @@ http.listen(8080)
 
 #### Server
 
-| Function | Signature                                              | Description                        |
-|----------|--------------------------------------------------------|------------------------------------|
-| `route`  | `route(method: string, path: string, handler: string): void` | Register a route handler    |
-| `listen` | `listen(port: int): void`                              | Start the server on a port         |
+| Function   | Signature                                                      | Description                        |
+|------------|----------------------------------------------------------------|------------------------------------|
+| `route`    | `route(method: string, path: string, handler): void`           | Register a route handler           |
+| `listen`   | `listen(port: int): void`                                      | Start the server on a port         |
+| `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
 
-Handler functions must take no parameters and return `string`. They are referenced by name as a string literal:
+Handler functions can take **0 parameters** (backward-compatible) or **1 parameter** of type `http.HttpRequest`. They must return a non-void type (typically `HttpResponse` or `string`).
+
+**HttpRequest struct** (available to handlers taking a request parameter):
 
 ```dex
-fn my_handler(): string {
+struct HttpRequest {
+  method: string       // "GET", "POST", etc.
+  path: string         // "/api/foo"
+  body: string         // request body (empty string if none)
+  query: string        // raw query string after '?' (empty if none)
+}
+```
+
+**Examples:**
+
+```dex
+// Handler with request context (new)
+fn handlePost(req: http.HttpRequest): http.HttpResponse {
+  let body: string = req.body
+  let method: string = req.method
+  return http.response(200, body, "text/plain")
+}
+
+// Handler without request context (backward-compatible)
+fn handleGet(): string {
   return "{\"ok\": true}"
 }
 
 fn main(): void {
-  http.route("GET", "/api", "my_handler")
+  http.route("POST", "/echo", handlePost)
+  http.route("GET", "/api", handleGet)
   http.listen(3000)
 }
 ```
@@ -1144,7 +1167,7 @@ let val: double = math.pow(2.0, 10.0) // 1024.0
 
 ### time
 
-Time functions for measuring and waiting.
+Time functions for measuring, waiting, and scheduling.
 
 ```dex
 import "time"
@@ -1154,11 +1177,99 @@ time.sleep(100)  // sleep 100ms
 let elapsed: long = time.now() - start
 ```
 
-| Function  | Signature               | Description                          |
-|-----------|-------------------------|--------------------------------------|
-| `now`     | `now(): long`           | Current time in milliseconds         |
-| `nowNs`  | `nowNs(): long`        | Current time in nanoseconds          |
-| `sleep`   | `sleep(ms: int): void`  | Sleep for specified milliseconds     |
+| Function        | Signature                        | Description                                      |
+|-----------------|----------------------------------|--------------------------------------------------|
+| `now`           | `now(): long`                    | Current time in milliseconds                     |
+| `nowNs`         | `nowNs(): long`                  | Current time in nanoseconds                      |
+| `sleep`         | `sleep(ms: int): void`           | Sleep for specified milliseconds                 |
+| `setTimeout`    | `setTimeout(fn, ms: int): void`  | Call a function once after `ms` milliseconds     |
+| `setInterval`   | `setInterval(fn, ms: int): int`  | Call a function every `ms` milliseconds; returns timer ID |
+| `clearInterval` | `clearInterval(id: int): void`   | Stop a repeating interval by timer ID            |
+
+**Timer/Interval example:**
+
+```dex
+import "time"
+import "fmt"
+
+fn heartbeat(): void {
+  fmt.print("tick")
+}
+
+fn main(): void {
+  time.setTimeout(heartbeat, 5000)              // call once after 5s
+  let id: int = time.setInterval(heartbeat, 1000)  // call every 1s
+  time.sleep(10000)
+  time.clearInterval(id)                        // stop interval
+}
+```
+
+Timer callbacks must take no parameters and return void. Each timer runs on a separate thread.
+
+### ws
+
+WebSocket module for persistent bidirectional connections (RFC 6455).
+
+```dex
+import "ws"
+```
+
+#### Types
+
+**Conn** — WebSocket connection handle:
+
+```dex
+struct Conn {
+  fd: int          // socket file descriptor
+  isServer: int    // 1 if server-side, 0 if client-side
+}
+```
+
+#### Server
+
+| Function        | Signature                         | Description                               |
+|-----------------|-----------------------------------|-------------------------------------------|
+| `handleMessage` | `handleMessage(fn): void`         | Register message handler                  |
+| `listen`        | `listen(port: int): void`         | Start WebSocket server on port            |
+
+Message handlers must take `(conn: ws.Conn, msg: string)` and return `void`.
+
+```dex
+import "ws"
+import "fmt"
+
+fn onMessage(conn: ws.Conn, msg: string): void {
+  fmt.print("got: " + msg)
+  ws.send(conn, "echo: " + msg)
+}
+
+fn main(): void {
+  ws.handleMessage(onMessage)
+  ws.listen(9090)
+}
+```
+
+#### Client
+
+| Function  | Signature                          | Description                                |
+|-----------|------------------------------------|--------------------------------------------|
+| `connect` | `connect(url: string): ws.Conn`    | Connect to a WebSocket server              |
+| `send`    | `send(conn: ws.Conn, msg: string): void` | Send text message on connection      |
+| `receive` | `receive(conn: ws.Conn): string`   | Receive text message (blocking)            |
+| `close`   | `close(conn: ws.Conn): void`       | Close connection                           |
+
+```dex
+import "ws"
+
+fn main(): void {
+  let conn: ws.Conn = ws.connect("ws://localhost:9090")
+  ws.send(conn, "hello")
+  let reply: string = ws.receive(conn)
+  ws.close(conn)
+}
+```
+
+The WebSocket implementation supports text frames, automatic ping/pong handling, and proper client-side frame masking per RFC 6455. Each server connection runs on a separate thread.
 
 ### io
 

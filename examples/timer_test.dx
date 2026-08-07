@@ -1,0 +1,13 @@
+import "time"
+import "fmt"
+
+fn heartbeat(): void {
+    fmt.print("tick")
+}
+
+fn main(): void {
+    let id: int = time.setInterval(heartbeat, 500)
+    time.sleep(1200)
+    time.clearInterval(id)
+    fmt.print("done")
+}

@@ -60,11 +60,7 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		if g.isStringExpr(e.Left) || g.isStringExpr(e.Right) {
 			switch e.Op {
 			case ast.BinAdd:
-				out.WriteString("dex_str_concat(")
-				g.genExpr(out, e.Left)
-				out.WriteString(", ")
-				g.genExpr(out, e.Right)
-				out.WriteString(")")
+				g.genStringConcat(out, e)
 				return
 			case ast.BinEq, ast.BinStrictEq:
 				out.WriteString("(strcmp(")
@@ -289,6 +285,12 @@ func (g *Generator) genStringData(out *strings.Builder, expr ast.Expr) {
 }
 
 func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
+	// StringBuilder constructor
+	if e.Name == "StringBuilder" && e.Module == "" && !e.IsConstructor {
+		out.WriteString("dex_sb_new()")
+		return
+	}
+
 	// Constructor call: emit struct literal from positional args
 	if e.IsConstructor {
 		structDef := ast.GetStructDef(e.StructType)
@@ -797,13 +799,14 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	}
 
 	// http.response(statusCode, body, contentType) -> HttpResponse struct literal
+	// Retain borrowed string refs (body, contentType) for ownership transfer to worker thread.
 	if e.Module == "http" && e.Name == "response" {
 		out.WriteString("(Dex_HttpResponse){")
 		g.genExpr(out, e.Args[0])
 		out.WriteString(", ")
-		g.genExpr(out, e.Args[1])
+		g.genOwnedStringArg(out, e.Args[1])
 		out.WriteString(", ")
-		g.genExpr(out, e.Args[2])
+		g.genOwnedStringArg(out, e.Args[2])
 		out.WriteString("}")
 		return
 	}
@@ -1064,9 +1067,17 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			}
 			return
 		case "listen":
-			out.WriteString("dex_listen(")
-			g.genExpr(out, e.Args[0])
-			out.WriteString(")")
+			if len(e.Args) == 2 {
+				out.WriteString("dex_listen_multi(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(", ")
+				g.genExpr(out, e.Args[1])
+				out.WriteString(")")
+			} else {
+				out.WriteString("dex_listen(")
+				g.genExpr(out, e.Args[0])
+				out.WriteString(")")
+			}
 			return
 		}
 	}
@@ -1085,6 +1096,44 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		g.genExpr(out, e.Args[0])
 		out.WriteString(")) { fprintf(stderr, \"FAIL: assert failed\\n\"); exit(1); }")
 		return
+	}
+
+	// Check if this is a StringBuilder method call
+	if e.Module != "" && g.sbVars[e.Module] {
+		switch e.Name {
+		case "append":
+			argType := g.typeOfExpr(e.Args[0])
+			var fn string
+			switch argType {
+			case ast.TypeString:
+				fn = "dex_sb_append_str"
+			case ast.TypeInt:
+				fn = "dex_sb_append_int"
+			case ast.TypeLong:
+				fn = "dex_sb_append_long"
+			case ast.TypeDouble:
+				fn = "dex_sb_append_double"
+			case ast.TypeBool:
+				fn = "dex_sb_append_bool"
+			case ast.TypeChar:
+				fn = "dex_sb_append_char"
+			default:
+				fn = "dex_sb_append_str"
+			}
+			out.WriteString(fmt.Sprintf("%s(%s, ", fn, e.Module))
+			g.genExpr(out, e.Args[0])
+			out.WriteString(")")
+			return
+		case "toString":
+			out.WriteString(fmt.Sprintf("dex_sb_toString(%s)", e.Module))
+			return
+		case "len":
+			out.WriteString(fmt.Sprintf("dex_sb_len(%s)", e.Module))
+			return
+		case "clear":
+			out.WriteString(fmt.Sprintf("dex_sb_clear(%s)", e.Module))
+			return
+		}
 	}
 
 	// Check if this is a map method call (e.Module is a variable name or field chain)
@@ -1238,24 +1287,16 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString(fmt.Sprintf("dex_str_len(%s)", e.Module))
 				return
 			case "contains":
-				out.WriteString(fmt.Sprintf("dex_str_contains(%s, ", e.Module))
-				g.genExpr(out, e.Args[0])
-				out.WriteString(")")
+				g.genStrMethodWithArgs(out, "dex_str_contains", e.Module, e.Args[:1])
 				return
 			case "startsWith":
-				out.WriteString(fmt.Sprintf("dex_str_startsWith(%s, ", e.Module))
-				g.genExpr(out, e.Args[0])
-				out.WriteString(")")
+				g.genStrMethodWithArgs(out, "dex_str_startsWith", e.Module, e.Args[:1])
 				return
 			case "endsWith":
-				out.WriteString(fmt.Sprintf("dex_str_endsWith(%s, ", e.Module))
-				g.genExpr(out, e.Args[0])
-				out.WriteString(")")
+				g.genStrMethodWithArgs(out, "dex_str_endsWith", e.Module, e.Args[:1])
 				return
 			case "indexOf":
-				out.WriteString(fmt.Sprintf("dex_str_indexOf(%s, ", e.Module))
-				g.genExpr(out, e.Args[0])
-				out.WriteString(")")
+				g.genStrMethodWithArgs(out, "dex_str_indexOf", e.Module, e.Args[:1])
 				return
 			case "toLower":
 				out.WriteString(fmt.Sprintf("dex_str_toLower(%s)", e.Module))
@@ -1267,9 +1308,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString(fmt.Sprintf("dex_str_trim(%s)", e.Module))
 				return
 			case "split":
-				out.WriteString(fmt.Sprintf("dex_str_split(%s, ", e.Module))
-				g.genExpr(out, e.Args[0])
-				out.WriteString(")")
+				g.genStrMethodWithArgs(out, "dex_str_split", e.Module, e.Args[:1])
 				return
 			case "substring":
 				out.WriteString(fmt.Sprintf("dex_str_substring(%s, ", e.Module))
@@ -1279,11 +1318,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString(")")
 				return
 			case "replace":
-				out.WriteString(fmt.Sprintf("dex_str_replace(%s, ", e.Module))
-				g.genExpr(out, e.Args[0])
-				out.WriteString(", ")
-				g.genExpr(out, e.Args[1])
-				out.WriteString(")")
+				g.genStrMethodWithArgs(out, "dex_str_replace", e.Module, e.Args[:2])
 				return
 			case "charAt":
 				out.WriteString(fmt.Sprintf("dex_str_charAt(%s, ", e.Module))
@@ -1382,6 +1417,22 @@ func (g *Generator) genOptionalArg(out *strings.Builder, arg ast.Expr, paramType
 	}
 }
 
+// genOwnedStringArg generates a string argument that transfers ownership (+1).
+// If the expression is already a new allocation (+1 from call/literal/concat),
+// it is emitted directly. Otherwise (borrowed ref like variable, field, index),
+// it emits a retain to create an owned copy.
+func (g *Generator) genOwnedStringArg(out *strings.Builder, arg ast.Expr) {
+	if g.isNewAlloc(arg) {
+		g.genExpr(out, arg)
+	} else {
+		out.WriteString("(dex_retain(")
+		g.genExpr(out, arg)
+		out.WriteString("), ")
+		g.genExpr(out, arg)
+		out.WriteString(")")
+	}
+}
+
 // genStringArg generates a string argument for a stdlib function, extracting ->data
 func (g *Generator) genStringArg(out *strings.Builder, arg ast.Expr) {
 	argType := g.typeOfExpr(arg)
@@ -1396,6 +1447,57 @@ func (g *Generator) genStringArg(out *strings.Builder, arg ast.Expr) {
 	} else {
 		g.genExpr(out, arg)
 	}
+}
+
+// genStrMethodWithArgs generates a string method call, wrapping any string literal
+// arguments in a statement-expression that releases the temp after the call.
+func (g *Generator) genStrMethodWithArgs(out *strings.Builder, cFunc, receiver string, args []ast.Expr) {
+	// Check if any arg is a string literal (produces +1 ref that would leak)
+	hasLitArg := false
+	for _, arg := range args {
+		if _, ok := arg.(*ast.StringLit); ok {
+			hasLitArg = true
+			break
+		}
+	}
+	if !hasLitArg {
+		// No string literal temps — emit directly
+		out.WriteString(fmt.Sprintf("%s(%s", cFunc, receiver))
+		for _, arg := range args {
+			out.WriteString(", ")
+			g.genExpr(out, arg)
+		}
+		out.WriteString(")")
+		return
+	}
+	// Wrap in statement-expression to release string literal temps
+	out.WriteString("({ ")
+	var tmpNames []string
+	for _, arg := range args {
+		tmp := g.nextTemp()
+		tmpNames = append(tmpNames, tmp)
+		if _, ok := arg.(*ast.StringLit); ok {
+			out.WriteString(fmt.Sprintf("DexString* %s = ", tmp))
+		} else {
+			// Non-literal args: capture the type from the expression
+			out.WriteString(fmt.Sprintf("DexString* %s = ", tmp))
+		}
+		g.genExpr(out, arg)
+		out.WriteString("; ")
+	}
+	resTmp := g.nextTemp()
+	out.WriteString(fmt.Sprintf("__auto_type %s = %s(%s", resTmp, cFunc, receiver))
+	for _, tmp := range tmpNames {
+		out.WriteString(fmt.Sprintf(", %s", tmp))
+	}
+	out.WriteString("); ")
+	// Release only the string literal temps
+	for i, arg := range args {
+		if _, ok := arg.(*ast.StringLit); ok {
+			out.WriteString(fmt.Sprintf("dex_release(%s); ", tmpNames[i]))
+		}
+	}
+	out.WriteString(fmt.Sprintf("%s; })", resTmp))
 }
 
 // genStdlibArg generates an argument for a stdlib function with CName,
@@ -1785,6 +1887,104 @@ func (g *Generator) genNullComparison(out *strings.Builder, e *ast.BinaryExpr, w
 	}
 }
 
+// flattenStringConcat flattens a chain of BinaryExpr{BinAdd} nodes on strings
+// into a list of leaf operands (left-to-right).
+func (g *Generator) flattenStringConcat(expr ast.Expr) []ast.Expr {
+	bin, ok := expr.(*ast.BinaryExpr)
+	if !ok || bin.Op != ast.BinAdd || !(g.isStringExpr(bin.Left) || g.isStringExpr(bin.Right)) {
+		return []ast.Expr{expr}
+	}
+	var result []ast.Expr
+	result = append(result, g.flattenStringConcat(bin.Left)...)
+	result = append(result, g.flattenStringConcat(bin.Right)...)
+	return result
+}
+
+// genStringConcat generates a linearized string concatenation chain.
+// It flattens nested BinAdd nodes, emits each operand that produces a +1 allocation
+// into a temp variable (registered in pendingReleases), and chains dex_str_concat calls
+// while releasing intermediates.
+func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) {
+	operands := g.flattenStringConcat(expr)
+
+	if len(operands) < 2 {
+		// Shouldn't happen, but handle defensively
+		g.genExpr(out, operands[0])
+		return
+	}
+
+	// For a simple 2-operand concat, release +1 operand temps inline
+	if len(operands) == 2 {
+		leftNew := g.isNewAlloc(operands[0])
+		rightNew := g.isNewAlloc(operands[1])
+		if !leftNew && !rightNew {
+			// Both borrowed — simple emit
+			out.WriteString("dex_str_concat(")
+			g.genExpr(out, operands[0])
+			out.WriteString(", ")
+			g.genExpr(out, operands[1])
+			out.WriteString(")")
+			return
+		}
+		// At least one operand is +1 — use statement-expression to release it
+		out.WriteString("({ ")
+		lTmp := g.nextTemp()
+		out.WriteString(fmt.Sprintf("DexString* %s = ", lTmp))
+		g.genExpr(out, operands[0])
+		out.WriteString("; ")
+		rTmp := g.nextTemp()
+		out.WriteString(fmt.Sprintf("DexString* %s = ", rTmp))
+		g.genExpr(out, operands[1])
+		out.WriteString("; ")
+		resTmp := g.nextTemp()
+		out.WriteString(fmt.Sprintf("DexString* %s = dex_str_concat(%s, %s); ", resTmp, lTmp, rTmp))
+		if leftNew {
+			out.WriteString(fmt.Sprintf("dex_release(%s); ", lTmp))
+		}
+		if rightNew {
+			out.WriteString(fmt.Sprintf("dex_release(%s); ", rTmp))
+		}
+		out.WriteString(fmt.Sprintf("%s; })", resTmp))
+		return
+	}
+
+	// For 3+ operands, use statement-expression to linearize and release intermediates.
+	// This avoids deeply nested dex_str_concat calls that leak intermediates.
+	out.WriteString("({ ")
+
+	// Emit each operand that needs a temp
+	operandVars := make([]string, len(operands))
+	for i, op := range operands {
+		tmpName := g.nextTemp()
+		operandVars[i] = tmpName
+		out.WriteString(fmt.Sprintf("DexString* %s = ", tmpName))
+		g.genExpr(out, op)
+		out.WriteString("; ")
+	}
+
+	// Chain concat calls, releasing intermediates
+	resultVar := operandVars[0]
+	for i := 1; i < len(operandVars); i++ {
+		concatTmp := g.nextTemp()
+		out.WriteString(fmt.Sprintf("DexString* %s = dex_str_concat(%s, %s); ", concatTmp, resultVar, operandVars[i]))
+		// Release the operand if it was a +1 allocation (not a borrowed ref)
+		if g.isNewAlloc(operands[i]) {
+			out.WriteString(fmt.Sprintf("dex_release(%s); ", operandVars[i]))
+		}
+		// Release the previous intermediate (except the first operand on first iteration)
+		if i > 1 {
+			// Previous resultVar was an intermediate concat result — release it
+			out.WriteString(fmt.Sprintf("dex_release(%s); ", resultVar))
+		} else if g.isNewAlloc(operands[0]) {
+			// First operand was a +1 allocation, release it after first concat
+			out.WriteString(fmt.Sprintf("dex_release(%s); ", operandVars[0]))
+		}
+		resultVar = concatTmp
+	}
+
+	out.WriteString(fmt.Sprintf("%s; })", resultVar))
+}
+
 // isStringExpr checks if an expression is known to produce a string type.
 func (g *Generator) isStringExpr(expr ast.Expr) bool {
 	switch e := expr.(type) {
@@ -1813,6 +2013,10 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 					return false
 				}
 			}
+		}
+		// StringBuilder methods that return strings
+		if e.Module != "" && g.sbVars[e.Module] {
+			return e.Name == "toString"
 		}
 		// String methods that return strings
 		if e.Module != "" && g.strVars[e.Module] {

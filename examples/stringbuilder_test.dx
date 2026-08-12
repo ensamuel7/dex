@@ -1,0 +1,45 @@
+import "str"
+
+fn main(): void {
+    // Basic usage
+    let sb = StringBuilder()
+    sb.append("hello")
+    sb.append(" ")
+    sb.append("world")
+    let result: string = sb.toString()
+    assert(result == "hello world")
+
+    // Polymorphic append
+    let sb2 = StringBuilder()
+    sb2.append("n=")
+    sb2.append(42)
+    sb2.append(" pi=")
+    sb2.append(3.14)
+    sb2.append(" ok=")
+    sb2.append(true)
+    let poly: string = sb2.toString()
+    assert(poly == "n=42 pi=3.14 ok=true")
+
+    // len and clear
+    let sb3 = StringBuilder()
+    assert(sb3.len() == 0)
+    sb3.append("test")
+    assert(sb3.len() == 4)
+    sb3.clear()
+    assert(sb3.len() == 0)
+
+    // Loop performance pattern (the motivating use case)
+    let sb4 = StringBuilder()
+    for(let i = 0; i < 100; i++) {
+        sb4.append(str.fromInt(i))
+        sb4.append(",")
+    }
+    let csv: string = sb4.toString()
+    assert(csv.startsWith("0,1,2,"))
+    assert(csv.endsWith("99,"))
+
+    // Type annotation
+    let sb5: StringBuilder = StringBuilder()
+    sb5.append("typed")
+    assert(sb5.toString() == "typed")
+}

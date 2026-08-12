@@ -40,3 +40,6 @@ var MapRuntime string
 
 //go:embed cruntime/event_loop.c
 var EventLoopRuntime string
+
+//go:embed cruntime/stringbuilder.c
+var StringBuilderRuntime string

@@ -161,6 +161,9 @@ func runTests() {
 		}
 
 		cmd := exec.Command(binaryPath)
+		if os.Getenv("DEX_SANITIZE") == "1" {
+			cmd.Env = append(os.Environ(), "ASAN_OPTIONS=detect_leaks=1")
+		}
 		output, err := cmd.CombinedOutput()
 		os.Remove(binaryPath)
 
@@ -412,6 +415,9 @@ func build(filename string) (string, error) {
 	binaryPath := filepath.Join(buildDir, baseName)
 	compiler := "cc"
 	args := append([]string{"-o", binaryPath}, gen.CompilerFlags()...)
+	if os.Getenv("DEX_SANITIZE") == "1" {
+		args = append(args, "-fsanitize=address", "-fno-omit-frame-pointer", "-g")
+	}
 	args = append(args, cFile)
 	cmd := exec.Command(compiler, args...)
 	cmd.Stderr = os.Stderr

@@ -21,11 +21,11 @@ func init() {
 				Doc:        "Register a route handler for the given HTTP method and path.",
 			},
 			"listen": {
-				Params:     []ast.Type{ast.TypeInt},
-				ParamNames: []string{"port"},
+				Params:     nil, // special-cased in checker: 1-2 int args
+				ParamNames: []string{"port", "workers"},
 				ReturnType: ast.TypeVoid,
-				CName:      "dex_listen",
-				Doc:        "Start the HTTP server on the specified port.",
+				CName:      "",
+				Doc:        "Start the HTTP server on the specified port. Optional second argument specifies the number of worker processes (0 = auto-detect based on CPU cores).",
 			},
 			// HTTP client functions — special-cased in checker/codegen (Params: nil, CName: "")
 			"get": {

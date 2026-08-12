@@ -1,0 +1,67 @@
+import "str"
+
+struct Item {
+    label: string
+    value: int
+}
+
+fn main(): void {
+    // Phase 1 regression: string variable in loop body + continue
+    // Before fix: continue skipped release of loop-body-scoped strings
+    let count = 0
+    for(let i = 0; i < 10; i++) {
+        let line: string = "iteration-" + str.fromInt(i)
+        if (i % 2 == 0) {
+            continue
+        }
+        count++
+    }
+    assert(count == 5)
+
+    // Phase 1 regression: while loop with break
+    let found: string = ""
+    let idx = 0
+    while (idx < 5) {
+        let candidate: string = "item-" + str.fromInt(idx)
+        if (idx == 3) {
+            found = candidate
+            break
+        }
+        idx++
+    }
+    assert(found == "item-3")
+
+    // Phase 2 regression: string assigned from struct field access
+    let item = Item { label: "hello", value: 42 }
+    let name: string = item.label
+    assert(name == "hello")
+
+    // Phase 2 regression: string assigned from array index
+    let names: string[] = ["alpha", "beta", "gamma"]
+    let picked: string = names[1]
+    assert(picked == "beta")
+
+    // Phase 2 regression: reassignment from field access
+    let tag: string = "initial"
+    tag = item.label
+    assert(tag == "hello")
+
+    // Phase 2 regression: reassignment from array index
+    let sel: string = "start"
+    sel = names[2]
+    assert(sel == "gamma")
+
+    // Phase 3 regression: string concat chain in a loop
+    let csv: string = ""
+    for(let i = 0; i < 5; i++) {
+        csv = csv + str.fromInt(i) + ","
+    }
+    assert(csv == "0,1,2,3,4,")
+
+    // Phase 3 regression: multi-operand concat
+    let a: string = "hello"
+    let b: string = " "
+    let c: string = "world"
+    let result: string = a + b + c + "!"
+    assert(result == "hello world!")
+}

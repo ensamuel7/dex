@@ -549,6 +549,41 @@ items.push(20)
 let count: int = items.len()  // 2</code></pre>
 </section>
 
+<!-- StringBuilder -->
+<section id="stringbuilder" class="page-section">
+<h2>StringBuilder</h2>
+
+<p><code>StringBuilder</code> is a built-in type for efficiently building strings via a growable buffer. It avoids the O(n&sup2;) cost of repeated string concatenation in loops. No import is needed.</p>
+
+<h3>Creating a StringBuilder</h3>
+<pre><code>let sb = StringBuilder()
+sb.append("hello ")
+sb.append(42)
+let result: string = sb.toString() // "hello 42"</code></pre>
+
+<h3>StringBuilder Methods</h3>
+<table>
+<tr><th>Method</th><th>Description</th><th>Returns</th></tr>
+<tr><td><code>.append(value)</code></td><td>Append a value (string, int, long, double, bool, or char)</td><td><code>void</code></td></tr>
+<tr><td><code>.toString()</code></td><td>Build the final string from the buffer</td><td><code>string</code></td></tr>
+<tr><td><code>.len()</code></td><td>Get the current length of the buffer</td><td><code>int</code></td></tr>
+<tr><td><code>.clear()</code></td><td>Reset the buffer to empty</td><td><code>void</code></td></tr>
+</table>
+
+<h3>Loop Pattern</h3>
+<p>The primary use case is building strings in loops without O(n&sup2;) overhead:</p>
+<pre><code>import "str"
+
+let sb = StringBuilder()
+for (let i = 0; i < 100; i++) {
+    sb.append(str.fromInt(i))
+    sb.append(",")
+}
+let csv: string = sb.toString()</code></pre>
+
+<p><code>StringBuilder</code> is reference-counted and automatically released at scope exit.</p>
+</section>
+
 <!-- Structs -->
 <section id="structs" class="page-section">
 <h2>Structs</h2>

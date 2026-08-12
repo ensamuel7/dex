@@ -511,6 +511,31 @@ let r: string = s.replace("World", "Dex") // "Hello, Dex"
 let c: char = s.charAt(0)         // 'H'
 ```
 
+### StringBuilder
+
+`StringBuilder` is a built-in type for efficiently building strings via a growable buffer. It avoids the O(n²) cost of repeated string concatenation in loops. No import is needed.
+
+```dex
+let sb = StringBuilder()
+sb.append("hello")
+sb.append(" ")
+sb.append(42)
+sb.append(" pi=")
+sb.append(3.14)
+let result: string = sb.toString() // "hello 42 pi=3.14"
+```
+
+The `append()` method is polymorphic and accepts `string`, `int`, `long`, `double`, `bool`, and `char` values.
+
+| Method        | Description                              | Returns  |
+|---------------|------------------------------------------|----------|
+| `.append(v)`  | Append a value (string/int/long/double/bool/char) | `void`   |
+| `.toString()` | Build the final string                   | `string` |
+| `.len()`      | Current length of the buffer             | `int`    |
+| `.clear()`    | Reset the buffer to empty                | `void`   |
+
+`StringBuilder` is refcounted and automatically released at scope exit.
+
 ---
 
 ## Functions
@@ -945,7 +970,7 @@ http.listen(8080)
 | Function   | Signature                                                      | Description                        |
 |------------|----------------------------------------------------------------|------------------------------------|
 | `route`    | `route(method: string, path: string, handler): void`           | Register a route handler           |
-| `listen`   | `listen(port: int): void`                                      | Start the server on a port         |
+| `listen`   | `listen(port: int, workers?: int): void`                       | Start the server on a port. Optional `workers` forks multiple processes via `SO_REUSEPORT` (0 = auto-detect CPU cores). |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
 
 Handler functions can take **0 parameters** (backward-compatible) or **1 parameter** of type `http.HttpRequest`. They must return a non-void type (typically `HttpResponse` or `string`).

@@ -28,7 +28,8 @@ type Generator struct {
 	usesExceptions    bool
 	usesStringMethods bool
 	usesMap           bool
-	usesEventLoop     bool
+	usesEventLoop       bool
+	usesStringBuilder   bool
 
 	tryCatchCounter int
 	switchCounter   int
@@ -42,6 +43,7 @@ type Generator struct {
 	arrVars    map[string]ast.Type   // variables known to be array type (name -> array type)
 	structVars map[string]ast.Type   // variables known to be struct type
 	mapVars    map[string]ast.Type   // variables known to be map type (name -> map type)
+	sbVars     map[string]bool      // variables known to be StringBuilder type
 	varTypes   map[string]ast.Type   // all variable types for this function scope
 
 	foreachCounter     int            // unique counter for foreach loop variables
@@ -62,6 +64,10 @@ type Generator struct {
 	// Type narrowing for optional types in null checks
 	narrowedVars   map[string]string   // varName -> narrowed C var name in current scope
 	narrowStack    []map[string]string // stack of narrowedVars snapshots for scope management
+
+	// Statement-level temp tracking for string concat intermediates
+	pendingReleases []string // temp var names to release after current statement
+	tempCounter     int      // unique counter for temp names
 }
 
 func New() *Generator {
@@ -74,6 +80,7 @@ func New() *Generator {
 		arrVars:         make(map[string]ast.Type),
 		structVars:      make(map[string]ast.Type),
 		mapVars:         make(map[string]ast.Type),
+		sbVars:          make(map[string]bool),
 		varTypes:        make(map[string]ast.Type),
 		funcTypedefs:    make(map[ast.Type]string),
 		varAnnotations:  make(map[string][]string),
@@ -173,7 +180,7 @@ func (g *Generator) emitCleanupAll(out *strings.Builder, prefix string, exceptVa
 	}
 }
 
-// emitCleanupInnerScopes releases vars from inner scopes down to (not including) targetDepth
+// emitCleanupInnerScopes releases vars from inner scopes down to (and including) targetDepth
 func (g *Generator) emitCleanupInnerScopes(out *strings.Builder, prefix string, targetDepth int) {
 	for i := len(g.scopeStack) - 1; i >= targetDepth; i-- {
 		scope := g.scopeStack[i]
@@ -270,6 +277,21 @@ func (g *Generator) hasHeapVarsInScope() bool {
 	return false
 }
 
+// nextTemp returns a unique temporary variable name for string intermediates.
+func (g *Generator) nextTemp() string {
+	name := fmt.Sprintf("_dex_tmp_%d", g.tempCounter)
+	g.tempCounter++
+	return name
+}
+
+// flushPendingReleases emits dex_release calls for all pending temporary variables.
+func (g *Generator) flushPendingReleases(out *strings.Builder, prefix string) {
+	for _, name := range g.pendingReleases {
+		out.WriteString(fmt.Sprintf("%sdex_release(%s);\n", prefix, name))
+	}
+	g.pendingReleases = nil
+}
+
 // CompilerFlags returns extra flags needed for the C compiler based on features used.
 // Must be called after Generate().
 func (g *Generator) CompilerFlags() []string {
@@ -326,9 +348,15 @@ func (g *Generator) Generate(program *ast.Program) string {
 		g.usesArray = true
 	}
 
-	// Arrays depend on the string runtime (DexArrayString uses DexString)
+	// StringBuilder depends on the string runtime
+	if g.usesStringBuilder {
+		g.usesString = true
+	}
+
+	// Arrays depend on the string runtime (DexArrayString uses DexString) and safety runtime (dex_panic)
 	if g.usesArray {
 		g.usesString = true
+		g.usesSafety = true
 	}
 
 	// Event loop is needed when HTTP or WebSocket server modules are imported
@@ -426,6 +454,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit string runtime (language-level feature for + on strings)
 	if g.usesString {
 		out.WriteString(StringRuntime)
+	}
+
+	// Emit StringBuilder runtime (must come after string runtime, before array)
+	if g.usesStringBuilder {
+		out.WriteString(StringBuilderRuntime)
 	}
 
 	// Emit array runtime (must come before module runtimes that reference array types)
@@ -744,6 +777,9 @@ func (g *Generator) scanType(t ast.Type) {
 	if ast.IsMapType(t) {
 		g.usesMap = true
 	}
+	if t == ast.TypeStringBuilder {
+		g.usesStringBuilder = true
+	}
 }
 
 func (g *Generator) scanStmt(stmt ast.Stmt) {
@@ -860,6 +896,10 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		// Scan for bool usage from json module
 		if e.Module == "json" {
 			g.usesBool = true
+		}
+		// Scan for StringBuilder usage
+		if e.Module == "" && e.Name == "StringBuilder" {
+			g.usesStringBuilder = true
 		}
 		// Scan for assert usage
 		if e.Module == "" && e.Name == "assert" {

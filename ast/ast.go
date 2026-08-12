@@ -24,6 +24,7 @@ const (
 	TypeArrayDouble
 	TypeChar
 	TypeArrayChar
+	TypeStringBuilder
 )
 
 // TypeInferred is used during parsing when a let statement has no explicit type annotation.
@@ -277,7 +278,7 @@ func FuncTypeReturn(t Type) Type {
 }
 
 func IsHeapType(t Type) bool {
-	return t == TypeString || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t)
+	return t == TypeString || t == TypeStringBuilder || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t)
 }
 
 func NeedsRelease(t Type) bool {

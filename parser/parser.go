@@ -469,7 +469,10 @@ func (p *Parser) parseType() (ast.Type, error) {
 		return ast.MapTypeOf(keyType, valType), nil
 	case token.TokenIdent:
 		name := tok.Value
-		if p.structNames[name] {
+		if name == "StringBuilder" {
+			p.advance()
+			base = ast.TypeStringBuilder
+		} else if p.structNames[name] {
 			p.advance()
 			t, ok := ast.LookupStructType(name)
 			if !ok {

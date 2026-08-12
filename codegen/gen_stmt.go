@@ -13,6 +13,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.arrVars = make(map[string]ast.Type)
 	g.structVars = make(map[string]ast.Type)
 	g.mapVars = make(map[string]ast.Type)
+	g.sbVars = make(map[string]bool)
 	g.varTypes = make(map[string]ast.Type)
 	g.varAnnotations = make(map[string][]string)
 	g.foreachCounter = 0
@@ -36,6 +37,9 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		}
 		if ast.IsMapType(p.Type) {
 			g.mapVars[p.Name] = p.Type
+		}
+		if p.Type == ast.TypeStringBuilder {
+			g.sbVars[p.Name] = true
 		}
 	}
 
@@ -109,6 +113,9 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		}
 		if ast.IsMapType(s.Type) {
 			g.mapVars[s.Name] = s.Type
+		}
+		if s.Type == ast.TypeStringBuilder {
+			g.sbVars[s.Name] = true
 		}
 		// Special case for map literal: let m: map[K,V] = {}
 		if _, ok := s.Value.(*ast.MapLitExpr); ok {
@@ -191,12 +198,20 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 				out.WriteString(fmt.Sprintf("%sDexString* %s = ", prefix, s.Name))
 				g.genExpr(out, s.Value)
 				out.WriteString(";\n")
-				// If RHS is a variable reference (borrowed), retain it
+				// If RHS is a borrowed reference (variable, array index, or field access), retain it
 				// But not for #[owned] — ownership transfer, no retain
+				isBorrowed := false
 				if _, ok := s.Value.(*ast.Ident); ok {
-					if !ast.HasAnnotation(s.Annotations, ast.AnnotOwned) {
-						out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, s.Name))
-					}
+					isBorrowed = true
+				}
+				if _, ok := s.Value.(*ast.IndexExpr); ok {
+					isBorrowed = true
+				}
+				if _, ok := s.Value.(*ast.FieldAccessExpr); ok {
+					isBorrowed = true
+				}
+				if isBorrowed && !ast.HasAnnotation(s.Annotations, ast.AnnotOwned) {
+					out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, s.Name))
 				}
 			}
 			g.registerScopeVar(s.Name, s.Type)
@@ -441,7 +456,17 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 						out.WriteString(fmt.Sprintf("%s{ %s _dex_old = %s; %s = ", prefix, g.cType(varType), s.Name, s.Name))
 						g.genExpr(out, s.Value)
 						out.WriteString(";")
+						isBorrowed := false
 						if _, ok := s.Value.(*ast.Ident); ok {
+							isBorrowed = true
+						}
+						if _, ok := s.Value.(*ast.IndexExpr); ok {
+							isBorrowed = true
+						}
+						if _, ok := s.Value.(*ast.FieldAccessExpr); ok {
+							isBorrowed = true
+						}
+						if isBorrowed {
 							out.WriteString(fmt.Sprintf(" dex_retain(%s);", s.Name))
 						}
 						out.WriteString(" if (_dex_old) { dex_release(_dex_old); } }\n")
@@ -459,8 +484,18 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			out.WriteString(fmt.Sprintf("%s{ %s _dex_old = %s; %s = ", prefix, g.cType(varType), s.Name, s.Name))
 			g.genExpr(out, s.Value)
 			out.WriteString(";")
-			// If the RHS is a variable reference (borrowed), retain
+			// If the RHS is a borrowed reference (variable, array index, or field access), retain
+			isBorrowed := false
 			if _, ok := s.Value.(*ast.Ident); ok {
+				isBorrowed = true
+			}
+			if _, ok := s.Value.(*ast.IndexExpr); ok {
+				isBorrowed = true
+			}
+			if _, ok := s.Value.(*ast.FieldAccessExpr); ok {
+				isBorrowed = true
+			}
+			if isBorrowed {
 				out.WriteString(fmt.Sprintf(" dex_retain(%s);", s.Name))
 			}
 			out.WriteString(" dex_release(_dex_old); }\n")
@@ -508,8 +543,8 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		savedLoop := g.isInLoop
 		savedDepth := g.loopDepth
 		g.isInLoop = true
-		g.pushScope()
 		g.loopDepth = len(g.scopeStack)
+		g.pushScope()
 		for _, stmt := range s.Body {
 			g.genStmt(out, stmt, indent+1)
 		}
@@ -529,8 +564,8 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		savedLoop := g.isInLoop
 		savedDepth := g.loopDepth
 		g.isInLoop = true
-		g.pushScope()
 		g.loopDepth = len(g.scopeStack)
+		g.pushScope()
 		for _, stmt := range s.Body {
 			g.genStmt(out, stmt, indent+1)
 		}
@@ -555,8 +590,8 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		savedLoop := g.isInLoop
 		savedDepth := g.loopDepth
 		g.isInLoop = true
-		g.pushScope()
 		g.loopDepth = len(g.scopeStack)
+		g.pushScope()
 		// Declare value variable
 		innerPrefix := strings.Repeat("    ", indent+1)
 		if ast.IsStructArrayType(arrType) {

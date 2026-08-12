@@ -34,6 +34,8 @@ func (g *Generator) cType(t ast.Type) string {
 		return "unsigned char"
 	case ast.TypeArrayChar:
 		return "DexArrayChar*"
+	case ast.TypeStringBuilder:
+		return "DexStringBuilder*"
 	case ast.TypeVoid:
 		return "void"
 	default:
@@ -382,6 +384,17 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 						return ast.ArrayTypeOf(ast.MapValueType(chainType))
 					}
 				}
+			}
+		}
+		// StringBuilder method calls
+		if e.Module != "" && g.sbVars[e.Module] {
+			switch e.Name {
+			case "len":
+				return ast.TypeInt
+			case "toString":
+				return ast.TypeString
+			case "append", "clear":
+				return ast.TypeVoid
 			}
 		}
 		// String method calls

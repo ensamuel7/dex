@@ -358,6 +358,15 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return retType, nil
 			}
 
+			// Check if module is a StringBuilder variable (StringBuilder method call)
+			if isVar && varType == ast.TypeStringBuilder {
+				retType, err := c.checkStringBuilderMethod(e.Module, e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				return retType, nil
+			}
+
 			// Resolve dotted field access: self.database -> look up field type
 			// This handles struct methods that call methods on struct-typed fields.
 			if !isVar && strings.Contains(e.Module, ".") {
@@ -1070,6 +1079,23 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return ast.TypeString, nil
 			}
 
+			// Special case: http.listen(port) or http.listen(port, workers)
+			if e.Module == "http" && e.Name == "listen" {
+				if len(e.Args) < 1 || len(e.Args) > 2 {
+					return 0, c.errAt(e.Pos, "http.listen() takes 1-2 arguments, got %d", len(e.Args))
+				}
+				for i, arg := range e.Args {
+					argType, err := c.checkExpr(arg)
+					if err != nil {
+						return 0, err
+					}
+					if argType != ast.TypeInt {
+						return 0, c.errAt(e.Pos, "http.listen() argument %d must be int, got %s", i+1, typeName(argType))
+					}
+				}
+				return ast.TypeVoid, nil
+			}
+
 			// HTTP form builder functions returning string
 			if e.Module == "http" && (e.Name == "formNew" || e.Name == "formField" || e.Name == "formFile") {
 				switch e.Name {
@@ -1173,6 +1199,14 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 			}
 			return fnReturn, nil
+		}
+
+		// Built-in StringBuilder constructor
+		if e.Name == "StringBuilder" && e.Module == "" {
+			if len(e.Args) != 0 {
+				return 0, c.errAt(e.Pos, "StringBuilder() takes no arguments")
+			}
+			return ast.TypeStringBuilder, nil
 		}
 
 		// Unqualified constructor call: StructName(args)
@@ -1499,6 +1533,44 @@ func (c *Checker) checkMapMethod(varName string, mapType ast.Type, method string
 	}
 }
 
+// checkStringBuilderMethod validates a method call on a StringBuilder variable.
+func (c *Checker) checkStringBuilderMethod(varName, method string, args []ast.Expr, pos ast.Pos) (ast.Type, error) {
+	switch method {
+	case "append":
+		if len(args) != 1 {
+			return 0, c.errAt(pos, "%s.append() takes exactly 1 argument, got %d", varName, len(args))
+		}
+		argType, err := c.checkExpr(args[0])
+		if err != nil {
+			return 0, err
+		}
+		switch argType {
+		case ast.TypeString, ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeBool, ast.TypeChar:
+			// all valid
+		default:
+			return 0, c.errAt(pos, "%s.append() argument must be string, int, long, double, bool, or char, got %s", varName, typeName(argType))
+		}
+		return ast.TypeVoid, nil
+	case "toString":
+		if len(args) != 0 {
+			return 0, c.errAt(pos, "%s.toString() takes no arguments, got %d", varName, len(args))
+		}
+		return ast.TypeString, nil
+	case "len":
+		if len(args) != 0 {
+			return 0, c.errAt(pos, "%s.len() takes no arguments, got %d", varName, len(args))
+		}
+		return ast.TypeInt, nil
+	case "clear":
+		if len(args) != 0 {
+			return 0, c.errAt(pos, "%s.clear() takes no arguments, got %d", varName, len(args))
+		}
+		return ast.TypeVoid, nil
+	default:
+		return 0, c.errAt(pos, "undefined method '%s' on StringBuilder type", method)
+	}
+}
+
 // extractNullCheck detects null comparison patterns in conditions.
 // Returns (varName, isNotNull) where isNotNull=true means "x != null".
 func extractNullCheck(cond ast.Expr) (string, bool) {
@@ -1675,6 +1747,8 @@ func typeName(t ast.Type) string {
 		return "char"
 	case ast.TypeArrayChar:
 		return "char[]"
+	case ast.TypeStringBuilder:
+		return "StringBuilder"
 	default:
 		if ast.IsRefType(t) {
 			return "&" + typeName(ast.RefInnerType(t))

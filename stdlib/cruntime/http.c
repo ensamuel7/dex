@@ -320,6 +320,9 @@ void dex_listen(int port) {
 
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
 
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
@@ -466,6 +469,61 @@ void dex_listen(int port) {
             }
         }
     }
+}
+
+/* ── Multi-process worker model via SO_REUSEPORT ─────────────────── */
+
+#define DEX_MAX_WORKERS 16
+static pid_t dex_worker_pids[DEX_MAX_WORKERS];
+static int   dex_worker_count = 0;
+
+static void dex_multi_shutdown_handler(int sig) {
+    (void)sig;
+    for (int i = 0; i < dex_worker_count; i++) {
+        if (dex_worker_pids[i] > 0) {
+            kill(dex_worker_pids[i], SIGTERM);
+        }
+    }
+    if (dex_server_fd >= 0) close(dex_server_fd);
+    _exit(0);
+}
+
+void dex_listen_multi(int port, int num_workers) {
+    if (num_workers <= 0) {
+        num_workers = (int)sysconf(_SC_NPROCESSORS_ONLN);
+        if (num_workers < 1) num_workers = 1;
+        if (num_workers > DEX_MAX_WORKERS) num_workers = DEX_MAX_WORKERS;
+    }
+    if (num_workers == 1) {
+        dex_listen(port);
+        return;
+    }
+    if (num_workers > DEX_MAX_WORKERS) num_workers = DEX_MAX_WORKERS;
+
+    signal(SIGPIPE, SIG_IGN);
+
+    /* Fork worker processes */
+    dex_worker_count = num_workers - 1;
+    for (int i = 0; i < num_workers - 1; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            continue;
+        }
+        if (pid == 0) {
+            /* Child: run event loop (SO_REUSEPORT allows multiple binds) */
+            dex_listen(port);
+            _exit(0);
+        }
+        dex_worker_pids[i] = pid;
+    }
+
+    /* Parent: install graceful shutdown handler */
+    signal(SIGINT, dex_multi_shutdown_handler);
+    signal(SIGTERM, dex_multi_shutdown_handler);
+
+    /* Parent becomes the last worker */
+    dex_listen(port);
 }
 
 // --- HTTP Client (libcurl) ---

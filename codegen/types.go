@@ -527,6 +527,24 @@ func (g *Generator) nonzeroCheckFunc(t ast.Type) string {
 	}
 }
 
+// jsonFieldKind returns the DexStructFieldDesc kind value for a DexLang type.
+func (g *Generator) jsonFieldKind(t ast.Type) string {
+	switch t {
+	case ast.TypeInt:
+		return "0"
+	case ast.TypeBool:
+		return "1"
+	case ast.TypeString:
+		return "2"
+	case ast.TypeLong:
+		return "3"
+	case ast.TypeDouble:
+		return "4"
+	default:
+		return "0"
+	}
+}
+
 func (g *Generator) cBinOp(op ast.BinOp) string {
 	switch op {
 	case ast.BinAdd:

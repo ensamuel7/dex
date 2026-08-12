@@ -195,6 +195,13 @@ func Generate(projectRoot string) (string, error) {
 				paramStr = "int|long|double|string|bool"
 			} else if name == "json" && fnName == "set" {
 				paramStr = "string, string, int|long|double|string|bool"
+			} else if name == "json" && fnName == "setObj" {
+				paramStr = "obj: string, key: string, value: string"
+			} else if name == "json" && fnName == "stringify" {
+				paramStr = "value: T[]|struct"
+			} else if name == "json" && fnName == "objectify" {
+				paramStr = "json: string"
+				retType = "T (struct)"
 			} else if name == "json" && fnName == "arrayPush" {
 				paramStr = "arr: string, value: int|long|double|string|bool"
 			} else if name == "db" && fnName == "col" {

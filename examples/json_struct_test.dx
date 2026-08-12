@@ -1,0 +1,42 @@
+import "json"
+import "fmt"
+
+struct Person {
+    name: string
+    age: int
+    active: bool
+}
+
+fn main(): void {
+    //Test json.stringify with struct
+    let p: Person = Person { name: "Alice", age: 30, active: true }
+    let jsonStr: string = json.stringify(p)
+    fmt.print(jsonStr)
+
+    //Test json.objectify to parse JSON back to struct
+    let p2: Person = json.objectify(jsonStr)
+    assert(p2.name == "Alice")
+    assert(p2.age == 30)
+    assert(p2.active == true)
+    fmt.print(p2.name)
+    fmt.print(p2.age)
+
+    //Test with manually built JSON
+    let raw: string = json.new()
+    raw = json.set(raw, "name", "Bob")
+    raw = json.set(raw, "age", 25)
+    raw = json.set(raw, "active", false)
+    let p3: Person = json.objectify(raw)
+    assert(p3.name == "Bob")
+    assert(p3.age == 25)
+    assert(p3.active == false)
+
+    //Test round-trip
+    let jsonStr2: string = json.stringify(p3)
+    let p4: Person = json.objectify(jsonStr2)
+    assert(p4.name == "Bob")
+    assert(p4.age == 25)
+    assert(p4.active == false)
+
+    fmt.print("json_struct_test: all assertions passed")
+}

@@ -480,7 +480,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return ast.TypeVoid, nil
 			}
 
-			// Special case: json.stringify(array) -> string
+			// Special case: json.stringify(array or struct) -> string
 			if e.Module == "json" && e.Name == "stringify" {
 				if len(e.Args) != 1 {
 					return 0, c.errAt(e.Pos, "json.stringify() takes exactly 1 argument, got %d", len(e.Args))
@@ -489,10 +489,28 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if err != nil {
 					return 0, err
 				}
-				if !ast.IsArrayType(argType) {
-					return 0, c.errAt(e.Pos, "json.stringify() argument must be an array type, got %s", typeName(argType))
+				if !ast.IsArrayType(argType) && !ast.IsStructType(argType) {
+					return 0, c.errAt(e.Pos, "json.stringify() argument must be an array or struct type, got %s", typeName(argType))
 				}
 				return ast.TypeString, nil
+			}
+
+			// Special case: json.objectify(jsonStr) -> struct (resolved from context)
+			if e.Module == "json" && e.Name == "objectify" {
+				if len(e.Args) != 1 {
+					return 0, c.errAt(e.Pos, "json.objectify() takes exactly 1 argument, got %d", len(e.Args))
+				}
+				argType, err := c.checkExpr(e.Args[0])
+				if err != nil {
+					return 0, err
+				}
+				if argType != ast.TypeString {
+					return 0, c.errAt(e.Pos, "json.objectify() argument must be string, got %s", typeName(argType))
+				}
+				if e.ResolvedType == 0 || !ast.IsStructType(e.ResolvedType) {
+					return 0, c.errAt(e.Pos, "json.objectify() requires an explicit struct type annotation (e.g., let x: MyStruct = json.objectify(...))")
+				}
+				return e.ResolvedType, nil
 			}
 
 			// Special case: json.set(obj, key, value) — polymorphic value type

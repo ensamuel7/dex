@@ -269,7 +269,14 @@ Functions, structs, and struct fields can be marked `public` or `private`. **By 
 |-----------|---------------------------------------------|
 | (none)    | Public (default)                            |
 | `public`  | Public (explicit, same as default)          |
-| `private` | Restricted to the defining module           |
+| `private` | Restricted to the defining file             |
+
+### Visibility semantics
+
+Visibility in DexLang is **file-scoped**, not class-scoped (DexLang is not an object-oriented language). This means:
+
+- **`public`** (default): The function is accessible from any file that imports the module. If no modifier is specified, the function is public.
+- **`private`**: The function is only accessible within the same `.dx` file where it is defined. Another file that imports the module cannot call a private function.
 
 ### Functions
 
@@ -289,6 +296,41 @@ private fn internal_helper(): int {
 }
 ```
 
+### Multi-file visibility example
+
+In a project with multiple `.dx` files, `private` prevents access from other files:
+
+**`math_utils.dx`:**
+
+```dex
+// Public — callable from any file that imports this module
+fn square(n: int): int {
+  return n * n
+}
+
+// Private — only callable within math_utils.dx
+private fn clampInternal(n: int, lo: int, hi: int): int {
+  if (n < lo) { return lo }
+  if (n > hi) { return hi }
+  return n
+}
+
+// Public wrapper that uses the private helper
+fn clamp(n: int): int {
+  return clampInternal(n, 0, 100)
+}
+```
+
+**`main.dx`:**
+
+```dex
+fn main(): void {
+  let x: int = square(5)            // OK — square is public
+  let y: int = clamp(150)           // OK — clamp is public
+  // let z: int = clampInternal(5, 0, 10)  // ERROR — clampInternal is private to math_utils.dx
+}
+```
+
 ### Structs and struct fields
 
 Structs are public by default. Individual fields can be marked `private`:
@@ -304,8 +346,6 @@ private struct InternalConfig {
   debug: bool
 }
 ```
-
-In single-file mode, privacy is tracked in the AST but not enforced (since all code is in the same file). Enforcement will be added with multi-file compilation support.
 
 ---
 
@@ -1059,7 +1099,9 @@ obj = json.set(obj, "pi", 3.14)
 | `new`        | `new(): string`                                                                 | Create empty `{}`              |
 | `set`        | `set(obj: string, key: string, value: string\|int\|bool\|long\|double): string` | Set a value (type auto-detected) |
 | `setArray`   | `setArray(obj: string, key: string, arr: T[]): string`                          | Set an array value             |
-| `stringify`  | `stringify(arr: T[]): string`                                                   | Convert an array to JSON string |
+| `setObj`     | `setObj(obj: string, key: string, value: string): string`                       | Set a key to a raw JSON object/array value (not quoted) |
+| `stringify`  | `stringify(value: T[]\|struct): string`                                         | Convert an array or struct to JSON string |
+| `objectify`  | `objectify(json: string): T`                                                    | Convert a JSON string into a typed struct |
 | `get`        | `get(json: string, key: string): string`                                        | Get a string value by key      |
 | `getInt`     | `getInt(json: string, key: string): int`                                        | Get an integer value by key    |
 | `getBool`    | `getBool(json: string, key: string): bool`                                      | Get a boolean value by key     |
@@ -1072,7 +1114,7 @@ obj = json.set(obj, "pi", 3.14)
 | `arrayPush`    | `arrayPush(arr: string, value: string\|int\|bool\|long\|double): string`      | Append a primitive value to a JSON array |
 | `arrayPushObj` | `arrayPushObj(arr: string, obj: string): string`                              | Append a JSON object/array to a JSON array |
 
-`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
+`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). `stringify` also accepts struct types, serializing all fields to a JSON object. `objectify` converts a JSON string back into a typed struct — the target type must be specified via type annotation (e.g., `let p: Person = json.objectify(str)`). `setObj` inserts raw JSON without quoting, which is essential for nesting objects. The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
 
 **JSON Arrays** — for working with JSON arrays as strings (useful for protocols like OCPP that use JSON arrays as message format):
 
@@ -1105,6 +1147,36 @@ obj = json.setArray(obj, "numbers", nums)
 
 let s: string = json.stringify(nums)
 // s is now: [1, 2, 3]
+```
+
+**Struct serialization** — `json.stringify` converts a struct to a JSON object string, and `json.objectify` parses a JSON string back into a typed struct:
+
+```dex
+struct Person {
+    name: string
+    age: int
+    active: bool
+}
+
+let p: Person = Person { name: "Alice", age: 30, active: true }
+let jsonStr: string = json.stringify(p)
+// jsonStr is now: {"name": "Alice", "age": 30, "active": true}
+
+let p2: Person = json.objectify(jsonStr)
+// p2.name == "Alice", p2.age == 30, p2.active == true
+```
+
+**Nested JSON objects** — use `json.setObj` to embed one JSON object inside another without quoting:
+
+```dex
+let inner: string = json.new()
+inner = json.set(inner, "status", "Accepted")
+inner = json.set(inner, "expiryDate", "2025-12-31T23:59:59Z")
+
+let resp: string = json.new()
+resp = json.set(resp, "action", "Authorize")
+resp = json.setObj(resp, "idTagInfo", inner)
+// resp is now: {"action":"Authorize","idTagInfo":{"status":"Accepted","expiryDate":"2025-12-31T23:59:59Z"}}
 ```
 
 ### db

@@ -535,11 +535,12 @@ static void dex_ws_worker_func(void* arg) {
 
     if (dex_ws_on_message) {
         DexString* msg = dex_string_from_cstr(item->message);
+        item->message = NULL; /* dex_string_from_cstr already freed it */
         dex_ws_on_message(conn->dex_conn, msg);
         dex_release(msg);
     }
 
-    free(item->message);
+    free(item->message); /* NULL if handler ran, otherwise free the raw buffer */
     free(item);
 
     /* Signal event loop that this connection is ready to read again */
@@ -609,6 +610,9 @@ void dex_ws_listen(int port) {
 
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
 
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
@@ -721,7 +725,7 @@ void dex_ws_listen(int port) {
 
                         /* Call on_connect callback */
                         if (dex_ws_on_connect) {
-                            DexString* path_str = dex_string_from_cstr(conn->path);
+                            DexString* path_str = dex_string_new(conn->path, strlen(conn->path));
                             dex_ws_on_connect(conn->dex_conn, path_str);
                             dex_release(path_str);
                         }

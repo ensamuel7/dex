@@ -588,11 +588,14 @@ void dex_array_struct_reverse(DexArrayStruct* a) {
 // === Struct array JSON serialization ===
 // Field descriptor for generic struct-to-JSON serialization
 // kind: 0=int, 1=bool, 2=string, 3=long, 4=double
+#ifndef DEX_STRUCT_FIELD_DESC_DEFINED
+#define DEX_STRUCT_FIELD_DESC_DEFINED
 typedef struct {
     const char* name;
     size_t offset;
     int kind;
 } DexStructFieldDesc;
+#endif
 
 const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields) {
     // Build JSON array of objects

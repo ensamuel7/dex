@@ -23,6 +23,13 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			}
 			call.ResolvedType = s.Type
 		}
+		// Pre-annotate json.objectify() with the expected struct type
+		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "json" && call.Name == "objectify" {
+			if s.Type == ast.TypeInferred {
+				return c.errAt(s.Pos, "json.objectify() requires an explicit type annotation (e.g., let x: MyStruct = json.objectify(...))")
+			}
+			call.ResolvedType = s.Type
+		}
 
 		// Handle type inference
 		if s.Type == ast.TypeInferred {
@@ -140,6 +147,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		}
 		// Pre-annotate db.col() with the expected return type
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "db" && call.Name == "col" {
+			call.ResolvedType = returnType
+		}
+		// Pre-annotate json.objectify() with the expected return type
+		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "json" && call.Name == "objectify" {
 			call.ResolvedType = returnType
 		}
 		exprType, err := c.checkExpr(s.Value)
@@ -348,6 +359,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		}
 		// Pre-annotate db.col() with the expected return type
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "db" && call.Name == "col" {
+			call.ResolvedType = varType
+		}
+		// Pre-annotate json.objectify() with the expected struct type
+		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "json" && call.Name == "objectify" {
 			call.ResolvedType = varType
 		}
 		exprType, err := c.checkExpr(s.Value)

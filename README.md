@@ -110,11 +110,13 @@ fn main(): void {
 |--------|-------------|
 | `fmt`  | Print to stdout |
 | `http` | HTTP server with route handlers |
-| `json` | Build and stringify JSON objects |
+| `json` | Build, stringify, and parse JSON (including struct serialization) |
 | `db`   | Database access (SQLite, Postgres, MySQL, MongoDB) |
 | `math` | Trig, rounding, sqrt, pow, etc. |
 | `time` | Timestamps and sleep |
 | `file` | Read, write, append, delete, upload |
+| `os`   | Environment variables, command execution |
+| `ws`   | WebSocket server and client connections |
 
 A basic web server:
 

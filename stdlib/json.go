@@ -40,6 +40,13 @@ func init() {
 				CName:      "",
 				Doc:        "Set an array field on a JSON object.",
 			},
+			"setObj": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeString, ast.TypeString},
+				ParamNames: []string{"json", "key", "value"},
+				ReturnType: ast.TypeString,
+				CName:      "dex_json_set_obj",
+				Doc:        "Set a key to a raw JSON object/array value (not quoted).",
+			},
 			"get": {
 				Params:     []ast.Type{ast.TypeString, ast.TypeString},
 				ParamNames: []string{"json", "key"},
@@ -108,6 +115,13 @@ func init() {
 				ReturnType: ast.TypeString,
 				CName:      "",
 				Doc:        "Append a value to a JSON array. Value can be string, int, long, double, or bool.",
+			},
+			"objectify": {
+				Params:     nil, // polymorphic — resolved from assignment context
+				ParamNames: []string{"json"},
+				ReturnType: ast.TypeString, // placeholder — overridden by ResolvedType
+				CName:      "",
+				Doc:        "Convert a JSON string into a typed struct.",
 			},
 			"arrayPushObj": {
 				Params:     []ast.Type{ast.TypeString, ast.TypeString},

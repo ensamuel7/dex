@@ -388,8 +388,27 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		out.WriteString(")")
 		return
 	}
-	// json.stringify(array) — special codegen (returns const char*, needs wrapping)
+	// json.stringify(array or struct) — special codegen (returns const char*, needs wrapping)
 	if e.Module == "json" && e.Name == "stringify" {
+		argType := g.typeOfExpr(e.Args[0])
+		if ast.IsStructType(argType) && !ast.IsArrayType(argType) {
+			// Struct stringify: use dex_json_encode_struct
+			def := ast.GetStructDef(argType)
+			cType := g.cType(argType)
+			out.WriteString(fmt.Sprintf("dex_string_from_cstr(dex_json_encode_struct(&"))
+			g.genExpr(out, e.Args[0])
+			out.WriteString(fmt.Sprintf(", %d, ", len(def.Fields)))
+			out.WriteString("(DexStructFieldDesc[]){ ")
+			for i, f := range def.Fields {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				fieldOffset := fmt.Sprintf("offsetof(%s, %s)", cType, f.Name)
+				out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, g.jsonFieldKind(f.Type)))
+			}
+			out.WriteString(" }))")
+			return
+		}
 		argIdent, ok := e.Args[0].(*ast.Ident)
 		if ok {
 			arrType := g.arrVars[argIdent.Name]
@@ -405,22 +424,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 						out.WriteString(", ")
 					}
 					fieldOffset := fmt.Sprintf("offsetof(%s, %s)", elemCType, f.Name)
-					var fieldKind string
-					switch f.Type {
-					case ast.TypeInt:
-						fieldKind = "0"
-					case ast.TypeBool:
-						fieldKind = "1"
-					case ast.TypeString:
-						fieldKind = "2"
-					case ast.TypeLong:
-						fieldKind = "3"
-					case ast.TypeDouble:
-						fieldKind = "4"
-					default:
-						fieldKind = "0"
-					}
-					out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, fieldKind))
+					out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, g.jsonFieldKind(f.Type)))
 				}
 				out.WriteString(" }))")
 			} else {
@@ -442,6 +446,26 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(%s))", fn, argIdent.Name))
 			}
 		}
+		return
+	}
+
+	// json.objectify(jsonStr) — decode JSON string into a struct
+	if e.Module == "json" && e.Name == "objectify" {
+		structType := e.ResolvedType
+		def := ast.GetStructDef(structType)
+		cType := g.cType(structType)
+		out.WriteString(fmt.Sprintf("({ %s _jobj_tmp = {0}; dex_json_decode_struct(", cType))
+		g.genExpr(out, e.Args[0])
+		out.WriteString(fmt.Sprintf("->data, &_jobj_tmp, %d, ", len(def.Fields)))
+		out.WriteString("(DexStructFieldDesc[]){ ")
+		for i, f := range def.Fields {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			fieldOffset := fmt.Sprintf("offsetof(%s, %s)", cType, f.Name)
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, g.jsonFieldKind(f.Type)))
+		}
+		out.WriteString(" }); _jobj_tmp; })")
 		return
 	}
 

@@ -13,8 +13,8 @@ const char* dex_json_set(const char* obj, const char* key, const char* val) {
     size_t olen = strlen(obj);
     size_t klen = strlen(key);
     size_t vlen = strlen(val);
-    // "key": "val"  => 4 quotes + colon + space + comma = 7, plus contents
-    size_t need = olen + klen + vlen + 8;
+    // non-empty: `, "key": "val"}` = 9 literal chars + klen + vlen + null
+    size_t need = olen + klen + vlen + 10;
     char* result = (char*)malloc(need);
     if (olen == 2) {
         // empty {}
@@ -79,6 +79,22 @@ const char* dex_json_set_double(const char* obj, const char* key, double val) {
     } else {
         memcpy(result, obj, olen - 1);
         snprintf(result + olen - 1, need - (olen - 1), ", \"%s\": %g}", key, val);
+    }
+    return result;
+}
+
+const char* dex_json_set_obj(const char* obj, const char* key, const char* val) {
+    size_t olen = strlen(obj);
+    size_t klen = strlen(key);
+    size_t vlen = strlen(val);
+    // non-empty: `, "key": val}` = 7 literal chars + klen + vlen + null
+    size_t need = olen + klen + vlen + 8;
+    char* result = (char*)malloc(need);
+    if (olen == 2) {
+        snprintf(result, need, "{\"%s\": %s}", key, val);
+    } else {
+        memcpy(result, obj, olen - 1);
+        snprintf(result + olen - 1, need - (olen - 1), ", \"%s\": %s}", key, val);
     }
     return result;
 }
@@ -342,6 +358,81 @@ const char* dex_json_array_push_bool(const char* arr, _Bool val) {
         snprintf(result + alen - 1, need - (alen - 1), ", %s]", vs);
     }
     return result;
+}
+
+// --- Struct encode/decode ---
+
+#ifndef DEX_STRUCT_FIELD_DESC_DEFINED
+#define DEX_STRUCT_FIELD_DESC_DEFINED
+typedef struct {
+    const char* name;
+    size_t offset;
+    int kind; // 0=int, 1=bool, 2=string, 3=long, 4=double
+} DexStructFieldDesc;
+#endif
+
+const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDesc* fields) {
+    size_t cap = 256;
+    char* buf = (char*)malloc(cap);
+    int pos = 0;
+    buf[pos++] = '{';
+    for (int f = 0; f < num_fields; f++) {
+        if (f > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if ((size_t)pos + 256 > cap) {
+            cap *= 2;
+            buf = (char*)realloc(buf, cap);
+        }
+        int n = 0;
+        switch (fields[f].kind) {
+        case 0: // int
+            n = snprintf(buf + pos, cap - pos, "\"%s\": %d", fields[f].name, *(int*)((char*)data + fields[f].offset));
+            break;
+        case 1: // bool
+            n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, (*(_Bool*)((char*)data + fields[f].offset)) ? "true" : "false");
+            break;
+        case 2: // string
+            { DexString* s = *(DexString**)((char*)data + fields[f].offset);
+              n = snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"", fields[f].name, s ? s->data : ""); }
+            break;
+        case 3: // long
+            n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)data + fields[f].offset));
+            break;
+        case 4: // double
+            n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)data + fields[f].offset));
+            break;
+        }
+        pos += n;
+        if ((size_t)pos + 256 > cap) {
+            cap *= 2;
+            buf = (char*)realloc(buf, cap);
+        }
+    }
+    buf[pos++] = '}';
+    buf[pos] = '\0';
+    return buf;
+}
+
+void dex_json_decode_struct(const char* json, void* out, int num_fields, DexStructFieldDesc* fields) {
+    for (int f = 0; f < num_fields; f++) {
+        switch (fields[f].kind) {
+        case 0: // int
+            *(int*)((char*)out + fields[f].offset) = dex_json_get_int(json, fields[f].name);
+            break;
+        case 1: // bool
+            *(_Bool*)((char*)out + fields[f].offset) = dex_json_get_bool(json, fields[f].name);
+            break;
+        case 2: // string
+            { const char* val = dex_json_get(json, fields[f].name);
+              *(DexString**)((char*)out + fields[f].offset) = dex_string_from_cstr(val); }
+            break;
+        case 3: // long
+            *(long*)((char*)out + fields[f].offset) = dex_json_get_long(json, fields[f].name);
+            break;
+        case 4: // double
+            *(double*)((char*)out + fields[f].offset) = dex_json_get_double(json, fields[f].name);
+            break;
+        }
+    }
 }
 
 const char* dex_json_array_push_obj(const char* arr, const char* obj) {

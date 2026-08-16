@@ -578,6 +578,9 @@ json.new()
 | `--`     | Decrement (statement only) |
 | `+=`     | Add and assign  |
 | `-=`     | Subtract and assign |
+| `*=`     | Multiply and assign |
+| `/=`     | Divide and assign |
+| `%=`     | Modulo and assign |
 
 `+` also works for string concatenation when both operands are `string`.
 
@@ -656,7 +659,7 @@ for(let i: int = 0; i < 10; i++) {
 }
 ```
 
-The init statement can be a `let` declaration (with or without type inference) or an assignment. The post statement supports `++`, `--`, `+=`, `-=`, or `=`.
+The init statement can be a `let` declaration (with or without type inference) or an assignment. The post statement supports `++`, `--`, `+=`, `-=`, `*=`, `/=`, `%=`, or `=`.
 
 ```dex
 for(let i = 0; i < 100; i += 2) {

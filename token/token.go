@@ -63,6 +63,9 @@ const (
 	TokenMinusMinus
 	TokenPlusAssign
 	TokenMinusAssign
+	TokenStarAssign
+	TokenSlashAssign
+	TokenModAssign
 	TokenPublic
 	TokenPrivate
 	TokenSpawn
@@ -211,6 +214,12 @@ func (k TokenKind) String() string {
 		return "+="
 	case TokenMinusAssign:
 		return "-="
+	case TokenStarAssign:
+		return "*="
+	case TokenSlashAssign:
+		return "/="
+	case TokenModAssign:
+		return "%="
 	case TokenPublic:
 		return "public"
 	case TokenPrivate:

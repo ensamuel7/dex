@@ -546,7 +546,7 @@ func TestJsonStringify(t *testing.T) {
 func TestJsonStringifyNonArray(t *testing.T) {
 	mustFail(t, `import "json" fn main(): string {
 		return json.stringify(42)
-	}`, "json.stringify() argument must be an array type")
+	}`, "json.stringify() argument must be an array or struct type")
 }
 
 func TestJsonSetArr(t *testing.T) {
@@ -579,7 +579,7 @@ func TestHttpRouteHandlerWrongSignature(t *testing.T) {
 			http.route("GET", "/", "handler")
 			return 0
 		}
-	`, "handler 'handler' must take no parameters")
+	`, "handler 'handler' parameter must be http.HttpRequest, got int")
 }
 
 func TestHttpRouteHandlerNonStringReturn(t *testing.T) {

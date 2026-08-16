@@ -122,7 +122,7 @@ func TestHttpFunctionSignatures(t *testing.T) {
 		returnType ast.Type
 	}{
 		{"route", []ast.Type{ast.TypeString, ast.TypeString, ast.TypeString}, ast.TypeVoid},
-		{"listen", []ast.Type{ast.TypeInt}, ast.TypeVoid},
+		{"listen", nil, ast.TypeVoid}, // special-cased in checker: 1-2 int args
 	}
 	for _, tt := range tests {
 		fd, ok := LookupFunc("http", tt.name)

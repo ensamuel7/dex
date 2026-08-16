@@ -82,6 +82,21 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 				l.advance()
 				l.advance()
 				continue
+			case "*=":
+				tokens = append(tokens, token.Token{Kind: token.TokenStarAssign, Value: "*=", Line: startLine, Col: startCol})
+				l.advance()
+				l.advance()
+				continue
+			case "/=":
+				tokens = append(tokens, token.Token{Kind: token.TokenSlashAssign, Value: "/=", Line: startLine, Col: startCol})
+				l.advance()
+				l.advance()
+				continue
+			case "%=":
+				tokens = append(tokens, token.Token{Kind: token.TokenModAssign, Value: "%=", Line: startLine, Col: startCol})
+				l.advance()
+				l.advance()
+				continue
 			case "==":
 				tokens = append(tokens, token.Token{Kind: token.TokenEq, Value: "==", Line: startLine, Col: startCol})
 				l.advance()

@@ -900,6 +900,27 @@ func (p *Parser) parseForPost() (ast.Stmt, error) {
 			return nil, err
 		}
 		return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinSub, Value: value}, nil
+	case token.TokenStarAssign:
+		p.advance()
+		value, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinMul, Value: value}, nil
+	case token.TokenSlashAssign:
+		p.advance()
+		value, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinDiv, Value: value}, nil
+	case token.TokenModAssign:
+		p.advance()
+		value, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinMod, Value: value}, nil
 	case token.TokenAssign:
 		p.advance()
 		value, err := p.parseExpr(0)
@@ -1275,6 +1296,33 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 				return nil, err
 			}
 			return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinSub, Value: value}, nil
+		case token.TokenStarAssign:
+			name := p.current().Value
+			p.advance() // consume ident
+			p.advance() // consume '*='
+			value, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinMul, Value: value}, nil
+		case token.TokenSlashAssign:
+			name := p.current().Value
+			p.advance() // consume ident
+			p.advance() // consume '/='
+			value, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinDiv, Value: value}, nil
+		case token.TokenModAssign:
+			name := p.current().Value
+			p.advance() // consume ident
+			p.advance() // consume '%='
+			value, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CompoundAssignStmt{Pos: pos, Name: name, Op: ast.BinMod, Value: value}, nil
 		}
 	}
 

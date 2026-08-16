@@ -26,7 +26,12 @@ static char* dex_os_read_pipe(FILE* fp) {
     while ((n = fread(chunk, 1, sizeof(chunk), fp)) > 0) {
         if (len + n > cap) {
             cap = (len + n) * 2;
-            buf = realloc(buf, cap + 1);
+            char* new_buf = realloc(buf, cap + 1);
+            if (!new_buf) {
+                if (buf) buf[len] = '\0';
+                return buf;
+            }
+            buf = new_buf;
         }
         memcpy(buf + len, chunk, n);
         len += n;
@@ -61,6 +66,7 @@ static Dex_ExecResult dex_os_exec(const char* command) {
     // Capture stderr by re-running with redirected streams
     size_t cmd_len = strlen(command);
     char* stderr_cmd = malloc(cmd_len + 32);
+    if (!stderr_cmd) return result;
     snprintf(stderr_cmd, cmd_len + 32, "%s 2>&1 1>/dev/null", command);
     FILE* efp = popen(stderr_cmd, "r");
     free(stderr_cmd);

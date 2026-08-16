@@ -967,13 +967,19 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 	switch expr.(type) {
 	case *ast.Ident:
 		return false // borrowed reference
+	case *ast.FieldAccessExpr:
+		return false // borrowed from struct field
+	case *ast.IndexExpr:
+		return false // borrowed from array/map element
 	case *ast.StringLit:
 		return true // dex_string_from_lit produces +1
 	case *ast.CallExpr:
 		return true // function calls produce +1
 	case *ast.BinaryExpr:
 		return true // concat produces +1
+	case *ast.ReceiveExpr:
+		return true // channel receive produces +1
 	default:
-		return true
+		return false // conservative: assume borrowed to avoid premature free
 	}
 }

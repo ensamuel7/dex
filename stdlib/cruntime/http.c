@@ -130,10 +130,12 @@ static DexHttpConn*   dex_http_conn_table[DEX_HTTP_MAX_FD];
 
 static DexHttpConn* dex_http_conn_new(int fd) {
     DexHttpConn* conn = (DexHttpConn*)calloc(1, sizeof(DexHttpConn));
+    if (!conn) return NULL;
     conn->fd = fd;
     conn->state = HTTP_READING_HEADERS;
     conn->read_cap = 8192;
     conn->read_buf = (char*)malloc(conn->read_cap);
+    if (!conn->read_buf) { free(conn); return NULL; }
     conn->read_len = 0;
     conn->content_length = -1;
     conn->headers_end = -1;
@@ -228,6 +230,7 @@ static void dex_http_build_response(DexHttpConn* conn, const char* status,
     int body_len = (int)strlen(body);
     int needed = 512 + body_len;
     conn->write_buf = (char*)malloc(needed);
+    if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
     int hlen = snprintf(conn->write_buf, needed,
         "HTTP/1.1 %s\r\n"
         "Content-Type: %s\r\n"
@@ -371,6 +374,7 @@ void dex_listen(int port) {
                     if (client_fd < 0) break;
                     dex_set_nonblocking(client_fd);
                     DexHttpConn* conn = dex_http_conn_new(client_fd);
+                    if (!conn) { close(client_fd); continue; }
                     dex_ev_add(dex_http_loop, client_fd, DEX_EV_READ, conn);
                 }
                 continue;
@@ -410,8 +414,17 @@ void dex_listen(int port) {
             if ((ev->events & DEX_EV_READ) && (conn->state == HTTP_READING_HEADERS || conn->state == HTTP_READING_BODY)) {
                 /* Grow buffer if needed */
                 if (conn->read_len >= conn->read_cap - 1) {
-                    conn->read_cap *= 2;
-                    conn->read_buf = (char*)realloc(conn->read_buf, conn->read_cap);
+                    int new_cap = conn->read_cap * 2;
+                    char* new_buf = (char*)realloc(conn->read_buf, new_cap);
+                    if (!new_buf) {
+                        /* Allocation failed, close connection */
+                        dex_ev_del(dex_http_loop, conn->fd);
+                        close(conn->fd);
+                        dex_http_conn_free(conn);
+                        continue;
+                    }
+                    conn->read_buf = new_buf;
+                    conn->read_cap = new_cap;
                 }
                 int r = (int)read(conn->fd, conn->read_buf + conn->read_len,
                                   conn->read_cap - conn->read_len - 1);
@@ -554,6 +567,7 @@ const char* dex_http_header(const char* headers, const char* key, const char* va
     // "Key: Value\n"
     size_t newlen = hlen + klen + 2 + vlen + 1 + 1;
     char* result = (char*)malloc(newlen);
+    if (!result) return "";
     snprintf(result, newlen, "%s%s: %s\n", headers, key, value);
     return result;
 }
@@ -582,6 +596,7 @@ static struct curl_slist* dex_http_parse_json_headers(const char* json_str) {
         // Build "Key: Value" header
         size_t hlen = klen + 2 + vlen + 1;
         char* h = (char*)malloc(hlen);
+        if (!h) { p = vend + 1; continue; }
         memcpy(h, kq, klen);
         h[klen] = ':';
         h[klen + 1] = ' ';
@@ -601,6 +616,7 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
 
     dex_http_buf buf = {NULL, 0};
     buf.data = malloc(1);
+    if (!buf.data) { curl_easy_cleanup(curl); return resp; }
     buf.data[0] = '\0';
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -629,6 +645,7 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
                 if (!end) end = p + strlen(p);
                 size_t hlen = (size_t)(end - p);
                 char* h = (char*)malloc(hlen + 1);
+                if (!h) { p = (*end) ? end + 1 : end; continue; }
                 memcpy(h, p, hlen);
                 h[hlen] = '\0';
                 // Trim trailing \r
@@ -720,6 +737,7 @@ const char* dex_http_form_field(const char* form, const char* key, const char* v
     // "F\tkey\tvalue\n"
     size_t newlen = flen + 2 + klen + 1 + vlen + 1 + 1;
     char* result = (char*)malloc(newlen);
+    if (!result) return "";
     snprintf(result, newlen, "%sF\t%s\t%s\n", form, key, value);
     return result;
 }
@@ -731,6 +749,7 @@ const char* dex_http_form_file(const char* form, const char* key, const char* pa
     // "P\tkey\tpath\n"
     size_t newlen = flen + 2 + klen + 1 + plen + 1 + 1;
     char* result = (char*)malloc(newlen);
+    if (!result) return "";
     snprintf(result, newlen, "%sP\t%s\t%s\n", form, key, path);
     return result;
 }
@@ -742,6 +761,7 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
 
     dex_http_buf buf = {NULL, 0};
     buf.data = malloc(1);
+    if (!buf.data) { curl_easy_cleanup(curl); return resp; }
     buf.data[0] = '\0';
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -761,6 +781,7 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
                 if (!end) end = hp + strlen(hp);
                 size_t hlen = (size_t)(end - hp);
                 char* h = (char*)malloc(hlen + 1);
+                if (!h) { hp = (*end) ? end + 1 : end; continue; }
                 memcpy(h, hp, hlen);
                 h[hlen] = '\0';
                 if (hlen > 0 && h[hlen-1] == '\r') h[hlen-1] = '\0';
@@ -788,7 +809,9 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
                 size_t klen = (size_t)(tab2 - key_start);
                 size_t vlen = (size_t)(line_end - tab2 - 1);
                 char* key = (char*)malloc(klen + 1);
+                if (!key) goto next_form_line;
                 char* val = (char*)malloc(vlen + 1);
+                if (!val) { free(key); goto next_form_line; }
                 memcpy(key, key_start, klen); key[klen] = '\0';
                 memcpy(val, tab2 + 1, vlen); val[vlen] = '\0';
 
@@ -803,6 +826,7 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
                 free(val);
             }
         }
+        next_form_line:
         p = (*line_end) ? line_end + 1 : line_end;
     }
 

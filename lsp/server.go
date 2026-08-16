@@ -208,6 +208,8 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 		s.handleCompletion(msg)
 	case "textDocument/definition":
 		s.handleDefinition(msg)
+	case "textDocument/semanticTokens/full":
+		s.handleSemanticTokens(msg)
 	default:
 		// Unknown method — respond with method not found if it has an ID
 		if msg.ID != nil {
@@ -226,6 +228,13 @@ func (s *Server) handleInitialize(msg *jsonrpcMessage) {
 			"definitionProvider": true,
 			"completionProvider": map[string]interface{}{
 				"triggerCharacters": []string{"."},
+			},
+			"semanticTokensProvider": map[string]interface{}{
+				"legend": map[string]interface{}{
+					"tokenTypes":     semanticTokenTypes,
+					"tokenModifiers": semanticTokenModifiers,
+				},
+				"full": true,
 			},
 		},
 		"serverInfo": map[string]interface{}{

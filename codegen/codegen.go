@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -295,7 +296,12 @@ func (g *Generator) flushPendingReleases(out *strings.Builder, prefix string) {
 // CompilerFlags returns extra flags needed for the C compiler based on features used.
 // Must be called after Generate().
 func (g *Generator) CompilerFlags() []string {
-	flags := []string{"-O2"}
+	flags := []string{"-O3", "-flto"}
+	if runtime.GOOS == "darwin" {
+		flags = append(flags, "-Wl,-dead_strip")
+	} else if runtime.GOOS == "linux" {
+		flags = append(flags, "-Wl,--gc-sections")
+	}
 	if g.usesConcurrency {
 		flags = append(flags, "-pthread")
 	}
@@ -348,7 +354,12 @@ func (g *Generator) Generate(program *ast.Program) string {
 		g.usesArray = true
 	}
 
-	// StringBuilder depends on the string runtime
+	// StringBuilder depends on the string runtime.
+	// Also enable StringBuilder when string is used, since genStringConcat
+	// auto-lowers 3+ operand chains to StringBuilder at code-gen time.
+	if g.usesString {
+		g.usesStringBuilder = true
+	}
 	if g.usesStringBuilder {
 		g.usesString = true
 	}
@@ -394,6 +405,15 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 	}
 
+	// string.h is needed by many runtimes (time, string ops, etc.)
+	// stddef.h is needed for offsetof in struct encoding
+	for _, inc := range []string{"#include <string.h>", "#include <stddef.h>"} {
+		if !emittedIncludes[inc] {
+			emittedIncludes[inc] = true
+			out.WriteString(inc + "\n")
+		}
+	}
+
 	if g.usesOptional {
 		inc := "#include <stdlib.h>"
 		if !emittedIncludes[inc] {
@@ -422,7 +442,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 
 	// Refcount needs these includes
 	if g.usesRefcount {
-		for _, inc := range []string{"#include <stdatomic.h>", "#include <stdlib.h>", "#include <string.h>", "#include <stdio.h>"} {
+		incs := []string{"#include <stdlib.h>", "#include <string.h>", "#include <stdio.h>"}
+		if g.usesConcurrency {
+			incs = append([]string{"#include <stdatomic.h>"}, incs...)
+		}
+		for _, inc := range incs {
 			if !emittedIncludes[inc] {
 				emittedIncludes[inc] = true
 				out.WriteString(inc + "\n")
@@ -443,6 +467,9 @@ func (g *Generator) Generate(program *ast.Program) string {
 
 	// Emit refcount runtime (must come before string/array/concurrency runtimes)
 	if g.usesRefcount {
+		if !g.usesConcurrency {
+			out.WriteString("#define DEX_SINGLE_THREADED\n")
+		}
 		out.WriteString(RefcountRuntime)
 	}
 

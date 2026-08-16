@@ -55,6 +55,7 @@ static void* _dex_interval_worker(void* arg) {
 
 void dex_time_set_timeout(void (*fn)(void), int ms) {
     DexTimerCtx* ctx = (DexTimerCtx*)malloc(sizeof(DexTimerCtx));
+    if (!ctx) return;
     ctx->fn = fn;
     ctx->ms = ms;
     ctx->cancelled = 0;
@@ -66,6 +67,7 @@ void dex_time_set_timeout(void (*fn)(void), int ms) {
 int dex_time_set_interval(void (*fn)(void), int ms) {
     if (dex_timer_count >= DEX_MAX_TIMERS) return -1;
     DexTimerCtx* ctx = (DexTimerCtx*)malloc(sizeof(DexTimerCtx));
+    if (!ctx) return -1;
     ctx->fn = fn;
     ctx->ms = ms;
     ctx->cancelled = 0;
@@ -92,6 +94,7 @@ const char* dex_time_format(long timestamp, const char* layout) {
     struct tm* tm_info = gmtime(&t);
     if (!tm_info) return strdup("");
     char* result = (char*)malloc(64);
+    if (!result) return strdup("");
     if (strcmp(layout, "iso8601") == 0 || strcmp(layout, "ISO8601") == 0) {
         strftime(result, 64, "%Y-%m-%dT%H:%M:%SZ", tm_info);
     } else {
@@ -105,6 +108,7 @@ const char* dex_time_iso_now(void) {
     struct tm* tm_info = gmtime(&t);
     if (!tm_info) return strdup("");
     char* result = (char*)malloc(64);
+    if (!result) return strdup("");
     strftime(result, 64, "%Y-%m-%dT%H:%M:%SZ", tm_info);
     return result;
 }

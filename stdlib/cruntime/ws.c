@@ -86,6 +86,7 @@ static void dex_sha1(const unsigned char* msg, size_t len, unsigned char digest[
     size_t new_len = len + 1;
     while (new_len % 64 != 56) new_len++;
     unsigned char* padded = (unsigned char*)calloc(new_len + 8, 1);
+    if (!padded) return;
     memcpy(padded, msg, len);
     padded[len] = 0x80;
     uint64_t bits = (uint64_t)len * 8;
@@ -204,6 +205,7 @@ static int dex_ws_frame_send(int fd, SSL* ssl, const char* payload, size_t len, 
     if (!is_server && len > 0) {
         // Mask the payload
         unsigned char* masked = (unsigned char*)malloc(len);
+        if (!masked) return -1;
         for (size_t i = 0; i < len; i++) {
             masked[i] = (unsigned char)payload[i] ^ mask_key[i % 4];
         }
@@ -350,10 +352,15 @@ static pthread_mutex_t dex_ws_completed_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static DexWsConn* dex_ws_conn_new(int fd) {
     DexWsConn* conn = (DexWsConn*)calloc(1, sizeof(DexWsConn));
+    if (!conn) return NULL;
     conn->fd = fd;
     conn->state = WS_HANDSHAKE_READ;
     conn->read_cap = 4096;
     conn->read_buf = (char*)malloc(conn->read_cap);
+    if (!conn->read_buf) {
+        free(conn);
+        return NULL;
+    }
     conn->read_len = 0;
     strcpy(conn->path, "/");
     conn->dex_conn.fd = fd;
@@ -411,6 +418,10 @@ static unsigned char* dex_ws_build_frame(const char* payload, size_t len, int* o
 
     int total = hlen + (int)len;
     unsigned char* buf = (unsigned char*)malloc(total);
+    if (!buf) {
+        *out_len = 0;
+        return NULL;
+    }
     memcpy(buf, hdr, hlen);
     if (len > 0) memcpy(buf + hlen, payload, len);
     *out_len = total;
@@ -491,6 +502,7 @@ static int dex_ws_parse_frame_incremental(DexWsConn* conn) {
 
         /* Allocate payload buffer */
         conn->frame_payload = (char*)malloc(conn->frame_payload_len + 1);
+        if (!conn->frame_payload) return -1;
         conn->frame_payload_read = 0;
 
         if (conn->frame_payload_len == 0) {
@@ -657,6 +669,10 @@ void dex_ws_listen(int port) {
                     if (client_fd < 0) break;
                     dex_set_nonblocking(client_fd);
                     DexWsConn* conn = dex_ws_conn_new(client_fd);
+                    if (!conn) {
+                        close(client_fd);
+                        break;
+                    }
                     dex_ev_add(dex_ws_loop, client_fd, DEX_EV_READ, conn);
                 }
                 continue;
@@ -739,8 +755,14 @@ void dex_ws_listen(int port) {
                 /* Handshake: accumulate HTTP upgrade request */
                 if (conn->state == WS_HANDSHAKE_READ) {
                     if (conn->read_len >= conn->read_cap - 1) {
-                        conn->read_cap *= 2;
-                        conn->read_buf = (char*)realloc(conn->read_buf, conn->read_cap);
+                        int new_cap = conn->read_cap * 2;
+                        char* new_buf = (char*)realloc(conn->read_buf, new_cap);
+                        if (!new_buf) {
+                            dex_ws_ev_close_conn(conn);
+                            continue;
+                        }
+                        conn->read_buf = new_buf;
+                        conn->read_cap = new_cap;
                     }
                     int r = (int)read(conn->fd, conn->read_buf + conn->read_len,
                                       conn->read_cap - conn->read_len - 1);
@@ -817,7 +839,16 @@ void dex_ws_listen(int port) {
 
                     /* Queue handshake response as a write item */
                     DexWsWriteItem* wi = (DexWsWriteItem*)calloc(1, sizeof(DexWsWriteItem));
+                    if (!wi) {
+                        dex_ws_ev_close_conn(conn);
+                        continue;
+                    }
                     wi->data = (unsigned char*)malloc(rlen);
+                    if (!wi->data) {
+                        free(wi);
+                        dex_ws_ev_close_conn(conn);
+                        continue;
+                    }
                     memcpy(wi->data, response, rlen);
                     wi->len = rlen;
                     wi->pos = 0;
@@ -861,6 +892,10 @@ void dex_ws_listen(int port) {
                         dex_ev_del(dex_ws_loop, conn->fd);
 
                         DexWsWorkItem* item = (DexWsWorkItem*)malloc(sizeof(DexWsWorkItem));
+                        if (!item) {
+                            dex_ws_reset_frame_parser(conn);
+                            continue;
+                        }
                         item->conn = conn;
                         item->message = conn->frame_payload;
                         conn->frame_payload = NULL; /* ownership transferred */
@@ -1014,8 +1049,13 @@ void dex_ws_send(Dex_Conn conn, const char* msg) {
         DexWsConn* wc = dex_ws_conn_table[conn.fd];
         int frame_len;
         unsigned char* frame_data = dex_ws_build_frame(msg, strlen(msg), &frame_len);
+        if (!frame_data) return;
 
         DexWsWriteItem* item = (DexWsWriteItem*)calloc(1, sizeof(DexWsWriteItem));
+        if (!item) {
+            free(frame_data);
+            return;
+        }
         item->data = frame_data;
         item->len = frame_len;
         item->pos = 0;

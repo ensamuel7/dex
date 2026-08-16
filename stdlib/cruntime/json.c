@@ -3,27 +3,82 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Compute the length of a JSON-escaped version of str (without quotes).
+static size_t dex_json_escaped_len(const char* str) {
+    size_t len = 0;
+    for (const char* p = str; *p; p++) {
+        switch (*p) {
+        case '"': case '\\': case '/': len += 2; break;
+        case '\b': case '\f': case '\n': case '\r': case '\t': len += 2; break;
+        default:
+            if ((unsigned char)*p < 0x20) {
+                len += 6; // \uXXXX
+            } else {
+                len += 1;
+            }
+        }
+    }
+    return len;
+}
+
+// Write JSON-escaped version of str into dst (without quotes). Returns chars written.
+static size_t dex_json_escape(char* dst, const char* str) {
+    size_t pos = 0;
+    for (const char* p = str; *p; p++) {
+        switch (*p) {
+        case '"':  dst[pos++] = '\\'; dst[pos++] = '"'; break;
+        case '\\': dst[pos++] = '\\'; dst[pos++] = '\\'; break;
+        case '/':  dst[pos++] = '\\'; dst[pos++] = '/'; break;
+        case '\b': dst[pos++] = '\\'; dst[pos++] = 'b'; break;
+        case '\f': dst[pos++] = '\\'; dst[pos++] = 'f'; break;
+        case '\n': dst[pos++] = '\\'; dst[pos++] = 'n'; break;
+        case '\r': dst[pos++] = '\\'; dst[pos++] = 'r'; break;
+        case '\t': dst[pos++] = '\\'; dst[pos++] = 't'; break;
+        default:
+            if ((unsigned char)*p < 0x20) {
+                pos += snprintf(dst + pos, 7, "\\u%04x", (unsigned char)*p);
+            } else {
+                dst[pos++] = *p;
+            }
+        }
+    }
+    return pos;
+}
+
 const char* dex_json_new(void) {
     char* s = (char*)malloc(3);
+    if (!s) return strdup("");
     s[0] = '{'; s[1] = '}'; s[2] = '\0';
     return s;
 }
 
 const char* dex_json_set(const char* obj, const char* key, const char* val) {
     size_t olen = strlen(obj);
-    size_t klen = strlen(key);
-    size_t vlen = strlen(val);
-    // non-empty: `, "key": "val"}` = 9 literal chars + klen + vlen + null
-    size_t need = olen + klen + vlen + 10;
+    size_t eklen = dex_json_escaped_len(key);
+    size_t evlen = dex_json_escaped_len(val);
+    // worst case: existing + `, "escaped_key": "escaped_val"}`
+    size_t need = olen + eklen + evlen + 10;
     char* result = (char*)malloc(need);
+    if (!result) return obj;
+    size_t pos = 0;
     if (olen == 2) {
-        // empty {}
-        snprintf(result, need, "{\"%s\": \"%s\"}", key, val);
+        result[pos++] = '{';
     } else {
-        // insert before closing }
         memcpy(result, obj, olen - 1);
-        snprintf(result + olen - 1, need - (olen - 1), ", \"%s\": \"%s\"}", key, val);
+        pos = olen - 1;
+        result[pos++] = ',';
+        result[pos++] = ' ';
     }
+    result[pos++] = '"';
+    pos += dex_json_escape(result + pos, key);
+    result[pos++] = '"';
+    result[pos++] = ':';
+    result[pos++] = ' ';
+    result[pos++] = '"';
+    pos += dex_json_escape(result + pos, val);
+    result[pos++] = '"';
+    result[pos++] = '}';
+    result[pos] = '\0';
     return result;
 }
 
@@ -32,6 +87,7 @@ const char* dex_json_set_int(const char* obj, const char* key, int val) {
     size_t klen = strlen(key);
     size_t need = olen + klen + 32;
     char* result = (char*)malloc(need);
+    if (!result) return obj;
     if (olen == 2) {
         snprintf(result, need, "{\"%s\": %d}", key, val);
     } else {
@@ -46,6 +102,7 @@ const char* dex_json_set_bool(const char* obj, const char* key, _Bool val) {
     size_t klen = strlen(key);
     size_t need = olen + klen + 16;
     char* result = (char*)malloc(need);
+    if (!result) return obj;
     if (olen == 2) {
         snprintf(result, need, "{\"%s\": %s}", key, val ? "true" : "false");
     } else {
@@ -60,6 +117,7 @@ const char* dex_json_set_long(const char* obj, const char* key, long val) {
     size_t klen = strlen(key);
     size_t need = olen + klen + 32;
     char* result = (char*)malloc(need);
+    if (!result) return obj;
     if (olen == 2) {
         snprintf(result, need, "{\"%s\": %ld}", key, val);
     } else {
@@ -74,6 +132,7 @@ const char* dex_json_set_double(const char* obj, const char* key, double val) {
     size_t klen = strlen(key);
     size_t need = olen + klen + 64;
     char* result = (char*)malloc(need);
+    if (!result) return obj;
     if (olen == 2) {
         snprintf(result, need, "{\"%s\": %g}", key, val);
     } else {
@@ -90,6 +149,7 @@ const char* dex_json_set_obj(const char* obj, const char* key, const char* val) 
     // non-empty: `, "key": val}` = 7 literal chars + klen + vlen + null
     size_t need = olen + klen + vlen + 8;
     char* result = (char*)malloc(need);
+    if (!result) return obj;
     if (olen == 2) {
         snprintf(result, need, "{\"%s\": %s}", key, val);
     } else {
@@ -135,6 +195,7 @@ const char* dex_json_get(const char* json, const char* key) {
         if (!end) return strdup("");
         size_t len = (size_t)(end - val);
         char* result = (char*)malloc(len + 1);
+        if (!result) return strdup("");
         memcpy(result, val, len);
         result[len] = '\0';
         return result;
@@ -144,6 +205,7 @@ const char* dex_json_get(const char* json, const char* key) {
     while (*end && *end != ',' && *end != '}' && *end != ']' && *end != ' ' && *end != '\n') end++;
     size_t len = (size_t)(end - val);
     char* result = (char*)malloc(len + 1);
+    if (!result) return strdup("");
     memcpy(result, val, len);
     result[len] = '\0';
     return result;
@@ -247,11 +309,13 @@ const char* dex_json_array_get(const char* json, int index) {
             if (*start == '"' && len >= 2 && *(p-1) == '"') {
                 len -= 2;
                 char* result = (char*)malloc(len + 1);
+                if (!result) return strdup("");
                 memcpy(result, start + 1, len);
                 result[len] = '\0';
                 return result;
             }
             char* result = (char*)malloc(len + 1);
+            if (!result) return strdup("");
             memcpy(result, start, len);
             result[len] = '\0';
             return result;
@@ -276,6 +340,7 @@ const char* dex_json_array_get_raw(const char* json, int index) {
         if (i == index) {
             size_t len = (size_t)(p - start);
             char* result = (char*)malloc(len + 1);
+            if (!result) return strdup("");
             memcpy(result, start, len);
             result[len] = '\0';
             return result;
@@ -289,21 +354,31 @@ const char* dex_json_array_get_raw(const char* json, int index) {
 
 const char* dex_json_array_new(void) {
     char* s = (char*)malloc(3);
+    if (!s) return strdup("");
     s[0] = '['; s[1] = ']'; s[2] = '\0';
     return s;
 }
 
 const char* dex_json_array_push_str(const char* arr, const char* val) {
     size_t alen = strlen(arr);
-    size_t vlen = strlen(val);
-    size_t need = alen + vlen + 8;
+    size_t evlen = dex_json_escaped_len(val);
+    size_t need = alen + evlen + 8;
     char* result = (char*)malloc(need);
+    if (!result) return arr;
+    size_t pos = 0;
     if (alen == 2) {
-        snprintf(result, need, "[\"%s\"]", val);
+        result[pos++] = '[';
     } else {
         memcpy(result, arr, alen - 1);
-        snprintf(result + alen - 1, need - (alen - 1), ", \"%s\"]", val);
+        pos = alen - 1;
+        result[pos++] = ',';
+        result[pos++] = ' ';
     }
+    result[pos++] = '"';
+    pos += dex_json_escape(result + pos, val);
+    result[pos++] = '"';
+    result[pos++] = ']';
+    result[pos] = '\0';
     return result;
 }
 
@@ -311,6 +386,7 @@ const char* dex_json_array_push_int(const char* arr, int val) {
     size_t alen = strlen(arr);
     size_t need = alen + 32;
     char* result = (char*)malloc(need);
+    if (!result) return arr;
     if (alen == 2) {
         snprintf(result, need, "[%d]", val);
     } else {
@@ -324,6 +400,7 @@ const char* dex_json_array_push_long(const char* arr, long val) {
     size_t alen = strlen(arr);
     size_t need = alen + 32;
     char* result = (char*)malloc(need);
+    if (!result) return arr;
     if (alen == 2) {
         snprintf(result, need, "[%ld]", val);
     } else {
@@ -337,6 +414,7 @@ const char* dex_json_array_push_double(const char* arr, double val) {
     size_t alen = strlen(arr);
     size_t need = alen + 64;
     char* result = (char*)malloc(need);
+    if (!result) return arr;
     if (alen == 2) {
         snprintf(result, need, "[%g]", val);
     } else {
@@ -350,6 +428,7 @@ const char* dex_json_array_push_bool(const char* arr, _Bool val) {
     size_t alen = strlen(arr);
     size_t need = alen + 16;
     char* result = (char*)malloc(need);
+    if (!result) return arr;
     const char* vs = val ? "true" : "false";
     if (alen == 2) {
         snprintf(result, need, "[%s]", vs);
@@ -374,13 +453,16 @@ typedef struct {
 const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDesc* fields) {
     size_t cap = 256;
     char* buf = (char*)malloc(cap);
+    if (!buf) return strdup("");
     int pos = 0;
     buf[pos++] = '{';
     for (int f = 0; f < num_fields; f++) {
         if (f > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
         if ((size_t)pos + 256 > cap) {
             cap *= 2;
-            buf = (char*)realloc(buf, cap);
+            char* tmp = (char*)realloc(buf, cap);
+            if (!tmp) { buf[pos] = '\0'; return buf; }
+            buf = tmp;
         }
         int n = 0;
         switch (fields[f].kind) {
@@ -392,7 +474,25 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
             break;
         case 2: // string
             { DexString* s = *(DexString**)((char*)data + fields[f].offset);
-              n = snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"", fields[f].name, s ? s->data : ""); }
+              const char* sdata = s ? s->data : "";
+              size_t eklen = dex_json_escaped_len(fields[f].name);
+              size_t evlen = dex_json_escaped_len(sdata);
+              size_t field_need = eklen + evlen + 8; // "key": "val"
+              while ((size_t)pos + field_need > cap) {
+                  cap *= 2;
+                  char* tmp = (char*)realloc(buf, cap);
+                  if (!tmp) { buf[pos] = '\0'; return buf; }
+                  buf = tmp;
+              }
+              buf[pos++] = '"';
+              pos += dex_json_escape(buf + pos, fields[f].name);
+              buf[pos++] = '"';
+              buf[pos++] = ':';
+              buf[pos++] = ' ';
+              buf[pos++] = '"';
+              pos += dex_json_escape(buf + pos, sdata);
+              buf[pos++] = '"';
+              n = 0; }
             break;
         case 3: // long
             n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)data + fields[f].offset));
@@ -404,7 +504,9 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
         pos += n;
         if ((size_t)pos + 256 > cap) {
             cap *= 2;
-            buf = (char*)realloc(buf, cap);
+            char* tmp = (char*)realloc(buf, cap);
+            if (!tmp) { buf[pos] = '\0'; return buf; }
+            buf = tmp;
         }
     }
     buf[pos++] = '}';
@@ -440,6 +542,7 @@ const char* dex_json_array_push_obj(const char* arr, const char* obj) {
     size_t olen = strlen(obj);
     size_t need = alen + olen + 4;
     char* result = (char*)malloc(need);
+    if (!result) return arr;
     if (alen == 2) {
         snprintf(result, need, "[%s]", obj);
     } else {

@@ -1425,11 +1425,10 @@ func (g *Generator) genOwnedStringArg(out *strings.Builder, arg ast.Expr) {
 	if g.isNewAlloc(arg) {
 		g.genExpr(out, arg)
 	} else {
-		out.WriteString("(dex_retain(")
+		tmp := g.nextTemp()
+		out.WriteString(fmt.Sprintf("({ DexString* %s = ", tmp))
 		g.genExpr(out, arg)
-		out.WriteString("), ")
-		g.genExpr(out, arg)
-		out.WriteString(")")
+		out.WriteString(fmt.Sprintf("; dex_retain(%s); %s; })", tmp, tmp))
 	}
 }
 
@@ -1550,6 +1549,13 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 			g.genStmt(&bodyBuf, stmt, 1)
 		}
 		g.spawnWrappers.WriteString(bodyBuf.String())
+		// Release heap-typed captures before returning
+		for _, cv := range captured {
+			if ast.IsHeapType(cv.typ) {
+				g.spawnWrappers.WriteString(fmt.Sprintf("    dex_release(%s);\n", cv.name))
+			}
+		}
+		g.spawnWrappers.WriteString("    dex_release(_ch);\n")
 		g.spawnWrappers.WriteString("    return NULL;\n")
 		g.spawnWrappers.WriteString("}\n")
 
@@ -1560,9 +1566,12 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		}
 		out.WriteString(fmt.Sprintf("({ DexChan* _spawn_ch = dex_chan_new(sizeof(%s), 64); ", retCType))
 		out.WriteString(fmt.Sprintf("%s* _spawn_ctx = (%s*)malloc(sizeof(%s)); ", ctxType, ctxType, ctxType))
-		out.WriteString("_spawn_ctx->_ch = _spawn_ch; ")
+		out.WriteString("_spawn_ctx->_ch = _spawn_ch; dex_retain(_spawn_ch); ")
 		for _, cv := range captured {
 			out.WriteString(fmt.Sprintf("_spawn_ctx->%s = %s; ", cv.name, cv.name))
+			if ast.IsHeapType(cv.typ) {
+				out.WriteString(fmt.Sprintf("dex_retain(%s); ", cv.name))
+			}
 		}
 		out.WriteString(fmt.Sprintf("pthread_t _spawn_t_%d; ", idx))
 		out.WriteString(fmt.Sprintf("pthread_create(&_spawn_t_%d, NULL, %s, _spawn_ctx); ", idx, wrapperName))
@@ -1611,6 +1620,14 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		if retType != ast.TypeVoid {
 			g.spawnWrappers.WriteString("    dex_chan_send(_ch, &_ret);\n")
 		}
+		// Release heap-typed args before returning
+		for i, arg := range call.Args {
+			argType := g.typeOfExpr(arg)
+			if ast.IsHeapType(argType) {
+				g.spawnWrappers.WriteString(fmt.Sprintf("    dex_release(_a%d);\n", i))
+			}
+		}
+		g.spawnWrappers.WriteString("    dex_release(_ch);\n")
 		g.spawnWrappers.WriteString("    return NULL;\n")
 		g.spawnWrappers.WriteString("}\n")
 
@@ -1621,11 +1638,15 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		}
 		out.WriteString(fmt.Sprintf("({ DexChan* _spawn_ch = dex_chan_new(sizeof(%s), 1); ", retCType))
 		out.WriteString(fmt.Sprintf("%s* _spawn_ctx = (%s*)malloc(sizeof(%s)); ", ctxType, ctxType, ctxType))
-		out.WriteString("_spawn_ctx->_ch = _spawn_ch; ")
+		out.WriteString("_spawn_ctx->_ch = _spawn_ch; dex_retain(_spawn_ch); ")
 		for i, arg := range call.Args {
 			out.WriteString(fmt.Sprintf("_spawn_ctx->_a%d = ", i))
 			g.genExpr(out, arg)
 			out.WriteString("; ")
+			argType := g.typeOfExpr(arg)
+			if ast.IsHeapType(argType) {
+				out.WriteString(fmt.Sprintf("dex_retain(_spawn_ctx->_a%d); ", i))
+			}
 		}
 		out.WriteString(fmt.Sprintf("pthread_t _spawn_t_%d; ", idx))
 		out.WriteString(fmt.Sprintf("pthread_create(&_spawn_t_%d, NULL, %s, _spawn_ctx); ", idx, wrapperName))
@@ -1948,41 +1969,27 @@ func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) 
 		return
 	}
 
-	// For 3+ operands, use statement-expression to linearize and release intermediates.
-	// This avoids deeply nested dex_str_concat calls that leak intermediates.
-	out.WriteString("({ ")
+	// For 3+ operands, use StringBuilder for efficient single-allocation concatenation.
+	g.usesStringBuilder = true
+	g.usesString = true
+	sbTmp := g.nextTemp()
+	resTmp := g.nextTemp()
+	out.WriteString(fmt.Sprintf("({ DexStringBuilder* %s = dex_sb_new(); ", sbTmp))
 
-	// Emit each operand that needs a temp
+	// Append each operand and release +1 allocations
 	operandVars := make([]string, len(operands))
 	for i, op := range operands {
 		tmpName := g.nextTemp()
 		operandVars[i] = tmpName
 		out.WriteString(fmt.Sprintf("DexString* %s = ", tmpName))
 		g.genExpr(out, op)
-		out.WriteString("; ")
+		out.WriteString(fmt.Sprintf("; dex_sb_append_str(%s, %s); ", sbTmp, tmpName))
+		if g.isNewAlloc(op) {
+			out.WriteString(fmt.Sprintf("dex_release(%s); ", tmpName))
+		}
 	}
 
-	// Chain concat calls, releasing intermediates
-	resultVar := operandVars[0]
-	for i := 1; i < len(operandVars); i++ {
-		concatTmp := g.nextTemp()
-		out.WriteString(fmt.Sprintf("DexString* %s = dex_str_concat(%s, %s); ", concatTmp, resultVar, operandVars[i]))
-		// Release the operand if it was a +1 allocation (not a borrowed ref)
-		if g.isNewAlloc(operands[i]) {
-			out.WriteString(fmt.Sprintf("dex_release(%s); ", operandVars[i]))
-		}
-		// Release the previous intermediate (except the first operand on first iteration)
-		if i > 1 {
-			// Previous resultVar was an intermediate concat result — release it
-			out.WriteString(fmt.Sprintf("dex_release(%s); ", resultVar))
-		} else if g.isNewAlloc(operands[0]) {
-			// First operand was a +1 allocation, release it after first concat
-			out.WriteString(fmt.Sprintf("dex_release(%s); ", operandVars[0]))
-		}
-		resultVar = concatTmp
-	}
-
-	out.WriteString(fmt.Sprintf("%s; })", resultVar))
+	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); dex_release(%s); %s; })", resTmp, sbTmp, sbTmp, resTmp))
 }
 
 // isStringExpr checks if an expression is known to produce a string type.

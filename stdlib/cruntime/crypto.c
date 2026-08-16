@@ -20,6 +20,7 @@ const char* dex_crypto_uuid(void) {
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
 
     char* result = (char*)malloc(37);
+    if (!result) return strdup("");
     snprintf(result, 37, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
         bytes[0], bytes[1], bytes[2], bytes[3],
         bytes[4], bytes[5],

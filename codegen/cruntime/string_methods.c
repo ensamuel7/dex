@@ -177,3 +177,24 @@ static _Bool dex_str_isWhitespace(DexString* s) {
 static _Bool dex_str_isEmpty(DexString* s) {
     return s->len == 0;
 }
+
+static _Bool dex_str_containsUppercase(DexString* s) {
+    for (size_t i = 0; i < s->len; i++) {
+        if (isupper((unsigned char)s->data[i])) return 1;
+    }
+    return 0;
+}
+
+static _Bool dex_str_containsLowercase(DexString* s) {
+    for (size_t i = 0; i < s->len; i++) {
+        if (islower((unsigned char)s->data[i])) return 1;
+    }
+    return 0;
+}
+
+static _Bool dex_str_containsDigit(DexString* s) {
+    for (size_t i = 0; i < s->len; i++) {
+        if (isdigit((unsigned char)s->data[i])) return 1;
+    }
+    return 0;
+}

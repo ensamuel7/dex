@@ -23,6 +23,62 @@ func ExtractImportPaths(tokens []token.Token) []string {
 	return paths
 }
 
+// PreRegisterUserStructs scans user module files (non-stdlib imports) for struct
+// and enum declarations and registers them globally so the main file parser
+// recognizes struct literal syntax (e.g. User { field: value }).
+func PreRegisterUserStructs(importPaths []string, sourceDir string) []string {
+	var names []string
+	visited := map[string]bool{}
+	for _, path := range importPaths {
+		if stdlib.Lookup(path) != nil {
+			continue
+		}
+		preRegisterStructsFromFile(filepath.Join(sourceDir, path+".dx"), visited, &names)
+	}
+	return names
+}
+
+func preRegisterStructsFromFile(filePath string, visited map[string]bool, names *[]string) {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil || visited[absPath] {
+		return
+	}
+	visited[absPath] = true
+
+	source, err := os.ReadFile(filePath)
+	if err != nil {
+		return
+	}
+
+	lex := lexer.New(string(source))
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return
+	}
+
+	// Scan for struct/enum declarations and sub-imports
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenStruct && tokens[i+1].Kind == token.TokenIdent {
+			name := tokens[i+1].Value
+			*names = append(*names, name)
+		}
+		if tokens[i].Kind == token.TokenEnum && tokens[i+1].Kind == token.TokenIdent {
+			name := tokens[i+1].Value
+			*names = append(*names, name)
+		}
+	}
+
+	// Recurse into sub-imports
+	subPaths := ExtractImportPaths(tokens)
+	modDir := filepath.Dir(absPath)
+	for _, subPath := range subPaths {
+		if stdlib.Lookup(subPath) != nil {
+			continue
+		}
+		preRegisterStructsFromFile(filepath.Join(modDir, subPath+".dx"), visited, names)
+	}
+}
+
 // ResolveUserModules finds non-stdlib imports, parses their .dx files,
 // prefixes their functions, and merges them into the main program.
 func ResolveUserModules(program *ast.Program, sourceDir string) error {

@@ -102,6 +102,7 @@ func main() {
 		defer os.Remove(binaryPath)
 
 		cmd := exec.Command(binaryPath)
+		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -265,6 +266,7 @@ func dev(filename string) {
 		fmt.Printf("[dev] running %s\n", binaryPath)
 
 		cmd = exec.Command(binaryPath)
+		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
@@ -363,9 +365,21 @@ func build(filename string) (string, error) {
 	importPaths := resolve.ExtractImportPaths(tokens)
 	typeNames := stdlib.ModuleTypesForImports(importPaths)
 
+	// Pre-scan user module files for struct/enum names so the main parser
+	// recognizes struct literal syntax (e.g. User { field: value }).
+	sourceDir := filepath.Dir(filename)
+	if sourceDir == "" {
+		sourceDir = "."
+	}
+	absSourceDir, _ := filepath.Abs(sourceDir)
+	userStructNames := resolve.PreRegisterUserStructs(importPaths, absSourceDir)
+
 	// Parse
 	p := parser.New(tokens)
 	for _, name := range typeNames {
+		p.AddStructName(name)
+	}
+	for _, name := range userStructNames {
 		p.AddStructName(name)
 	}
 	p.AddStructName("Exception") // built-in Exception type
@@ -378,11 +392,6 @@ func build(filename string) (string, error) {
 	resolve.FlattenStructMethods(program)
 
 	// Resolve user module imports (non-stdlib .dx files)
-	sourceDir := filepath.Dir(filename)
-	if sourceDir == "" {
-		sourceDir = "."
-	}
-	absSourceDir, _ := filepath.Abs(sourceDir)
 	if err := resolve.ResolveUserModules(program, absSourceDir); err != nil {
 		return "", err
 	}

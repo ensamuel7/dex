@@ -192,6 +192,9 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 		{Label: "isNumeric", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are numeric or '.' (non-empty)."},
 		{Label: "isWhitespace", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are whitespace (non-empty)."},
 		{Label: "isEmpty", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string is empty (length 0)."},
+		{Label: "containsUppercase", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one uppercase letter."},
+		{Label: "containsLowercase", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one lowercase letter."},
+		{Label: "containsDigit", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one digit."},
 		// Map methods
 		{Label: "set", Kind: CompletionKindFunction, Detail: "(key, value): void", Documentation: "Set a key-value pair in the map."},
 		{Label: "get", Kind: CompletionKindFunction, Detail: "(key): value", Documentation: "Get the value for a key."},

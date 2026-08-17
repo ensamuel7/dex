@@ -689,26 +689,24 @@ func (g *Generator) Generate(program *ast.Program) string {
 	}
 
 	// Emit forward declarations for all user-defined functions
-	if g.usesConcurrency {
-		for _, fn := range program.Functions {
-			if fn.Name == "main" {
-				continue
-			}
-			retType := g.cType(fn.ReturnType)
-			out.WriteString(fmt.Sprintf("%s %s(", retType, fn.Name))
-			for i, p := range fn.Params {
-				if i > 0 {
-					out.WriteString(", ")
-				}
-				out.WriteString(fmt.Sprintf("%s %s", g.cType(p.Type), p.Name))
-			}
-			if len(fn.Params) == 0 {
-				out.WriteString("void")
-			}
-			out.WriteString(");\n")
+	for _, fn := range program.Functions {
+		if fn.Name == "main" {
+			continue
 		}
-		out.WriteString("\n")
+		retType := g.cType(fn.ReturnType)
+		out.WriteString(fmt.Sprintf("%s %s(", retType, fn.Name))
+		for i, p := range fn.Params {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(fmt.Sprintf("%s %s", g.cType(p.Type), p.Name))
+		}
+		if len(fn.Params) == 0 {
+			out.WriteString("void")
+		}
+		out.WriteString(");\n")
 	}
+	out.WriteString("\n")
 
 	// Emit forward declarations for flattened struct method functions
 	hasStructMethods := false

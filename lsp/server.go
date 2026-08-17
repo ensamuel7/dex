@@ -471,6 +471,12 @@ func (s *Server) diagnose(uri string, text string) {
 	// Parse
 	p := parser.New(tokens)
 	seedParserModuleTypes(p, tokens)
+	// Pre-register struct/enum names from user module files so the parser
+	// recognizes struct literal syntax (e.g. User { field: value }).
+	importPaths := resolve.ExtractImportPaths(tokens)
+	for _, name := range resolve.PreRegisterUserStructs(importPaths, sourceDir) {
+		p.AddStructName(name)
+	}
 	program, parseErrs := p.Parse()
 	if len(parseErrs) > 0 {
 		for _, e := range parseErrs {

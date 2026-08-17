@@ -1329,7 +1329,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				g.genExpr(out, e.Args[0])
 				out.WriteString(")")
 				return
-			case "isAlphanumeric", "isAlpha", "isDigit", "isNumeric", "isWhitespace", "isEmpty":
+			case "isAlphanumeric", "isAlpha", "isDigit", "isNumeric", "isWhitespace", "isEmpty",
+				"containsUppercase", "containsLowercase", "containsDigit":
 				out.WriteString(fmt.Sprintf("dex_str_%s(%s)", e.Name, e.Module))
 				return
 			}

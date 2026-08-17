@@ -56,15 +56,21 @@ func preRegisterStructsFromFile(filePath string, visited map[string]bool, names 
 		return
 	}
 
-	// Scan for struct/enum declarations and sub-imports
+	// Scan for struct/enum declarations and sub-imports.
+	// Register placeholder types so ast.LookupStructType/LookupEnumType works
+	// when the main file parser resolves type annotations (e.g. ": User").
+	// The full definitions get filled in later when modules are fully parsed,
+	// and RegisterStructType/RegisterEnumType are idempotent (update existing).
 	for i := 0; i < len(tokens)-1; i++ {
 		if tokens[i].Kind == token.TokenStruct && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
 			*names = append(*names, name)
+			ast.RegisterStructType(ast.StructDef{Name: name})
 		}
 		if tokens[i].Kind == token.TokenEnum && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
 			*names = append(*names, name)
+			ast.RegisterEnumType(ast.EnumDef{Name: name})
 		}
 	}
 

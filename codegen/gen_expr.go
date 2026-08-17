@@ -357,13 +357,18 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
-	// Special case: fmt.print / fmt.println — polymorphic print for any primitive type
+	// Special case: fmt.print / fmt.println — polymorphic print for any type
 	if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
-		newline := ""
-		if e.Name == "println" {
-			newline = "\\n"
-		}
+		newline := e.Name == "println"
 		argType := g.typeOfExpr(e.Args[0])
+		if ast.IsArrayType(argType) || ast.IsStructType(argType) {
+			g.genPrintValue(out, e.Args[0], argType, newline)
+			return
+		}
+		nl := ""
+		if newline {
+			nl = "\\n"
+		}
 		var fmtStr string
 		switch argType {
 		case ast.TypeChar:
@@ -375,13 +380,13 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		case ast.TypeDouble:
 			fmtStr = "%f"
 		case ast.TypeString:
-			out.WriteString(fmt.Sprintf("printf(\"%%s%s\", ", newline))
+			out.WriteString(fmt.Sprintf("printf(\"%%s%s\", ", nl))
 			g.genExpr(out, e.Args[0])
 			out.WriteString("->data)")
 			return
 		case ast.TypeBool:
 			// Print bools as "true"/"false"
-			out.WriteString(fmt.Sprintf("printf(\"%%s%s\", ", newline))
+			out.WriteString(fmt.Sprintf("printf(\"%%s%s\", ", nl))
 			out.WriteString("(")
 			g.genExpr(out, e.Args[0])
 			out.WriteString(") ? \"true\" : \"false\")")
@@ -389,7 +394,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		default:
 			fmtStr = "%d"
 		}
-		out.WriteString(fmt.Sprintf("printf(\"%s%s\", ", fmtStr, newline))
+		out.WriteString(fmt.Sprintf("printf(\"%s%s\", ", fmtStr, nl))
 		g.genExpr(out, e.Args[0])
 		out.WriteString(")")
 		return
@@ -2074,4 +2079,204 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 		return g.typeOfExpr(e) == ast.TypeString
 	}
 	return false
+}
+
+// genPrintValue generates C code to print a value of any type.
+// For arrays and structs it wraps the output in a do { ... } while(0) block.
+func (g *Generator) genPrintValue(out *strings.Builder, expr ast.Expr, typ ast.Type, newline bool) {
+	if ast.IsArrayType(typ) {
+		g.genPrintArray(out, expr, typ, newline)
+		return
+	}
+	if ast.IsStructType(typ) {
+		g.genPrintStruct(out, expr, typ, newline)
+		return
+	}
+	// Primitive types — inline printf
+	nl := ""
+	if newline {
+		nl = "\\n"
+	}
+	switch typ {
+	case ast.TypeChar:
+		out.WriteString(fmt.Sprintf("printf(\"%%c%s\", ", nl))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	case ast.TypeInt:
+		out.WriteString(fmt.Sprintf("printf(\"%%d%s\", ", nl))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	case ast.TypeLong:
+		out.WriteString(fmt.Sprintf("printf(\"%%ld%s\", ", nl))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	case ast.TypeDouble:
+		out.WriteString(fmt.Sprintf("printf(\"%%f%s\", ", nl))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	case ast.TypeString:
+		out.WriteString(fmt.Sprintf("printf(\"%%s%s\", ", nl))
+		g.genExpr(out, expr)
+		out.WriteString("->data)")
+	case ast.TypeBool:
+		out.WriteString(fmt.Sprintf("printf(\"%%s%s\", (", nl))
+		g.genExpr(out, expr)
+		out.WriteString(") ? \"true\" : \"false\")")
+	default:
+		// enums and other integer-like types
+		out.WriteString(fmt.Sprintf("printf(\"%%d%s\", ", nl))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	}
+}
+
+// genPrintArray generates C code to print an array as [elem, elem, ...].
+func (g *Generator) genPrintArray(out *strings.Builder, expr ast.Expr, arrType ast.Type, newline bool) {
+	elemType := ast.ElementType(arrType)
+	cnt := g.printCounter
+	g.printCounter++
+	iterVar := fmt.Sprintf("_pi%d", cnt)
+
+	out.WriteString("do { ")
+
+	// Store the array pointer in a temp variable
+	arrVar := fmt.Sprintf("_pa%d", cnt)
+	if ast.IsStructArrayType(arrType) {
+		out.WriteString(fmt.Sprintf("DexArrayStruct* %s = (DexArrayStruct*)", arrVar))
+	} else {
+		out.WriteString(fmt.Sprintf("%s %s = ", g.cType(arrType), arrVar))
+	}
+	g.genExpr(out, expr)
+	out.WriteString("; ")
+
+	out.WriteString("printf(\"[\"); ")
+	out.WriteString(fmt.Sprintf("for (int %s = 0; %s < %s->len; %s++) { ", iterVar, iterVar, arrVar, iterVar))
+	out.WriteString(fmt.Sprintf("if (%s > 0) printf(\", \"); ", iterVar))
+
+	// Generate print for each element
+	elemExpr := fmt.Sprintf("%s->data[%s]", arrVar, iterVar)
+	if ast.IsStructArrayType(arrType) {
+		elemCType := g.cType(elemType)
+		elemExpr = fmt.Sprintf("*(%s*)dex_array_struct_get(%s, %s)", elemCType, arrVar, iterVar)
+	}
+	g.genPrintElem(out, elemExpr, elemType)
+	out.WriteString("; ")
+
+	out.WriteString("} ")
+	if newline {
+		out.WriteString("printf(\"]\\n\"); ")
+	} else {
+		out.WriteString("printf(\"]\"); ")
+	}
+	out.WriteString("} while(0)")
+}
+
+// genPrintElem generates C code to print a single element given as a C expression string.
+func (g *Generator) genPrintElem(out *strings.Builder, cExpr string, typ ast.Type) {
+	if ast.IsArrayType(typ) {
+		// Nested array: recurse
+		elemType := ast.ElementType(typ)
+		cnt := g.printCounter
+		g.printCounter++
+		iterVar := fmt.Sprintf("_pi%d", cnt)
+		arrVar := fmt.Sprintf("_pa%d", cnt)
+
+		if ast.IsStructArrayType(typ) {
+			out.WriteString(fmt.Sprintf("{ DexArrayStruct* %s = (DexArrayStruct*)%s; ", arrVar, cExpr))
+		} else {
+			out.WriteString(fmt.Sprintf("{ %s %s = %s; ", g.cType(typ), arrVar, cExpr))
+		}
+		out.WriteString("printf(\"[\"); ")
+		out.WriteString(fmt.Sprintf("for (int %s = 0; %s < %s->len; %s++) { ", iterVar, iterVar, arrVar, iterVar))
+		out.WriteString(fmt.Sprintf("if (%s > 0) printf(\", \"); ", iterVar))
+
+		innerExpr := fmt.Sprintf("%s->data[%s]", arrVar, iterVar)
+		if ast.IsStructArrayType(typ) {
+			innerCType := g.cType(elemType)
+			innerExpr = fmt.Sprintf("*(%s*)dex_array_struct_get(%s, %s)", innerCType, arrVar, iterVar)
+		}
+		g.genPrintElem(out, innerExpr, elemType)
+		out.WriteString("; ")
+
+		out.WriteString("} printf(\"]\"); }")
+		return
+	}
+	if ast.IsStructType(typ) {
+		// Nested struct: recurse
+		def := ast.GetStructDef(typ)
+		if def == nil {
+			out.WriteString(fmt.Sprintf("printf(\"%%d\", %s)", cExpr))
+			return
+		}
+		cnt := g.printCounter
+		g.printCounter++
+		structVar := fmt.Sprintf("_ps%d", cnt)
+		cType := g.cType(typ)
+		out.WriteString(fmt.Sprintf("{ %s %s = %s; ", cType, structVar, cExpr))
+		out.WriteString(fmt.Sprintf("printf(\"%s{\"); ", def.Name))
+		for i, f := range def.Fields {
+			if i > 0 {
+				out.WriteString("printf(\", \"); ")
+			}
+			fieldExpr := fmt.Sprintf("%s.%s", structVar, f.Name)
+			out.WriteString(fmt.Sprintf("printf(\"%s: \"); ", f.Name))
+			g.genPrintElem(out, fieldExpr, f.Type)
+			out.WriteString("; ")
+		}
+		out.WriteString("printf(\"}\"); }")
+		return
+	}
+	// Primitive types
+	switch typ {
+	case ast.TypeChar:
+		out.WriteString(fmt.Sprintf("printf(\"%%c\", %s)", cExpr))
+	case ast.TypeInt:
+		out.WriteString(fmt.Sprintf("printf(\"%%d\", %s)", cExpr))
+	case ast.TypeLong:
+		out.WriteString(fmt.Sprintf("printf(\"%%ld\", %s)", cExpr))
+	case ast.TypeDouble:
+		out.WriteString(fmt.Sprintf("printf(\"%%f\", %s)", cExpr))
+	case ast.TypeString:
+		out.WriteString(fmt.Sprintf("printf(\"%%s\", %s->data)", cExpr))
+	case ast.TypeBool:
+		out.WriteString(fmt.Sprintf("printf(\"%%s\", (%s) ? \"true\" : \"false\")", cExpr))
+	default:
+		// enums and other integer-like types
+		out.WriteString(fmt.Sprintf("printf(\"%%d\", %s)", cExpr))
+	}
+}
+
+// genPrintStruct generates C code to print a struct as Name{field: value, ...}.
+func (g *Generator) genPrintStruct(out *strings.Builder, expr ast.Expr, structType ast.Type, newline bool) {
+	def := ast.GetStructDef(structType)
+	if def == nil {
+		out.WriteString("printf(\"<unknown struct>\")")
+		return
+	}
+	cnt := g.printCounter
+	g.printCounter++
+	structVar := fmt.Sprintf("_ps%d", cnt)
+	cType := g.cType(structType)
+
+	out.WriteString("do { ")
+	out.WriteString(fmt.Sprintf("%s %s = ", cType, structVar))
+	g.genExpr(out, expr)
+	out.WriteString("; ")
+
+	out.WriteString(fmt.Sprintf("printf(\"%s{\"); ", def.Name))
+	for i, f := range def.Fields {
+		if i > 0 {
+			out.WriteString("printf(\", \"); ")
+		}
+		fieldExpr := fmt.Sprintf("%s.%s", structVar, f.Name)
+		out.WriteString(fmt.Sprintf("printf(\"%s: \"); ", f.Name))
+		g.genPrintElem(out, fieldExpr, f.Type)
+		out.WriteString("; ")
+	}
+	if newline {
+		out.WriteString("printf(\"}\\n\"); ")
+	} else {
+		out.WriteString("printf(\"}\"); ")
+	}
+	out.WriteString("} while(0)")
 }

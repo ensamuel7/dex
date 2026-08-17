@@ -98,6 +98,14 @@ func ResetStructTypes() {
 }
 
 func RegisterStructType(def StructDef) Type {
+	if id, ok := structByName[def.Name]; ok {
+		// Update existing entry (e.g. placeholder from pre-scan gets real fields)
+		idx := int(id - TypeStructBase)
+		if idx >= 0 && idx < len(structDefs) {
+			structDefs[idx] = def
+		}
+		return id
+	}
 	id := TypeStructBase + Type(len(structDefs))
 	structByName[def.Name] = id
 	structDefs = append(structDefs, def)
@@ -961,6 +969,14 @@ func ResetEnumTypes() {
 }
 
 func RegisterEnumType(def EnumDef) Type {
+	if id, ok := enumByName[def.Name]; ok {
+		// Update existing entry (e.g. placeholder from pre-scan gets real variants)
+		idx := int(id - TypeEnumBase)
+		if idx >= 0 && idx < len(enumDefs) {
+			enumDefs[idx] = def
+		}
+		return id
+	}
 	id := TypeEnumBase + Type(len(enumDefs))
 	enumByName[def.Name] = id
 	enumDefs = append(enumDefs, def)

@@ -47,6 +47,7 @@ type Generator struct {
 	sbVars     map[string]bool      // variables known to be StringBuilder type
 	varTypes   map[string]ast.Type   // all variable types for this function scope
 
+	printCounter       int            // unique counter for print temp variables
 	foreachCounter     int            // unique counter for foreach loop variables
 	spawnCounter       int            // unique counter for spawn wrapper functions
 	spawnWrappers      strings.Builder // collected wrapper functions emitted before main

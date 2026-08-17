@@ -483,7 +483,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 				if argType != ast.TypeInt && argType != ast.TypeLong && argType != ast.TypeDouble &&
 					argType != ast.TypeString && argType != ast.TypeBool && argType != ast.TypeChar &&
-					!ast.IsEnumType(argType) {
+					!ast.IsEnumType(argType) && !ast.IsArrayType(argType) && !ast.IsStructType(argType) {
 					return 0, c.errAt(e.Pos, "fmt.%s() argument must be a primitive type, got %s", e.Name, typeName(argType))
 				}
 				return ast.TypeVoid, nil

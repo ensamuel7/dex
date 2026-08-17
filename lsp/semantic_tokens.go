@@ -115,6 +115,42 @@ func scanSemanticTokens(tokens []token.Token) []int {
 		}
 	}
 
+	// Collect declared variable names for fallback coloring.
+	declaredVars := map[string]bool{}
+	for i := 0; i < len(tokens)-1; i++ {
+		// let ident / const ident
+		if (tokens[i].Kind == token.TokenLet || tokens[i].Kind == token.TokenConst) && tokens[i+1].Kind == token.TokenIdent {
+			declaredVars[tokens[i+1].Value] = true
+		}
+		// foreach(collection as ident) or foreach(collection as ident, ident)
+		if tokens[i].Kind == token.TokenAs {
+			if i+1 < len(tokens) && tokens[i+1].Kind == token.TokenIdent {
+				declaredVars[tokens[i+1].Value] = true
+			}
+			if i+2 < len(tokens) && tokens[i+2].Kind == token.TokenComma && i+3 < len(tokens) && tokens[i+3].Kind == token.TokenIdent {
+				declaredVars[tokens[i+3].Value] = true
+			}
+		}
+		// function parameters: fn name(ident: type, ident: type)
+		if (tokens[i].Kind == token.TokenFn || tokens[i].Kind == token.TokenFunction) && i+1 < len(tokens) && tokens[i+1].Kind == token.TokenIdent {
+			// Skip fn name and opening paren
+			for j := i + 2; j < len(tokens); j++ {
+				if tokens[j].Kind == token.TokenLParen {
+					// Scan params
+					for k := j + 1; k < len(tokens); k++ {
+						if tokens[k].Kind == token.TokenRParen {
+							break
+						}
+						if tokens[k].Kind == token.TokenIdent && k+1 < len(tokens) && tokens[k+1].Kind == token.TokenColon {
+							declaredVars[tokens[k].Value] = true
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
 	var raw []rawToken
 
 	// Track struct literal context with a stack of brace depths.
@@ -244,6 +280,22 @@ func scanSemanticTokens(tokens []token.Token) []int {
 				}
 			}
 
+			// var.method() / var.property pattern: known variable followed by dot
+			if next != nil && next.Kind == token.TokenDot && declaredVars[tok.Value] && !importedModules[tok.Value] && !enumNames[tok.Value] {
+				emit(tok, semTypeVariable, 0)
+				p2 := peek2(i)
+				if p2 != nil && p2.Kind == token.TokenIdent {
+					if i+3 < len(tokens) && tokens[i+3].Kind == token.TokenLParen {
+						emit(*p2, semTypeFunction, 0)
+					} else {
+						emit(*p2, semTypeProperty, 0)
+					}
+					i += 2
+					continue
+				}
+				continue
+			}
+
 			// Module.func() pattern: ident "." ident "("
 			if next != nil && next.Kind == token.TokenDot && importedModules[tok.Value] {
 				p2 := peek2(i)
@@ -283,6 +335,12 @@ func scanSemanticTokens(tokens []token.Token) []int {
 					emit(tok, semTypeEnum, 0)
 					continue
 				}
+			}
+
+			// Fallback: known variable reference
+			if declaredVars[tok.Value] {
+				emit(tok, semTypeVariable, 0)
+				continue
 			}
 		}
 	}

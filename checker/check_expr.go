@@ -1442,6 +1442,11 @@ func (c *Checker) checkStringMethod(varName, method string, args []ast.Expr, pos
 			return 0, c.errAt(pos, "%s.charAt() argument must be int, got %s", varName, typeName(argType))
 		}
 		return ast.TypeChar, nil
+	case "isAlphanumeric", "isAlpha", "isDigit", "isNumeric", "isWhitespace", "isEmpty":
+		if len(args) != 0 {
+			return 0, c.errAt(pos, "%s.%s() takes no arguments, got %d", varName, method, len(args))
+		}
+		return ast.TypeBool, nil
 	default:
 		return 0, c.errAt(pos, "undefined method '%s' on string type", method)
 	}

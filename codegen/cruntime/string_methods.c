@@ -132,3 +132,48 @@ static unsigned char dex_str_charAt(DexString* s, int index) {
     }
     return (unsigned char)s->data[index];
 }
+
+static _Bool dex_str_isAlphanumeric(DexString* s) {
+    if (s->len == 0) return 0;
+    for (size_t i = 0; i < s->len; i++) {
+        if (!isalnum((unsigned char)s->data[i])) return 0;
+    }
+    return 1;
+}
+
+static _Bool dex_str_isAlpha(DexString* s) {
+    if (s->len == 0) return 0;
+    for (size_t i = 0; i < s->len; i++) {
+        if (!isalpha((unsigned char)s->data[i])) return 0;
+    }
+    return 1;
+}
+
+static _Bool dex_str_isDigit(DexString* s) {
+    if (s->len == 0) return 0;
+    for (size_t i = 0; i < s->len; i++) {
+        if (!isdigit((unsigned char)s->data[i])) return 0;
+    }
+    return 1;
+}
+
+static _Bool dex_str_isNumeric(DexString* s) {
+    if (s->len == 0) return 0;
+    for (size_t i = 0; i < s->len; i++) {
+        unsigned char c = (unsigned char)s->data[i];
+        if (!isdigit(c) && c != '.') return 0;
+    }
+    return 1;
+}
+
+static _Bool dex_str_isWhitespace(DexString* s) {
+    if (s->len == 0) return 0;
+    for (size_t i = 0; i < s->len; i++) {
+        if (!isspace((unsigned char)s->data[i])) return 0;
+    }
+    return 1;
+}
+
+static _Bool dex_str_isEmpty(DexString* s) {
+    return s->len == 0;
+}

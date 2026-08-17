@@ -186,6 +186,12 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 		{Label: "substring", Kind: CompletionKindFunction, Detail: "(start: int, end: int): string", Documentation: "Return a substring from start to end (exclusive)."},
 		{Label: "replace", Kind: CompletionKindFunction, Detail: "(old: string, new: string): string", Documentation: "Replace all occurrences of old with new."},
 		{Label: "charAt", Kind: CompletionKindFunction, Detail: "(index: int): char", Documentation: "Return the character at the given index."},
+		{Label: "isAlphanumeric", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are alphanumeric (non-empty)."},
+		{Label: "isAlpha", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are alphabetic (non-empty)."},
+		{Label: "isDigit", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are digits (non-empty)."},
+		{Label: "isNumeric", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are numeric or '.' (non-empty)."},
+		{Label: "isWhitespace", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are whitespace (non-empty)."},
+		{Label: "isEmpty", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string is empty (length 0)."},
 		// Map methods
 		{Label: "set", Kind: CompletionKindFunction, Detail: "(key, value): void", Documentation: "Set a key-value pair in the map."},
 		{Label: "get", Kind: CompletionKindFunction, Detail: "(key): value", Documentation: "Get the value for a key."},

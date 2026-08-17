@@ -365,6 +365,45 @@ private struct InternalConfig {
 }
 ```
 
+### Zero values
+
+Omitted fields in struct literals are initialized to their zero value, similar to Go:
+
+| Type      | Zero value |
+|-----------|------------|
+| `int`     | `0`        |
+| `long`    | `0`        |
+| `double`  | `0.0`      |
+| `bool`    | `false`    |
+| `char`    | `'\0'`     |
+| `string`  | `""`       |
+| struct    | all fields zero-initialized recursively |
+| array     | `null`     |
+| optional  | `null`     |
+
+```dex
+struct Point {
+  x: int
+  y: int
+}
+
+let origin = Point{}           // Point{x: 0, y: 0}
+let p = Point{x: 5}           // Point{x: 5, y: 0}
+```
+
+Nested structs are also zero-initialized recursively:
+
+```dex
+struct Line {
+  start: Point
+  end: Point
+  label: string
+}
+
+let line = Line{label: "AB"}
+// Line{start: Point{x: 0, y: 0}, end: Point{x: 0, y: 0}, label: AB}
+```
+
 ---
 
 ## Enums
@@ -959,21 +998,29 @@ import "module_name"
 
 ### fmt
 
-Print values to stdout.
+Print values to stdout. Accepts any type — primitives, arrays, and structs.
 
 ```dex
 import "fmt"
 
-fmt.println(42)            // print with newline
-fmt.println("hello")       // print with newline
-fmt.print("no newline")    // print without newline
-fmt.print(3.14)            // print without newline
+fmt.println(42)            // 42
+fmt.println("hello")       // hello
+fmt.print("no newline")   // no newline (no trailing \n)
+fmt.print(3.14)            // 3.140000
+
+// Arrays print as [elem, elem, ...]
+let nums: int[] = [1, 2, 3]
+fmt.println(nums)          // [1, 2, 3]
+
+// Structs print as Name{field: value, ...}
+let p = Point{x: 10, y: 20}
+fmt.println(p)             // Point{x: 10, y: 20}
 ```
 
-| Function  | Signature                                                | Description                          |
-|-----------|----------------------------------------------------------|--------------------------------------|
-| `print`   | `print(value: int\|long\|double\|string\|bool): void`   | Print any primitive without newline  |
-| `println` | `println(value: int\|long\|double\|string\|bool): void` | Print any primitive with newline     |
+| Function  | Signature                    | Description                          |
+|-----------|------------------------------|--------------------------------------|
+| `print`   | `print(value: any): void`    | Print any value without newline      |
+| `println` | `println(value: any): void`  | Print any value with newline         |
 
 ### http
 

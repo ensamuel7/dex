@@ -174,10 +174,18 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		out.WriteString(fmt.Sprintf("(%s){ ", cName))
 		structType, _ := ast.LookupStructType(e.Name)
 		structDef := ast.GetStructDef(structType)
+		// Track which fields are explicitly provided
+		provided := make(map[string]bool, len(e.FieldNames))
+		for _, fn := range e.FieldNames {
+			provided[fn] = true
+		}
+		first := true
+		// Emit explicitly provided fields
 		for i, fn := range e.FieldNames {
-			if i > 0 {
+			if !first {
 				out.WriteString(", ")
 			}
+			first = false
 			out.WriteString(fmt.Sprintf(".%s = ", fn))
 			// Insert & for ref-typed fields (only if arg is not already a ref)
 			if structDef != nil {
@@ -192,6 +200,20 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 				}
 			}
 			g.genExpr(out, e.FieldValues[i])
+		}
+		// Emit zero values for missing fields
+		if structDef != nil {
+			for _, f := range structDef.Fields {
+				if provided[f.Name] {
+					continue
+				}
+				if !first {
+					out.WriteString(", ")
+				}
+				first = false
+				out.WriteString(fmt.Sprintf(".%s = ", f.Name))
+				g.genZeroValue(out, f.Type)
+			}
 		}
 		out.WriteString(" }")
 
@@ -361,8 +383,12 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
 		newline := e.Name == "println"
 		argType := g.typeOfExpr(e.Args[0])
-		if ast.IsArrayType(argType) || ast.IsStructType(argType) {
-			g.genPrintValue(out, e.Args[0], argType, newline)
+		if ast.IsArrayType(argType) {
+			g.genPrintArray(out, e.Args[0], argType, newline)
+			return
+		}
+		if ast.IsStructType(argType) {
+			g.genPrintStruct(out, e.Args[0], argType, newline)
 			return
 		}
 		nl := ""
@@ -2081,55 +2107,6 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 	return false
 }
 
-// genPrintValue generates C code to print a value of any type.
-// For arrays and structs it wraps the output in a do { ... } while(0) block.
-func (g *Generator) genPrintValue(out *strings.Builder, expr ast.Expr, typ ast.Type, newline bool) {
-	if ast.IsArrayType(typ) {
-		g.genPrintArray(out, expr, typ, newline)
-		return
-	}
-	if ast.IsStructType(typ) {
-		g.genPrintStruct(out, expr, typ, newline)
-		return
-	}
-	// Primitive types — inline printf
-	nl := ""
-	if newline {
-		nl = "\\n"
-	}
-	switch typ {
-	case ast.TypeChar:
-		out.WriteString(fmt.Sprintf("printf(\"%%c%s\", ", nl))
-		g.genExpr(out, expr)
-		out.WriteString(")")
-	case ast.TypeInt:
-		out.WriteString(fmt.Sprintf("printf(\"%%d%s\", ", nl))
-		g.genExpr(out, expr)
-		out.WriteString(")")
-	case ast.TypeLong:
-		out.WriteString(fmt.Sprintf("printf(\"%%ld%s\", ", nl))
-		g.genExpr(out, expr)
-		out.WriteString(")")
-	case ast.TypeDouble:
-		out.WriteString(fmt.Sprintf("printf(\"%%f%s\", ", nl))
-		g.genExpr(out, expr)
-		out.WriteString(")")
-	case ast.TypeString:
-		out.WriteString(fmt.Sprintf("printf(\"%%s%s\", ", nl))
-		g.genExpr(out, expr)
-		out.WriteString("->data)")
-	case ast.TypeBool:
-		out.WriteString(fmt.Sprintf("printf(\"%%s%s\", (", nl))
-		g.genExpr(out, expr)
-		out.WriteString(") ? \"true\" : \"false\")")
-	default:
-		// enums and other integer-like types
-		out.WriteString(fmt.Sprintf("printf(\"%%d%s\", ", nl))
-		g.genExpr(out, expr)
-		out.WriteString(")")
-	}
-}
-
 // genPrintArray generates C code to print an array as [elem, elem, ...].
 func (g *Generator) genPrintArray(out *strings.Builder, expr ast.Expr, arrType ast.Type, newline bool) {
 	elemType := ast.ElementType(arrType)
@@ -2237,7 +2214,7 @@ func (g *Generator) genPrintElem(out *strings.Builder, cExpr string, typ ast.Typ
 	case ast.TypeDouble:
 		out.WriteString(fmt.Sprintf("printf(\"%%f\", %s)", cExpr))
 	case ast.TypeString:
-		out.WriteString(fmt.Sprintf("printf(\"%%s\", %s->data)", cExpr))
+		out.WriteString(fmt.Sprintf("printf(\"%%s\", (%s) ? (%s)->data : \"\")", cExpr, cExpr))
 	case ast.TypeBool:
 		out.WriteString(fmt.Sprintf("printf(\"%%s\", (%s) ? \"true\" : \"false\")", cExpr))
 	default:
@@ -2279,4 +2256,43 @@ func (g *Generator) genPrintStruct(out *strings.Builder, expr ast.Expr, structTy
 		out.WriteString("printf(\"}\"); ")
 	}
 	out.WriteString("} while(0)")
+}
+
+// genZeroValue emits the C zero value for a DexLang type.
+// int/long/char → 0, double → 0.0, bool → 0, string → dex_string_from_lit(""),
+// structs → recursive zero-init, arrays/other pointers → NULL.
+func (g *Generator) genZeroValue(out *strings.Builder, typ ast.Type) {
+	switch typ {
+	case ast.TypeInt, ast.TypeChar:
+		out.WriteString("0")
+	case ast.TypeLong:
+		out.WriteString("0L")
+	case ast.TypeDouble:
+		out.WriteString("0.0")
+	case ast.TypeBool:
+		out.WriteString("0")
+	case ast.TypeString:
+		out.WriteString("dex_string_from_lit(\"\")")
+	default:
+		if ast.IsStructType(typ) {
+			def := ast.GetStructDef(typ)
+			if def == nil {
+				out.WriteString("((" + g.cType(typ) + "){ 0 })")
+				return
+			}
+			cName := "Dex_" + def.Name
+			out.WriteString(fmt.Sprintf("(%s){ ", cName))
+			for i, f := range def.Fields {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				out.WriteString(fmt.Sprintf(".%s = ", f.Name))
+				g.genZeroValue(out, f.Type)
+			}
+			out.WriteString(" }")
+			return
+		}
+		// Arrays, optionals, and other pointer types: NULL
+		out.WriteString("NULL")
+	}
 }

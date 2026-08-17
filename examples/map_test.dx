@@ -76,5 +76,5 @@ fn main(): void {
     assert(m4.len() == 1)
     assert(m4.get("z") == 30)
 
-    fmt.print("all map tests passed")
+    fmt.println("all map tests passed")
 }

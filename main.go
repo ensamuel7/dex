@@ -353,10 +353,10 @@ func build(filename string) (string, error) {
 	}
 
 	// Lex
-	lex := lexer.New(string(source))
+	lex := lexer.NewWithFile(string(source), filename)
 	tokens, err := lex.Tokenize()
 	if err != nil {
-		return "", fmt.Errorf("%s:%v", filename, err)
+		return "", err
 	}
 
 	// Seed parser with module-provided struct type names from imported modules
@@ -369,9 +369,9 @@ func build(filename string) (string, error) {
 		p.AddStructName(name)
 	}
 	p.AddStructName("Exception") // built-in Exception type
-	program, err := p.Parse()
-	if err != nil {
-		return "", fmt.Errorf("%s:%v", filename, err)
+	program, parseErrs := p.Parse()
+	if len(parseErrs) > 0 {
+		return "", parseErrs[0]
 	}
 
 	// Flatten struct methods in the main program (before resolving modules)
@@ -384,13 +384,13 @@ func build(filename string) (string, error) {
 	}
 	absSourceDir, _ := filepath.Abs(sourceDir)
 	if err := resolve.ResolveUserModules(program, absSourceDir); err != nil {
-		return "", fmt.Errorf("%s: %v", filename, err)
+		return "", err
 	}
 
 	// Type check
 	ch := checker.New()
-	if err := ch.Check(program); err != nil {
-		return "", fmt.Errorf("%s: %v", filename, err)
+	if checkErrs := ch.Check(program); len(checkErrs) > 0 {
+		return "", checkErrs[0]
 	}
 
 	// Generate C

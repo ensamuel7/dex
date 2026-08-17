@@ -13,6 +13,7 @@ type Lexer struct {
 	pos    int
 	line   int
 	col    int
+	file   string
 }
 
 func New(source string) *Lexer {
@@ -24,6 +25,23 @@ func New(source string) *Lexer {
 	}
 }
 
+func NewWithFile(source, file string) *Lexer {
+	return &Lexer{
+		source: []rune(source),
+		pos:    0,
+		line:   1,
+		col:    1,
+		file:   file,
+	}
+}
+
+func (l *Lexer) errPrefix() string {
+	if l.file != "" {
+		return l.file + ":"
+	}
+	return ""
+}
+
 func (l *Lexer) Tokenize() ([]token.Token, error) {
 	var tokens []token.Token
 
@@ -31,7 +49,7 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 		l.skipWhitespaceAndComments()
 
 		if l.pos >= len(l.source) {
-			tokens = append(tokens, token.Token{Kind: token.TokenEOF, Value: "", Line: l.line, Col: l.col})
+			tokens = append(tokens, token.Token{Kind: token.TokenEOF, Value: "", File: l.file, Line: l.line, Col: l.col})
 			break
 		}
 
@@ -44,13 +62,13 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 			three := string(l.source[l.pos : l.pos+3])
 			switch three {
 			case "===":
-				tokens = append(tokens, token.Token{Kind: token.TokenStrictEq, Value: "===", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenStrictEq, Value: "===", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				l.advance()
 				continue
 			case "!==":
-				tokens = append(tokens, token.Token{Kind: token.TokenStrictNeq, Value: "!==", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenStrictNeq, Value: "!==", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				l.advance()
@@ -63,67 +81,67 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 			two := string(l.source[l.pos : l.pos+2])
 			switch two {
 			case "++":
-				tokens = append(tokens, token.Token{Kind: token.TokenPlusPlus, Value: "++", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenPlusPlus, Value: "++", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "--":
-				tokens = append(tokens, token.Token{Kind: token.TokenMinusMinus, Value: "--", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenMinusMinus, Value: "--", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "+=":
-				tokens = append(tokens, token.Token{Kind: token.TokenPlusAssign, Value: "+=", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenPlusAssign, Value: "+=", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "-=":
-				tokens = append(tokens, token.Token{Kind: token.TokenMinusAssign, Value: "-=", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenMinusAssign, Value: "-=", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "*=":
-				tokens = append(tokens, token.Token{Kind: token.TokenStarAssign, Value: "*=", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenStarAssign, Value: "*=", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "/=":
-				tokens = append(tokens, token.Token{Kind: token.TokenSlashAssign, Value: "/=", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenSlashAssign, Value: "/=", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "%=":
-				tokens = append(tokens, token.Token{Kind: token.TokenModAssign, Value: "%=", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenModAssign, Value: "%=", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "==":
-				tokens = append(tokens, token.Token{Kind: token.TokenEq, Value: "==", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenEq, Value: "==", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "!=":
-				tokens = append(tokens, token.Token{Kind: token.TokenNeq, Value: "!=", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenNeq, Value: "!=", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "<=":
-				tokens = append(tokens, token.Token{Kind: token.TokenLte, Value: "<=", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenLte, Value: "<=", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case ">=":
-				tokens = append(tokens, token.Token{Kind: token.TokenGte, Value: ">=", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenGte, Value: ">=", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "&&":
-				tokens = append(tokens, token.Token{Kind: token.TokenAnd, Value: "&&", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenAnd, Value: "&&", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
 			case "||":
-				tokens = append(tokens, token.Token{Kind: token.TokenOr, Value: "||", Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenOr, Value: "||", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
 				l.advance()
 				continue
@@ -133,83 +151,83 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 		// Single-character tokens
 		switch ch {
 		case '+':
-			tokens = append(tokens, token.Token{Kind: token.TokenPlus, Value: "+", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenPlus, Value: "+", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '-':
-			tokens = append(tokens, token.Token{Kind: token.TokenMinus, Value: "-", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenMinus, Value: "-", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '*':
-			tokens = append(tokens, token.Token{Kind: token.TokenStar, Value: "*", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenStar, Value: "*", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '/':
-			tokens = append(tokens, token.Token{Kind: token.TokenSlash, Value: "/", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenSlash, Value: "/", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '=':
-			tokens = append(tokens, token.Token{Kind: token.TokenAssign, Value: "=", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenAssign, Value: "=", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '!':
-			tokens = append(tokens, token.Token{Kind: token.TokenBang, Value: "!", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenBang, Value: "!", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '<':
-			tokens = append(tokens, token.Token{Kind: token.TokenLt, Value: "<", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenLt, Value: "<", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '>':
-			tokens = append(tokens, token.Token{Kind: token.TokenGt, Value: ">", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenGt, Value: ">", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '(':
-			tokens = append(tokens, token.Token{Kind: token.TokenLParen, Value: "(", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenLParen, Value: "(", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case ')':
-			tokens = append(tokens, token.Token{Kind: token.TokenRParen, Value: ")", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenRParen, Value: ")", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '{':
-			tokens = append(tokens, token.Token{Kind: token.TokenLBrace, Value: "{", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenLBrace, Value: "{", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '}':
-			tokens = append(tokens, token.Token{Kind: token.TokenRBrace, Value: "}", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenRBrace, Value: "}", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case ':':
-			tokens = append(tokens, token.Token{Kind: token.TokenColon, Value: ":", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenColon, Value: ":", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case ',':
-			tokens = append(tokens, token.Token{Kind: token.TokenComma, Value: ",", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenComma, Value: ",", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '.':
-			tokens = append(tokens, token.Token{Kind: token.TokenDot, Value: ".", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenDot, Value: ".", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '[':
-			tokens = append(tokens, token.Token{Kind: token.TokenLBracket, Value: "[", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenLBracket, Value: "[", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case ']':
-			tokens = append(tokens, token.Token{Kind: token.TokenRBracket, Value: "]", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenRBracket, Value: "]", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case ';':
-			tokens = append(tokens, token.Token{Kind: token.TokenSemicolon, Value: ";", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenSemicolon, Value: ";", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '?':
-			tokens = append(tokens, token.Token{Kind: token.TokenQuestion, Value: "?", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenQuestion, Value: "?", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		case '&':
-			tokens = append(tokens, token.Token{Kind: token.TokenAmpersand, Value: "&", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenAmpersand, Value: "&", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		}
@@ -231,7 +249,7 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 					case 't':
 						str = append(str, '\t')
 					default:
-						return nil, fmt.Errorf("%d:%d: unknown escape sequence '\\%c'", l.line, l.col, l.source[l.pos])
+						return nil, fmt.Errorf("%s%d:%d: unknown escape sequence '\\%c'", l.errPrefix(), l.line, l.col, l.source[l.pos])
 					}
 					l.advance()
 				} else {
@@ -240,10 +258,10 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 				}
 			}
 			if l.pos >= len(l.source) {
-				return nil, fmt.Errorf("%d:%d: unterminated string literal", startLine, startCol)
+				return nil, fmt.Errorf("%s%d:%d: unterminated string literal", l.errPrefix(), startLine, startCol)
 			}
 			l.advance() // consume closing quote
-			tokens = append(tokens, token.Token{Kind: token.TokenString, Value: string(str), Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenString, Value: string(str), File: l.file, Line: startLine, Col: startCol})
 			continue
 		}
 
@@ -251,13 +269,13 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 		if ch == '\'' {
 			l.advance() // consume opening quote
 			if l.pos >= len(l.source) {
-				return nil, fmt.Errorf("%d:%d: unterminated char literal", startLine, startCol)
+				return nil, fmt.Errorf("%s%d:%d: unterminated char literal", l.errPrefix(), startLine, startCol)
 			}
 			var charVal rune
 			if l.source[l.pos] == '\\' {
 				l.advance() // consume backslash
 				if l.pos >= len(l.source) {
-					return nil, fmt.Errorf("%d:%d: unterminated char literal", startLine, startCol)
+					return nil, fmt.Errorf("%s%d:%d: unterminated char literal", l.errPrefix(), startLine, startCol)
 				}
 				switch l.source[l.pos] {
 				case '\'':
@@ -269,7 +287,7 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 				case 't':
 					charVal = '\t'
 				default:
-					return nil, fmt.Errorf("%d:%d: unknown escape sequence '\\%c' in char literal", l.line, l.col, l.source[l.pos])
+					return nil, fmt.Errorf("%s%d:%d: unknown escape sequence '\\%c' in char literal", l.errPrefix(), l.line, l.col, l.source[l.pos])
 				}
 				l.advance()
 			} else {
@@ -277,10 +295,10 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 				l.advance()
 			}
 			if l.pos >= len(l.source) || l.source[l.pos] != '\'' {
-				return nil, fmt.Errorf("%d:%d: unterminated char literal", startLine, startCol)
+				return nil, fmt.Errorf("%s%d:%d: unterminated char literal", l.errPrefix(), startLine, startCol)
 			}
 			l.advance() // consume closing quote
-			tokens = append(tokens, token.Token{Kind: token.TokenChar, Value: string(charVal), Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenChar, Value: string(charVal), File: l.file, Line: startLine, Col: startCol})
 			continue
 		}
 
@@ -315,16 +333,16 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 				l.advance()
 			}
 			if l.pos >= len(l.source) {
-				return nil, fmt.Errorf("%d:%d: unterminated annotation", startLine, startCol)
+				return nil, fmt.Errorf("%s%d:%d: unterminated annotation", l.errPrefix(), startLine, startCol)
 			}
 			l.advance() // consume closing ']'
-			tokens = append(tokens, token.Token{Kind: token.TokenAnnotation, Value: string(content), Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenAnnotation, Value: string(content), File: l.file, Line: startLine, Col: startCol})
 			continue
 		}
 
 		// Percent operator
 		if ch == '%' {
-			tokens = append(tokens, token.Token{Kind: token.TokenPercent, Value: "%", Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenPercent, Value: "%", File: l.file, Line: startLine, Col: startCol})
 			l.advance()
 			continue
 		}
@@ -342,11 +360,11 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 					l.advance()
 				}
 				value := strings.ReplaceAll(string(l.source[start:l.pos]), "_", "")
-				tokens = append(tokens, token.Token{Kind: token.TokenFloat, Value: value, Line: startLine, Col: startCol})
+				tokens = append(tokens, token.Token{Kind: token.TokenFloat, Value: value, File: l.file, Line: startLine, Col: startCol})
 				continue
 			}
 			value := strings.ReplaceAll(string(l.source[start:l.pos]), "_", "")
-			tokens = append(tokens, token.Token{Kind: token.TokenInt, Value: value, Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: token.TokenInt, Value: value, File: l.file, Line: startLine, Col: startCol})
 			continue
 		}
 
@@ -361,11 +379,11 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 			if !isKeyword {
 				kind = token.TokenIdent
 			}
-			tokens = append(tokens, token.Token{Kind: kind, Value: value, Line: startLine, Col: startCol})
+			tokens = append(tokens, token.Token{Kind: kind, Value: value, File: l.file, Line: startLine, Col: startCol})
 			continue
 		}
 
-		return nil, fmt.Errorf("%d:%d: unexpected character '%c'", l.line, l.col, ch)
+		return nil, fmt.Errorf("%s%d:%d: unexpected character '%c'", l.errPrefix(), l.line, l.col, ch)
 	}
 
 	return tokens, nil

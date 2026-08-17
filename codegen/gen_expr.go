@@ -357,8 +357,12 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
-	// Special case: fmt.print — polymorphic print for any primitive type
-	if e.Module == "fmt" && e.Name == "print" {
+	// Special case: fmt.print / fmt.println — polymorphic print for any primitive type
+	if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
+		newline := ""
+		if e.Name == "println" {
+			newline = "\\n"
+		}
 		argType := g.typeOfExpr(e.Args[0])
 		var fmtStr string
 		switch argType {
@@ -371,13 +375,13 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		case ast.TypeDouble:
 			fmtStr = "%f"
 		case ast.TypeString:
-			out.WriteString("printf(\"%s\\n\", ")
+			out.WriteString(fmt.Sprintf("printf(\"%%s%s\", ", newline))
 			g.genExpr(out, e.Args[0])
 			out.WriteString("->data)")
 			return
 		case ast.TypeBool:
 			// Print bools as "true"/"false"
-			out.WriteString("printf(\"%s\\n\", ")
+			out.WriteString(fmt.Sprintf("printf(\"%%s%s\", ", newline))
 			out.WriteString("(")
 			g.genExpr(out, e.Args[0])
 			out.WriteString(") ? \"true\" : \"false\")")
@@ -385,7 +389,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		default:
 			fmtStr = "%d"
 		}
-		out.WriteString(fmt.Sprintf("printf(\"%s\\n\", ", fmtStr))
+		out.WriteString(fmt.Sprintf("printf(\"%s%s\", ", fmtStr, newline))
 		g.genExpr(out, e.Args[0])
 		out.WriteString(")")
 		return

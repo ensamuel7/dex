@@ -11,6 +11,6 @@ fn main(): void {
   // orderService receives both as constructor args (DI)
   let orderSvc = orderService.OrderService(userSvc, notifier)
 
-  fmt.print("--- Placing order ---")
-  fmt.print(orderSvc.placeOrder("kweku", "MacBook Pro"))
+  fmt.println("--- Placing order ---")
+  fmt.println(orderSvc.placeOrder("kweku", "MacBook Pro"))
 }

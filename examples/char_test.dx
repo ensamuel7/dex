@@ -33,7 +33,7 @@ fn main(): void {
   assert(chars.len() == 3)
 
   // Print char
-  fmt.print('X')
+  fmt.println('X')
 
   // Char inference
   let inferred = 'B'

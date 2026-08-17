@@ -7,5 +7,5 @@ fn add(a: int, b: int): int {
 
 function main(): void {
   let x: int = add(5, 10)
-  fmt.print(x)
+  fmt.println(x)
 }

@@ -8,15 +8,41 @@ import (
 	"github.com/ensamuel7/dex/token"
 )
 
+// maxParseErrors is a sentinel type used to abort parsing via panic
+// when the error limit is reached.
+type maxParseErrors struct{}
+
 type Parser struct {
 	tokens      []token.Token
 	pos         int
 	structNames map[string]bool
 	enumNames   map[string]bool
+	errors      []error
+	maxErrors   int
 }
 
 func New(tokens []token.Token) *Parser {
-	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool), enumNames: make(map[string]bool)}
+	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool), enumNames: make(map[string]bool), maxErrors: 20}
+}
+
+// recordError appends an error and panics with maxParseErrors if the limit is reached.
+func (p *Parser) recordError(err error) {
+	p.errors = append(p.errors, err)
+	if len(p.errors) >= p.maxErrors {
+		panic(maxParseErrors{})
+	}
+}
+
+// synchronize advances past tokens until the next top-level declaration boundary.
+func (p *Parser) synchronize() {
+	for !p.atEnd() {
+		switch p.current().Kind {
+		case token.TokenFn, token.TokenFunction, token.TokenStruct, token.TokenEnum,
+			token.TokenPublic, token.TokenPrivate, token.TokenAnnotation:
+			return
+		}
+		p.advance()
+	}
 }
 
 // AddStructName registers a struct name so the parser recognizes it as a type.
@@ -25,14 +51,26 @@ func (p *Parser) AddStructName(name string) {
 	p.structNames[name] = true
 }
 
-func (p *Parser) Parse() (*ast.Program, error) {
-	program := &ast.Program{}
+func (p *Parser) Parse() (program *ast.Program, errs []error) {
+	program = &ast.Program{}
+
+	// Recover from maxParseErrors sentinel panic
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(maxParseErrors); !ok {
+				panic(r) // re-panic if not our sentinel
+			}
+		}
+		errs = p.errors
+	}()
 
 	// Parse import declarations
 	for p.check(token.TokenImport) {
 		p.advance() // consume 'import'
 		if !p.check(token.TokenString) {
-			return nil, p.errorf("expected string after 'import'")
+			p.recordError(p.errorf("expected string after 'import'"))
+			p.synchronize()
+			continue
 		}
 		path := p.current().Value
 		p.advance()
@@ -40,12 +78,15 @@ func (p *Parser) Parse() (*ast.Program, error) {
 		if p.check(token.TokenAs) {
 			p.advance() // consume 'as'
 			if !p.check(token.TokenString) {
-				return nil, p.errorf("expected string after 'as'")
+				p.recordError(p.errorf("expected string after 'as'"))
+				p.synchronize()
+				continue
 			}
 			alias = p.current().Value
 			p.advance()
 		}
 		program.Imports = append(program.Imports, ast.Import{Path: path, Alias: alias})
+		p.match(token.TokenSemicolon) // optional trailing semicolon
 	}
 
 	// Parse struct and enum definitions (with optional annotations and access modifiers)
@@ -53,14 +94,18 @@ func (p *Parser) Parse() (*ast.Program, error) {
 		if p.isEnumDefAhead() {
 			ed, err := p.parseEnumDef()
 			if err != nil {
-				return nil, err
+				p.recordError(err)
+				p.synchronize()
+				continue
 			}
 			program.Enums = append(program.Enums, *ed)
 		} else {
 			annotations := p.collectAnnotations()
 			sd, err := p.parseStructDef()
 			if err != nil {
-				return nil, err
+				p.recordError(err)
+				p.synchronize()
+				continue
 			}
 			_ = annotations // struct-level annotations reserved for future use
 			program.Structs = append(program.Structs, *sd)
@@ -71,13 +116,15 @@ func (p *Parser) Parse() (*ast.Program, error) {
 		annotations := p.collectAnnotations()
 		fn, err := p.parseFunction()
 		if err != nil {
-			return nil, err
+			p.recordError(err)
+			p.synchronize()
+			continue
 		}
 		fn.Annotations = annotations
 		program.Functions = append(program.Functions, *fn)
 	}
 
-	return program, nil
+	return program, p.errors
 }
 
 // isStructDefAhead returns true if the current tokens form a struct definition,
@@ -536,6 +583,7 @@ func (p *Parser) parseBlock() ([]ast.Stmt, error) {
 			return nil, err
 		}
 		stmts = append(stmts, stmt)
+		p.match(token.TokenSemicolon) // optional trailing semicolon
 	}
 
 	if err := p.expect(token.TokenRBrace); err != nil {
@@ -709,7 +757,7 @@ func (p *Parser) parseReturnStmt() (ast.Stmt, error) {
 	p.advance() // consume 'return'
 
 	// Bare return (no expression) for void functions
-	if p.check(token.TokenRBrace) || p.check(token.TokenEOF) {
+	if p.check(token.TokenRBrace) || p.check(token.TokenEOF) || p.check(token.TokenSemicolon) {
 		return &ast.ReturnStmt{Pos: pos, Value: nil}, nil
 	}
 
@@ -1788,12 +1836,17 @@ func (p *Parser) collectAnnotations() []string {
 
 func (p *Parser) errorf(format string, args ...interface{}) error {
 	tok := p.current()
-	prefix := fmt.Sprintf("%d:%d: ", tok.Line, tok.Col)
+	var prefix string
+	if tok.File != "" {
+		prefix = fmt.Sprintf("%s:%d:%d: ", tok.File, tok.Line, tok.Col)
+	} else {
+		prefix = fmt.Sprintf("%d:%d: ", tok.Line, tok.Col)
+	}
 	return fmt.Errorf(prefix+format, args...)
 }
 
 // pos returns the current token's position as an ast.Pos.
 func (p *Parser) nodePos() ast.Pos {
 	tok := p.current()
-	return ast.Pos{Line: tok.Line, Col: tok.Col}
+	return ast.Pos{File: tok.File, Line: tok.Line, Col: tok.Col}
 }

@@ -27,7 +27,7 @@ fn main(): void {
 
     // Enum in if statement
     if (c == Color.Red) {
-        fmt.print("red")
+        fmt.println("red")
     }
 
     // Enum comparison between same type
@@ -40,7 +40,7 @@ fn main(): void {
             assert(false)
         }
         case Direction.East: {
-            fmt.print("east")
+            fmt.println("east")
         }
         case Direction.South, Direction.West: {
             assert(false)
@@ -57,7 +57,7 @@ fn main(): void {
             assert(false)
         }
         default: {
-            fmt.print("blue")
+            fmt.println("blue")
         }
     }
 
@@ -85,5 +85,5 @@ fn main(): void {
     assert(colors[0] == Color.Red)
     assert(colors[1] == Color.Blue)
 
-    fmt.print("all enum tests passed")
+    fmt.println("all enum tests passed")
 }

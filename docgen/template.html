@@ -181,7 +181,7 @@ go build -o dex .</code></pre>
 <pre><code>import "fmt"
 
 fn main(): void {
-  fmt.print("Hello, World!")
+  fmt.println("Hello, World!")
 }</code></pre>
 
 <h3>Build &amp; Run</h3>
@@ -355,30 +355,30 @@ fn main(): void {
 }
 
 function main(): void {
-  fmt.print("hello")
+  fmt.println("hello")
 }</code></pre>
 
 <h3>Control Flow</h3>
 
 <h4>if / else</h4>
 <pre><code>if (x &gt; 0) {
-  fmt.print(x)
+  fmt.println(x)
 } else {
-  fmt.print(0)
+  fmt.println(0)
 }</code></pre>
 <p><code>else if</code> chains are supported. The condition must be <code>bool</code> and enclosed in parentheses.</p>
 
 <h4>while</h4>
 <pre><code>let i: int = 0
 while (i &lt; 10) {
-  fmt.print(i)
+  fmt.println(i)
   i = i + 1
 }</code></pre>
 
 <h4>for</h4>
 <p>C-style for loop with init, condition, and post statements:</p>
 <pre><code>for (let i: int = 0; i &lt; 10; i++) {
-  fmt.print(i)
+  fmt.println(i)
 }
 
 // Type inference works in the init statement
@@ -393,13 +393,13 @@ for (let i = 0; i &lt; 100; i += 2) {
 
 // Value only
 foreach (nums as n) {
-  fmt.print(n)
+  fmt.println(n)
 }
 
 // Index and value
 foreach (nums as i, n) {
-  fmt.print(i)  // 0, 1, 2
-  fmt.print(n)  // 10, 20, 30
+  fmt.println(i)  // 0, 1, 2
+  fmt.println(n)  // 10, 20, 30
 }</code></pre>
 <p>The iterable must be an array type. The index variable (if used) is always <code>int</code>. The value variable takes the element type of the array.</p>
 
@@ -411,7 +411,7 @@ foreach (nums as i, n) {
 
 for (let i = 0; i &lt; 10; i++) {
   if (i % 2 == 0) { continue }
-  fmt.print(i)  // prints odd numbers only
+  fmt.println(i)  // prints odd numbers only
 }</code></pre>
 <p><code>break</code> and <code>continue</code> work inside <code>while</code>, <code>for</code>, and <code>foreach</code> loops. Using them outside a loop is a compile error.</p>
 </section>
@@ -455,7 +455,7 @@ if (x != null) {
 
 fn greet(name: string?): void {
     if (name != null) {
-        fmt.print(name)
+        fmt.println(name)
     }
 }</code></pre>
 
@@ -610,7 +610,7 @@ let u: User = User{name: "Alice", age: 30, active: true}</code></pre>
 <p>Access fields with dot notation. Fields can be reassigned after creation:</p>
 <pre><code>let name: string = u.name    // field access
 u.age = 31                    // field assignment
-fmt.print(p.x)                // use in expressions</code></pre>
+fmt.println(p.x)                // use in expressions</code></pre>
 </section>
 
 <!-- Standard Library -->
@@ -658,7 +658,7 @@ db.exec(conn, "INSERT INTO users (name) VALUES ('Alice')")
 let rows: int = db.query(conn, "SELECT id, name FROM users")
 while (db.next(rows)) {
     let name: string = db.col(rows, 1)
-    fmt.print(name)
+    fmt.println(name)
 }
 db.free(rows)
 db.close(conn)</code></pre>
@@ -856,9 +856,9 @@ fn main(): void {
     try {
         throw Exception("oops")
     } catch (e: Exception) {
-        fmt.print(e.message)  // "oops"
+        fmt.println(e.message)  // "oops"
     } finally {
-        fmt.print("cleanup")
+        fmt.println("cleanup")
     }
 }</code></pre>
 
@@ -867,7 +867,7 @@ fn main(): void {
 <pre><code>try {
     throw Exception("error")
 } finally {
-    fmt.print("always runs")
+    fmt.println("always runs")
 }
 // exception propagates after finally</code></pre>
 
@@ -881,7 +881,7 @@ fn main(): void {
     try {
         risky()
     } catch (e: Exception) {
-        fmt.print(e.message)  // "from risky"
+        fmt.println(e.message)  // "from risky"
     }
 }</code></pre>
 
@@ -898,11 +898,11 @@ fn main(): void {
 <h3>print</h3>
 <div class="func-card"><div class="sig"><span class="module">fmt</span>.print(<span class="ptype">value: int|long|double|string|bool</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Print a single value followed by a newline. Accepts any primitive type — the compiler selects the correct format string at compile time.</p>
-<pre><code>fmt.print(42)            // prints: 42
-fmt.print("hello")       // prints: hello
-fmt.print(3.14)          // prints: 3.140000
-fmt.print(true)          // prints: true
-fmt.print(1000000)       // prints: 1000000</code></pre>
+<pre><code>fmt.println(42)            // prints: 42
+fmt.println("hello")       // prints: hello
+fmt.println(3.14)          // prints: 3.140000
+fmt.println(true)          // prints: true
+fmt.println(1000000)       // prints: 1000000</code></pre>
 <p>Each call prints exactly one value. To print multiple values, use multiple calls or build a string with concatenation.</p>
 </section>
 
@@ -1038,8 +1038,8 @@ fn main(): void {
 
 <pre><code>// Simple GET
 let resp: HttpResponse = http.get("https://api.example.com/data")
-fmt.print(resp.statusCode)
-fmt.print(resp.body)
+fmt.println(resp.statusCode)
+fmt.println(resp.body)
 
 // POST with JSON body
 let body: string = json.new()
@@ -1107,14 +1107,14 @@ fn main(): void {
 <div class="func-card"><div class="sig"><span class="module">file</span>.read(<span class="ptype">path: string</span>) <span class="ret">-&gt; string</span></div></div>
 <p>Read the entire contents of a file and return it as a string. Returns an empty string if the file does not exist or cannot be read.</p>
 <pre><code>let content: string = file.read("config.txt")
-fmt.print(content)</code></pre>
+fmt.println(content)</code></pre>
 
 <h3>write</h3>
 <div class="func-card"><div class="sig"><span class="module">file</span>.write(<span class="ptype">path: string, data: string</span>) <span class="ret">-&gt; bool</span></div></div>
 <p>Write data to a file, creating it if it does not exist or overwriting if it does. Returns <code>true</code> on success.</p>
 <pre><code>let ok: bool = file.write("output.txt", "Hello, World!")
 if (!ok) {
-    fmt.print("Failed to write file")
+    fmt.println("Failed to write file")
 }</code></pre>
 
 <h3>append</h3>
@@ -1143,7 +1143,7 @@ if (!ok) {
 <div class="func-card"><div class="sig"><span class="module">file</span>.upload(<span class="ptype">path: string, url: string</span>) <span class="ret">-&gt; string</span></div></div>
 <p>Upload a file to a URL via HTTP multipart form POST. The file is sent as a form field named <code>file</code>. Returns the server's response body as a string, or an empty string on failure.</p>
 <pre><code>let response: string = file.upload("photo.jpg", "https://api.example.com/upload")
-fmt.print(response)</code></pre>
+fmt.println(response)</code></pre>
 <p>Requires <code>libcurl</code> at compile time (<code>brew install curl</code> on macOS).</p>
 
 <h3>Full example</h3>
@@ -1154,7 +1154,7 @@ fn main(): void {
     // Write and read back
     file.write("hello.txt", "Hello, Dex!")
     let content: string = file.read("hello.txt")
-    fmt.print(content)
+    fmt.println(content)
 
     // Append a line
     file.append("hello.txt", "\nSecond line")
@@ -1230,10 +1230,10 @@ fn main(): void {
     let val: double = math.pow(2.0, 10.0) // 1024.0
     let angle: double = math.sin(pi / 2.0) // 1.0
 
-    fmt.print(math.floor(3.7))   // 3.0
-    fmt.print(math.ceil(3.2))    // 4.0
-    fmt.print(math.abs(-5.0))    // 5.0
-    fmt.print(math.min(3.0, 7.0)) // 3.0
+    fmt.println(math.floor(3.7))   // 3.0
+    fmt.println(math.ceil(3.2))    // 4.0
+    fmt.println(math.abs(-5.0))    // 5.0
+    fmt.println(math.min(3.0, 7.0)) // 3.0
 }</code></pre>
 </section>
 
@@ -1281,20 +1281,20 @@ fn main(): void {
     let start: long = time.now()
     time.sleep(100)  // sleep 100ms
     let elapsed: long = time.now() - start
-    fmt.print(elapsed)
+    fmt.println(elapsed)
 
     // High-resolution timing
     let t1: long = time.nowNs()
     // ... do work ...
     let t2: long = time.nowNs()
-    fmt.print(t2 - t1)  // nanoseconds elapsed
+    fmt.println(t2 - t1)  // nanoseconds elapsed
 }</code></pre>
 
 <pre><code>import "time"
 import "fmt"
 
 fn heartbeat(): void {
-    fmt.print("tick")
+    fmt.println("tick")
 }
 
 fn main(): void {
@@ -1354,7 +1354,7 @@ fn main(): void {
 import "fmt"
 
 fn onMessage(conn: ws.Conn, msg: string): void {
-    fmt.print("got: " + msg)
+    fmt.println("got: " + msg)
     ws.send(conn, "echo: " + msg)
 }
 
@@ -1371,7 +1371,7 @@ fn main(): void {
     let conn: ws.Conn = ws.connect("ws://localhost:9090")
     ws.send(conn, "hello")
     let reply: string = ws.receive(conn)
-    fmt.print(reply)
+    fmt.println(reply)
     ws.close(conn)
 }</code></pre>
 </section>
@@ -1428,7 +1428,7 @@ Param {
 <tr><th>Node</th><th>Fields</th><th>Example</th></tr>
 <tr><td><code>LetStmt</code></td><td>Name, Type, Value</td><td><code>let x: int = 42</code></td></tr>
 <tr><td><code>ReturnStmt</code></td><td>Value</td><td><code>return x + 1</code></td></tr>
-<tr><td><code>ExprStmt</code></td><td>Expr</td><td><code>fmt.print(x)</code></td></tr>
+<tr><td><code>ExprStmt</code></td><td>Expr</td><td><code>fmt.println(x)</code></td></tr>
 <tr><td><code>IfStmt</code></td><td>Cond, Then, Else</td><td><code>if (x &gt; 0) { ... } else { ... }</code></td></tr>
 <tr><td><code>WhileStmt</code></td><td>Cond, Body</td><td><code>while (i &lt; 10) { ... }</code></td></tr>
 <tr><td><code>BlockStmt</code></td><td>Stmts</td><td><code>{ ... }</code></td></tr>
@@ -1448,7 +1448,7 @@ Param {
 <tr><td><code>Ident</code></td><td>Name</td><td><code>x</code></td></tr>
 <tr><td><code>BinaryExpr</code></td><td>Op, Left, Right</td><td><code>a + b</code></td></tr>
 <tr><td><code>UnaryExpr</code></td><td>Op, Operand</td><td><code>!flag</code></td></tr>
-<tr><td><code>CallExpr</code></td><td>Module, Name, Args</td><td><code>fmt.print(x)</code></td></tr>
+<tr><td><code>CallExpr</code></td><td>Module, Name, Args</td><td><code>fmt.println(x)</code></td></tr>
 <tr><td><code>ArrayLitExpr</code></td><td>ElemType, Elems</td><td><code>[1, 2, 3]</code></td></tr>
 <tr><td><code>IndexExpr</code></td><td>Array, Index</td><td><code>arr[0]</code></td></tr>
 <tr><td><code>StructLitExpr</code></td><td>Name, FieldNames, FieldValues</td><td><code>Point{x: 1, y: 2}</code></td></tr>

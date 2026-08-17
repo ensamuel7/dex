@@ -12,6 +12,14 @@ func init() {
 				ParamNames: []string{"value"},
 				ReturnType: ast.TypeVoid,
 				CName:      "", // special codegen
+				Doc:        "Print a value to stdout without a trailing newline.",
+			},
+			// println is like print but adds a newline
+			"println": {
+				Params:     nil, // special: checked manually in checker
+				ParamNames: []string{"value"},
+				ReturnType: ast.TypeVoid,
+				CName:      "", // special codegen
 				Doc:        "Print a value to stdout followed by a newline.",
 			},
 		},

@@ -5,18 +5,18 @@ fn main(): void {
     // Test os.env
     let path: string = os.env("PATH")
     assert(path != "")
-    fmt.print("PATH is set")
+    fmt.println("PATH is set")
 
     // Test os.exec
     let result: ExecResult = os.exec("echo hello")
     assert(result.exitCode == 0)
     assert(result.output == "hello\n")
-    fmt.print("os.exec works")
+    fmt.println("os.exec works")
 
     // Test os.env with unset var
     let unset: string = os.env("DEX_NONEXISTENT_VAR_12345")
     assert(unset == "")
-    fmt.print("os.env returns empty for unset vars")
+    fmt.println("os.env returns empty for unset vars")
 
-    fmt.print("All os tests passed")
+    fmt.println("All os tests passed")
 }

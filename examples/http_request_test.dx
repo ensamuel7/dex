@@ -16,5 +16,5 @@ fn handleGet(): string {
 fn main(): void {
     http.route("POST", "/echo", handlePost)
     http.route("GET", "/hello", handleGet)
-    fmt.print("HTTP request context test compiled successfully")
+    fmt.println("HTTP request context test compiled successfully")
 }

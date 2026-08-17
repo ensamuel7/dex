@@ -2,12 +2,12 @@ import "fmt"
 
 fn main(): void {
     try {
-        fmt.print("before")
+        fmt.println("before")
         throw Exception("something broke")
-        fmt.print("should not print")
+        fmt.println("should not print")
     } catch (e: Exception) {
-        fmt.print(e.message + " In catch")
+        fmt.println(e.message + " In catch")
     } finally {
-        fmt.print("cleanup in finally")
+        fmt.println("cleanup in finally")
     }
 }

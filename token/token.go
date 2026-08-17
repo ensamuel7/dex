@@ -92,6 +92,7 @@ const (
 type Token struct {
 	Kind  TokenKind
 	Value string
+	File  string
 	Line  int
 	Col   int
 }

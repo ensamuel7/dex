@@ -39,11 +39,15 @@ func checkSource(t *testing.T, source string) error {
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
-	prog, err := p.Parse()
-	if err != nil {
-		t.Fatalf("parser error: %v", err)
+	prog, parseErrs := p.Parse()
+	if len(parseErrs) > 0 {
+		t.Fatalf("parser error: %v", parseErrs[0])
 	}
-	return New().Check(prog)
+	checkErrs := New().Check(prog)
+	if len(checkErrs) > 0 {
+		return checkErrs[0]
+	}
+	return nil
 }
 
 func extractTestImportPaths(tokens []token.Token) []string {
@@ -462,7 +466,7 @@ func TestScoping(t *testing.T) {
 
 func TestValidImport(t *testing.T) {
 	mustCheck(t, `import "fmt" fn main(): int {
-		fmt.print(42)
+		fmt.println(42)
 		return 0
 	}`)
 }
@@ -473,7 +477,7 @@ func TestInvalidImport(t *testing.T) {
 
 func TestModuleNotImported(t *testing.T) {
 	mustFail(t, `fn main(): int {
-		fmt.print(42)
+		fmt.println(42)
 		return 0
 	}`, "module 'fmt' is not imported")
 }
@@ -482,14 +486,14 @@ func TestModuleNotImported(t *testing.T) {
 
 func TestFmtPrint(t *testing.T) {
 	mustCheck(t, `import "fmt" fn main(): int {
-		fmt.print(42)
+		fmt.println(42)
 		return 0
 	}`)
 }
 
 func TestFmtPrintStr(t *testing.T) {
 	mustCheck(t, `import "fmt" fn main(): int {
-		fmt.print("hello")
+		fmt.println("hello")
 		return 0
 	}`)
 }
@@ -497,30 +501,30 @@ func TestFmtPrintStr(t *testing.T) {
 func TestFmtPrintLong(t *testing.T) {
 	mustCheck(t, `import "fmt" fn main(): int {
 		let l: long = 100
-		fmt.print(l)
+		fmt.println(l)
 		return 0
 	}`)
 }
 
 func TestFmtPrintDouble(t *testing.T) {
 	mustCheck(t, `import "fmt" fn main(): int {
-		fmt.print(3.14)
+		fmt.println(3.14)
 		return 0
 	}`)
 }
 
 func TestFmtPrintBool(t *testing.T) {
 	mustCheck(t, `import "fmt" fn main(): int {
-		fmt.print(true)
+		fmt.println(true)
 		return 0
 	}`)
 }
 
 func TestFmtPrintWrongArgCount(t *testing.T) {
 	mustFail(t, `import "fmt" fn main(): int {
-		fmt.print(1, 2)
+		fmt.println(1, 2)
 		return 0
-	}`, "fmt.print() takes exactly 1 argument")
+	}`, "fmt.println() takes exactly 1 argument")
 }
 
 func TestJsonNew(t *testing.T) {
@@ -935,8 +939,8 @@ func TestHttpGetFieldAccess(t *testing.T) {
 import "fmt"
 fn main(): void {
 	let resp: HttpResponse = http.get("https://example.com")
-	fmt.print(resp.statusCode)
-	fmt.print(resp.body)
+	fmt.println(resp.statusCode)
+	fmt.println(resp.body)
 }`)
 }
 

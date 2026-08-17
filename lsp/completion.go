@@ -86,8 +86,8 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 	if err == nil {
 		p := parser.New(tokens)
 		seedParserModuleTypes(p, tokens)
-		program, err := p.Parse()
-		if err == nil {
+		program, errs := p.Parse()
+		if len(errs) == 0 {
 			for _, fn := range program.Functions {
 				items = append(items, CompletionItem{
 					Label:  fn.Name,

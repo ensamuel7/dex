@@ -39,12 +39,12 @@ func generate(t *testing.T, source string) string {
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
-	prog, err := p.Parse()
-	if err != nil {
-		t.Fatalf("parser error: %v", err)
+	prog, parseErrs := p.Parse()
+	if len(parseErrs) > 0 {
+		t.Fatalf("parser error: %v", parseErrs[0])
 	}
-	if err := checker.New().Check(prog); err != nil {
-		t.Fatalf("checker error: %v", err)
+	if checkErrs := checker.New().Check(prog); len(checkErrs) > 0 {
+		t.Fatalf("checker error: %v", checkErrs[0])
 	}
 	return New().Generate(prog)
 }
@@ -350,29 +350,34 @@ func TestCodegenIndexAssign(t *testing.T) {
 
 func TestCodegenFmtPrint(t *testing.T) {
 	out := generate(t, `import "fmt" fn main(): void { fmt.print(42) }`)
+	assertContains(t, out, `printf("%d", 42)`)
+}
+
+func TestCodegenFmtPrintln(t *testing.T) {
+	out := generate(t, `import "fmt" fn main(): void { fmt.println(42) }`)
 	assertContains(t, out, `printf("%d\n", 42)`)
 }
 
 func TestCodegenFmtPrintStr(t *testing.T) {
-	out := generate(t, `import "fmt" fn main(): void { fmt.print("hi") }`)
+	out := generate(t, `import "fmt" fn main(): void { fmt.println("hi") }`)
 	assertContains(t, out, `printf("%s\n"`)
 }
 
 func TestCodegenFmtPrintLong(t *testing.T) {
 	out := generate(t, `import "fmt" fn f(l: long): void {
-		fmt.print(l)
+		fmt.println(l)
 	}
 	fn main(): void {}`)
 	assertContains(t, out, `printf("%ld\n"`)
 }
 
 func TestCodegenFmtPrintDouble(t *testing.T) {
-	out := generate(t, `import "fmt" fn main(): void { fmt.print(3.14) }`)
+	out := generate(t, `import "fmt" fn main(): void { fmt.println(3.14) }`)
 	assertContains(t, out, `printf("%f\n"`)
 }
 
 func TestCodegenFmtPrintBool(t *testing.T) {
-	out := generate(t, `import "fmt" fn main(): void { fmt.print(true) }`)
+	out := generate(t, `import "fmt" fn main(): void { fmt.println(true) }`)
 	assertContains(t, out, `printf("%s\n"`)
 	assertContains(t, out, `"true" : "false"`)
 }

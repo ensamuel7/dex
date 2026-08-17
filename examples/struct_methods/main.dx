@@ -3,8 +3,8 @@ import "service"
 
 fn main(): void {
   let c = service.Counter(10)
-  fmt.print(c.value())
-  fmt.print(c.increment())
-  fmt.print(c.add(5))
-  fmt.print(service.greet())
+  fmt.println(c.value())
+  fmt.println(c.increment())
+  fmt.println(c.add(5))
+  fmt.println(service.greet())
 }

@@ -4,39 +4,39 @@ import "file"
 fn main(): void {
     // Write a file
     let ok: bool = file.write("test_output.txt", "Hello from Dex!\n")
-    fmt.print(ok)
+    fmt.println(ok)
 
     // Check it exists
     let found: bool = file.exists("test_output.txt")
-    fmt.print(found)
+    fmt.println(found)
 
     // Read it back
     let contents: string = file.read("test_output.txt")
-    fmt.print(contents)
+    fmt.println(contents)
 
     // Append to it
     let ok2: bool = file.append("test_output.txt", "Second line\n")
-    fmt.print(ok2)
+    fmt.println(ok2)
 
     // Read again to see both lines
     let contents2: string = file.read("test_output.txt")
-    fmt.print(contents2)
+    fmt.println(contents2)
 
     // Rename the file
     let renamed: bool = file.rename("test_output.txt", "test_renamed.txt")
-    fmt.print(renamed)
+    fmt.println(renamed)
 
     // Verify old name is gone and new name exists
     let gone: bool = file.exists("test_output.txt")
-    fmt.print(gone)
+    fmt.println(gone)
     let exists2: bool = file.exists("test_renamed.txt")
-    fmt.print(exists2)
+    fmt.println(exists2)
 
     // Clean up
     let removed: bool = file.remove("test_renamed.txt")
-    fmt.print(removed)
+    fmt.println(removed)
 
     // Verify removal
     let gone2: bool = file.exists("test_renamed.txt")
-    fmt.print(gone2)
+    fmt.println(gone2)
 }

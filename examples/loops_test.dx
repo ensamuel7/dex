@@ -64,5 +64,5 @@ fn main(): void {
     }
     assert(outer == 30)
 
-    fmt.print("All loop tests passed!")
+    fmt.println("All loop tests passed!")
 }

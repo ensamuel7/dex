@@ -11,15 +11,15 @@ fn main(): void {
     //Test json.stringify with struct
     let p: Person = Person { name: "Alice", age: 30, active: true }
     let jsonStr: string = json.stringify(p)
-    fmt.print(jsonStr)
+    fmt.println(jsonStr)
 
     //Test json.objectify to parse JSON back to struct
     let p2: Person = json.objectify(jsonStr)
     assert(p2.name == "Alice")
     assert(p2.age == 30)
     assert(p2.active == true)
-    fmt.print(p2.name)
-    fmt.print(p2.age)
+    fmt.println(p2.name)
+    fmt.println(p2.age)
 
     //Test with manually built JSON
     let raw: string = json.new()
@@ -38,5 +38,5 @@ fn main(): void {
     assert(p4.age == 25)
     assert(p4.active == false)
 
-    fmt.print("json_struct_test: all assertions passed")
+    fmt.println("json_struct_test: all assertions passed")
 }

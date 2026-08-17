@@ -98,8 +98,8 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 	// Parse the file for function/variable info
 	p := parser.New(tokens)
 	seedParserModuleTypes(p, tokens)
-	program, err := p.Parse()
-	if err != nil {
+	program, errs := p.Parse()
+	if len(errs) > 0 {
 		return ""
 	}
 

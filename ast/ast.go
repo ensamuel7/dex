@@ -2,8 +2,9 @@ package ast
 
 import "fmt"
 
-// Pos represents a source position (line and column).
+// Pos represents a source position (file, line, and column).
 type Pos struct {
+	File string
 	Line int
 	Col  int
 }

@@ -2,5 +2,5 @@
 import "fmt"
 
 function main(): void {
-  fmt.print(5 + 10)
+  fmt.println(5 + 10)
 }

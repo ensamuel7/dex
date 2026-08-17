@@ -15,9 +15,9 @@ func parse(t *testing.T, source string) *ast.Program {
 	if err != nil {
 		t.Fatalf("lexer error: %v", err)
 	}
-	prog, err := New(tokens).Parse()
-	if err != nil {
-		t.Fatalf("parser error: %v", err)
+	prog, errs := New(tokens).Parse()
+	if len(errs) > 0 {
+		t.Fatalf("parser error: %v", errs[0])
 	}
 	return prog
 }
@@ -53,8 +53,11 @@ func parseError(t *testing.T, source string) error {
 	if err != nil {
 		return err
 	}
-	_, err = New(tokens).Parse()
-	return err
+	_, errs := New(tokens).Parse()
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
 }
 
 // --- Literal tests ---
@@ -885,5 +888,60 @@ func TestCompoundAssignSubStmt(t *testing.T) {
 	}
 	if ca.Name != "x" || ca.Op != ast.BinSub {
 		t.Errorf("CompoundAssign = {%q, %d}, want {x, BinSub}", ca.Name, ca.Op)
+	}
+}
+
+// --- Optional semicolons ---
+
+func TestOptionalSemicolonStatements(t *testing.T) {
+	prog := parse(t, `fn main(): void {
+		let x: int = 5;
+		let y: int = 10;
+		x = 20;
+		return;
+	}`)
+	body := prog.Functions[0].Body
+	if len(body) != 4 {
+		t.Fatalf("expected 4 stmts, got %d", len(body))
+	}
+	ls, ok := body[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("body[0] is %T, want LetStmt", body[0])
+	}
+	if ls.Name != "x" {
+		t.Errorf("body[0].Name = %q, want %q", ls.Name, "x")
+	}
+	ls2, ok := body[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("body[1] is %T, want LetStmt", body[1])
+	}
+	if ls2.Name != "y" {
+		t.Errorf("body[1].Name = %q, want %q", ls2.Name, "y")
+	}
+}
+
+func TestMixedSemicolonAndNoSemicolon(t *testing.T) {
+	prog := parse(t, `fn main(): void {
+		let x: int = 5;
+		let y: int = 10
+		x = 20;
+		y = 30
+	}`)
+	body := prog.Functions[0].Body
+	if len(body) != 4 {
+		t.Fatalf("expected 4 stmts, got %d", len(body))
+	}
+}
+
+func TestSemicolonAfterImport(t *testing.T) {
+	prog := parse(t, `import "fmt"; import "json"; fn main(): void { }`)
+	if len(prog.Imports) != 2 {
+		t.Fatalf("expected 2 imports, got %d", len(prog.Imports))
+	}
+	if prog.Imports[0].Path != "fmt" {
+		t.Errorf("Import[0].Path = %q, want %q", prog.Imports[0].Path, "fmt")
+	}
+	if prog.Imports[1].Path != "json" {
+		t.Errorf("Import[1].Path = %q, want %q", prog.Imports[1].Path, "json")
 	}
 }

@@ -79,10 +79,11 @@ const (
 // --- Server ---
 
 type Server struct {
-	mu        sync.Mutex
-	documents map[string]string
-	writer    io.Writer
-	logger    *log.Logger
+	mu           sync.Mutex
+	documents    map[string]string
+	writer       io.Writer
+	logger       *log.Logger
+	importedURIs map[string][]string // main document URI -> list of imported file URIs we published diagnostics for
 }
 
 // Run starts the LSP server on stdin/stdout.
@@ -90,9 +91,10 @@ func Run() {
 	logger := log.New(os.Stderr, "[dex-lsp] ", log.LstdFlags)
 
 	s := &Server{
-		documents: make(map[string]string),
-		writer:    os.Stdout,
-		logger:    logger,
+		documents:    make(map[string]string),
+		writer:       os.Stdout,
+		logger:       logger,
+		importedURIs: make(map[string][]string),
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -285,7 +287,14 @@ func (s *Server) handleDidClose(msg *jsonrpcMessage) {
 	json.Unmarshal(msg.Params, &params)
 
 	delete(s.documents, params.TextDocument.URI)
-	// Clear diagnostics
+	// Clear diagnostics for imported files
+	if uris, ok := s.importedURIs[params.TextDocument.URI]; ok {
+		for _, impURI := range uris {
+			s.publishDiagnostics(impURI, []Diagnostic{})
+		}
+		delete(s.importedURIs, params.TextDocument.URI)
+	}
+	// Clear diagnostics for the main file
 	s.publishDiagnostics(params.TextDocument.URI, []Diagnostic{})
 }
 
@@ -407,10 +416,21 @@ func (s *Server) handleDefinition(msg *jsonrpcMessage) {
 
 // --- Diagnostics ---
 
-var errPosRegex = regexp.MustCompile(`^(\d+):(\d+):\s*(.*)$`)
+var errPosRegex = regexp.MustCompile(`^(?:(.+?):)?(\d+):(\d+):\s*(.*)$`)
 
 func (s *Server) diagnose(uri string, text string) {
 	var diagnostics []Diagnostic
+
+	// Clear previously published diagnostics for imported files
+	if prevURIs, ok := s.importedURIs[uri]; ok {
+		for _, impURI := range prevURIs {
+			s.publishDiagnostics(impURI, []Diagnostic{})
+		}
+	}
+	s.importedURIs[uri] = nil
+
+	// crossFileDiags collects diagnostics keyed by file URI for cross-file routing
+	crossFileDiags := map[string][]Diagnostic{}
 
 	// Reset and register module types
 	ast.ResetStructTypes()
@@ -430,52 +450,150 @@ func (s *Server) diagnose(uri string, text string) {
 	lex := lexer.New(text)
 	tokens, err := lex.Tokenize()
 	if err != nil {
-		diagnostics = append(diagnostics, makeDiagnostic(err.Error()))
+		diagnostics = append(diagnostics, makeDiagnosticWithSource(err.Error(), text))
 		s.publishDiagnostics(uri, diagnostics)
 		return
+	}
+
+	filePath := uriToPath(uri)
+	sourceDir := filepath.Dir(filePath)
+
+	// Diagnose imported user module files for syntax errors
+	importedPaths := extractUserImportPaths(tokens, sourceDir)
+	for _, impPath := range importedPaths {
+		impDiags := diagnoseImportedFile(impPath)
+		if len(impDiags) > 0 {
+			impURI := pathToURI(impPath)
+			crossFileDiags[impURI] = append(crossFileDiags[impURI], impDiags...)
+		}
 	}
 
 	// Parse
 	p := parser.New(tokens)
 	seedParserModuleTypes(p, tokens)
-	program, err := p.Parse()
-	if err != nil {
-		diagnostics = append(diagnostics, makeDiagnostic(err.Error()))
+	program, parseErrs := p.Parse()
+	if len(parseErrs) > 0 {
+		for _, e := range parseErrs {
+			diagnostics = append(diagnostics, makeDiagnosticWithSource(e.Error(), text))
+		}
 		s.publishDiagnostics(uri, diagnostics)
+		s.publishCrossFileDiags(uri, crossFileDiags)
 		return
 	}
 
 	// Resolve user modules so the checker doesn't flag them as unknown
 	resolve.FlattenStructMethods(program)
-	filePath := uriToPath(uri)
-	sourceDir := filepath.Dir(filePath)
-	_ = resolve.ResolveUserModules(program, sourceDir)
+	if err := resolve.ResolveUserModules(program, sourceDir); err != nil {
+		result := makeDiagnosticForFileWithSource(err.Error(), filePath, text)
+		if result.file != "" {
+			// Error belongs to a different file — route it there
+			impURI := pathToURI(result.file)
+			// Read the imported file source for token length
+			impSource, _ := os.ReadFile(result.file)
+			impText := string(impSource)
+			tokenLen := 1
+			if impText != "" {
+				tokenLen = tokenLengthAt(impText, result.line1, result.col1)
+			}
+			crossFileDiags[impURI] = append(crossFileDiags[impURI], Diagnostic{
+				Range: Range{
+					Start: Position{Line: result.line1 - 1, Character: result.col1 - 1},
+					End:   Position{Line: result.line1 - 1, Character: result.col1 - 1 + tokenLen},
+				},
+				Severity: 1,
+				Source:   "dex",
+				Message:  result.message,
+			})
+		} else {
+			diagnostics = append(diagnostics, result.diag)
+		}
+		s.publishDiagnostics(uri, diagnostics)
+		s.publishCrossFileDiags(uri, crossFileDiags)
+		return
+	}
 
 	// Type check
 	ch := checker.New()
-	if err := ch.Check(program); err != nil {
-		diagnostics = append(diagnostics, makeDiagnostic(err.Error()))
+	if checkErrs := ch.Check(program); len(checkErrs) > 0 {
+		for _, e := range checkErrs {
+			result := makeDiagnosticForFileWithSource(e.Error(), filePath, text)
+			if result.file != "" {
+				// Error belongs to a different file — route it there
+				impURI := pathToURI(result.file)
+				impSource, _ := os.ReadFile(result.file)
+				impText := string(impSource)
+				tokenLen := 1
+				if impText != "" {
+					tokenLen = tokenLengthAt(impText, result.line1, result.col1)
+				}
+				crossFileDiags[impURI] = append(crossFileDiags[impURI], Diagnostic{
+					Range: Range{
+						Start: Position{Line: result.line1 - 1, Character: result.col1 - 1},
+						End:   Position{Line: result.line1 - 1, Character: result.col1 - 1 + tokenLen},
+					},
+					Severity: 1,
+					Source:   "dex",
+					Message:  result.message,
+				})
+			} else {
+				diagnostics = append(diagnostics, result.diag)
+			}
+		}
 		s.publishDiagnostics(uri, diagnostics)
+		s.publishCrossFileDiags(uri, crossFileDiags)
 		return
 	}
 
 	// No errors — clear diagnostics
 	s.publishDiagnostics(uri, diagnostics)
+	s.publishCrossFileDiags(uri, crossFileDiags)
 }
 
-func makeDiagnostic(errMsg string) Diagnostic {
+// publishCrossFileDiags publishes diagnostics to imported file URIs and tracks
+// the URIs for cleanup on close/change.
+func (s *Server) publishCrossFileDiags(mainURI string, crossFileDiags map[string][]Diagnostic) {
+	var publishedURIs []string
+	for impURI, diags := range crossFileDiags {
+		s.publishDiagnostics(impURI, diags)
+		publishedURIs = append(publishedURIs, impURI)
+	}
+	s.importedURIs[mainURI] = publishedURIs
+}
+
+// crossFileDiagResult holds the parsed error info for cross-file diagnostic routing.
+type crossFileDiagResult struct {
+	diag      Diagnostic
+	file      string // non-empty if error belongs to a different file
+	line1     int    // 1-based line from error (for cross-file use)
+	col1      int    // 1-based col from error (for cross-file use)
+	message   string // cleaned message without location prefix
+}
+
+func makeDiagnosticForFileWithSource(errMsg, currentFile, sourceText string) crossFileDiagResult {
 	line := 0
 	col := 0
 	message := errMsg
+	file := ""
 
 	if m := errPosRegex.FindStringSubmatch(errMsg); m != nil {
-		if l, err := strconv.Atoi(m[1]); err == nil {
+		file = m[1] // may be empty if no filename prefix
+		if l, err := strconv.Atoi(m[2]); err == nil {
 			line = l - 1 // LSP is 0-based
 		}
-		if c, err := strconv.Atoi(m[2]); err == nil {
+		if c, err := strconv.Atoi(m[3]); err == nil {
 			col = c - 1
 		}
-		message = m[3]
+		message = m[4]
+	}
+
+	// If the error is from a different file, return it for cross-file routing
+	if file != "" && currentFile != "" && file != currentFile {
+		return crossFileDiagResult{
+			file:    file,
+			line1:   line + 1,
+			col1:    col + 1,
+			message: message,
+		}
 	}
 
 	if line < 0 {
@@ -485,15 +603,49 @@ func makeDiagnostic(errMsg string) Diagnostic {
 		col = 0
 	}
 
-	return Diagnostic{
-		Range: Range{
-			Start: Position{Line: line, Character: col},
-			End:   Position{Line: line, Character: col + 1},
-		},
-		Severity: 1, // Error
-		Source:   "dex",
-		Message:  message,
+	// Compute token length for better error ranges
+	tokenLen := 1
+	if sourceText != "" && line >= 0 && col >= 0 {
+		tokenLen = tokenLengthAt(sourceText, line+1, col+1) // convert to 1-based
 	}
+
+	return crossFileDiagResult{
+		diag: Diagnostic{
+			Range: Range{
+				Start: Position{Line: line, Character: col},
+				End:   Position{Line: line, Character: col + tokenLen},
+			},
+			Severity: 1, // Error
+			Source:   "dex",
+			Message:  message,
+		},
+	}
+}
+
+func makeDiagnosticForFile(errMsg, currentFile string) Diagnostic {
+	result := makeDiagnosticForFileWithSource(errMsg, currentFile, "")
+	if result.file != "" {
+		// Cross-file error without source routing falls back to line 0
+		return Diagnostic{
+			Range: Range{
+				Start: Position{Line: 0, Character: 0},
+				End:   Position{Line: 0, Character: 1},
+			},
+			Severity: 1,
+			Source:   "dex",
+			Message:  fmt.Sprintf("%s:%d:%d: %s", result.file, result.line1, result.col1, result.message),
+		}
+	}
+	return result.diag
+}
+
+func makeDiagnostic(errMsg string) Diagnostic {
+	return makeDiagnosticForFile(errMsg, "")
+}
+
+func makeDiagnosticWithSource(errMsg, sourceText string) Diagnostic {
+	result := makeDiagnosticForFileWithSource(errMsg, "", sourceText)
+	return result.diag
 }
 
 func (s *Server) publishDiagnostics(uri string, diagnostics []Diagnostic) {
@@ -599,6 +751,125 @@ func seedParserModuleTypes(p *parser.Parser, tokens []token.Token) {
 		p.AddStructName(name)
 	}
 	p.AddStructName("Exception") // built-in Exception type
+}
+
+// pathToURI converts a local file path to a file:// URI.
+func pathToURI(filePath string) string {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		abs = filePath
+	}
+	return "file://" + abs
+}
+
+// extractUserImportPaths scans tokens for import declarations and returns
+// absolute paths to user .dx module files (skipping stdlib imports).
+func extractUserImportPaths(tokens []token.Token, sourceDir string) []string {
+	var paths []string
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
+			importPath := tokens[i+1].Value
+			// Skip stdlib imports
+			if stdlib.Lookup(importPath) != nil {
+				continue
+			}
+			// Resolve to absolute .dx file path
+			modFile := importPath + ".dx"
+			absPath := filepath.Join(sourceDir, modFile)
+			paths = append(paths, absPath)
+		}
+	}
+	return paths
+}
+
+// diagnoseImportedFile reads a .dx file from disk and runs lexer+parser,
+// returning any diagnostics found.
+func diagnoseImportedFile(filePath string) []Diagnostic {
+	source, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil // file not found — resolve will catch this
+	}
+
+	text := string(source)
+	var diags []Diagnostic
+
+	lex := lexer.NewWithFile(text, filePath)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		diags = append(diags, makeDiagnosticWithSource(err.Error(), text))
+		return diags
+	}
+
+	p := parser.New(tokens)
+	seedParserModuleTypes(p, tokens)
+	_, parseErrs := p.Parse()
+	for _, e := range parseErrs {
+		diags = append(diags, makeDiagnosticWithSource(e.Error(), text))
+	}
+
+	return diags
+}
+
+// tokenLengthAt computes the length of the token at the given 1-based line and
+// column in the source text. Returns 1 as a fallback.
+func tokenLengthAt(text string, line, col int) int {
+	lines := strings.Split(text, "\n")
+	if line < 1 || line > len(lines) {
+		return 1
+	}
+	lineText := lines[line-1]
+	idx := col - 1 // convert to 0-based
+	if idx < 0 || idx >= len(lineText) {
+		return 1
+	}
+
+	ch := lineText[idx]
+
+	// String literal
+	if ch == '"' || ch == '\'' || ch == '`' {
+		for i := idx + 1; i < len(lineText); i++ {
+			if lineText[i] == ch && (i == 0 || lineText[i-1] != '\\') {
+				return i - idx + 1
+			}
+		}
+		return len(lineText) - idx
+	}
+
+	// Identifier or keyword
+	if isIdentStart(ch) {
+		end := idx + 1
+		for end < len(lineText) && isIdentContinue(lineText[end]) {
+			end++
+		}
+		return end - idx
+	}
+
+	// Number
+	if ch >= '0' && ch <= '9' {
+		end := idx + 1
+		for end < len(lineText) && (lineText[end] >= '0' && lineText[end] <= '9' || lineText[end] == '.') {
+			end++
+		}
+		return end - idx
+	}
+
+	// Multi-char operators
+	remaining := lineText[idx:]
+	for _, op := range []string{"!==", "===", "!=", "==", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/="} {
+		if strings.HasPrefix(remaining, op) {
+			return len(op)
+		}
+	}
+
+	return 1
+}
+
+func isIdentStart(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
+}
+
+func isIdentContinue(ch byte) bool {
+	return isIdentStart(ch) || (ch >= '0' && ch <= '9')
 }
 
 // uriToPath converts a file:// URI to a local file path.

@@ -24,6 +24,24 @@ fn main(): void {
 }
 ```
 
+### Statement Termination
+
+Semicolons are **optional** in DexLang. Statements are terminated by newlines or by context (braces, keywords). You may add a trailing semicolon after any statement or import declaration if you prefer C/Java/Go-style syntax. Both styles can be mixed freely:
+
+```dex
+// Without semicolons
+let x: int = 5
+fmt.println("hello")
+
+// With semicolons
+let y: int = 10;
+fmt.println("world");
+
+// Mixed
+let a: int = 1;
+let b: int = 2
+```
+
 ---
 
 ## Keywords
@@ -142,7 +160,7 @@ fn findUser(id: int): string? {
 
 fn greet(name: string?): void {
     if (name != null) {
-        fmt.print(name)
+        fmt.println(name)
     }
 }
 ```
@@ -371,15 +389,15 @@ Variants are assigned sequential integer values starting at 0.
 let c: Color = Color.Red
 
 if (c == Color.Green) {
-    fmt.print("green")
+    fmt.println("green")
 }
 
 switch (c) {
     case Color.Red: {
-        fmt.print("red")
+        fmt.println("red")
     }
     case Color.Green, Color.Blue: {
-        fmt.print("not red")
+        fmt.println("not red")
     }
 }
 ```
@@ -557,7 +575,7 @@ let result: int = add(5, 10)
 ### Module-qualified calls
 
 ```dex
-fmt.print(42)
+fmt.println(42)
 json.new()
 ```
 
@@ -655,7 +673,7 @@ C-style for loop with init, condition, and post statements:
 
 ```dex
 for(let i: int = 0; i < 10; i++) {
-  fmt.print(i)
+  fmt.println(i)
 }
 ```
 
@@ -676,13 +694,13 @@ let nums: int[] = [10, 20, 30]
 
 // Value only
 foreach(nums as n) {
-  fmt.print(n)
+  fmt.println(n)
 }
 
 // Index and value
 foreach(nums as i, n) {
-  fmt.print(i)  // 0, 1, 2
-  fmt.print(n)  // 10, 20, 30
+  fmt.println(i)  // 0, 1, 2
+  fmt.println(n)  // 10, 20, 30
 }
 ```
 
@@ -699,7 +717,7 @@ while (true) {
 
 for(let i = 0; i < 10; i++) {
   if (i % 2 == 0) { continue }
-  fmt.print(i)  // prints odd numbers only
+  fmt.println(i)  // prints odd numbers only
 }
 ```
 
@@ -712,13 +730,13 @@ Multi-way branching on a value. Supports `int`, `string`, `char`, `long`, `doubl
 ```dex
 switch (action) {
     case "BootNotification": {
-        fmt.print("Boot!")
+        fmt.println("Boot!")
     }
     case "Heartbeat", "StatusNotification": {
-        fmt.print("Alive")
+        fmt.println("Alive")
     }
     default: {
-        fmt.print("Unknown")
+        fmt.println("Unknown")
     }
 }
 ```
@@ -728,13 +746,13 @@ Integer switch:
 ```dex
 switch (code) {
     case 200: {
-        fmt.print("OK")
+        fmt.println("OK")
     }
     case 404: {
-        fmt.print("Not Found")
+        fmt.println("Not Found")
     }
     default: {
-        fmt.print("Other")
+        fmt.println("Other")
     }
 }
 ```
@@ -879,10 +897,10 @@ try {
     throw Exception("oops")
 } catch (e: Exception) {
     // handle the exception
-    fmt.print(e.message)
+    fmt.println(e.message)
 } finally {
     // always runs after try or catch
-    fmt.print("cleanup")
+    fmt.println("cleanup")
 }
 ```
 
@@ -898,7 +916,7 @@ If a `try` block has only `finally` (no `catch`), the exception is re-thrown aft
 try {
     throw Exception("error")
 } finally {
-    fmt.print("cleanup runs first")
+    fmt.println("cleanup runs first")
 }
 // exception propagates here
 ```
@@ -916,7 +934,7 @@ fn main(): void {
     try {
         risky()
     } catch (e: Exception) {
-        fmt.print(e.message)  // "from risky"
+        fmt.println(e.message)  // "from risky"
     }
 }
 ```
@@ -941,21 +959,21 @@ import "module_name"
 
 ### fmt
 
-Print values to stdout (with newline).
+Print values to stdout.
 
 ```dex
 import "fmt"
 
-fmt.print(42)            // print an int
-fmt.print("hello")       // print a string
-fmt.print(100000)        // print a long
-fmt.print(3.14)          // print a double
-fmt.print(true)          // print a bool ("true" or "false")
+fmt.println(42)            // print with newline
+fmt.println("hello")       // print with newline
+fmt.print("no newline")    // print without newline
+fmt.print(3.14)            // print without newline
 ```
 
-| Function | Signature                                              | Description                       |
-|----------|--------------------------------------------------------|-----------------------------------|
-| `print`  | `print(value: int\|long\|double\|string\|bool): void` | Print any primitive with newline  |
+| Function  | Signature                                                | Description                          |
+|-----------|----------------------------------------------------------|--------------------------------------|
+| `print`   | `print(value: int\|long\|double\|string\|bool): void`   | Print any primitive without newline  |
+| `println` | `println(value: int\|long\|double\|string\|bool): void` | Print any primitive with newline     |
 
 ### http
 
@@ -1070,9 +1088,9 @@ import "json"
 fn main(): void {
   // Simple GET
   let resp: HttpResponse = http.get("https://api.example.com/data")
-  fmt.print(resp.statusCode)
-  fmt.print(resp.body)
-  fmt.print(resp.contentType)
+  fmt.println(resp.statusCode)
+  fmt.println(resp.body)
+  fmt.println(resp.contentType)
 
   // Parse JSON response
   let name: string = json.get(resp.body, "name")
@@ -1223,7 +1241,7 @@ while (db.next(rows)) {
     let id: int = db.col(rows, 0)
     let name: string = db.col(rows, 1)
     let age: int = db.col(rows, 2)
-    fmt.print(name)
+    fmt.println(name)
 }
 db.free(rows)
 db.close(conn)
@@ -1325,7 +1343,7 @@ import "time"
 import "fmt"
 
 fn heartbeat(): void {
-  fmt.print("tick")
+  fmt.println("tick")
 }
 
 fn main(): void {
@@ -1375,16 +1393,16 @@ import "ws"
 import "fmt"
 
 fn onConnect(conn: ws.Conn, path: string): void {
-  fmt.print("client connected on path: " + path)
+  fmt.println("client connected on path: " + path)
 }
 
 fn onMessage(conn: ws.Conn, msg: string): void {
-  fmt.print("got: " + msg)
+  fmt.println("got: " + msg)
   ws.send(conn, "echo: " + msg)
 }
 
 fn onDisconnect(conn: ws.Conn): void {
-  fmt.print("client disconnected")
+  fmt.println("client disconnected")
 }
 
 fn main(): void {
@@ -1466,7 +1484,7 @@ import "os"
 
 let home: string = os.env("HOME")
 let result: ExecResult = os.exec("ls -la")
-fmt.print(result.output)
+fmt.println(result.output)
 os.exit(0)
 ```
 
@@ -1602,7 +1620,7 @@ fn handle_hello(): string {
 
 fn main(): void {
   let result: int = factorial(5)
-  fmt.print(result)
+  fmt.println(result)
 
   http.route("GET", "/hello", "handle_hello")
   http.listen(8080)

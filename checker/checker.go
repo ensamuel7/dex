@@ -21,10 +21,17 @@ type Checker struct {
 	imports          map[string]*stdlib.Module
 	userModules      map[string]bool
 	loopDepth        int
+	errors           []error
+	maxErrors        int
 
 	structMethods      map[string]map[string]funcSig // structName -> methodName -> sig
 	structConstructors map[string][]ast.Type          // structName -> constructor param types
 	structModule       map[string]string              // structName -> moduleName (for cross-module structs)
+}
+
+// addError records a checker error.
+func (c *Checker) addError(err error) {
+	c.errors = append(c.errors, err)
 }
 
 func New() *Checker {
@@ -35,19 +42,23 @@ func New() *Checker {
 		structMethods:      make(map[string]map[string]funcSig),
 		structConstructors: make(map[string][]ast.Type),
 		structModule:       make(map[string]string),
+		maxErrors:          20,
 	}
 }
 
 // errAt formats an error with position information when available.
 func (c *Checker) errAt(pos ast.Pos, format string, args ...interface{}) error {
 	if pos.Line > 0 {
+		if pos.File != "" {
+			return fmt.Errorf("%s:%d:%d: "+format, append([]interface{}{pos.File, pos.Line, pos.Col}, args...)...)
+		}
 		return fmt.Errorf("%d:%d: "+format, append([]interface{}{pos.Line, pos.Col}, args...)...)
 	}
 	return fmt.Errorf(format, args...)
 }
 
 
-func (c *Checker) Check(program *ast.Program) error {
+func (c *Checker) Check(program *ast.Program) []error {
 	// Populate user modules set
 	for _, modName := range program.UserModules {
 		c.userModules[modName] = true
@@ -57,7 +68,8 @@ func (c *Checker) Check(program *ast.Program) error {
 	for _, imp := range program.Imports {
 		mod := stdlib.Lookup(imp.Path)
 		if mod == nil {
-			return fmt.Errorf("unknown import '%s'", imp.Path)
+			c.addError(fmt.Errorf("unknown import '%s'", imp.Path))
+			continue
 		}
 		key := imp.Path
 		if imp.Alias != "" {
@@ -70,17 +82,19 @@ func (c *Checker) Check(program *ast.Program) error {
 	seen := map[string]bool{}
 	for _, sd := range program.Structs {
 		if seen[sd.Name] {
-			return fmt.Errorf("duplicate struct type '%s'", sd.Name)
+			c.addError(fmt.Errorf("duplicate struct type '%s'", sd.Name))
+			continue
 		}
 		seen[sd.Name] = true
 		fieldNames := map[string]bool{}
 		for _, f := range sd.Fields {
 			if fieldNames[f.Name] {
-				return fmt.Errorf("duplicate field '%s' in struct '%s'", f.Name, sd.Name)
+				c.addError(fmt.Errorf("duplicate field '%s' in struct '%s'", f.Name, sd.Name))
+				continue
 			}
 			fieldNames[f.Name] = true
 			if !isValidFieldType(f.Type) {
-				return fmt.Errorf("invalid type for field '%s' in struct '%s'", f.Name, sd.Name)
+				c.addError(fmt.Errorf("invalid type for field '%s' in struct '%s'", f.Name, sd.Name))
 			}
 		}
 	}
@@ -88,13 +102,15 @@ func (c *Checker) Check(program *ast.Program) error {
 	// Validate enum definitions
 	for _, ed := range program.Enums {
 		if seen[ed.Name] {
-			return fmt.Errorf("duplicate type name '%s'", ed.Name)
+			c.addError(fmt.Errorf("duplicate type name '%s'", ed.Name))
+			continue
 		}
 		seen[ed.Name] = true
 		variantNames := map[string]bool{}
 		for _, v := range ed.Variants {
 			if variantNames[v] {
-				return fmt.Errorf("duplicate variant '%s' in enum '%s'", v, ed.Name)
+				c.addError(fmt.Errorf("duplicate variant '%s' in enum '%s'", v, ed.Name))
+				continue
 			}
 			variantNames[v] = true
 		}
@@ -154,14 +170,19 @@ func (c *Checker) Check(program *ast.Program) error {
 
 		for _, stmt := range fn.Body {
 			if err := c.checkStmt(stmt, fn.ReturnType); err != nil {
-				return err
+				c.addError(err)
+				break // stop checking this function, but continue to next
 			}
 		}
 
 		c.popScope()
+
+		if len(c.errors) >= c.maxErrors {
+			break
+		}
 	}
 
-	return nil
+	return c.errors
 }
 
 // Scope management

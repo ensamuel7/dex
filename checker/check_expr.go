@@ -472,10 +472,10 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return 0, c.errAt(e.Pos, "module '%s' is not imported", e.Module)
 			}
 
-			// Special case: fmt.print(value) — accepts any primitive type
-			if e.Module == "fmt" && e.Name == "print" {
+			// Special case: fmt.print/fmt.println — accepts any primitive type
+			if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
 				if len(e.Args) != 1 {
-					return 0, c.errAt(e.Pos, "fmt.print() takes exactly 1 argument, got %d", len(e.Args))
+					return 0, c.errAt(e.Pos, "fmt.%s() takes exactly 1 argument, got %d", e.Name, len(e.Args))
 				}
 				argType, err := c.checkExpr(e.Args[0])
 				if err != nil {
@@ -484,7 +484,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if argType != ast.TypeInt && argType != ast.TypeLong && argType != ast.TypeDouble &&
 					argType != ast.TypeString && argType != ast.TypeBool && argType != ast.TypeChar &&
 					!ast.IsEnumType(argType) {
-					return 0, c.errAt(e.Pos, "fmt.print() argument must be a primitive type, got %s", typeName(argType))
+					return 0, c.errAt(e.Pos, "fmt.%s() argument must be a primitive type, got %s", e.Name, typeName(argType))
 				}
 				return ast.TypeVoid, nil
 			}

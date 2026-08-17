@@ -46,9 +46,9 @@ fn handle_users(): string {
 }
 
 fn main(): void {
-    fmt.print("Routes:")
-    fmt.print("  GET /items  - 1000 ints via native array + json.setArray")
-    fmt.print("  GET /users  - 100 objects via json.new/set + string concat")
+    fmt.println("Routes:")
+    fmt.println("  GET /items  - 1000 ints via native array + json.setArray")
+    fmt.println("  GET /users  - 100 objects via json.new/set + string concat")
     http.route("GET", "/items", "handle_items")
     http.route("GET", "/users", "handle_users")
     http.listen(8080)

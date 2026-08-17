@@ -5,17 +5,17 @@ import "fmt"
 fn main(): void {
     io.prompt("Enter your name: ")
     let name: string = io.readLine()
-    fmt.print("Hello, " + name + "!")
+    fmt.println("Hello, " + name + "!")
 
     io.prompt("Enter your age: ")
     let age: int = io.readInt()
-    fmt.print(age)
+    fmt.println(age)
 
     io.prompt("Enter a price: ")
     let price: double = io.readDouble()
-    fmt.print(price)
+    fmt.println(price)
 
     io.prompt("Are you sure? (true/false): ")
     let sure: bool = io.readBool()
-    fmt.print(sure)
+    fmt.println(sure)
 }

@@ -11,11 +11,11 @@ fn factorial(n: int): int {
 
 fn main(): void {
   let result: int = factorial(5)
-  fmt.print(result)
+  fmt.println(result)
 
   if (result == 120) {
-    fmt.print(1)
+    fmt.println(1)
   } else {
-    fmt.print(0)
+    fmt.println(0)
   }
 }

@@ -87,10 +87,10 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	}
 
 	// Lex
-	lex := lexer.New(string(source))
+	lex := lexer.NewWithFile(string(source), filePath)
 	tokens, err := lex.Tokenize()
 	if err != nil {
-		return fmt.Errorf("%s: %v", filePath, err)
+		return err
 	}
 
 	// Extract import paths from tokens BEFORE parsing
@@ -135,9 +135,9 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	for _, name := range ast.AllStructNames() {
 		p.AddStructName(name)
 	}
-	modProgram, err := p.Parse()
-	if err != nil {
-		return fmt.Errorf("%s: %v", filePath, err)
+	modProgram, errs := p.Parse()
+	if len(errs) > 0 {
+		return errs[0]
 	}
 
 	// Flatten struct methods

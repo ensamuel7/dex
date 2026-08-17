@@ -166,5 +166,5 @@ fn main(): void {
     testOptionalParam()
     testLongOptional()
     testStringReassign()
-    fmt.print("All optional tests passed!")
+    fmt.println("All optional tests passed!")
 }

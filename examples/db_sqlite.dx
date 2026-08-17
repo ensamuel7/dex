@@ -13,9 +13,9 @@ fn main(): void {
         let id: int = db.col(rows, 0)
         let name: string = db.col(rows, 1)
         let age: int = db.col(rows, 2)
-        fmt.print(id)
-        fmt.print(name)
-        fmt.print(age)
+        fmt.println(id)
+        fmt.println(name)
+        fmt.println(age)
     }
 
     db.free(rows)

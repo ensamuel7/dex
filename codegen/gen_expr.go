@@ -8,6 +8,15 @@ import (
 	"github.com/ensamuel7/dex/stdlib"
 )
 
+// isPrimitiveRef returns true when the type is a ref wrapping a primitive type.
+func isPrimitiveRef(t ast.Type) bool {
+	if !ast.IsRefType(t) {
+		return false
+	}
+	inner := ast.RefInnerType(t)
+	return inner == ast.TypeInt || inner == ast.TypeLong || inner == ast.TypeDouble || inner == ast.TypeBool || inner == ast.TypeChar
+}
+
 func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	switch e := expr.(type) {
 	case *ast.IntLit:
@@ -46,6 +55,8 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	case *ast.Ident:
 		if narrowed, ok := g.narrowedVars[e.Name]; ok {
 			out.WriteString(narrowed)
+		} else if t, ok := g.varTypes[e.Name]; ok && isPrimitiveRef(t) {
+			out.WriteString(fmt.Sprintf("(*%s)", e.Name))
 		} else {
 			out.WriteString(e.Name)
 		}
@@ -326,9 +337,15 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				argType := g.typeOfExpr(e.Args[i])
 				if !ast.IsRefType(argType) {
 					out.WriteString("&")
+					g.genExpr(out, e.Args[i])
+				} else if ident, ok := e.Args[i].(*ast.Ident); ok && isPrimitiveRef(argType) {
+					out.WriteString(ident.Name)
+				} else {
+					g.genExpr(out, e.Args[i])
 				}
+			} else {
+				g.genExpr(out, e.Args[i])
 			}
-			g.genExpr(out, e.Args[i])
 		}
 		out.WriteString(" }")
 		return
@@ -371,9 +388,15 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				argType := g.typeOfExpr(arg)
 				if !ast.IsRefType(argType) {
 					out.WriteString("&")
+					g.genExpr(out, arg)
+				} else if ident, ok := arg.(*ast.Ident); ok && isPrimitiveRef(argType) {
+					out.WriteString(ident.Name)
+				} else {
+					g.genExpr(out, arg)
 				}
+			} else {
+				g.genExpr(out, arg)
 			}
-			g.genExpr(out, arg)
 		}
 		out.WriteString(")")
 		return
@@ -1411,13 +1434,18 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		if hasFn && i < len(fn.Params) && ast.IsOptionalType(fn.Params[i].Type) {
 			g.genOptionalArg(out, arg, fn.Params[i].Type)
 		} else if hasFn && i < len(fn.Params) && ast.IsRefType(fn.Params[i].Type) {
-			// Insert & when passing struct value to ref-typed param
+			// Insert & when passing value to ref-typed param
 			// but not if the arg is already a ref type
 			argType := g.typeOfExpr(arg)
 			if !ast.IsRefType(argType) {
 				out.WriteString("&")
+				g.genExpr(out, arg)
+			} else if ident, ok := arg.(*ast.Ident); ok && isPrimitiveRef(argType) {
+				// Primitive ref passed to ref param: emit raw pointer name
+				out.WriteString(ident.Name)
+			} else {
+				g.genExpr(out, arg)
 			}
-			g.genExpr(out, arg)
 		} else {
 			g.genExpr(out, arg)
 		}
@@ -1963,7 +1991,7 @@ func (g *Generator) flattenStringConcat(expr ast.Expr) []ast.Expr {
 // genStringConcat generates a linearized string concatenation chain.
 // It flattens nested BinAdd nodes, emits each operand that produces a +1 allocation
 // into a temp variable (registered in pendingReleases), and chains dex_str_concat calls
-// while releasing intermediates.
+// while releasing intermediates. Non-string operands are auto-coerced via StringBuilder.
 func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) {
 	operands := g.flattenStringConcat(expr)
 
@@ -1973,8 +2001,17 @@ func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) 
 		return
 	}
 
-	// For a simple 2-operand concat, release +1 operand temps inline
-	if len(operands) == 2 {
+	// Check if any operand is non-string (needs coercion)
+	hasNonString := false
+	for _, op := range operands {
+		if !g.isStringExpr(op) {
+			hasNonString = true
+			break
+		}
+	}
+
+	// For a simple 2-operand concat of two strings, release +1 operand temps inline
+	if len(operands) == 2 && !hasNonString {
 		leftNew := g.isNewAlloc(operands[0])
 		rightNew := g.isNewAlloc(operands[1])
 		if !leftNew && !rightNew {
@@ -2008,26 +2045,124 @@ func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) 
 		return
 	}
 
-	// For 3+ operands, use StringBuilder for efficient single-allocation concatenation.
+	// For 3+ operands or coercion, use StringBuilder for efficient concatenation.
 	g.usesStringBuilder = true
 	g.usesString = true
 	sbTmp := g.nextTemp()
 	resTmp := g.nextTemp()
 	out.WriteString(fmt.Sprintf("({ DexStringBuilder* %s = dex_sb_new(); ", sbTmp))
 
-	// Append each operand and release +1 allocations
-	operandVars := make([]string, len(operands))
-	for i, op := range operands {
-		tmpName := g.nextTemp()
-		operandVars[i] = tmpName
-		out.WriteString(fmt.Sprintf("DexString* %s = ", tmpName))
-		g.genExpr(out, op)
-		out.WriteString(fmt.Sprintf("; dex_sb_append_str(%s, %s); ", sbTmp, tmpName))
-		if g.isNewAlloc(op) {
-			out.WriteString(fmt.Sprintf("dex_release(%s); ", tmpName))
+	// Append each operand, handling both string and non-string types
+	for _, op := range operands {
+		if g.isStringExpr(op) {
+			tmpName := g.nextTemp()
+			out.WriteString(fmt.Sprintf("DexString* %s = ", tmpName))
+			g.genExpr(out, op)
+			out.WriteString(fmt.Sprintf("; dex_sb_append_str(%s, %s); ", sbTmp, tmpName))
+			if g.isNewAlloc(op) {
+				out.WriteString(fmt.Sprintf("dex_release(%s); ", tmpName))
+			}
+		} else {
+			typ := g.typeOfExpr(op)
+			tmpName := g.nextTemp()
+			out.WriteString(fmt.Sprintf("%s %s = ", g.cType(typ), tmpName))
+			g.genExpr(out, op)
+			out.WriteString("; ")
+			g.genAppendToSB(out, sbTmp, tmpName, typ)
 		}
 	}
 
+	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); dex_release(%s); %s; })", resTmp, sbTmp, sbTmp, resTmp))
+}
+
+// genAppendToSB appends a C value of the given type to a StringBuilder variable.
+// Handles primitives, strings, structs, arrays, and enums.
+func (g *Generator) genAppendToSB(out *strings.Builder, sbVar string, cExpr string, typ ast.Type) {
+	switch typ {
+	case ast.TypeInt:
+		out.WriteString(fmt.Sprintf("dex_sb_append_int(%s, %s); ", sbVar, cExpr))
+	case ast.TypeLong:
+		out.WriteString(fmt.Sprintf("dex_sb_append_long(%s, %s); ", sbVar, cExpr))
+	case ast.TypeDouble:
+		out.WriteString(fmt.Sprintf("dex_sb_append_double(%s, %s); ", sbVar, cExpr))
+	case ast.TypeBool:
+		out.WriteString(fmt.Sprintf("dex_sb_append_bool(%s, %s); ", sbVar, cExpr))
+	case ast.TypeChar:
+		out.WriteString(fmt.Sprintf("dex_sb_append_char(%s, %s); ", sbVar, cExpr))
+	case ast.TypeString:
+		out.WriteString(fmt.Sprintf("dex_sb_append_str(%s, %s); ", sbVar, cExpr))
+	default:
+		if ast.IsStructType(typ) {
+			def := ast.GetStructDef(typ)
+			if def == nil {
+				out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \"<struct>\"); ", sbVar))
+				return
+			}
+			cnt := g.printCounter
+			g.printCounter++
+			structVar := fmt.Sprintf("_ps%d", cnt)
+			cType := g.cType(typ)
+			out.WriteString(fmt.Sprintf("{ %s %s = %s; ", cType, structVar, cExpr))
+			out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \"%s{\"); ", sbVar, def.Name))
+			for i, f := range def.Fields {
+				if i > 0 {
+					out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \", \"); ", sbVar))
+				}
+				fieldExpr := fmt.Sprintf("%s.%s", structVar, f.Name)
+				out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \"%s: \"); ", sbVar, f.Name))
+				g.genAppendToSB(out, sbVar, fieldExpr, f.Type)
+			}
+			out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \"}\"); ", sbVar))
+			out.WriteString("} ")
+		} else if ast.IsArrayType(typ) {
+			elemType := ast.ElementType(typ)
+			cnt := g.printCounter
+			g.printCounter++
+			iterVar := fmt.Sprintf("_pi%d", cnt)
+			arrVar := fmt.Sprintf("_pa%d", cnt)
+			if ast.IsStructArrayType(typ) {
+				out.WriteString(fmt.Sprintf("{ DexArrayStruct* %s = (DexArrayStruct*)%s; ", arrVar, cExpr))
+			} else {
+				out.WriteString(fmt.Sprintf("{ %s %s = %s; ", g.cType(typ), arrVar, cExpr))
+			}
+			out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \"[\"); ", sbVar))
+			out.WriteString(fmt.Sprintf("for (int %s = 0; %s < %s->len; %s++) { ", iterVar, iterVar, arrVar, iterVar))
+			out.WriteString(fmt.Sprintf("if (%s > 0) dex_sb_append_cstr(%s, \", \"); ", iterVar, sbVar))
+			elemExpr := fmt.Sprintf("%s->data[%s]", arrVar, iterVar)
+			if ast.IsStructArrayType(typ) {
+				elemCType := g.cType(elemType)
+				elemExpr = fmt.Sprintf("*(%s*)dex_array_struct_get(%s, %s)", elemCType, arrVar, iterVar)
+			}
+			g.genAppendToSB(out, sbVar, elemExpr, elemType)
+			out.WriteString("} ")
+			out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \"]\"); ", sbVar))
+			out.WriteString("} ")
+		} else if ast.IsEnumType(typ) {
+			out.WriteString(fmt.Sprintf("dex_sb_append_int(%s, %s); ", sbVar, cExpr))
+		} else {
+			out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \"<unknown>\"); ", sbVar))
+		}
+	}
+}
+
+// genExprAsString emits code producing a DexString* from any expression,
+// using a temporary StringBuilder for non-string types.
+func (g *Generator) genExprAsString(out *strings.Builder, expr ast.Expr) {
+	typ := g.typeOfExpr(expr)
+	if typ == ast.TypeString {
+		g.genExpr(out, expr)
+		return
+	}
+	g.usesStringBuilder = true
+	g.usesString = true
+	sbTmp := g.nextTemp()
+	valTmp := g.nextTemp()
+	resTmp := g.nextTemp()
+	out.WriteString(fmt.Sprintf("({ DexStringBuilder* %s = dex_sb_new(); ", sbTmp))
+	out.WriteString(fmt.Sprintf("%s %s = ", g.cType(typ), valTmp))
+	g.genExpr(out, expr)
+	out.WriteString("; ")
+	g.genAppendToSB(out, sbTmp, valTmp, typ)
 	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); dex_release(%s); %s; })", resTmp, sbTmp, sbTmp, resTmp))
 }
 

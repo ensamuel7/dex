@@ -79,6 +79,14 @@ static void dex_sb_append_char(DexStringBuilder* sb, unsigned char v) {
     sb->buf[sb->len] = '\0';
 }
 
+static void dex_sb_append_cstr(DexStringBuilder* sb, const char* s) {
+    size_t n = strlen(s);
+    dex_sb_ensure(sb, n);
+    memcpy(sb->buf + sb->len, s, n);
+    sb->len += n;
+    sb->buf[sb->len] = '\0';
+}
+
 static DexString* dex_sb_toString(DexStringBuilder* sb) {
     return dex_string_new(sb->buf, sb->len);
 }

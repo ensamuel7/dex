@@ -47,6 +47,13 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		if err != nil {
 			return 0, err
 		}
+		// Auto-unwrap primitive refs for arithmetic/comparison
+		if ast.IsRefType(leftType) && ast.IsValueType(ast.RefInnerType(leftType)) {
+			leftType = ast.RefInnerType(leftType)
+		}
+		if ast.IsRefType(rightType) && ast.IsValueType(ast.RefInnerType(rightType)) {
+			rightType = ast.RefInnerType(rightType)
+		}
 
 		switch e.Op {
 		case ast.BinAdd:
@@ -60,6 +67,11 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 					e.HasMixedTypes = true
 				}
 				return widerNumericType(leftType, rightType), nil
+			}
+			// String coercion: string + T or T + string
+			if (leftType == ast.TypeString && isStringifiable(rightType)) ||
+				(rightType == ast.TypeString && isStringifiable(leftType)) {
+				return ast.TypeString, nil
 			}
 			return 0, c.errAt(e.Pos, "'+' requires matching numeric or string operands")
 
@@ -139,6 +151,10 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		operandType, err := c.checkExpr(e.Operand)
 		if err != nil {
 			return 0, err
+		}
+		// Auto-unwrap primitive refs for unary operations
+		if ast.IsRefType(operandType) && ast.IsValueType(ast.RefInnerType(operandType)) {
+			operandType = ast.RefInnerType(operandType)
 		}
 
 		switch e.Op {
@@ -1607,7 +1623,8 @@ func isValidFieldType(t ast.Type) bool {
 		return isValidFieldType(ast.OptionalInnerType(t))
 	}
 	if ast.IsRefType(t) {
-		return ast.IsStructType(ast.RefInnerType(t))
+		inner := ast.RefInnerType(t)
+		return ast.IsStructType(inner) || ast.IsValueType(inner)
 	}
 	switch t {
 	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar:
@@ -1627,6 +1644,14 @@ func widerNumericType(a, b ast.Type) ast.Type {
 
 func isNumericType(t ast.Type) bool {
 	return t == ast.TypeChar || t == ast.TypeInt || t == ast.TypeLong || t == ast.TypeDouble
+}
+
+func isStringifiable(t ast.Type) bool {
+	switch t {
+	case ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeBool, ast.TypeChar:
+		return true
+	}
+	return ast.IsStructType(t) || ast.IsEnumType(t) || ast.IsArrayType(t)
 }
 
 func isPrimitiveType(t ast.Type) bool {

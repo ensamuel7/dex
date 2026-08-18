@@ -404,6 +404,103 @@ let line = Line{label: "AB"}
 // Line{start: Point{x: 0, y: 0}, end: Point{x: 0, y: 0}, label: AB}
 ```
 
+### Value and reference semantics
+
+DexLang uses **pass-by-value** as the default for primitives and structs. Arrays and strings are always passed as pointers. The `&Type` syntax opts into pass-by-reference for structs.
+
+**Primitives** (`int`, `long`, `double`, `bool`, `char`) are always pass-by-value. Changes inside a function do not affect the caller:
+
+```dex
+fn increment(n: int): void {
+  n = n + 1   // modifies the local copy only
+}
+
+let x: int = 5
+increment(x)
+fmt.println(x)   // still 5
+```
+
+**Structs** are pass-by-value by default. The function receives a copy:
+
+```dex
+fn tryUpdate(user: User): void {
+  user.name = "changed"   // modifies the local copy only
+}
+
+let u = User{name: "john", age: 25}
+tryUpdate(u)
+fmt.println(u.name)   // still "john"
+```
+
+Use `&StructName` in the parameter type to pass by reference. Mutations through the reference affect the original:
+
+```dex
+fn update(user: &User): void {
+  user.name = "changed"   // modifies the original
+}
+
+let u = User{name: "john", age: 25}
+update(u)
+fmt.println(u.name)   // "changed"
+```
+
+The caller does not need to write `&` at the call site — the compiler inserts it automatically. Field access, field assignment, and method calls all work transparently on references:
+
+```dex
+fn getName(user: &User): string {
+  return user.name        // field access works with dot syntax
+}
+
+fn greetRef(user: &User): string {
+  return user.greet()     // method calls work normally
+}
+```
+
+**Arrays** (`int[]`, `string[]`, etc.) and **strings** are always pointers under the hood. Mutations to array contents are visible to the caller:
+
+```dex
+fn addItem(arr: int[]): void {
+  arr.push(99)   // modifies the original array
+}
+
+let nums: int[] = [1, 2, 3]
+addItem(nums)
+fmt.println(nums)   // [1, 2, 3, 99]
+```
+
+**Reference fields in structs** — struct fields can use `&StructName` to hold a reference rather than a copy. This enables dependency injection patterns:
+
+```dex
+struct Database {
+  host: string
+}
+
+struct Service {
+  db: &Database
+}
+
+let db = Database{host: "localhost"}
+let svc = Service{db: db}   // svc.db points to db
+```
+
+**Summary:**
+
+| Type | Default passing | Mutable? | Caller sees changes? | Allocation | Opt-in reference |
+|------|----------------|----------|---------------------|------------|-----------------|
+| `int`, `long`, `double` | value | Yes | No | stack | `&int`, `&long`, `&double` |
+| `bool`, `char` | value | Yes | No | stack | `&bool`, `&char` |
+| `string` | pointer | Yes | Yes | heap (ref-counted) | — |
+| `int[]`, `string[]`, etc. | pointer | Yes | Yes | heap (ref-counted) | — |
+| `struct` | value (copy) | Yes | No | stack | `&Struct` |
+| `&Struct` | pointer | Yes | Yes | stack (pointed-to) | — |
+| `const` variable | — | No | — | same as type | — |
+| `enum` | value | No (constants) | No | stack | — |
+| `map[K, V]` | pointer | Yes | Yes | heap (ref-counted) | — |
+
+**Rules:**
+- Struct and primitive types (`int`, `long`, `double`, `bool`, `char`) can use the `&` prefix for pass-by-reference. `&string` is a compile error (strings are already heap-allocated pointers).
+- Double references (`&&Struct`) are not allowed.
+
 ---
 
 ## Enums
@@ -640,6 +737,42 @@ json.new()
 | `%=`     | Modulo and assign |
 
 `+` also works for string concatenation when both operands are `string`.
+
+#### String coercion
+
+When one operand of `+` is a `string` and the other is a non-string type, the non-string operand is automatically converted to its string representation. This works for all primitive types (`int`, `long`, `double`, `bool`, `char`), structs, enums, and arrays.
+
+```dex
+let n: int = 42
+let msg: string = "value: " + n   // "value: 42"
+
+let pi: double = 3.14
+let s: string = "pi is " + pi     // "pi is 3.14"
+
+let flag: bool = true
+let t: string = "flag: " + flag   // "flag: true"
+```
+
+The non-string operand can appear on either side:
+
+```dex
+let x: int = 10
+let s: string = x + " items"      // "10 items"
+```
+
+Structs are converted using the format `Name{field: value, ...}`:
+
+```dex
+struct Point { x: int  y: int }
+let p = Point { x: 1, y: 2 }
+let s: string = "pos: " + p       // "pos: Point{x: 1, y: 2}"
+```
+
+Coercion chains work naturally with multiple operands:
+
+```dex
+let s: string = "a" + 1 + "b"     // "a1b"
+```
 
 ### Comparison
 

@@ -419,6 +419,12 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 
 	case *ast.AssignStmt:
 		varType := g.varTypes[s.Name]
+		if isPrimitiveRef(varType) {
+			out.WriteString(fmt.Sprintf("%s(*%s) = ", prefix, s.Name))
+			g.genExpr(out, s.Value)
+			out.WriteString(";\n")
+			break
+		}
 		if ast.IsOptionalType(varType) {
 			inner := ast.OptionalInnerType(varType)
 			_, isNull := s.Value.(*ast.NullLit)
@@ -635,13 +641,25 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		out.WriteString(fmt.Sprintf("%scontinue;\n", prefix))
 
 	case *ast.IncrementStmt:
-		out.WriteString(fmt.Sprintf("%s%s++;\n", prefix, s.Name))
+		if t, ok := g.varTypes[s.Name]; ok && isPrimitiveRef(t) {
+			out.WriteString(fmt.Sprintf("%s(*%s)++;\n", prefix, s.Name))
+		} else {
+			out.WriteString(fmt.Sprintf("%s%s++;\n", prefix, s.Name))
+		}
 
 	case *ast.DecrementStmt:
-		out.WriteString(fmt.Sprintf("%s%s--;\n", prefix, s.Name))
+		if t, ok := g.varTypes[s.Name]; ok && isPrimitiveRef(t) {
+			out.WriteString(fmt.Sprintf("%s(*%s)--;\n", prefix, s.Name))
+		} else {
+			out.WriteString(fmt.Sprintf("%s%s--;\n", prefix, s.Name))
+		}
 
 	case *ast.CompoundAssignStmt:
-		out.WriteString(fmt.Sprintf("%s%s %s= ", prefix, s.Name, g.cBinOp(s.Op)))
+		if t, ok := g.varTypes[s.Name]; ok && isPrimitiveRef(t) {
+			out.WriteString(fmt.Sprintf("%s(*%s) %s= ", prefix, s.Name, g.cBinOp(s.Op)))
+		} else {
+			out.WriteString(fmt.Sprintf("%s%s %s= ", prefix, s.Name, g.cBinOp(s.Op)))
+		}
 		g.genExpr(out, s.Value)
 		out.WriteString(";\n")
 
@@ -942,14 +960,30 @@ func (g *Generator) genForInit(out *strings.Builder, stmt ast.Stmt) {
 func (g *Generator) genForPost(out *strings.Builder, stmt ast.Stmt) {
 	switch s := stmt.(type) {
 	case *ast.IncrementStmt:
-		out.WriteString(fmt.Sprintf("%s++", s.Name))
+		if t, ok := g.varTypes[s.Name]; ok && isPrimitiveRef(t) {
+			out.WriteString(fmt.Sprintf("(*%s)++", s.Name))
+		} else {
+			out.WriteString(fmt.Sprintf("%s++", s.Name))
+		}
 	case *ast.DecrementStmt:
-		out.WriteString(fmt.Sprintf("%s--", s.Name))
+		if t, ok := g.varTypes[s.Name]; ok && isPrimitiveRef(t) {
+			out.WriteString(fmt.Sprintf("(*%s)--", s.Name))
+		} else {
+			out.WriteString(fmt.Sprintf("%s--", s.Name))
+		}
 	case *ast.CompoundAssignStmt:
-		out.WriteString(fmt.Sprintf("%s %s= ", s.Name, g.cBinOp(s.Op)))
+		if t, ok := g.varTypes[s.Name]; ok && isPrimitiveRef(t) {
+			out.WriteString(fmt.Sprintf("(*%s) %s= ", s.Name, g.cBinOp(s.Op)))
+		} else {
+			out.WriteString(fmt.Sprintf("%s %s= ", s.Name, g.cBinOp(s.Op)))
+		}
 		g.genExpr(out, s.Value)
 	case *ast.AssignStmt:
-		out.WriteString(fmt.Sprintf("%s = ", s.Name))
+		if isPrimitiveRef(g.varTypes[s.Name]) {
+			out.WriteString(fmt.Sprintf("(*%s) = ", s.Name))
+		} else {
+			out.WriteString(fmt.Sprintf("%s = ", s.Name))
+		}
 		g.genExpr(out, s.Value)
 	}
 }

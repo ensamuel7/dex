@@ -1008,14 +1008,6 @@ func EnumName(t Type) string {
 	return def.Name
 }
 
-func AllEnumNames() []string {
-	names := make([]string, 0, len(enumByName))
-	for name := range enumByName {
-		names = append(names, name)
-	}
-	return names
-}
-
 // EnumAccessExpr represents accessing an enum variant: Color.Red
 type EnumAccessExpr struct {
 	Pos      Pos

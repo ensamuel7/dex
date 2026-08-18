@@ -405,13 +405,32 @@ func (p *Parser) parseType() (ast.Type, error) {
 		if p.check(token.TokenAmpersand) {
 			return 0, p.errorf("double-reference types (&&) are not allowed")
 		}
-		// Only struct types can be referenced
+		// Check for primitive type keywords first
+		tok := p.current()
+		switch tok.Kind {
+		case token.TokenIntKw:
+			p.advance()
+			return ast.RefTypeOf(ast.TypeInt), nil
+		case token.TokenLong:
+			p.advance()
+			return ast.RefTypeOf(ast.TypeLong), nil
+		case token.TokenDouble:
+			p.advance()
+			return ast.RefTypeOf(ast.TypeDouble), nil
+		case token.TokenBool:
+			p.advance()
+			return ast.RefTypeOf(ast.TypeBool), nil
+		case token.TokenCharKw:
+			p.advance()
+			return ast.RefTypeOf(ast.TypeChar), nil
+		}
+		// Struct types can be referenced
 		if !p.check(token.TokenIdent) {
-			return 0, p.errorf("reference types (&) are only allowed on struct types")
+			return 0, p.errorf("reference types (&) are only allowed on struct or primitive types")
 		}
 		name := p.current().Value
 		if !p.structNames[name] {
-			return 0, p.errorf("reference types (&) are only allowed on struct types, got '%s'", name)
+			return 0, p.errorf("reference types (&) are only allowed on struct or primitive types, got '%s'", name)
 		}
 		p.advance()
 		t, ok := ast.LookupStructType(name)

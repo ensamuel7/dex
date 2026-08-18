@@ -294,6 +294,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if c.isConst(s.Name) {
 			return c.errAt(s.Pos, "cannot modify const variable '%s'", s.Name)
 		}
+		// Unwrap primitive ref for numeric check
+		if ast.IsRefType(varType) && ast.IsValueType(ast.RefInnerType(varType)) {
+			varType = ast.RefInnerType(varType)
+		}
 		if !isNumericType(varType) {
 			return c.errAt(s.Pos, "'++' requires numeric variable, got %s", typeName(varType))
 		}
@@ -307,6 +311,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if c.isConst(s.Name) {
 			return c.errAt(s.Pos, "cannot modify const variable '%s'", s.Name)
 		}
+		// Unwrap primitive ref for numeric check
+		if ast.IsRefType(varType) && ast.IsValueType(ast.RefInnerType(varType)) {
+			varType = ast.RefInnerType(varType)
+		}
 		if !isNumericType(varType) {
 			return c.errAt(s.Pos, "'--' requires numeric variable, got %s", typeName(varType))
 		}
@@ -319,6 +327,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		}
 		if c.isConst(s.Name) {
 			return c.errAt(s.Pos, "cannot modify const variable '%s'", s.Name)
+		}
+		// Unwrap primitive ref for numeric check
+		if ast.IsRefType(varType) && ast.IsValueType(ast.RefInnerType(varType)) {
+			varType = ast.RefInnerType(varType)
 		}
 		if !isNumericType(varType) {
 			return c.errAt(s.Pos, "compound assignment requires numeric variable, got %s", typeName(varType))
@@ -369,8 +381,13 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if err != nil {
 			return err
 		}
-		if exprType != varType && !canAssign(varType, exprType, s.Value) {
-			return c.errAt(s.Pos, "type mismatch in assignment: expected %s, got %s", typeName(varType), typeName(exprType))
+		// For primitive ref targets, unwrap for type comparison (allow int -> &int assignment)
+		cmpType := varType
+		if ast.IsRefType(varType) && ast.IsValueType(ast.RefInnerType(varType)) {
+			cmpType = ast.RefInnerType(varType)
+		}
+		if exprType != cmpType && !canAssign(cmpType, exprType, s.Value) {
+			return c.errAt(s.Pos, "type mismatch in assignment: expected %s, got %s", typeName(cmpType), typeName(exprType))
 		}
 		return nil
 

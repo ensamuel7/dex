@@ -286,14 +286,6 @@ func (g *Generator) nextTemp() string {
 	return name
 }
 
-// flushPendingReleases emits dex_release calls for all pending temporary variables.
-func (g *Generator) flushPendingReleases(out *strings.Builder, prefix string) {
-	for _, name := range g.pendingReleases {
-		out.WriteString(fmt.Sprintf("%sdex_release(%s);\n", prefix, name))
-	}
-	g.pendingReleases = nil
-}
-
 // CompilerFlags returns extra flags needed for the C compiler based on features used.
 // Must be called after Generate().
 func (g *Generator) CompilerFlags() []string {

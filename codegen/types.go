@@ -78,6 +78,18 @@ func (g *Generator) cType(t ast.Type) string {
 		}
 		if ast.IsRefType(t) {
 			inner := ast.RefInnerType(t)
+			switch inner {
+			case ast.TypeInt:
+				return "int*"
+			case ast.TypeLong:
+				return "long*"
+			case ast.TypeDouble:
+				return "double*"
+			case ast.TypeBool:
+				return "_Bool*"
+			case ast.TypeChar:
+				return "unsigned char*"
+			}
 			if ast.IsStructType(inner) {
 				return "Dex_" + ast.StructName(inner) + "*"
 			}
@@ -452,7 +464,7 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			return ast.FuncTypeReturn(t)
 		}
 	case *ast.BinaryExpr:
-		if e.Op == ast.BinAdd && g.isStringExpr(e.Left) {
+		if e.Op == ast.BinAdd && (g.isStringExpr(e.Left) || g.isStringExpr(e.Right)) {
 			return ast.TypeString
 		}
 		// Comparison and logical operators return bool

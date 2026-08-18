@@ -628,27 +628,6 @@ func makeDiagnosticForFileWithSource(errMsg, currentFile, sourceText string) cro
 	}
 }
 
-func makeDiagnosticForFile(errMsg, currentFile string) Diagnostic {
-	result := makeDiagnosticForFileWithSource(errMsg, currentFile, "")
-	if result.file != "" {
-		// Cross-file error without source routing falls back to line 0
-		return Diagnostic{
-			Range: Range{
-				Start: Position{Line: 0, Character: 0},
-				End:   Position{Line: 0, Character: 1},
-			},
-			Severity: 1,
-			Source:   "dex",
-			Message:  fmt.Sprintf("%s:%d:%d: %s", result.file, result.line1, result.col1, result.message),
-		}
-	}
-	return result.diag
-}
-
-func makeDiagnostic(errMsg string) Diagnostic {
-	return makeDiagnosticForFile(errMsg, "")
-}
-
 func makeDiagnosticWithSource(errMsg, sourceText string) Diagnostic {
 	result := makeDiagnosticForFileWithSource(errMsg, "", sourceText)
 	return result.diag

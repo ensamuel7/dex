@@ -1,0 +1,32 @@
+import "fmt"
+
+struct User {
+    name: string
+    age: int
+}
+
+fn main(): void {
+    let x: int = 42
+    let msg1: string = "value: " + x
+    assert(msg1 == "value: 42")
+
+    let pi: double = 3.14
+    let msg2: string = "pi: " + pi
+    fmt.println(msg2)
+
+    let flag: bool = true
+    let msg3: string = "flag: " + flag
+    assert(msg3 == "flag: true")
+
+    let u = User { name: "alice", age: 30 }
+    let msg4: string = "user: " + u
+    fmt.println(msg4)
+
+    let msg5: string = x + " items"
+    assert(msg5 == "42 items")
+
+    let msg6: string = "a" + 1 + "b"
+    assert(msg6 == "a1b")
+
+    fmt.println("All string coercion tests passed")
+}

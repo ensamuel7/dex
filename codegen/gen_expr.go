@@ -406,6 +406,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
 		newline := e.Name == "println"
 		argType := g.typeOfExpr(e.Args[0])
+		// Auto-unwrap ref types for printing (e.g., &User → User)
+		if ast.IsRefType(argType) {
+			argType = ast.RefInnerType(argType)
+		}
 		if ast.IsArrayType(argType) {
 			g.genPrintArray(out, e.Args[0], argType, newline)
 			return
@@ -2092,6 +2096,13 @@ func (g *Generator) genAppendToSB(out *strings.Builder, sbVar string, cExpr stri
 	case ast.TypeString:
 		out.WriteString(fmt.Sprintf("dex_sb_append_str(%s, %s); ", sbVar, cExpr))
 	default:
+		// Auto-unwrap ref types: dereference and delegate to inner type
+		if ast.IsRefType(typ) {
+			innerType := ast.RefInnerType(typ)
+			derefExpr := fmt.Sprintf("(*%s)", cExpr)
+			g.genAppendToSB(out, sbVar, derefExpr, innerType)
+			return
+		}
 		if ast.IsStructType(typ) {
 			def := ast.GetStructDef(typ)
 			if def == nil {
@@ -2371,9 +2382,17 @@ func (g *Generator) genPrintStruct(out *strings.Builder, expr ast.Expr, structTy
 	cType := g.cType(structType)
 
 	out.WriteString("do { ")
-	out.WriteString(fmt.Sprintf("%s %s = ", cType, structVar))
-	g.genExpr(out, expr)
-	out.WriteString("; ")
+	// If expr is a ref type (&Struct), dereference the pointer
+	exprType := g.typeOfExpr(expr)
+	if ast.IsRefType(exprType) {
+		out.WriteString(fmt.Sprintf("%s %s = *(", cType, structVar))
+		g.genExpr(out, expr)
+		out.WriteString("); ")
+	} else {
+		out.WriteString(fmt.Sprintf("%s %s = ", cType, structVar))
+		g.genExpr(out, expr)
+		out.WriteString("; ")
+	}
 
 	out.WriteString(fmt.Sprintf("printf(\"%s{\"); ", def.Name))
 	for i, f := range def.Fields {

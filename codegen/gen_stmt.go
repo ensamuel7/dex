@@ -709,16 +709,35 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		}
 
 	case *ast.FieldAssignStmt:
-		out.WriteString(prefix)
-		g.genExpr(out, s.Object)
 		objType := g.typeOfExpr(s.Object)
-		if ast.IsRefType(objType) {
-			out.WriteString(fmt.Sprintf("->%s = ", s.Field))
+		fieldType := g.typeOfExpr(s.Value)
+		// For ref-type objects (&Struct), retain/release heap-typed fields
+		// to keep proper reference counts when the struct outlives the function scope
+		if ast.IsRefType(objType) && ast.IsHeapType(fieldType) {
+			// Evaluate value once into a temp to avoid double-evaluation of side effects
+			tmpVal := g.nextTemp()
+			out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(fieldType), tmpVal))
+			g.genExpr(out, s.Value)
+			out.WriteString(";\n")
+			// Retain new value, release old, then assign
+			out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, tmpVal))
+			out.WriteString(fmt.Sprintf("%sdex_release(", prefix))
+			g.genExpr(out, s.Object)
+			out.WriteString(fmt.Sprintf("->%s);\n", s.Field))
+			out.WriteString(prefix)
+			g.genExpr(out, s.Object)
+			out.WriteString(fmt.Sprintf("->%s = %s;\n", s.Field, tmpVal))
 		} else {
-			out.WriteString(fmt.Sprintf(".%s = ", s.Field))
+			out.WriteString(prefix)
+			g.genExpr(out, s.Object)
+			if ast.IsRefType(objType) {
+				out.WriteString(fmt.Sprintf("->%s = ", s.Field))
+			} else {
+				out.WriteString(fmt.Sprintf(".%s = ", s.Field))
+			}
+			g.genExpr(out, s.Value)
+			out.WriteString(";\n")
 		}
-		g.genExpr(out, s.Value)
-		out.WriteString(";\n")
 		// Emit cycle check if debug(cycles) is enabled and field is heap-typed
 		if g.usesDebugCycles {
 			fieldType := g.typeOfExpr(s.Value)

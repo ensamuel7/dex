@@ -497,9 +497,14 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if err != nil {
 					return 0, err
 				}
-				if argType != ast.TypeInt && argType != ast.TypeLong && argType != ast.TypeDouble &&
-					argType != ast.TypeString && argType != ast.TypeBool && argType != ast.TypeChar &&
-					!ast.IsEnumType(argType) && !ast.IsArrayType(argType) && !ast.IsStructType(argType) {
+				// Auto-unwrap ref types for printing (e.g., &User -> User)
+				printType := argType
+				if ast.IsRefType(printType) {
+					printType = ast.RefInnerType(printType)
+				}
+				if printType != ast.TypeInt && printType != ast.TypeLong && printType != ast.TypeDouble &&
+					printType != ast.TypeString && printType != ast.TypeBool && printType != ast.TypeChar &&
+					!ast.IsEnumType(printType) && !ast.IsArrayType(printType) && !ast.IsStructType(printType) {
 					return 0, c.errAt(e.Pos, "fmt.%s() argument must be a primitive type, got %s", e.Name, typeName(argType))
 				}
 				return ast.TypeVoid, nil
@@ -1650,6 +1655,9 @@ func isStringifiable(t ast.Type) bool {
 	switch t {
 	case ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeBool, ast.TypeChar:
 		return true
+	}
+	if ast.IsRefType(t) {
+		return isStringifiable(ast.RefInnerType(t))
 	}
 	return ast.IsStructType(t) || ast.IsEnumType(t) || ast.IsArrayType(t)
 }

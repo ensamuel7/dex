@@ -468,6 +468,9 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if !ok {
 					return 0, c.errAt(e.Pos, "undefined function '%s' in module '%s'", e.Name, e.Module)
 				}
+				if sig.IsPrivate {
+					return 0, c.errAt(e.Pos, "function '%s' in module '%s' is private", e.Name, e.Module)
+				}
 				if len(e.Args) != len(sig.Params) {
 					return 0, c.errAt(e.Pos, "%s.%s() takes exactly %d argument(s), got %d", e.Module, e.Name, len(sig.Params), len(e.Args))
 				}

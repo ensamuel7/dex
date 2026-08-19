@@ -412,11 +412,11 @@ let words = ["a", "b"]   // inferred as string[]</code></pre>
 name = "DexLang"</code></pre>
 
 <h3>Compound Assignment &amp; Increment</h3>
+<p>These operators work on numeric variables (<code>int</code>, <code>long</code>, <code>double</code>).</p>
 <pre><code>x += 5    // equivalent to x = x + 5
 x -= 2    // equivalent to x = x - 2
 x++       // equivalent to x = x + 1
 x--       // equivalent to x = x - 1</code></pre>
-<p>These operators work on numeric variables (<code>int</code>, <code>long</code>, <code>double</code>).</p>
 
 <h3>String Escape Sequences</h3>
 <table>
@@ -517,13 +517,12 @@ import "json"</code></pre>
 assert(x &gt; 0)</code></pre>
 
 <h3>Testing</h3>
-<p>Test files use the <code>*_test.dx</code> naming convention. Use <code>assert()</code> to validate behavior.</p>
+<p>Test files use the <code>*_test.dx</code> naming convention. Use <code>assert()</code> to validate behavior. Run with <code>dex test</code> (discovers all <code>*_test.dx</code> files) or <code>dex test myfile_test.dx</code>.</p>
 <pre><code>// math_test.dx
 fn main(): void {
     assert(1 + 1 == 2)
     assert(10 % 3 == 1)
 }</code></pre>
-<p>Run with <code>dex test</code> (discovers all <code>*_test.dx</code> files) or <code>dex test myfile_test.dx</code>.</p>
 </section>
 
 <!-- Functions & Control Flow -->
@@ -543,14 +542,15 @@ function main(): void {
 <h3>Control Flow</h3>
 
 <h4>if / else</h4>
+<p><code>else if</code> chains are supported. The condition must be <code>bool</code> and enclosed in parentheses.</p>
 <pre><code>if (x &gt; 0) {
   fmt.println(x)
 } else {
   fmt.println(0)
 }</code></pre>
-<p><code>else if</code> chains are supported. The condition must be <code>bool</code> and enclosed in parentheses.</p>
 
 <h4>while</h4>
+<p>Loop while a condition is true:</p>
 <pre><code>let i: int = 0
 while (i &lt; 10) {
   fmt.println(i)
@@ -558,7 +558,7 @@ while (i &lt; 10) {
 }</code></pre>
 
 <h4>for</h4>
-<p>C-style for loop with init, condition, and post statements:</p>
+<p>C-style for loop with init, condition, and post statements. The post statement supports <code>++</code>, <code>--</code>, <code>+=</code>, <code>-=</code>, or <code>=</code>.</p>
 <pre><code>for (let i: int = 0; i &lt; 10; i++) {
   fmt.println(i)
 }
@@ -567,10 +567,9 @@ while (i &lt; 10) {
 for (let i = 0; i &lt; 100; i += 2) {
   // iterate by 2
 }</code></pre>
-<p>The post statement supports <code>++</code>, <code>--</code>, <code>+=</code>, <code>-=</code>, or <code>=</code>.</p>
 
 <h4>foreach</h4>
-<p>Iterate over array elements:</p>
+<p>Iterate over array elements. The iterable must be an array type. The index variable (if used) is always <code>int</code>. The value variable takes the element type of the array.</p>
 <pre><code>let nums: int[] = [10, 20, 30]
 
 // Value only
@@ -583,10 +582,9 @@ foreach (nums as i, n) {
   fmt.println(i)  // 0, 1, 2
   fmt.println(n)  // 10, 20, 30
 }</code></pre>
-<p>The iterable must be an array type. The index variable (if used) is always <code>int</code>. The value variable takes the element type of the array.</p>
 
 <h4>break and continue</h4>
-<p>Exit a loop early with <code>break</code>, or skip to the next iteration with <code>continue</code>:</p>
+<p>Exit a loop early with <code>break</code>, or skip to the next iteration with <code>continue</code>. Both work inside <code>while</code>, <code>for</code>, and <code>foreach</code> loops. Using them outside a loop is a compile error.</p>
 <pre><code>while (true) {
   if (done) { break }
 }
@@ -595,7 +593,6 @@ for (let i = 0; i &lt; 10; i++) {
   if (i % 2 == 0) { continue }
   fmt.println(i)  // prints odd numbers only
 }</code></pre>
-<p><code>break</code> and <code>continue</code> work inside <code>while</code>, <code>for</code>, and <code>foreach</code> loops. Using them outside a loop is a compile error.</p>
 
 <h4>switch</h4>
 <p>Multi-way branching on a value. Supports <code>int</code>, <code>string</code>, <code>char</code>, <code>long</code>, <code>double</code>, and <code>bool</code> tag types. Multiple values per case are separated by commas. There is no fallthrough — only the matched case executes.</p>
@@ -681,11 +678,10 @@ fn greet(name: string?): void {
 <!-- Constants -->
 <section id="constants" class="page-section">
 <h2>Constants</h2>
-<p>Declare immutable variables with <code>const</code>. Constants cannot be reassigned, incremented, decremented, or modified with compound assignment after initialization.</p>
+<p>Declare immutable variables with <code>const</code>. Constants cannot be reassigned, incremented, decremented, or modified with compound assignment after initialization. <code>const</code> supports the same syntax as <code>let</code> — both explicit type annotations and type inference work.</p>
 <pre><code>const pi = 3.14
 const max_size: int = 100
 const name: string = "DexLang"</code></pre>
-<p><code>const</code> supports the same syntax as <code>let</code> — both explicit type annotations and type inference work.</p>
 
 <h3>Immutability</h3>
 <p>Attempting to modify a const variable is a compile error:</p>
@@ -740,6 +736,7 @@ private struct InternalConfig {
 <h2>Arrays</h2>
 
 <h3>Array Basics</h3>
+<p>Arrays are declared with a typed bracket syntax. Elements are accessed and assigned by index, and built-in methods handle common operations:</p>
 <pre><code>let nums: int[] = [10, 20, 30]
 let first: int = nums[0]       // indexing
 nums[1] = 25                    // index assignment
@@ -747,6 +744,7 @@ nums.push(40)                   // append
 let length: int = nums.len()   // length</code></pre>
 
 <h3>Array Methods</h3>
+<p>Every array has the following built-in methods:</p>
 <table>
 <tr><th>Method</th><th>Description</th><th>Returns</th></tr>
 <tr><td><code>.push(value)</code></td><td>Append an element to the array</td><td><code>void</code></td></tr>
@@ -1018,7 +1016,7 @@ let u = User{name: "john", age: 25}
 tryUpdate(u)
 fmt.println(u.name)   // still "john"</code></pre>
 
-<p>Use <code>&amp;StructName</code> in the parameter type to pass by reference. Mutations through the reference affect the original:</p>
+<p>Use <code>&amp;StructName</code> in the parameter type to pass by reference. Mutations through the reference affect the original. The caller does not need to write <code>&amp;</code> at the call site — the compiler inserts it automatically.</p>
 <pre><code>fn update(user: &amp;User): void {
     user.name = "changed"   // modifies the original
 }
@@ -1026,7 +1024,6 @@ fmt.println(u.name)   // still "john"</code></pre>
 let u = User{name: "john", age: 25}
 update(u)
 fmt.println(u.name)   // "changed"</code></pre>
-<p>The caller does not need to write <code>&amp;</code> at the call site — the compiler inserts it automatically.</p>
 
 <h4>Primitive references</h4>
 <p>Primitives (<code>int</code>, <code>long</code>, <code>double</code>, <code>bool</code>, <code>char</code>) also support the <code>&amp;</code> prefix for pass-by-reference:</p>
@@ -1165,22 +1162,20 @@ db.close(conn)</code></pre>
 <p>Advance the cursor to the next row. Returns <code>true</code> if a row is available, <code>false</code> when finished.</p>
 
 <div class="func-card"><div class="sig"><span class="module">db</span>.col(<span class="ptype">rows: int, index: int</span>) <span class="ret">-&gt; int|string|double|bool</span></div></div>
-<p>Read a column value from the current row. The return type is determined by the variable's type annotation — the compiler dispatches to the correct column reader at compile time:</p>
+<p>Read a column value from the current row. The return type is determined by the variable's type annotation — the compiler dispatches to the correct column reader at compile time. An explicit type annotation is required — <code>let x = db.col(rows, 0)</code> is a compile error.</p>
 <pre><code>let id: int = db.col(rows, 0)        // reads as int
 let name: string = db.col(rows, 1)   // reads as string
 let score: double = db.col(rows, 2)  // reads as double
 let active: bool = db.col(rows, 3)   // reads as bool</code></pre>
-<p>An explicit type annotation is required — <code>let x = db.col(rows, 0)</code> is a compile error.</p>
 
 <h4>Mixed or unknown column types</h4>
-<p>If you don't know the column type ahead of time (e.g. legacy data with mixed types), use <code>string</code> as a safe fallback. The runtime will convert any column value to its string representation:</p>
+<p>If you don't know the column type ahead of time (e.g. legacy data with mixed types), use <code>string</code> as a safe fallback. The runtime will convert any column value to its string representation. Reading a string column as <code>int</code> returns <code>0</code>, not an error — use <code>string</code> + explicit conversion when column types are uncertain.</p>
 <pre><code>// Read any column as string — always works
 let val: string = db.col(rows, 0)
 
 // Then convert as needed
 let n: int = str.toInt(val)
 let d: double = str.toDouble(val)</code></pre>
-<p>Reading a string column as <code>int</code> returns <code>0</code>, not an error. Use <code>string</code> + explicit conversion when column types are uncertain.</p>
 
 <div class="func-card"><div class="sig"><span class="module">db</span>.free(<span class="ptype">rows: int</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Free a result set and release its slot. Always call this after you finish iterating.</p>
@@ -1245,22 +1240,19 @@ let val = receive(task)  // 42</code></pre>
 <pre><code>spawn { doBackgroundWork() }</code></pre>
 
 <h3>send</h3>
-<p>Send a value from inside a spawn block, or to a shared channel.</p>
+<p>Send a value from inside a spawn block, or to a shared channel. Inside a spawn block, <code>send(value)</code> delivers the value to whoever calls <code>receive(task)</code>. With two arguments, <code>send(channel, value)</code> pushes a value into a shared channel for many-to-one communication.</p>
 <pre><code>send(value)            // send to the task's implicit handle
 send(channel, value)   // send to a shared channel</code></pre>
-<p>Inside a spawn block, <code>send(value)</code> delivers the value to whoever calls <code>receive(task)</code>. With two arguments, <code>send(channel, value)</code> pushes a value into a shared channel for many-to-one communication.</p>
 
 <h3>receive</h3>
-<p>Block until a value is available from a task handle or channel, then return it.</p>
+<p>Block until a value is available from a task handle or channel, then return it. The return type matches the type that was sent. For task handles, this is determined by the <code>send(value)</code> call or the spawned function's return type.</p>
 <pre><code>let val: int = receive(task)      // receive from a task handle
 let val: int = receive(channel)   // receive from a channel</code></pre>
-<p>The return type matches the type that was sent. For task handles, this is determined by the <code>send(value)</code> call or the spawned function's return type.</p>
 
 <h3>channel</h3>
-<p>Create a shared channel for many-to-one communication. Takes a type argument specifying the element type.</p>
-<pre><code>let ch = channel(int)</code></pre>
-<p>Channels are typed — a <code>channel(int)</code> can only carry <code>int</code> values. Use explicit type annotations with <code>chan</code>:</p>
-<pre><code>let ch: chan int = channel(int)</code></pre>
+<p>Create a shared channel for many-to-one communication. Takes a type argument specifying the element type. Channels are typed — a <code>channel(int)</code> can only carry <code>int</code> values.</p>
+<pre><code>let ch = channel(int)
+let ch: chan int = channel(int)  // explicit type annotation</code></pre>
 
 <h3>close</h3>
 <p>Close a channel. Subsequent sends are ignored and blocked receivers get zero values.</p>
@@ -1269,12 +1261,14 @@ let val: int = receive(channel)   // receive from a channel</code></pre>
 <h3>Patterns</h3>
 
 <h4>1-to-1 (task sends result to parent)</h4>
+<p>A single spawned task sends its result back to the parent via <code>send</code>/<code>receive</code>:</p>
 <pre><code>let task = spawn {
     send(42)
 }
 assert(receive(task) == 42)</code></pre>
 
 <h4>Many-to-one (fan-in via shared channel)</h4>
+<p>Multiple tasks push values into a shared channel, and the parent collects them:</p>
 <pre><code>let ch = channel(int)
 for (let i = 0; i &lt; 10; i++) {
     spawn { send(ch, i * 10) }
@@ -1360,13 +1354,12 @@ fn main(): void {
 
 <h3>print</h3>
 <div class="func-card"><div class="sig"><span class="module">fmt</span>.print(<span class="ptype">value: int|long|double|string|bool</span>) <span class="ret">-&gt; void</span></div></div>
-<p>Print a single value followed by a newline. Accepts any primitive type — the compiler selects the correct format string at compile time.</p>
+<p>Print a single value followed by a newline. Accepts any primitive type — the compiler selects the correct format string at compile time. Each call prints exactly one value. To print multiple values, use multiple calls or build a string with concatenation.</p>
 <pre><code>fmt.println(42)            // prints: 42
 fmt.println("hello")       // prints: hello
 fmt.println(3.14)          // prints: 3.140000
 fmt.println(true)          // prints: true
 fmt.println(1000000)       // prints: 1000000</code></pre>
-<p>Each call prints exactly one value. To print multiple values, use multiple calls or build a string with concatenation.</p>
 </section>
 
 <!-- json module -->
@@ -1382,7 +1375,7 @@ fmt.println(1000000)       // prints: 1000000</code></pre>
 
 <h3>set</h3>
 <div class="func-card"><div class="sig"><span class="module">json</span>.set(<span class="ptype">obj: string, key: string, value: string|int|bool|long|double</span>) <span class="ret">-&gt; string</span></div></div>
-<p>Set a key-value pair on a JSON object. Returns a new string with the field added. The value type is detected at compile time — no type suffix needed.</p>
+<p>Set a key-value pair on a JSON object. Returns a new string with the field added. Each call inserts the new field before the closing <code>}</code>. The original string is not modified — you must reassign the result. The value type is detected at compile time — no type suffix needed.</p>
 <pre><code>let obj: string = json.new()
 obj = json.set(obj, "name", "Dex")       // string value
 obj = json.set(obj, "version", 1)         // int value
@@ -1390,7 +1383,6 @@ obj = json.set(obj, "stable", true)       // bool value
 obj = json.set(obj, "bignum", 1000000)    // long value
 obj = json.set(obj, "pi", 3.14)           // double value
 // {"name":"Dex","version":1,"stable":true,"bignum":1000000,"pi":3.14}</code></pre>
-<p>Each call inserts the new field before the closing <code>}</code>. The original string is not modified — you must reassign the result.</p>
 
 <h3>setArray</h3>
 <div class="func-card"><div class="sig"><span class="module">json</span>.setArray(<span class="ptype">obj: string, key: string, arr: T[]</span>) <span class="ret">-&gt; string</span></div></div>
@@ -1425,13 +1417,12 @@ let jsonStr: string = json.stringify(p)
 
 <h3>objectify</h3>
 <div class="func-card"><div class="sig"><span class="module">json</span>.objectify(<span class="ptype">json: string</span>) <span class="ret">-&gt; T (struct)</span></div></div>
-<p>Convert a JSON string into a typed struct. The target type is determined by the variable's type annotation:</p>
+<p>Convert a JSON string into a typed struct. The target type is determined by the variable's type annotation. An explicit type annotation is required — <code>let x = json.objectify(str)</code> is a compile error.</p>
 <pre><code>let jsonStr: string = "{\"name\": \"Alice\", \"age\": 30, \"active\": true}"
 let p: Person = json.objectify(jsonStr)
 fmt.println(p.name)    // "Alice"
 fmt.println(p.age)     // 30
 fmt.println(p.active)  // true</code></pre>
-<p>An explicit type annotation is required — <code>let x = json.objectify(str)</code> is a compile error.</p>
 
 <h3>setObj</h3>
 <div class="func-card"><div class="sig"><span class="module">json</span>.setObj(<span class="ptype">obj: string, key: string, value: string</span>) <span class="ret">-&gt; string</span></div></div>
@@ -1652,10 +1643,9 @@ if (!ok) {
 
 <h3>upload</h3>
 <div class="func-card"><div class="sig"><span class="module">file</span>.upload(<span class="ptype">path: string, url: string</span>) <span class="ret">-&gt; string</span></div></div>
-<p>Upload a file to a URL via HTTP multipart form POST. The file is sent as a form field named <code>file</code>. Returns the server's response body as a string, or an empty string on failure.</p>
+<p>Upload a file to a URL via HTTP multipart form POST. The file is sent as a form field named <code>file</code>. Returns the server's response body as a string, or an empty string on failure. Requires <code>libcurl</code> at compile time (<code>brew install curl</code> on macOS).</p>
 <pre><code>let response: string = file.upload("photo.jpg", "https://api.example.com/upload")
 fmt.println(response)</code></pre>
-<p>Requires <code>libcurl</code> at compile time (<code>brew install curl</code> on macOS).</p>
 
 <h3>Full example</h3>
 <pre><code>import "file"
@@ -1918,7 +1908,7 @@ fn main(): void {
 }</code></pre>
 
 <h3>Client Example</h3>
-<p>To connect to an existing WebSocket server: call <code>ws.connect(url)</code> to get a connection handle, then use <code>ws.send</code>/<code>ws.receive</code> to communicate.</p>
+<p>To connect to an existing WebSocket server: call <code>ws.connect(url)</code> to get a connection handle, then use <code>ws.send</code>/<code>ws.receive</code> to communicate. The <code>connect</code> function supports both <code>ws://</code> (plain) and <code>wss://</code> (TLS via OpenSSL).</p>
 <pre><code>import "ws"
 import "fmt"
 
@@ -1936,7 +1926,6 @@ fn main(): void {
     // Clean up
     ws.close(conn)
 }</code></pre>
-<p>The <code>connect</code> function supports both <code>ws://</code> (plain) and <code>wss://</code> (TLS via OpenSSL).</p>
 </section>
 
 <!-- io module -->

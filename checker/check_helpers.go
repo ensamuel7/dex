@@ -40,7 +40,7 @@ func isValidFieldType(t ast.Type) bool {
 		return ast.IsStructType(inner) || ast.IsValueType(inner)
 	}
 	switch t {
-	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar:
+	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar, ast.TypeMutex:
 		return true
 	default:
 		return ast.IsStructType(t) || ast.IsEnumType(t) || ast.IsMapType(t)
@@ -160,8 +160,127 @@ func canAssign(targetType, exprType ast.Type, expr ast.Expr) bool {
 	if ast.IsRefType(targetType) && exprType == ast.RefInnerType(targetType) {
 		return true
 	}
+	// struct -> interface (structural typing)
+	if ast.IsInterfaceType(targetType) && ast.IsStructType(exprType) {
+		return structSatisfiesInterface(exprType, targetType)
+	}
 	// float literal -> double (already types as double, but keep for clarity)
 	return false
+}
+
+// structSatisfiesInterface checks if a struct type has all methods required by an interface.
+func structSatisfiesInterface(structType, ifaceType ast.Type) bool {
+	ifaceDef := ast.GetInterfaceDef(ifaceType)
+	if ifaceDef == nil {
+		return false
+	}
+	structDef := ast.GetStructDef(structType)
+	if structDef == nil {
+		return false
+	}
+	// Need access to the checker's structMethods map, but this is a standalone function.
+	// For now, check against the global method registry.
+	// This will be called from canAssign which doesn't have checker context.
+	// We need a different approach — store method info in the AST.
+	// For the initial implementation, we'll check methods on the struct definition directly.
+	for _, im := range ifaceDef.Methods {
+		found := false
+		for _, sm := range structDef.Methods {
+			if sm.Name == im.Name {
+				// Check param types match
+				if len(sm.Params) != len(im.Params) {
+					return false
+				}
+				for i, pt := range im.Params {
+					if sm.Params[i].Type != pt {
+						return false
+					}
+				}
+				if sm.ReturnType != im.ReturnType {
+					return false
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveNamedArgs reorders named arguments to match parameter order.
+// After this, ArgNames is cleared and Args is in positional order.
+func (c *Checker) resolveNamedArgs(e *ast.CallExpr, sig funcSig) error {
+	if len(sig.ParamNames) == 0 {
+		return c.errAt(e.Pos, "named arguments used but function has no parameter names")
+	}
+
+	newArgs := make([]ast.Expr, len(sig.Params))
+	used := make([]bool, len(sig.Params))
+
+	// First: place positional args (those with empty name)
+	posIdx := 0
+	for i, name := range e.ArgNames {
+		if name == "" {
+			if posIdx >= len(sig.Params) {
+				return c.errAt(e.Pos, "too many positional arguments")
+			}
+			newArgs[posIdx] = e.Args[i]
+			used[posIdx] = true
+			posIdx++
+		}
+	}
+
+	// Second: place named args
+	for i, name := range e.ArgNames {
+		if name == "" {
+			continue
+		}
+		found := false
+		for j, paramName := range sig.ParamNames {
+			if paramName == name {
+				if used[j] {
+					return c.errAt(e.Pos, "duplicate argument for parameter '%s'", name)
+				}
+				newArgs[j] = e.Args[i]
+				used[j] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return c.errAt(e.Pos, "unknown parameter name '%s'", name)
+		}
+	}
+
+	// Fill in defaults for unused params
+	for i, isUsed := range used {
+		if !isUsed {
+			if sig.DefaultValues[i] != nil {
+				newArgs[i] = sig.DefaultValues[i]
+			} else {
+				return c.errAt(e.Pos, "missing argument for required parameter '%s'", sig.ParamNames[i])
+			}
+		}
+	}
+
+	e.Args = newArgs
+	e.ArgNames = nil
+	return nil
+}
+
+// fillDefaultArgs appends default values for missing trailing arguments.
+func (c *Checker) fillDefaultArgs(e *ast.CallExpr, sig funcSig) error {
+	for i := len(e.Args); i < len(sig.Params); i++ {
+		if i < len(sig.DefaultValues) && sig.DefaultValues[i] != nil {
+			e.Args = append(e.Args, sig.DefaultValues[i])
+		} else {
+			return c.errAt(e.Pos, "missing argument for required parameter '%s'", sig.ParamNames[i])
+		}
+	}
+	return nil
 }
 
 func typeName(t ast.Type) string {
@@ -196,6 +315,8 @@ func typeName(t ast.Type) string {
 		return "char[]"
 	case ast.TypeStringBuilder:
 		return "StringBuilder"
+	case ast.TypeMutex:
+		return "mutex"
 	default:
 		if ast.IsRefType(t) {
 			return "&" + typeName(ast.RefInnerType(t))
@@ -240,6 +361,9 @@ func typeName(t ast.Type) string {
 		}
 		if ast.IsMapType(t) {
 			return "map[" + typeName(ast.MapKeyType(t)) + ", " + typeName(ast.MapValueType(t)) + "]"
+		}
+		if ast.IsInterfaceType(t) {
+			return ast.InterfaceName(t)
 		}
 		return "unknown"
 	}

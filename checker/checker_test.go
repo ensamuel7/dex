@@ -418,7 +418,7 @@ func TestFunctionCallWrongArgCount(t *testing.T) {
 	mustFail(t, `
 		fn add(a: int, b: int): int { return a + b }
 		fn main(): int { return add(1) }
-	`, "expects 2 arguments, got 1")
+	`, "missing argument for required parameter")
 }
 
 func TestFunctionCallWrongArgType(t *testing.T) {

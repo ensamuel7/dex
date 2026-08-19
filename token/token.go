@@ -86,6 +86,14 @@ const (
 	TokenDefault
 	TokenEnum
 	TokenMap
+	TokenInterpStringStart // text before first ${ in interpolated string
+	TokenInterpStringMid   // text between } and next ${ in interpolated string
+	TokenInterpStringEnd   // text after last } to closing " in interpolated string
+	TokenMatch
+	TokenFatArrow // =>
+	TokenInterface
+	TokenDefer
+	TokenMutex
 	TokenEOF
 )
 
@@ -261,6 +269,22 @@ func (k TokenKind) String() string {
 		return "enum"
 	case TokenMap:
 		return "map"
+	case TokenInterpStringStart:
+		return "interp string start"
+	case TokenInterpStringMid:
+		return "interp string mid"
+	case TokenInterpStringEnd:
+		return "interp string end"
+	case TokenMatch:
+		return "match"
+	case TokenFatArrow:
+		return "=>"
+	case TokenInterface:
+		return "interface"
+	case TokenDefer:
+		return "defer"
+	case TokenMutex:
+		return "mutex"
 	case TokenEOF:
 		return "end of file"
 	default:
@@ -307,5 +331,9 @@ var Keywords = map[string]TokenKind{
 	"case":     TokenCase,
 	"default":  TokenDefault,
 	"enum":     TokenEnum,
-	"map":      TokenMap,
+	"map":       TokenMap,
+	"match":     TokenMatch,
+	"interface": TokenInterface,
+	"defer":     TokenDefer,
+	"mutex":     TokenMutex,
 }

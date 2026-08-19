@@ -326,6 +326,80 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		}
 		return e.EnumType, nil
 
+	case *ast.StringInterpExpr:
+		// Each non-string part must be stringifiable
+		for _, part := range e.Parts {
+			if _, ok := part.(*ast.StringLit); ok {
+				continue
+			}
+			partType, err := c.checkExpr(part)
+			if err != nil {
+				return 0, err
+			}
+			if partType != ast.TypeString && !isStringifiable(partType) {
+				return 0, c.errAt(e.Pos, "interpolated expression must be stringifiable, got %s", typeName(partType))
+			}
+		}
+		return ast.TypeString, nil
+
+	case *ast.MatchExpr:
+		tagType, err := c.checkExpr(e.Tag)
+		if err != nil {
+			return 0, err
+		}
+		if len(e.Arms) == 0 {
+			return 0, c.errAt(e.Pos, "match expression must have at least one arm")
+		}
+		hasWildcard := false
+		var resultType ast.Type
+		for i, arm := range e.Arms {
+			if arm.IsWildcard {
+				hasWildcard = true
+			} else {
+				for _, pat := range arm.Patterns {
+					patType, err := c.checkExpr(pat)
+					if err != nil {
+						return 0, err
+					}
+					if !canAssign(tagType, patType, pat) && patType != tagType {
+						return 0, c.errAt(arm.Pos, "match pattern type %s does not match tag type %s", typeName(patType), typeName(tagType))
+					}
+				}
+			}
+			bodyType, err := c.checkExpr(arm.Body)
+			if err != nil {
+				return 0, err
+			}
+			if i == 0 {
+				resultType = bodyType
+			} else if bodyType != resultType {
+				return 0, c.errAt(arm.Pos, "match arm body type %s does not match first arm type %s", typeName(bodyType), typeName(resultType))
+			}
+		}
+		if !hasWildcard {
+			return 0, c.errAt(e.Pos, "match expression must have a wildcard '_' arm for exhaustiveness")
+		}
+		e.Type = resultType
+		return resultType, nil
+
+	case *ast.LambdaExpr:
+		// Push scope and define params
+		c.pushScope()
+		var paramTypes []ast.Type
+		for _, p := range e.Params {
+			c.define(p.Name, p.Type)
+			paramTypes = append(paramTypes, p.Type)
+		}
+		// Check body
+		for _, stmt := range e.Body {
+			if err := c.checkStmt(stmt, e.ReturnType); err != nil {
+				c.popScope()
+				return 0, err
+			}
+		}
+		c.popScope()
+		return ast.FuncTypeOf(paramTypes, e.ReturnType), nil
+
 	case *ast.MapLitExpr:
 		// Empty map literal — type must be inferred from context (LetStmt handles this)
 		return 0, c.errAt(e.Pos, "cannot infer type of empty map literal")
@@ -374,6 +448,24 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return retType, nil
 			}
 
+			// Check if module is a mutex variable (mutex method call)
+			if isVar && varType == ast.TypeMutex {
+				switch e.Name {
+				case "lock":
+					if len(e.Args) != 0 {
+						return 0, c.errAt(e.Pos, "mutex.lock() takes no arguments, got %d", len(e.Args))
+					}
+					return ast.TypeVoid, nil
+				case "unlock":
+					if len(e.Args) != 0 {
+						return 0, c.errAt(e.Pos, "mutex.unlock() takes no arguments, got %d", len(e.Args))
+					}
+					return ast.TypeVoid, nil
+				default:
+					return 0, c.errAt(e.Pos, "mutex has no method '%s'", e.Name)
+				}
+			}
+
 			// Check if module is a StringBuilder variable (StringBuilder method call)
 			if isVar && varType == ast.TypeStringBuilder {
 				retType, err := c.checkStringBuilderMethod(e.Module, e.Name, e.Args, e.Pos)
@@ -409,6 +501,23 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			// Unwrap ref type for method calls
 			if isVar && ast.IsRefType(varType) {
 				varType = ast.RefInnerType(varType)
+			}
+			// Mutex method call on dotted field (e.g. self.mu.lock())
+			if isVar && varType == ast.TypeMutex {
+				switch e.Name {
+				case "lock":
+					if len(e.Args) != 0 {
+						return 0, c.errAt(e.Pos, "mutex.lock() takes no arguments, got %d", len(e.Args))
+					}
+					return ast.TypeVoid, nil
+				case "unlock":
+					if len(e.Args) != 0 {
+						return 0, c.errAt(e.Pos, "mutex.unlock() takes no arguments, got %d", len(e.Args))
+					}
+					return ast.TypeVoid, nil
+				default:
+					return 0, c.errAt(e.Pos, "mutex has no method '%s'", e.Name)
+				}
 			}
 			// Struct method call: instance.method()
 			if isVar && ast.IsStructType(varType) {
@@ -1260,6 +1369,18 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		sig, ok := c.funcs[e.Name]
 		if !ok {
 			return 0, c.errAt(e.Pos, "undefined function '%s'", e.Name)
+		}
+		// Handle named arguments: reorder args to match parameter order
+		if len(e.ArgNames) > 0 {
+			if err := c.resolveNamedArgs(e, sig); err != nil {
+				return 0, err
+			}
+		}
+		// Handle default parameters: fill in missing args
+		if len(e.Args) < len(sig.Params) {
+			if err := c.fillDefaultArgs(e, sig); err != nil {
+				return 0, err
+			}
 		}
 		if len(e.Args) != len(sig.Params) {
 			return 0, c.errAt(e.Pos, "function '%s' expects %d arguments, got %d", e.Name, len(sig.Params), len(e.Args))

@@ -80,6 +80,11 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 		if l.pos+1 < len(l.source) {
 			two := string(l.source[l.pos : l.pos+2])
 			switch two {
+			case "=>":
+				tokens = append(tokens, token.Token{Kind: token.TokenFatArrow, Value: "=>", File: l.file, Line: startLine, Col: startCol})
+				l.advance()
+				l.advance()
+				continue
 			case "++":
 				tokens = append(tokens, token.Token{Kind: token.TokenPlusPlus, Value: "++", File: l.file, Line: startLine, Col: startCol})
 				l.advance()
@@ -232,36 +237,14 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 			continue
 		}
 
-		// String literals
+		// String literals (with interpolation support)
 		if ch == '"' {
 			l.advance() // consume opening quote
-			var str []rune
-			for l.pos < len(l.source) && l.source[l.pos] != '"' {
-				if l.source[l.pos] == '\\' && l.pos+1 < len(l.source) {
-					l.advance()
-					switch l.source[l.pos] {
-					case '"':
-						str = append(str, '"')
-					case '\\':
-						str = append(str, '\\')
-					case 'n':
-						str = append(str, '\n')
-					case 't':
-						str = append(str, '\t')
-					default:
-						return nil, fmt.Errorf("%s%d:%d: unknown escape sequence '\\%c'", l.errPrefix(), l.line, l.col, l.source[l.pos])
-					}
-					l.advance()
-				} else {
-					str = append(str, l.source[l.pos])
-					l.advance()
-				}
+			interpTokens, err := l.scanStringLiteral(startLine, startCol)
+			if err != nil {
+				return nil, err
 			}
-			if l.pos >= len(l.source) {
-				return nil, fmt.Errorf("%s%d:%d: unterminated string literal", l.errPrefix(), startLine, startCol)
-			}
-			l.advance() // consume closing quote
-			tokens = append(tokens, token.Token{Kind: token.TokenString, Value: string(str), File: l.file, Line: startLine, Col: startCol})
+			tokens = append(tokens, interpTokens...)
 			continue
 		}
 
@@ -399,6 +382,126 @@ func (l *Lexer) advance() {
 		}
 		l.pos++
 	}
+}
+
+// scanStringLiteral scans a string literal (opening quote already consumed).
+// If the string contains ${...} interpolations, it emits InterpStringStart/Mid/End tokens
+// with the interpolated expression tokens in between.
+// If no interpolation, it emits a plain TokenString.
+func (l *Lexer) scanStringLiteral(startLine, startCol int) ([]token.Token, error) {
+	var tokens []token.Token
+	var str []rune
+	hasInterp := false
+	isFirst := true
+
+	for l.pos < len(l.source) && l.source[l.pos] != '"' {
+		// Check for ${
+		if l.source[l.pos] == '$' && l.pos+1 < len(l.source) && l.source[l.pos+1] == '{' {
+			hasInterp = true
+			// Emit the text accumulated so far
+			if isFirst {
+				tokens = append(tokens, token.Token{Kind: token.TokenInterpStringStart, Value: string(str), File: l.file, Line: startLine, Col: startCol})
+				isFirst = false
+			} else {
+				tokens = append(tokens, token.Token{Kind: token.TokenInterpStringMid, Value: string(str), File: l.file, Line: startLine, Col: startCol})
+			}
+			str = nil
+			l.advance() // consume '$'
+			l.advance() // consume '{'
+
+			// Tokenize the expression inside ${...} tracking brace depth
+			braceDepth := 1
+			for l.pos < len(l.source) && braceDepth > 0 {
+				if l.source[l.pos] == '}' {
+					braceDepth--
+					if braceDepth == 0 {
+						l.advance() // consume closing '}'
+						break
+					}
+				}
+				if l.source[l.pos] == '{' {
+					braceDepth++
+				}
+				// We need to tokenize normally inside the interpolation.
+				// Save position and use a sub-lexer approach: collect the expression source and tokenize it.
+				// Actually, we can collect the expression characters and tokenize them separately.
+				// Let's collect the raw source first.
+				break // use the collect approach below
+			}
+
+			// Collect raw expression source between ${ and }
+			if braceDepth > 0 {
+				var exprSource []rune
+				for l.pos < len(l.source) && braceDepth > 0 {
+					ch := l.source[l.pos]
+					if ch == '{' {
+						braceDepth++
+					} else if ch == '}' {
+						braceDepth--
+						if braceDepth == 0 {
+							l.advance() // consume closing '}'
+							break
+						}
+					}
+					exprSource = append(exprSource, ch)
+					l.advance()
+				}
+				if braceDepth > 0 {
+					return nil, fmt.Errorf("%s%d:%d: unterminated string interpolation", l.errPrefix(), startLine, startCol)
+				}
+				// Tokenize the expression
+				subLexer := New(string(exprSource))
+				subLexer.file = l.file
+				exprTokens, err := subLexer.Tokenize()
+				if err != nil {
+					return nil, err
+				}
+				// Append all tokens except EOF
+				for _, t := range exprTokens {
+					if t.Kind != token.TokenEOF {
+						tokens = append(tokens, t)
+					}
+				}
+			}
+			continue
+		}
+
+		// Handle escape sequences
+		if l.source[l.pos] == '\\' && l.pos+1 < len(l.source) {
+			l.advance()
+			switch l.source[l.pos] {
+			case '"':
+				str = append(str, '"')
+			case '\\':
+				str = append(str, '\\')
+			case 'n':
+				str = append(str, '\n')
+			case 't':
+				str = append(str, '\t')
+			default:
+				return nil, fmt.Errorf("%s%d:%d: unknown escape sequence '\\%c'", l.errPrefix(), l.line, l.col, l.source[l.pos])
+			}
+			l.advance()
+		} else {
+			str = append(str, l.source[l.pos])
+			l.advance()
+		}
+	}
+
+	if l.pos >= len(l.source) {
+		return nil, fmt.Errorf("%s%d:%d: unterminated string literal", l.errPrefix(), startLine, startCol)
+	}
+	l.advance() // consume closing quote
+
+	if hasInterp {
+		// Emit final text segment
+		tokens = append(tokens, token.Token{Kind: token.TokenInterpStringEnd, Value: string(str), File: l.file, Line: startLine, Col: startCol})
+	} else {
+		// No interpolation: emit plain string token
+		tokens = append(tokens, token.Token{Kind: token.TokenString, Value: string(str), File: l.file, Line: startLine, Col: startCol})
+	}
+
+	return tokens, nil
 }
 
 func (l *Lexer) skipWhitespaceAndComments() {

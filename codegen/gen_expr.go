@@ -271,7 +271,33 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		out.WriteString(fmt.Sprintf("({ %s _recv_tmp; dex_chan_recv(", ctyp))
 		g.genExpr(out, e.Source)
 		out.WriteString(", &_recv_tmp); _recv_tmp; })")
+
+	case *ast.StringInterpExpr:
+		g.genStringInterpExpr(out, e)
+
+	case *ast.MatchExpr:
+		g.genMatchExpr(out, e)
+
+	case *ast.LambdaExpr:
+		g.genLambdaExpr(out, e)
 	}
+}
+
+// resolveFieldChainC converts a dotted field chain like "self.mu" to the correct
+// C accessor chain, using "->" for ref/pointer types and "." for value types.
+func (g *Generator) resolveFieldChainC(chain string) string {
+	if !strings.Contains(chain, ".") {
+		return chain
+	}
+	parts := strings.SplitN(chain, ".", 2)
+	baseType, ok := g.varTypes[parts[0]]
+	if !ok {
+		return chain
+	}
+	if ast.IsRefType(baseType) {
+		return parts[0] + "->" + parts[1]
+	}
+	return chain
 }
 
 // resolveFieldChainType resolves the type of a dotted field chain like "self.database".
@@ -1158,6 +1184,32 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		g.genExpr(out, e.Args[0])
 		out.WriteString(")) { fprintf(stderr, \"FAIL: assert failed\\n\"); exit(1); }")
 		return
+	}
+
+	// Check if this is a mutex method call (direct variable or field chain)
+	if e.Module != "" {
+		isMutex := false
+		if t, ok := g.varTypes[e.Module]; ok && t == ast.TypeMutex {
+			isMutex = true
+		}
+		if !isMutex && strings.Contains(e.Module, ".") {
+			chainType := g.resolveFieldChainType(e.Module)
+			if chainType == ast.TypeMutex {
+				isMutex = true
+			}
+		}
+		if isMutex {
+			// Resolve dotted path with correct accessor (-> for ref types, . for value types)
+			cPath := g.resolveFieldChainC(e.Module)
+			switch e.Name {
+			case "lock":
+				out.WriteString(fmt.Sprintf("pthread_mutex_lock(&%s)", cPath))
+				return
+			case "unlock":
+				out.WriteString(fmt.Sprintf("pthread_mutex_unlock(&%s)", cPath))
+				return
+			}
+		}
 	}
 
 	// Check if this is a StringBuilder method call

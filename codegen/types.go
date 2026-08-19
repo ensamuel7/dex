@@ -36,6 +36,8 @@ func (g *Generator) cType(t ast.Type) string {
 		return "DexArrayChar*"
 	case ast.TypeStringBuilder:
 		return "DexStringBuilder*"
+	case ast.TypeMutex:
+		return "pthread_mutex_t"
 	case ast.TypeVoid:
 		return "void"
 	default:
@@ -96,6 +98,9 @@ func (g *Generator) cType(t ast.Type) string {
 		}
 		if ast.IsEnumType(t) {
 			return "Dex_" + ast.EnumName(t)
+		}
+		if ast.IsInterfaceType(t) {
+			return "Dex_" + ast.InterfaceName(t)
 		}
 		if ast.IsMapType(t) {
 			return "DexMap_" + g.mapSuffix(t) + "*"
@@ -522,6 +527,16 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		return e.EnumType
 	case *ast.MapLitExpr:
 		return e.MapType
+	case *ast.StringInterpExpr:
+		return ast.TypeString
+	case *ast.MatchExpr:
+		return e.Type
+	case *ast.LambdaExpr:
+		var paramTypes []ast.Type
+		for _, p := range e.Params {
+			paramTypes = append(paramTypes, p.Type)
+		}
+		return ast.FuncTypeOf(paramTypes, e.ReturnType)
 	}
 	return ast.TypeVoid
 }

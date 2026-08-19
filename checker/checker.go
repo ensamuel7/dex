@@ -8,9 +8,11 @@ import (
 )
 
 type funcSig struct {
-	Params     []ast.Type
-	ReturnType ast.Type
-	IsPrivate  bool
+	Params        []ast.Type
+	ParamNames    []string
+	DefaultValues []ast.Expr // parallel to Params; nil = no default
+	ReturnType    ast.Type
+	IsPrivate     bool
 }
 
 type Checker struct {
@@ -129,10 +131,14 @@ func (c *Checker) Check(program *ast.Program) []error {
 			methods := make(map[string]funcSig)
 			for _, m := range sd.Methods {
 				var mParamTypes []ast.Type
+				var mParamNames []string
+				var mDefaults []ast.Expr
 				for _, p := range m.Params {
 					mParamTypes = append(mParamTypes, p.Type)
+					mParamNames = append(mParamNames, p.Name)
+					mDefaults = append(mDefaults, p.DefaultValue)
 				}
-				methods[m.Name] = funcSig{Params: mParamTypes, ReturnType: m.ReturnType, IsPrivate: m.IsPrivate}
+				methods[m.Name] = funcSig{Params: mParamTypes, ParamNames: mParamNames, DefaultValues: mDefaults, ReturnType: m.ReturnType, IsPrivate: m.IsPrivate}
 			}
 			c.structMethods[sd.Name] = methods
 		}
@@ -147,16 +153,27 @@ func (c *Checker) Check(program *ast.Program) []error {
 		c.structModule[sName] = modName
 	}
 
+	// Register interface types
+	for _, ifaceDef := range program.Interfaces {
+		ast.RegisterInterfaceType(ifaceDef)
+	}
+
 	// First pass: register all function signatures
 	for _, fn := range program.Functions {
 		var paramTypes []ast.Type
+		var paramNames []string
+		var defaultValues []ast.Expr
 		for _, p := range fn.Params {
 			paramTypes = append(paramTypes, p.Type)
+			paramNames = append(paramNames, p.Name)
+			defaultValues = append(defaultValues, p.DefaultValue)
 		}
 		c.funcs[fn.Name] = funcSig{
-			Params:     paramTypes,
-			ReturnType: fn.ReturnType,
-			IsPrivate:  fn.IsPrivate,
+			Params:        paramTypes,
+			ParamNames:    paramNames,
+			DefaultValues: defaultValues,
+			ReturnType:    fn.ReturnType,
+			IsPrivate:     fn.IsPrivate,
 		}
 	}
 

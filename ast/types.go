@@ -433,7 +433,7 @@ func GetEnumDef(t Type) *EnumDef {
 }
 
 func IsEnumType(t Type) bool {
-	return t >= TypeEnumBase
+	return t >= TypeEnumBase && t < TypeInterfaceBase
 }
 
 func EnumName(t Type) string {
@@ -453,3 +453,57 @@ type EnumAccessExpr struct {
 }
 
 func (e *EnumAccessExpr) exprNode() {}
+
+// Interface type registry
+var (
+	interfaceDefs   []InterfaceDef
+	interfaceByName map[string]Type
+)
+
+func init() {
+	ResetInterfaceTypes()
+}
+
+func ResetInterfaceTypes() {
+	interfaceDefs = nil
+	interfaceByName = make(map[string]Type)
+}
+
+func RegisterInterfaceType(def InterfaceDef) Type {
+	if id, ok := interfaceByName[def.Name]; ok {
+		idx := int(id - TypeInterfaceBase)
+		if idx >= 0 && idx < len(interfaceDefs) {
+			interfaceDefs[idx] = def
+		}
+		return id
+	}
+	id := TypeInterfaceBase + Type(len(interfaceDefs))
+	interfaceByName[def.Name] = id
+	interfaceDefs = append(interfaceDefs, def)
+	return id
+}
+
+func LookupInterfaceType(name string) (Type, bool) {
+	id, ok := interfaceByName[name]
+	return id, ok
+}
+
+func GetInterfaceDef(t Type) *InterfaceDef {
+	idx := int(t - TypeInterfaceBase)
+	if idx < 0 || idx >= len(interfaceDefs) {
+		return nil
+	}
+	return &interfaceDefs[idx]
+}
+
+func IsInterfaceType(t Type) bool {
+	return t >= TypeInterfaceBase
+}
+
+func InterfaceName(t Type) string {
+	def := GetInterfaceDef(t)
+	if def == nil {
+		return "unknown"
+	}
+	return def.Name
+}

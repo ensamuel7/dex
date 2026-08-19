@@ -12,16 +12,18 @@ import (
 type maxParseErrors struct{}
 
 type Parser struct {
-	tokens      []token.Token
-	pos         int
-	structNames map[string]bool
-	enumNames   map[string]bool
-	errors      []error
-	maxErrors   int
+	tokens         []token.Token
+	pos            int
+	structNames    map[string]bool
+	enumNames      map[string]bool
+	interfaceNames map[string]bool
+	errors         []error
+	maxErrors      int
+	lastArgNames   []string // set by parseArgs when named arguments are used
 }
 
 func New(tokens []token.Token) *Parser {
-	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool), enumNames: make(map[string]bool), maxErrors: 20}
+	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool), enumNames: make(map[string]bool), interfaceNames: make(map[string]bool), maxErrors: 20}
 }
 
 // recordError appends an error and panics with maxParseErrors if the limit is reached.
@@ -88,9 +90,17 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 		p.match(token.TokenSemicolon) // optional trailing semicolon
 	}
 
-	// Parse struct and enum definitions (with optional annotations and access modifiers)
-	for p.isStructDefAhead() || p.isEnumDefAhead() {
-		if p.isEnumDefAhead() {
+	// Parse struct, enum, and interface definitions (with optional annotations and access modifiers)
+	for p.isStructDefAhead() || p.isEnumDefAhead() || p.isInterfaceDefAhead() {
+		if p.isInterfaceDefAhead() {
+			ifaceDef, err := p.parseInterfaceDef()
+			if err != nil {
+				p.recordError(err)
+				p.synchronize()
+				continue
+			}
+			program.Interfaces = append(program.Interfaces, *ifaceDef)
+		} else if p.isEnumDefAhead() {
 			ed, err := p.parseEnumDef()
 			if err != nil {
 				p.recordError(err)
@@ -142,6 +152,86 @@ func (p *Parser) isStructDefAhead() bool {
 		return true
 	}
 	return false
+}
+
+// isInterfaceDefAhead returns true if the current token is the 'interface' keyword.
+func (p *Parser) isInterfaceDefAhead() bool {
+	return p.pos < len(p.tokens) && p.tokens[p.pos].Kind == token.TokenInterface
+}
+
+func (p *Parser) parseInterfaceDef() (*ast.InterfaceDef, error) {
+	p.advance() // consume 'interface'
+
+	name, err := p.expectIdent()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.expect(token.TokenLBrace); err != nil {
+		return nil, err
+	}
+
+	var methods []ast.InterfaceMethod
+	for !p.check(token.TokenRBrace) && !p.atEnd() {
+		// Expect: fn methodName(params): returnType
+		if !p.check(token.TokenFn) && !p.check(token.TokenFunction) {
+			return nil, p.errorf("expected 'fn' in interface method declaration")
+		}
+		p.advance() // consume 'fn'/'function'
+
+		methodName, err := p.expectIdent()
+		if err != nil {
+			return nil, err
+		}
+
+		if err := p.expect(token.TokenLParen); err != nil {
+			return nil, err
+		}
+
+		// Parse parameter types (no names needed, but accept name: type for consistency)
+		var paramTypes []ast.Type
+		if !p.check(token.TokenRParen) {
+			for {
+				// Try to skip optional param name with colon
+				if p.check(token.TokenIdent) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenColon {
+					p.advance() // skip name
+					p.advance() // skip ':'
+				}
+				paramType, err := p.parseType()
+				if err != nil {
+					return nil, err
+				}
+				paramTypes = append(paramTypes, paramType)
+				if !p.match(token.TokenComma) {
+					break
+				}
+			}
+		}
+
+		if err := p.expect(token.TokenRParen); err != nil {
+			return nil, err
+		}
+
+		// Parse return type
+		retType := ast.TypeVoid
+		if p.match(token.TokenColon) {
+			retType, err = p.parseType()
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		methods = append(methods, ast.InterfaceMethod{Name: methodName, Params: paramTypes, ReturnType: retType})
+	}
+
+	if err := p.expect(token.TokenRBrace); err != nil {
+		return nil, err
+	}
+
+	p.interfaceNames[name] = true
+	ast.RegisterInterfaceType(ast.InterfaceDef{Name: name, Methods: methods})
+
+	return &ast.InterfaceDef{Name: name, Methods: methods}, nil
 }
 
 // isEnumDefAhead returns true if the current token is the 'enum' keyword.
@@ -382,10 +472,31 @@ func (p *Parser) parseParams() ([]ast.Param, error) {
 			return nil, err
 		}
 
-		params = append(params, ast.Param{Name: name, Type: typ, Annotations: annotations})
+		param := ast.Param{Name: name, Type: typ, Annotations: annotations}
+
+		// Check for default value: = expr
+		if p.match(token.TokenAssign) {
+			defaultVal, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			param.DefaultValue = defaultVal
+		}
+
+		params = append(params, param)
 
 		if !p.match(token.TokenComma) {
 			break
+		}
+	}
+
+	// Validate: once a param has a default, all subsequent params must too
+	seenDefault := false
+	for _, param := range params {
+		if param.DefaultValue != nil {
+			seenDefault = true
+		} else if seenDefault {
+			return nil, p.errorf("parameter '%s' must have a default value (required after first default parameter)", param.Name)
 		}
 	}
 
@@ -463,6 +574,9 @@ func (p *Parser) parseType() (ast.Type, error) {
 	case token.TokenVoid:
 		p.advance()
 		return ast.TypeVoid, nil
+	case token.TokenMutex:
+		p.advance()
+		return ast.TypeMutex, nil
 	case token.TokenChan:
 		p.advance() // consume 'chan'
 		elemType, err := p.parseType()
@@ -549,6 +663,13 @@ func (p *Parser) parseType() (ast.Type, error) {
 			t, ok := ast.LookupEnumType(name)
 			if !ok {
 				return 0, p.errorf("unknown enum type '%s'", name)
+			}
+			base = t
+		} else if p.interfaceNames[name] {
+			p.advance()
+			t, ok := ast.LookupInterfaceType(name)
+			if !ok {
+				return 0, p.errorf("unknown interface type '%s'", name)
 			}
 			base = t
 		} else if p.pos+2 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenDot && p.tokens[p.pos+2].Kind == token.TokenIdent {

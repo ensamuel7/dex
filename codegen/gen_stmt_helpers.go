@@ -127,6 +127,10 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 		return true // concat produces +1
 	case *ast.ReceiveExpr:
 		return true // channel receive produces +1
+	case *ast.StringInterpExpr:
+		return true // interpolation produces +1
+	case *ast.MatchExpr:
+		return true // match produces a new value
 	default:
 		return false // conservative: assume borrowed to avoid premature free
 	}

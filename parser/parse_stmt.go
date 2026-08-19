@@ -93,6 +93,8 @@ func (p *Parser) parseStmt() (ast.Stmt, error) {
 		return p.parseThrowStmt()
 	case token.TokenSwitch:
 		return p.parseSwitchStmt()
+	case token.TokenDefer:
+		return p.parseDeferStmt()
 	default:
 		return p.parseExprStmt()
 	}
@@ -101,6 +103,11 @@ func (p *Parser) parseStmt() (ast.Stmt, error) {
 func (p *Parser) parseLetStmt() (ast.Stmt, error) {
 	pos := p.nodePos()
 	p.advance() // consume 'let'
+
+	// Check for destructuring: let { name1, name2 } = expr
+	if p.check(token.TokenLBrace) {
+		return p.parseDestructureLetStmt(pos, false)
+	}
 
 	name, err := p.expectIdent()
 	if err != nil {
@@ -146,6 +153,11 @@ func (p *Parser) parseLetStmt() (ast.Stmt, error) {
 func (p *Parser) parseConstStmt() (ast.Stmt, error) {
 	pos := p.nodePos()
 	p.advance() // consume 'const'
+
+	// Check for destructuring: const { name1, name2 } = expr
+	if p.check(token.TokenLBrace) {
+		return p.parseDestructureLetStmt(pos, true)
+	}
 
 	name, err := p.expectIdent()
 	if err != nil {
@@ -824,4 +836,47 @@ func (p *Parser) parseExprStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 	return &ast.ExprStmt{Pos: pos, Expr: expr}, nil
+}
+
+func (p *Parser) parseDeferStmt() (ast.Stmt, error) {
+	pos := p.nodePos()
+	p.advance() // consume 'defer'
+
+	expr, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.DeferStmt{Pos: pos, Expr: expr}, nil
+}
+
+func (p *Parser) parseDestructureLetStmt(pos ast.Pos, isConst bool) (ast.Stmt, error) {
+	p.advance() // consume '{'
+
+	var names []string
+	for !p.check(token.TokenRBrace) && !p.atEnd() {
+		name, err := p.expectIdent()
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+		if !p.match(token.TokenComma) {
+			break
+		}
+	}
+
+	if err := p.expect(token.TokenRBrace); err != nil {
+		return nil, err
+	}
+
+	if err := p.expect(token.TokenAssign); err != nil {
+		return nil, err
+	}
+
+	value, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.DestructureLetStmt{Pos: pos, Names: names, Value: value, IsConst: isConst}, nil
 }

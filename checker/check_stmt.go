@@ -588,6 +588,40 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		}
 		return nil
 
+	case *ast.DeferStmt:
+		_, err := c.checkExpr(s.Expr)
+		return err
+
+	case *ast.DestructureLetStmt:
+		exprType, err := c.checkExpr(s.Value)
+		if err != nil {
+			return err
+		}
+		if !ast.IsStructType(exprType) {
+			return c.errAt(s.Pos, "destructuring requires a struct type, got %s", typeName(exprType))
+		}
+		def := ast.GetStructDef(exprType)
+		if def == nil {
+			return c.errAt(s.Pos, "cannot destructure unknown struct type")
+		}
+		for _, name := range s.Names {
+			found := false
+			for _, f := range def.Fields {
+				if f.Name == name {
+					c.define(name, f.Type)
+					if s.IsConst {
+						c.defineConst(name)
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				return c.errAt(s.Pos, "struct '%s' has no field '%s'", def.Name, name)
+			}
+		}
+		return nil
+
 	default:
 		return fmt.Errorf("unknown statement type")
 	}

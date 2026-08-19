@@ -52,6 +52,9 @@ type Generator struct {
 	spawnCounter       int            // unique counter for spawn wrapper functions
 	spawnWrappers      strings.Builder // collected wrapper functions emitted before main
 	routeWrapperCount  int             // unique counter for route handler wrappers
+	matchCounter       int            // unique counter for match expression temp vars
+	lambdaCounter      int            // unique counter for lambda/closure functions
+	lambdaWrappers     strings.Builder // collected lambda functions emitted before main
 
 	funcTypedefs   map[ast.Type]string // function type → typedef name (e.g. DexFn_1)
 	funcTypedefCnt int                 // counter for unique typedef names
@@ -70,6 +73,9 @@ type Generator struct {
 	// Statement-level temp tracking for string concat intermediates
 	pendingReleases []string // temp var names to release after current statement
 	tempCounter     int      // unique counter for temp names
+
+	// Defer tracking
+	deferExprs []ast.Expr // accumulated defer expressions for current function (LIFO order)
 }
 
 func New() *Generator {
@@ -267,6 +273,20 @@ func (g *Generator) stmtUsesRegion(stmt ast.Stmt) bool {
 		}
 	}
 	return false
+}
+
+// emitDeferredCalls emits accumulated defer expressions in LIFO order (last defer first).
+func (g *Generator) emitDeferredCalls(out *strings.Builder, prefix string) {
+	for i := len(g.deferExprs) - 1; i >= 0; i-- {
+		out.WriteString(prefix)
+		g.genExpr(out, g.deferExprs[i])
+		out.WriteString(";\n")
+	}
+}
+
+// hasDefers returns true if there are pending deferred expressions.
+func (g *Generator) hasDefers() bool {
+	return len(g.deferExprs) > 0
 }
 
 // hasHeapVarsInScope checks if there are any heap vars tracked in any scope
@@ -577,6 +597,22 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 	}
 
+	// Emit interface typedef structs (vtable-based)
+	for _, ifaceDef := range program.Interfaces {
+		out.WriteString(fmt.Sprintf("typedef struct {\n"))
+		out.WriteString("    void* _data;\n")
+		out.WriteString("    struct {\n")
+		for _, m := range ifaceDef.Methods {
+			out.WriteString(fmt.Sprintf("        %s (*%s)(void*", g.cType(m.ReturnType), m.Name))
+			for _, pt := range m.Params {
+				out.WriteString(fmt.Sprintf(", %s", g.cType(pt)))
+			}
+			out.WriteString(");\n")
+		}
+		out.WriteString("    } _vtable;\n")
+		out.WriteString(fmt.Sprintf("} Dex_%s;\n", ifaceDef.Name))
+	}
+
 	// Emit event loop runtime (must come before HTTP/WS module runtimes)
 	if g.usesEventLoop {
 		out.WriteString(EventLoopRuntime)
@@ -752,12 +788,24 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString("\n")
 	}
 
+	// Emit lambda wrappers (before function bodies)
+	if g.lambdaWrappers.Len() > 0 {
+		out.WriteString(g.lambdaWrappers.String())
+		out.WriteString("\n")
+	}
+
 	out.WriteString(funcBuf.String())
 
 	return out.String()
 }
 
 func (g *Generator) scan(program *ast.Program) {
+	// Scan struct field types (for mutex, etc.)
+	for _, sd := range program.Structs {
+		for _, f := range sd.Fields {
+			g.scanType(f.Type)
+		}
+	}
 	for _, fn := range program.Functions {
 		g.scanType(fn.ReturnType)
 		for _, p := range fn.Params {
@@ -797,6 +845,9 @@ func (g *Generator) scanType(t ast.Type) {
 	}
 	if t == ast.TypeStringBuilder {
 		g.usesStringBuilder = true
+	}
+	if t == ast.TypeMutex {
+		g.usesConcurrency = true
 	}
 }
 
@@ -893,6 +944,10 @@ func (g *Generator) scanStmt(stmt ast.Stmt) {
 		for _, stmt := range s.Default {
 			g.scanStmt(stmt)
 		}
+	case *ast.DestructureLetStmt:
+		g.scanExpr(s.Value)
+	case *ast.DeferStmt:
+		g.scanExpr(s.Expr)
 	}
 }
 
@@ -923,6 +978,10 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		if e.Module == "" && e.Name == "assert" {
 			g.usesAssert = true
 			g.usesBool = true
+		}
+		// Scan for mutex method usage
+		if e.Module != "" && (e.Name == "lock" || e.Name == "unlock") {
+			g.usesConcurrency = true
 		}
 		// Scan for string method usage — conservatively detect potential string methods.
 		// False positives (e.g. array.len()) are harmless since the included static
@@ -972,6 +1031,28 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		// no-op: enum values are compile-time constants
 	case *ast.MapLitExpr:
 		g.usesMap = true
+	case *ast.StringInterpExpr:
+		g.usesString = true
+		g.usesStringBuilder = true
+		for _, part := range e.Parts {
+			g.scanExpr(part)
+		}
+	case *ast.MatchExpr:
+		g.scanExpr(e.Tag)
+		for _, arm := range e.Arms {
+			for _, pat := range arm.Patterns {
+				g.scanExpr(pat)
+			}
+			g.scanExpr(arm.Body)
+		}
+	case *ast.LambdaExpr:
+		for _, p := range e.Params {
+			g.scanType(p.Type)
+		}
+		g.scanType(e.ReturnType)
+		for _, stmt := range e.Body {
+			g.scanStmt(stmt)
+		}
 	}
 }
 

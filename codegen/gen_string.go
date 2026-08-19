@@ -399,6 +399,8 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 		}
 	case *ast.FieldAccessExpr:
 		return g.typeOfExpr(e) == ast.TypeString
+	case *ast.StringInterpExpr:
+		return true
 	}
 	return false
 }
@@ -577,6 +579,8 @@ func (g *Generator) genZeroValue(out *strings.Builder, typ ast.Type) {
 		out.WriteString("0")
 	case ast.TypeString:
 		out.WriteString("dex_string_from_lit(\"\")")
+	case ast.TypeMutex:
+		out.WriteString("PTHREAD_MUTEX_INITIALIZER")
 	default:
 		if ast.IsStructType(typ) {
 			def := ast.GetStructDef(typ)
@@ -598,5 +602,71 @@ func (g *Generator) genZeroValue(out *strings.Builder, typ ast.Type) {
 		}
 		// Arrays, optionals, and other pointer types: NULL
 		out.WriteString("NULL")
+	}
+}
+
+// genStringInterpExpr generates code for string interpolation: "Hello, ${name}!"
+// This desugars to StringBuilder-based concatenation.
+func (g *Generator) genStringInterpExpr(out *strings.Builder, e *ast.StringInterpExpr) {
+	// Collect all parts as a flat list for genAppendToSB
+	// Use statement expression: ({ ... })
+	sbName := fmt.Sprintf("_interp_sb_%d", g.tempCounter)
+	resultName := fmt.Sprintf("_interp_result_%d", g.tempCounter)
+	g.tempCounter++
+
+	out.WriteString(fmt.Sprintf("({ DexStringBuilder* %s = dex_sb_new(); ", sbName))
+
+	for _, part := range e.Parts {
+		if strLit, ok := part.(*ast.StringLit); ok {
+			if strLit.Value != "" {
+				out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, %q, %d); ", sbName, strLit.Value, len(strLit.Value)))
+			}
+		} else {
+			// Expression part — use genAppendToSB
+			partType := g.typeOfExpr(part)
+			g.genAppendExprToSB(out, sbName, part, partType)
+			out.WriteString("; ")
+		}
+	}
+
+	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_to_string(%s); ", resultName, sbName))
+	out.WriteString(fmt.Sprintf("dex_release(%s); ", sbName))
+	out.WriteString(fmt.Sprintf("%s; })", resultName))
+}
+
+// genAppendExprToSB appends an expression's value to a StringBuilder.
+func (g *Generator) genAppendExprToSB(out *strings.Builder, sbName string, expr ast.Expr, typ ast.Type) {
+	switch typ {
+	case ast.TypeString:
+		out.WriteString(fmt.Sprintf("dex_sb_append(%s, ", sbName))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	case ast.TypeInt:
+		out.WriteString(fmt.Sprintf("dex_sb_append_int(%s, ", sbName))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	case ast.TypeLong:
+		out.WriteString(fmt.Sprintf("dex_sb_append_long(%s, ", sbName))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	case ast.TypeDouble:
+		out.WriteString(fmt.Sprintf("dex_sb_append_double(%s, ", sbName))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	case ast.TypeBool:
+		out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, (", sbName))
+		g.genExpr(out, expr)
+		out.WriteString(") ? \"true\" : \"false\", (")
+		g.genExpr(out, expr)
+		out.WriteString(") ? 4 : 5)")
+	case ast.TypeChar:
+		out.WriteString(fmt.Sprintf("dex_sb_append_char(%s, ", sbName))
+		g.genExpr(out, expr)
+		out.WriteString(")")
+	default:
+		// For other types, use genExprAsString and append
+		out.WriteString("{ DexString* _interp_tmp = ")
+		g.genExprAsString(out, expr)
+		out.WriteString(fmt.Sprintf("; dex_sb_append(%s, _interp_tmp); dex_release(_interp_tmp); }", sbName))
 	}
 }

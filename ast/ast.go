@@ -24,6 +24,7 @@ const (
 	TypeChar
 	TypeArrayChar
 	TypeStringBuilder
+	TypeMutex
 )
 
 // TypeInferred is used during parsing when a let statement has no explicit type annotation.
@@ -63,6 +64,9 @@ const TypeMapBase Type = 9000
 
 // Enum type system: dynamic IDs starting at 10000
 const TypeEnumBase Type = 10000
+
+// Interface type system: dynamic IDs starting at 11000
+const TypeInterfaceBase Type = 11000
 
 type StructField struct {
 	Name        string
@@ -256,6 +260,7 @@ type Program struct {
 	Structs      []StructDef
 	Enums        []EnumDef
 	Functions    []Function
+	Interfaces   []InterfaceDef
 	UserModules  []string          // module names (last path segment) of resolved user imports
 	StructModule map[string]string // structName -> moduleName (for cross-module structs)
 }
@@ -270,9 +275,10 @@ type Function struct {
 }
 
 type Param struct {
-	Name        string
-	Type        Type
-	Annotations []string
+	Name         string
+	Type         Type
+	Annotations  []string
+	DefaultValue Expr // nil = no default
 }
 
 // Stmt interface
@@ -508,14 +514,15 @@ type UnaryExpr struct {
 }
 
 type CallExpr struct {
-	Pos          Pos
-	Module       string // empty = user-defined function, "http"/"json"/"fmt" = stdlib
-	Name         string
-	Args         []Expr
-	ResolvedType Type // set by checker for return-type polymorphism (e.g. db.col)
-	IsMethodCall bool // set by checker: instance.method() call
-	IsConstructor bool // set by checker: StructName(args) constructor call
-	StructType   Type // set by checker: the struct type for method/constructor calls
+	Pos           Pos
+	Module        string // empty = user-defined function, "http"/"json"/"fmt" = stdlib
+	Name          string
+	Args          []Expr
+	ArgNames      []string // parallel to Args; empty string = positional (set by parser for named args)
+	ResolvedType  Type     // set by checker for return-type polymorphism (e.g. db.col)
+	IsMethodCall  bool     // set by checker: instance.method() call
+	IsConstructor bool     // set by checker: StructName(args) constructor call
+	StructType    Type     // set by checker: the struct type for method/constructor calls
 }
 
 type ArrayLitExpr struct {
@@ -563,6 +570,75 @@ type NullLit struct {
 }
 
 func (e *NullLit) exprNode() {}
+
+// DeferStmt represents a defer statement: defer expr
+// The expression is executed when the enclosing function returns.
+type DeferStmt struct {
+	Pos  Pos
+	Expr Expr // expression (typically a function call) to execute on function exit
+}
+
+func (s *DeferStmt) stmtNode() {}
+
+// StringInterpExpr represents a string interpolation expression: "Hello, ${name}!"
+// Parts alternates between StringLit (text segments) and interpolated expressions.
+type StringInterpExpr struct {
+	Pos   Pos
+	Parts []Expr // alternating StringLit and interpolated expressions
+}
+
+func (e *StringInterpExpr) exprNode() {}
+
+// MatchArm represents a single arm in a match expression.
+type MatchArm struct {
+	Pos        Pos
+	Patterns   []Expr // match values; nil for wildcard
+	IsWildcard bool
+	Body       Expr // result expression
+}
+
+// MatchExpr represents a match expression: match(value) { 1 => "one", _ => "other" }
+type MatchExpr struct {
+	Pos  Pos
+	Tag  Expr
+	Arms []MatchArm
+	Type Type // resolved result type, set by checker
+}
+
+func (e *MatchExpr) exprNode() {}
+
+// DestructureLetStmt represents destructuring: let { name, age } = person
+type DestructureLetStmt struct {
+	Pos     Pos
+	Names   []string // variable names to bind
+	Value   Expr     // RHS expression (must be struct type)
+	IsConst bool
+}
+
+func (s *DestructureLetStmt) stmtNode() {}
+
+// LambdaExpr represents a lambda/closure expression: fn(x: int): int { return x + 1 }
+type LambdaExpr struct {
+	Pos        Pos
+	Params     []Param
+	ReturnType Type
+	Body       []Stmt
+}
+
+func (e *LambdaExpr) exprNode() {}
+
+// InterfaceMethod describes a method signature in an interface definition.
+type InterfaceMethod struct {
+	Name       string
+	Params     []Type
+	ReturnType Type
+}
+
+// InterfaceDef defines an interface with structural typing.
+type InterfaceDef struct {
+	Name    string
+	Methods []InterfaceMethod
+}
 
 // Annotation constants
 const (

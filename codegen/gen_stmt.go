@@ -22,6 +22,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.isInLoop = false
 	g.loopDepth = 0
 	g.narrowedVars = make(map[string]string)
+	g.deferExprs = nil
 
 	// Register params (not tracked in scope — callee-borrows convention)
 	for _, p := range fn.Params {
@@ -80,6 +81,9 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	if fnUsesArena {
 		out.WriteString("    dex_arena_destroy(_arena);\n")
 	}
+
+	// Emit deferred calls at function exit (for fall-through paths)
+	g.emitDeferredCalls(out, "    ")
 
 	// For void main(), insert cleanup + implicit return 0
 	if fn.Name == "main" && fn.ReturnType == ast.TypeVoid {
@@ -312,6 +316,7 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	case *ast.ReturnStmt:
 		// Bare return (no value) — void function
 		if s.Value == nil {
+			g.emitDeferredCalls(out, prefix)
 			g.emitCleanupAll(out, prefix, "")
 			out.WriteString(fmt.Sprintf("%sreturn;\n", prefix))
 			break
@@ -323,23 +328,27 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			if ast.IsValueType(inner) {
 				ctyp := g.cType(retType)
 				if isNull {
+					g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn (%s){0};\n", prefix, ctyp))
 				} else {
 					out.WriteString(fmt.Sprintf("%s%s _ret_tmp = (%s){1, ", prefix, ctyp, ctyp))
 					g.genExpr(out, s.Value)
 					out.WriteString("};\n")
+					g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 				}
 			} else {
 				// Heap/struct optional: NULL for null, value otherwise
 				if isNull {
+					g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn NULL;\n", prefix))
 				} else if ast.IsHeapType(inner) || ast.IsHeapType(retType) {
 					if ident, ok := s.Value.(*ast.Ident); ok {
 						out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, ident.Name))
+						g.emitDeferredCalls(out, prefix)
 						g.emitCleanupAll(out, prefix, "")
 						out.WriteString(fmt.Sprintf("%sreturn %s;\n", prefix, ident.Name))
 					} else {
@@ -347,10 +356,12 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 						out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
 						g.genExpr(out, s.Value)
 						out.WriteString(";\n")
+						g.emitDeferredCalls(out, prefix)
 						g.emitCleanupAll(out, prefix, "")
 						out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 					}
 				} else {
+					g.emitDeferredCalls(out, prefix)
 					out.WriteString(fmt.Sprintf("%sreturn ", prefix))
 					g.genExpr(out, s.Value)
 					out.WriteString(";\n")
@@ -362,6 +373,7 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			// Retain the return value, clean up everything else, then return
 			if ident, ok := s.Value.(*ast.Ident); ok {
 				out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, ident.Name))
+				g.emitDeferredCalls(out, prefix)
 				g.emitCleanupAll(out, prefix, "")
 				out.WriteString(fmt.Sprintf("%sreturn %s;\n", prefix, ident.Name))
 			} else {
@@ -369,21 +381,24 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 				out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, g.cType(retType)))
 				g.genExpr(out, s.Value)
 				out.WriteString(";\n")
+				g.emitDeferredCalls(out, prefix)
 				g.emitCleanupAll(out, prefix, "")
 				out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 			}
 		} else {
 			// Non-heap return — clean up all heap vars first
-			if g.hasHeapVarsInScope() {
+			if g.hasHeapVarsInScope() || g.hasDefers() {
 				// Evaluate return value into temp to avoid use-after-free
 				ctyp := g.cType(retType)
 				if retType != ast.TypeVoid {
 					out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
 					g.genExpr(out, s.Value)
 					out.WriteString(";\n")
+					g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 				} else {
+					g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn;\n", prefix))
 				}
@@ -830,6 +845,8 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		}
 
 	case *ast.ThrowStmt:
+		// Emit deferred calls before throwing
+		g.emitDeferredCalls(out, prefix)
 		// Extract message from Exception constructor: Exception("msg") -> _dex_throw(msg)
 		out.WriteString(fmt.Sprintf("%s_dex_throw(", prefix))
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Name == "Exception" && len(call.Args) == 1 {
@@ -908,6 +925,51 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			out.WriteString(fmt.Sprintf("%sif (_dex_exc_%d_caught) {\n", prefix, id))
 			out.WriteString(fmt.Sprintf("%s    _dex_throw(_dex_exc_stack[_dex_exc_top + 1].message);\n", prefix))
 			out.WriteString(fmt.Sprintf("%s}\n", prefix))
+		}
+
+	case *ast.DeferStmt:
+		// Accumulate deferred expression (will be emitted at function exit / return)
+		g.deferExprs = append(g.deferExprs, s.Expr)
+
+	case *ast.DestructureLetStmt:
+		// Generate RHS into a temp variable
+		rhsType := g.typeOfExpr(s.Value)
+		if !ast.IsStructType(rhsType) {
+			break
+		}
+		def := ast.GetStructDef(rhsType)
+		if def == nil {
+			break
+		}
+		tmpName := fmt.Sprintf("_destruct_%d", g.tempCounter)
+		g.tempCounter++
+		out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(rhsType), tmpName))
+		g.genExpr(out, s.Value)
+		out.WriteString(";\n")
+
+		// For each destructured name, emit variable declaration from field access
+		for _, name := range s.Names {
+			for _, f := range def.Fields {
+				if f.Name == name {
+					g.varTypes[name] = f.Type
+					if f.Type == ast.TypeString {
+						g.strVars[name] = true
+					}
+					if ast.IsArrayType(f.Type) {
+						g.arrVars[name] = f.Type
+					}
+					if ast.IsStructType(f.Type) {
+						g.structVars[name] = f.Type
+					}
+					out.WriteString(fmt.Sprintf("%s%s %s = %s.%s;\n", prefix, g.cType(f.Type), name, tmpName, name))
+					// Retain heap types since we're creating a new reference
+					if ast.IsHeapType(f.Type) {
+						out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, name))
+						g.registerScopeVar(name, f.Type)
+					}
+					break
+				}
+			}
 		}
 	}
 }

@@ -224,6 +224,13 @@ func (g *Generator) collectUsedVars(stmts []ast.Stmt, used, defined map[string]b
 		case *ast.FieldAssignStmt:
 			g.collectUsedVarsExpr(s.Object, used)
 			g.collectUsedVarsExpr(s.Value, used)
+		case *ast.DestructureLetStmt:
+			g.collectUsedVarsExpr(s.Value, used)
+			for _, name := range s.Names {
+				defined[name] = true
+			}
+		case *ast.DeferStmt:
+			g.collectUsedVarsExpr(s.Expr, used)
 		}
 	}
 }
@@ -275,5 +282,24 @@ func (g *Generator) collectUsedVarsExpr(expr ast.Expr, used map[string]bool) {
 		// no vars
 	case *ast.MapLitExpr:
 		// no vars
+	case *ast.StringInterpExpr:
+		for _, part := range e.Parts {
+			g.collectUsedVarsExpr(part, used)
+		}
+	case *ast.MatchExpr:
+		g.collectUsedVarsExpr(e.Tag, used)
+		for _, arm := range e.Arms {
+			for _, pat := range arm.Patterns {
+				g.collectUsedVarsExpr(pat, used)
+			}
+			g.collectUsedVarsExpr(arm.Body, used)
+		}
+	case *ast.LambdaExpr:
+		// Lambda body captures are handled separately
+		defined := make(map[string]bool)
+		for _, p := range e.Params {
+			defined[p.Name] = true
+		}
+		g.collectUsedVars(e.Body, used, defined)
 	}
 }

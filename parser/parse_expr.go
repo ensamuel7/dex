@@ -146,6 +146,12 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		p.advance()
 		return &ast.StringLit{Pos: pos, Value: tok.Value}, nil
 
+	case token.TokenInterpStringStart:
+		return p.parseStringInterp()
+
+	case token.TokenMatch:
+		return p.parseMatchExpr()
+
 	case token.TokenChar:
 		p.advance()
 		runes := []rune(tok.Value)
@@ -292,7 +298,12 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				if err := p.expect(token.TokenRParen); err != nil {
 					return nil, err
 				}
-				return &ast.CallExpr{Pos: pos, Module: name, Name: memberName, Args: args}, nil
+				callExpr := &ast.CallExpr{Pos: pos, Module: name, Name: memberName, Args: args}
+				if p.lastArgNames != nil {
+					callExpr.ArgNames = p.lastArgNames
+					p.lastArgNames = nil
+				}
+				return callExpr, nil
 			}
 			// Otherwise it's a field access
 			return &ast.FieldAccessExpr{Pos: pos, Object: &ast.Ident{Pos: pos, Name: name}, Field: memberName}, nil
@@ -321,10 +332,19 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRParen); err != nil {
 				return nil, err
 			}
-			return &ast.CallExpr{Pos: pos, Name: name, Args: args}, nil
+			callExpr := &ast.CallExpr{Pos: pos, Name: name, Args: args}
+			if p.lastArgNames != nil {
+				callExpr.ArgNames = p.lastArgNames
+				p.lastArgNames = nil
+			}
+			return callExpr, nil
 		}
 
 		return &ast.Ident{Pos: pos, Name: name}, nil
+
+	case token.TokenFn, token.TokenFunction:
+		// Lambda expression: fn(params): returnType { body }
+		return p.parseLambdaExpr()
 
 	case token.TokenLParen:
 		p.advance()
@@ -369,22 +389,213 @@ func (p *Parser) parseSpawnExpr() (ast.Expr, error) {
 
 func (p *Parser) parseArgs() ([]ast.Expr, error) {
 	var args []ast.Expr
+	var argNames []string
+	hasNamedArgs := false
 
 	if p.check(token.TokenRParen) {
 		return args, nil
 	}
 
 	for {
+		// Check for named argument: ident: expr
+		// Lookahead: if we see TokenIdent followed by TokenColon, and the colon is NOT
+		// part of a type annotation (which would need to be followed by a type keyword),
+		// treat as named arg.
+		if p.check(token.TokenIdent) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenColon {
+			// Check it's not a struct literal field (those are inside {}) or a type annotation
+			// Since we're inside parseArgs (inside parens), ident: is always a named arg
+			name := p.current().Value
+			p.advance() // consume ident
+			p.advance() // consume ':'
+			expr, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, expr)
+			argNames = append(argNames, name)
+			hasNamedArgs = true
+
+			if !p.match(token.TokenComma) {
+				break
+			}
+			continue
+		}
+
+		if hasNamedArgs {
+			return nil, p.errorf("positional arguments cannot follow named arguments")
+		}
+
 		expr, err := p.parseExpr(0)
 		if err != nil {
 			return nil, err
 		}
 		args = append(args, expr)
+		argNames = append(argNames, "")
 
 		if !p.match(token.TokenComma) {
 			break
 		}
 	}
 
+	// Only set ArgNames on the CallExpr if there are named args
+	// (the caller will need to handle this)
+	if hasNamedArgs {
+		// Store argNames in a package-level var that the caller can pick up
+		p.lastArgNames = argNames
+	} else {
+		p.lastArgNames = nil
+	}
+
 	return args, nil
+}
+
+func (p *Parser) parseStringInterp() (ast.Expr, error) {
+	pos := p.nodePos()
+	var parts []ast.Expr
+
+	// Current token is TokenInterpStringStart
+	parts = append(parts, &ast.StringLit{Pos: pos, Value: p.current().Value})
+	p.advance()
+
+	// Parse first interpolated expression
+	expr, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+	parts = append(parts, expr)
+
+	// Parse remaining mid/end parts
+	for {
+		if p.check(token.TokenInterpStringMid) {
+			parts = append(parts, &ast.StringLit{Pos: p.nodePos(), Value: p.current().Value})
+			p.advance()
+			expr, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, expr)
+		} else if p.check(token.TokenInterpStringEnd) {
+			parts = append(parts, &ast.StringLit{Pos: p.nodePos(), Value: p.current().Value})
+			p.advance()
+			break
+		} else {
+			return nil, p.errorf("expected string interpolation continuation or end, got '%s'", p.current().Value)
+		}
+	}
+
+	return &ast.StringInterpExpr{Pos: pos, Parts: parts}, nil
+}
+
+func (p *Parser) parseMatchExpr() (ast.Expr, error) {
+	pos := p.nodePos()
+	p.advance() // consume 'match'
+
+	if err := p.expect(token.TokenLParen); err != nil {
+		return nil, err
+	}
+
+	tag, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.expect(token.TokenRParen); err != nil {
+		return nil, err
+	}
+
+	if err := p.expect(token.TokenLBrace); err != nil {
+		return nil, err
+	}
+
+	var arms []ast.MatchArm
+
+	for !p.check(token.TokenRBrace) && !p.atEnd() {
+		armPos := p.nodePos()
+
+		// Check for wildcard: _
+		if p.check(token.TokenIdent) && p.current().Value == "_" {
+			p.advance() // consume '_'
+			if err := p.expect(token.TokenFatArrow); err != nil {
+				return nil, err
+			}
+			body, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			arms = append(arms, ast.MatchArm{Pos: armPos, IsWildcard: true, Body: body})
+		} else {
+			// Parse comma-separated pattern expressions
+			var patterns []ast.Expr
+			for {
+				pat, err := p.parseExpr(0)
+				if err != nil {
+					return nil, err
+				}
+				patterns = append(patterns, pat)
+				if !p.match(token.TokenComma) {
+					break
+				}
+				// Check if next is => (end of patterns)
+				if p.check(token.TokenFatArrow) {
+					break
+				}
+			}
+
+			if err := p.expect(token.TokenFatArrow); err != nil {
+				return nil, err
+			}
+
+			body, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+
+			arms = append(arms, ast.MatchArm{Pos: armPos, Patterns: patterns, Body: body})
+		}
+	}
+
+	if err := p.expect(token.TokenRBrace); err != nil {
+		return nil, err
+	}
+
+	return &ast.MatchExpr{Pos: pos, Tag: tag, Arms: arms}, nil
+}
+
+func (p *Parser) parseLambdaExpr() (ast.Expr, error) {
+	pos := p.nodePos()
+	p.advance() // consume 'fn' or 'function'
+
+	if err := p.expect(token.TokenLParen); err != nil {
+		return nil, err
+	}
+
+	params, err := p.parseParams()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.expect(token.TokenRParen); err != nil {
+		return nil, err
+	}
+
+	// Parse return type
+	retType := ast.TypeVoid
+	if p.match(token.TokenColon) {
+		retType, err = p.parseType()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Parse body
+	if err := p.expect(token.TokenLBrace); err != nil {
+		return nil, err
+	}
+
+	body, err := p.parseBlock()
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.LambdaExpr{Pos: pos, Params: params, ReturnType: retType, Body: body}, nil
 }

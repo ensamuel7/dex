@@ -161,7 +161,7 @@ func TestUnaryNot(t *testing.T) {
 // --- Type mismatches ---
 
 func TestTypeMismatchIntPlusString(t *testing.T) {
-	mustFail(t, `fn main(): void { let x: int = 1 + "a" }`, "'+' requires matching numeric or string operands")
+	mustFail(t, `fn main(): void { let x: int = 1 + "a" }`, "type mismatch in let: expected int, got string")
 }
 
 func TestTypeMismatchIntPlusBool(t *testing.T) {

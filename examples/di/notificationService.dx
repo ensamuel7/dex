@@ -1,9 +1,0 @@
-import "fmt"
-
-struct NotificationService(sender: string) {
-  fn notify(to: string, msg: string): string {
-    let result: string = "[" + sender + "] -> " + to + ": " + msg
-    fmt.println(result)
-    return result
-  }
-}

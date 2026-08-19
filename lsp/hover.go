@@ -100,7 +100,10 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 	seedParserModuleTypes(p, tokens)
 	program, errs := p.Parse()
 	if len(errs) > 0 {
-		return ""
+		// Still attempt hover with partial parse results
+		if program == nil {
+			return ""
+		}
 	}
 
 	// Resolve user modules for cross-module hover info

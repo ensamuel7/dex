@@ -147,12 +147,18 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 		var items []CompletionItem
 		for name, fdef := range mod.Funcs {
 			var params []string
-			for i, p := range fdef.Params {
-				pname := fmt.Sprintf("arg%d", i+1)
-				if i < len(fdef.ParamNames) {
-					pname = fdef.ParamNames[i]
+			if fdef.Params != nil {
+				for i, p := range fdef.Params {
+					pname := fmt.Sprintf("arg%d", i+1)
+					if i < len(fdef.ParamNames) {
+						pname = fdef.ParamNames[i]
+					}
+					params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
 				}
-				params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
+			} else {
+				for _, pname := range fdef.ParamNames {
+					params = append(params, fmt.Sprintf("%s: %s", pname, "string"))
+				}
 			}
 			detail := fmt.Sprintf("(%s): %s", strings.Join(params, ", "), typeName(fdef.ReturnType))
 			items = append(items, CompletionItem{

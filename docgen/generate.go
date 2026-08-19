@@ -5,8 +5,6 @@ import (
 	_ "embed"
 	"fmt"
 	"html/template"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -20,12 +18,10 @@ var tmplHTML string
 
 // TemplateData holds all data passed to the HTML template.
 type TemplateData struct {
-	Modules           []ModuleData
-	DbModule          ModuleData
-	Keywords          []KeywordData
-	Types             []KeywordData
-	Examples          []ExampleData
-	ExampleCategories []ExampleCategory
+	Modules  []ModuleData
+	DbModule ModuleData
+	Keywords []KeywordData
+	Types    []KeywordData
 }
 
 // ModuleData represents a stdlib module.
@@ -47,19 +43,6 @@ type FuncData struct {
 type KeywordData struct {
 	Name  string
 	Token string
-}
-
-// ExampleData represents an example file.
-type ExampleData struct {
-	Title    string
-	Filename string
-	Content  string
-}
-
-// ExampleCategory groups examples under a heading.
-type ExampleCategory struct {
-	Name     string
-	Examples []ExampleData
 }
 
 func typeName(t ast.Type) string {
@@ -159,18 +142,6 @@ func tokenKindName(k token.TokenKind) string {
 	default:
 		return fmt.Sprintf("TokenKind(%d)", k)
 	}
-}
-
-func titleCase(filename string) string {
-	title := strings.TrimSuffix(filename, ".dx")
-	title = strings.ReplaceAll(title, "_", " ")
-	words := strings.Fields(title)
-	for i, w := range words {
-		if len(w) > 0 {
-			words[i] = strings.ToUpper(w[:1]) + w[1:]
-		}
-	}
-	return strings.Join(words, " ")
 }
 
 func Generate(projectRoot string) (string, error) {
@@ -326,96 +297,6 @@ func Generate(projectRoot string) (string, error) {
 		data.Types = append(data.Types, KeywordData{
 			Name:  t,
 			Token: tokenKindName(token.Keywords[t]),
-		})
-	}
-
-	// Read example files
-	exDir := filepath.Join(projectRoot, "examples")
-	entries, err := os.ReadDir(exDir)
-	if err == nil {
-		for _, e := range entries {
-			if filepath.Ext(e.Name()) == ".dx" {
-				content, err := os.ReadFile(filepath.Join(exDir, e.Name()))
-				if err != nil {
-					continue
-				}
-				data.Examples = append(data.Examples, ExampleData{
-					Title:    titleCase(e.Name()),
-					Filename: e.Name(),
-					Content:  string(content),
-				})
-			}
-		}
-	}
-
-	// Categorize examples for grouped rendering
-	categoryOrder := []string{
-		"Language Basics",
-		"Data Structures",
-		"JSON & Serialization",
-		"Networking",
-		"Database",
-		"Concurrency & Timers",
-		"Error Handling",
-		"References & Memory",
-		"I/O & System",
-	}
-	fileCategoryMap := map[string]string{
-		"hello.dx":              "Language Basics",
-		"functions.dx":          "Language Basics",
-		"control_flow.dx":       "Language Basics",
-		"types_test.dx":         "Language Basics",
-		"loops_test.dx":         "Language Basics",
-		"inference_test.dx":     "Language Basics",
-		"const_test.dx":         "Language Basics",
-		"access_test.dx":        "Language Basics",
-		"switch_test.dx":        "Language Basics",
-		"arrays.dx":             "Data Structures",
-		"structs.dx":            "Data Structures",
-		"enum_test.dx":          "Data Structures",
-		"map_test.dx":           "Data Structures",
-		"string_test.dx":        "Data Structures",
-		"char_test.dx":          "Data Structures",
-		"stringbuilder_test.dx": "Data Structures",
-		"optional_test.dx":      "Data Structures",
-		"json_struct_test.dx":   "JSON & Serialization",
-		"string_coerce_test.dx": "JSON & Serialization",
-		"http_client.dx":        "Networking",
-		"http_request_test.dx":  "Networking",
-		"ws_test.dx":            "Networking",
-		"db_sqlite.dx":          "Database",
-		"db_mysql.dx":           "Database",
-		"db_mongo.dx":           "Database",
-		"concurrency_test.dx":   "Concurrency & Timers",
-		"timer_test.dx":         "Concurrency & Timers",
-		"try_catch.dx":          "Error Handling",
-		"ref_test.dx":           "References & Memory",
-		"ref_primitive_test.dx": "References & Memory",
-		"funcref_test.dx":       "References & Memory",
-		"memory_test.dx":        "References & Memory",
-		"io_demo.dx":            "I/O & System",
-		"file_io.dx":            "I/O & System",
-	}
-	catMap := make(map[string][]ExampleData)
-	for _, ex := range data.Examples {
-		cat, ok := fileCategoryMap[ex.Filename]
-		if !ok {
-			cat = "Other"
-		}
-		catMap[cat] = append(catMap[cat], ex)
-	}
-	for _, catName := range categoryOrder {
-		if examples, ok := catMap[catName]; ok {
-			data.ExampleCategories = append(data.ExampleCategories, ExampleCategory{
-				Name:     catName,
-				Examples: examples,
-			})
-		}
-	}
-	if others, ok := catMap["Other"]; ok {
-		data.ExampleCategories = append(data.ExampleCategories, ExampleCategory{
-			Name:     "Other",
-			Examples: others,
 		})
 	}
 

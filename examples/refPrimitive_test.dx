@@ -4,7 +4,7 @@ fn increment(n: &int): void {
     n = n + 1
 }
 
-fn double_it(d: &double): void {
+fn doubleIt(d: &double): void {
     d = d * 2.0
 }
 
@@ -18,7 +18,7 @@ fn main(): void {
     assert(x == 6)
 
     let pi: double = 3.14
-    double_it(pi)
+    doubleIt(pi)
     assert(pi > 6.2)
 
     let flag: bool = true

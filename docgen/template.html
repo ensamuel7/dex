@@ -129,9 +129,6 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
 .feature-card h4{margin:0 0 6px;font-size:.9rem;color:var(--heading)}
 .feature-card p{font-size:.82rem;margin:0;color:var(--text2)}
 
-/* Example category headers */
-.example-category{font-size:1.2rem;font-weight:600;color:var(--accent);margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
-
 /* Search highlight */
 .search-highlight{outline:2px solid var(--accent);outline-offset:4px;border-radius:4px;transition:outline-color .3s}
 
@@ -240,12 +237,6 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
       <div class="nav-group-links">
         <a onclick="show('ast')">AST</a>
         <a onclick="show('lexer')">Lexer &amp; Tokens</a>
-      </div>
-    </div>
-    <div class="nav-group" data-group="examples">
-      <div class="nav-group-toggle label-examples" onclick="toggleGroup(this)">Examples <span class="chevron">&#9660;</span></div>
-      <div class="nav-group-links">
-        <a onclick="show('examples')">All Examples</a>
       </div>
     </div>
   </nav>
@@ -385,20 +376,35 @@ CMD ["server"]</code></pre>
 </table>
 
 <h3>Variables</h3>
-<p>Variables are declared with <code>let</code>. You can provide an explicit type annotation or let the compiler infer it:</p>
+<p>Variables are declared with <code>let</code>. You can provide an explicit type annotation or omit it and let the compiler infer the type automatically.</p>
 <pre><code>// Explicit type annotation
 let x: int = 42
 let name: string = "hello"
 let flag: bool = true
-let nums: int[] = [1, 2, 3]
+let nums: int[] = [1, 2, 3]</code></pre>
 
-// Type inference — the type is determined from the right-hand side
-let y = 100          // inferred as int
+<h3>Type Inference</h3>
+<p>DexLang supports <strong>type inference</strong> — when the type can be determined from the right-hand side of an assignment, the type annotation is optional. The compiler will infer the correct type at compile time.</p>
+<pre><code>let y = 100          // inferred as int
 let pi = 3.14        // inferred as double
 let msg = "world"    // inferred as string
-let ok = true        // inferred as bool</code></pre>
-<p>Type inference does <strong>not</strong> work with empty array literals — these require an explicit type:</p>
-<pre><code>let items: int[] = []   // explicit type required</code></pre>
+let ok = true        // inferred as bool
+let ch = 'A'         // inferred as char
+let big = 100L       // inferred as long</code></pre>
+
+<p>Inference also works with expressions, function returns, and struct constructors:</p>
+<pre><code>let sum = 10 + 20        // inferred as int
+let half = 10.0 / 3.0    // inferred as double
+let nums = [1, 2, 3]     // inferred as int[]
+let words = ["a", "b"]   // inferred as string[]</code></pre>
+
+<h4>When explicit types are required</h4>
+<table>
+<tr><th>Case</th><th>Example</th><th>Reason</th></tr>
+<tr><td>Empty arrays</td><td><code>let items: int[] = []</code></td><td>No elements to infer type from</td></tr>
+<tr><td>Struct references</td><td><code>let p: &amp;Point = &amp;myPoint</code></td><td>Reference types must be explicit</td></tr>
+<tr><td><code>db.col()</code> return</td><td><code>let val: string = db.col(r, 0)</code></td><td>Return type depends on annotation</td></tr>
+</table>
 
 <h3>Assignment</h3>
 <p>A variable must be declared with <code>let</code> before it can be assigned.</p>
@@ -708,12 +714,12 @@ fn helper(): int {
 }
 
 // Explicit public (same as default)
-public fn also_public(): int {
+public fn alsoPublic(): int {
     return 42
 }
 
 // Private — restricted access
-private fn internal_helper(): int {
+private fn internalHelper(): int {
     return 99
 }</code></pre>
 
@@ -1220,7 +1226,7 @@ while (db.next(rows)) {
 <h4>Block form</h4>
 <p>Run arbitrary code in a new thread. Use <code>send(value)</code> to return a result to the caller.</p>
 <pre><code>let task = spawn {
-    let result = expensive_computation()
+    let result = expensiveComputation()
     send(result)
 }
 let val = receive(task)</code></pre>
@@ -1236,7 +1242,7 @@ let val = receive(task)  // 42</code></pre>
 
 <h4>Fire-and-forget</h4>
 <p>If you don't need the result, omit the assignment. The task runs in the background.</p>
-<pre><code>spawn { do_background_work() }</code></pre>
+<pre><code>spawn { doBackgroundWork() }</code></pre>
 
 <h3>send</h3>
 <p>Send a value from inside a spawn block, or to a shared channel.</p>
@@ -1578,11 +1584,11 @@ let r: HttpResponse = http.postForm("https://api.example.com/upload", form)</cod
 <pre><code>import "http"
 import "json"
 
-fn handle_hello(): string {
+fn handleHello(): string {
     return "{\"message\": \"Hello, World!\"}"
 }
 
-fn handle_json(): string {
+fn handleJson(): string {
     let response: string = json.new()
     response = json.set(response, "message", "Hello from Dex!")
     response = json.set(response, "number", 42)
@@ -1590,14 +1596,14 @@ fn handle_json(): string {
     return response
 }
 
-fn handle_echo(req: http.HttpRequest): http.HttpResponse {
+fn handleEcho(req: http.HttpRequest): http.HttpResponse {
     return http.response(200, req.body, "text/plain")
 }
 
 fn main(): void {
-    http.route("GET", "/hello", handle_hello)
-    http.route("GET", "/json", handle_json)
-    http.route("POST", "/echo", handle_echo)
+    http.route("GET", "/hello", handleHello)
+    http.route("GET", "/json", handleJson)
+    http.route("POST", "/echo", handleEcho)
     http.listen(8080)
 }</code></pre>
 </section>
@@ -2225,19 +2231,6 @@ Param {
 </section>
 
 <!-- Examples -->
-<section id="examples" class="page-section">
-<h2>Examples</h2>
-<p>Example programs organized by topic. Each example is a complete, runnable <code>.dx</code> file.</p>
-
-{{range .ExampleCategories}}
-<h3>{{.Name}}</h3>
-{{range .Examples}}
-<h4>{{.Title}} <span style="font-size:.8rem;font-weight:400;color:var(--text2)">{{.Filename}}</span></h4>
-<pre><code>{{.Content}}</code></pre>
-{{end}}
-
-{{end}}
-</section>
 
 </div>
 
@@ -2324,7 +2317,14 @@ function buildToc() {
     if (tag === 'h4') a.className = 'toc-h4';
     a.addEventListener('click', function() {
       var target = document.getElementById(this.getAttribute('data-target'));
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (target) {
+        var main = document.querySelector('.main');
+        if (main) {
+          var mainRect = main.getBoundingClientRect();
+          var targetRect = target.getBoundingClientRect();
+          main.scrollTo({ top: main.scrollTop + targetRect.top - mainRect.top - 20, behavior: 'smooth' });
+        }
+      }
     });
     tocLinks.appendChild(a);
   });
@@ -2398,8 +2398,7 @@ var sectionNames = {
   'mod-crypto': 'crypto Module',
   'mod-str': 'str Module',
   'ast': 'AST',
-  'lexer': 'Lexer & Tokens',
-  'examples': 'Examples'
+  'lexer': 'Lexer & Tokens'
 };
 
 function buildSearchIndex() {

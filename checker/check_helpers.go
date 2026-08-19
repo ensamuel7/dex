@@ -283,6 +283,153 @@ func (c *Checker) fillDefaultArgs(e *ast.CallExpr, sig funcSig) error {
 	return nil
 }
 
+// collectReferencedVars walks statements and expressions to collect all referenced
+// variable names, distinguishing between locally-defined and externally-referenced.
+func collectReferencedVars(stmts []ast.Stmt, used, defined map[string]bool) {
+	for _, stmt := range stmts {
+		switch s := stmt.(type) {
+		case *ast.LetStmt:
+			collectReferencedVarsExpr(s.Value, used)
+			defined[s.Name] = true
+		case *ast.ExprStmt:
+			collectReferencedVarsExpr(s.Expr, used)
+		case *ast.ReturnStmt:
+			if s.Value != nil {
+				collectReferencedVarsExpr(s.Value, used)
+			}
+		case *ast.AssignStmt:
+			collectReferencedVarsExpr(s.Value, used)
+			used[s.Name] = true
+		case *ast.IfStmt:
+			collectReferencedVarsExpr(s.Cond, used)
+			collectReferencedVars(s.Then, used, defined)
+			collectReferencedVars(s.Else, used, defined)
+		case *ast.WhileStmt:
+			collectReferencedVarsExpr(s.Cond, used)
+			collectReferencedVars(s.Body, used, defined)
+		case *ast.ForStmt:
+			collectReferencedVars([]ast.Stmt{s.Init}, used, defined)
+			collectReferencedVarsExpr(s.Cond, used)
+			collectReferencedVars([]ast.Stmt{s.Post}, used, defined)
+			collectReferencedVars(s.Body, used, defined)
+		case *ast.ForeachStmt:
+			collectReferencedVarsExpr(s.Iterable, used)
+			defined[s.ValueVar] = true
+			if s.IndexVar != "" {
+				defined[s.IndexVar] = true
+			}
+			collectReferencedVars(s.Body, used, defined)
+		case *ast.BlockStmt:
+			collectReferencedVars(s.Stmts, used, defined)
+		case *ast.SendStmt:
+			if s.Target != nil {
+				collectReferencedVarsExpr(s.Target, used)
+			}
+			collectReferencedVarsExpr(s.Value, used)
+		case *ast.IncrementStmt:
+			used[s.Name] = true
+		case *ast.DecrementStmt:
+			used[s.Name] = true
+		case *ast.CompoundAssignStmt:
+			used[s.Name] = true
+			collectReferencedVarsExpr(s.Value, used)
+		case *ast.IndexAssignStmt:
+			collectReferencedVarsExpr(s.Array, used)
+			collectReferencedVarsExpr(s.Index, used)
+			collectReferencedVarsExpr(s.Value, used)
+		case *ast.FieldAssignStmt:
+			collectReferencedVarsExpr(s.Object, used)
+			collectReferencedVarsExpr(s.Value, used)
+		case *ast.DestructureLetStmt:
+			collectReferencedVarsExpr(s.Value, used)
+			for _, name := range s.Names {
+				defined[name] = true
+			}
+		case *ast.DeferStmt:
+			collectReferencedVarsExpr(s.Expr, used)
+		case *ast.ThrowStmt:
+			collectReferencedVarsExpr(s.Value, used)
+		case *ast.TryCatchStmt:
+			collectReferencedVars(s.Body, used, defined)
+			if s.CatchBody != nil {
+				defined[s.CatchVar] = true
+				collectReferencedVars(s.CatchBody, used, defined)
+			}
+			if s.FinallyBody != nil {
+				collectReferencedVars(s.FinallyBody, used, defined)
+			}
+		case *ast.SwitchStmt:
+			collectReferencedVarsExpr(s.Tag, used)
+			for _, sc := range s.Cases {
+				collectReferencedVars(sc.Body, used, defined)
+			}
+			if s.Default != nil {
+				collectReferencedVars(s.Default, used, defined)
+			}
+		}
+	}
+}
+
+func collectReferencedVarsExpr(expr ast.Expr, used map[string]bool) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.(type) {
+	case *ast.Ident:
+		used[e.Name] = true
+	case *ast.BinaryExpr:
+		collectReferencedVarsExpr(e.Left, used)
+		collectReferencedVarsExpr(e.Right, used)
+	case *ast.UnaryExpr:
+		collectReferencedVarsExpr(e.Operand, used)
+	case *ast.CallExpr:
+		for _, arg := range e.Args {
+			collectReferencedVarsExpr(arg, used)
+		}
+	case *ast.IndexExpr:
+		collectReferencedVarsExpr(e.Array, used)
+		collectReferencedVarsExpr(e.Index, used)
+	case *ast.FieldAccessExpr:
+		collectReferencedVarsExpr(e.Object, used)
+	case *ast.ArrayLitExpr:
+		for _, elem := range e.Elems {
+			collectReferencedVarsExpr(elem, used)
+		}
+	case *ast.StructLitExpr:
+		for _, v := range e.FieldValues {
+			collectReferencedVarsExpr(v, used)
+		}
+	case *ast.SpawnExpr:
+		if e.Body != nil {
+			innerDefined := make(map[string]bool)
+			collectReferencedVars(e.Body, used, innerDefined)
+		}
+		if e.Call != nil {
+			collectReferencedVarsExpr(e.Call, used)
+		}
+	case *ast.ReceiveExpr:
+		collectReferencedVarsExpr(e.Source, used)
+	case *ast.StringInterpExpr:
+		for _, part := range e.Parts {
+			collectReferencedVarsExpr(part, used)
+		}
+	case *ast.MatchExpr:
+		collectReferencedVarsExpr(e.Tag, used)
+		for _, arm := range e.Arms {
+			for _, pat := range arm.Patterns {
+				collectReferencedVarsExpr(pat, used)
+			}
+			collectReferencedVarsExpr(arm.Body, used)
+		}
+	case *ast.LambdaExpr:
+		innerDefined := make(map[string]bool)
+		for _, p := range e.Params {
+			innerDefined[p.Name] = true
+		}
+		collectReferencedVars(e.Body, used, innerDefined)
+	}
+}
+
 func typeName(t ast.Type) string {
 	switch t {
 	case ast.TypeNull:

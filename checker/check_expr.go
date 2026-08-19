@@ -274,6 +274,26 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 
 	case *ast.SpawnExpr:
 		if e.Body != nil {
+			// Check for captured variables with restricted annotations
+			spawnUsed := make(map[string]bool)
+			spawnDefined := make(map[string]bool)
+			collectReferencedVars(e.Body, spawnUsed, spawnDefined)
+			for name := range spawnUsed {
+				if spawnDefined[name] {
+					continue
+				}
+				annots := c.resolveAnnotations(name)
+				if ast.HasAnnotation(annots, ast.AnnotOwned) {
+					return 0, c.errAt(e.Pos, "cannot capture #[owned] variable '%s' in spawn block (would alias ownership)", name)
+				}
+				if ast.HasAnnotation(annots, ast.AnnotNoEscape) {
+					return 0, c.errAt(e.Pos, "cannot capture #[noEscape] variable '%s' in spawn block (may escape scope)", name)
+				}
+				if ast.HasAnnotation(annots, ast.AnnotRegion) {
+					return 0, c.errAt(e.Pos, "cannot capture #[region] variable '%s' in spawn block (region-bound, may escape scope)", name)
+				}
+			}
+
 			c.pushScope()
 			sendType := ast.TypeVoid
 			for _, stmt := range e.Body {
@@ -383,6 +403,30 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		return resultType, nil
 
 	case *ast.LambdaExpr:
+		// Check for captured variables with restricted annotations
+		used := make(map[string]bool)
+		defined := make(map[string]bool)
+		for _, p := range e.Params {
+			defined[p.Name] = true
+		}
+		collectReferencedVars(e.Body, used, defined)
+		for name := range used {
+			if defined[name] {
+				continue
+			}
+			// This is a captured variable — check its annotations
+			annots := c.resolveAnnotations(name)
+			if ast.HasAnnotation(annots, ast.AnnotOwned) {
+				return 0, c.errAt(e.Pos, "cannot capture #[owned] variable '%s' in closure (would alias ownership)", name)
+			}
+			if ast.HasAnnotation(annots, ast.AnnotNoEscape) {
+				return 0, c.errAt(e.Pos, "cannot capture #[noEscape] variable '%s' in closure (may escape scope)", name)
+			}
+			if ast.HasAnnotation(annots, ast.AnnotRegion) {
+				return 0, c.errAt(e.Pos, "cannot capture #[region] variable '%s' in closure (region-bound, may escape scope)", name)
+			}
+		}
+
 		// Push scope and define params
 		c.pushScope()
 		var paramTypes []ast.Type

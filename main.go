@@ -42,7 +42,7 @@ func formatError(msg string) string {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|lsp|docs> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs> <file.dx>")
 		os.Exit(1)
 	}
 
@@ -78,7 +78,7 @@ func main() {
 	}
 
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|check> <file.dx>")
 		os.Exit(1)
 	}
 
@@ -116,9 +116,12 @@ func main() {
 	case "dev":
 		dev(filename)
 
+	case "check":
+		check(filename)
+
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|lsp|docs> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs> <file.dx>")
 		os.Exit(1)
 	}
 }
@@ -435,5 +438,119 @@ func build(filename string) (string, error) {
 	}
 
 	return binaryPath, nil
+}
+
+// generateC runs the compilation pipeline up to C code generation (no cc invocation).
+// Returns the path to the generated .c file.
+func generateC(filename string) (string, error) {
+	ast.ResetStructTypes()
+	ast.ResetChanTypes()
+	ast.ResetTaskTypes()
+	ast.ResetWeakTypes()
+	ast.ResetStructArrayTypes()
+	ast.ResetOptionalTypes()
+	ast.ResetRefTypes()
+	ast.ResetFuncTypes()
+	ast.ResetMapTypes()
+	ast.ResetEnumTypes()
+
+	stdlib.RegisterAllModuleTypes()
+	ast.RegisterExceptionType()
+
+	source, err := os.ReadFile(filename)
+	if err != nil {
+		return "", fmt.Errorf("%s: %v", filename, err)
+	}
+
+	lex := lexer.NewWithFile(string(source), filename)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return "", err
+	}
+
+	importPaths := resolve.ExtractImportPaths(tokens)
+	typeNames := stdlib.ModuleTypesForImports(importPaths)
+
+	sourceDir := filepath.Dir(filename)
+	if sourceDir == "" {
+		sourceDir = "."
+	}
+	absSourceDir, _ := filepath.Abs(sourceDir)
+	userStructNames := resolve.PreRegisterUserStructs(importPaths, absSourceDir)
+
+	p := parser.New(tokens)
+	for _, name := range typeNames {
+		p.AddStructName(name)
+	}
+	for _, name := range userStructNames {
+		p.AddStructName(name)
+	}
+	p.AddStructName("Exception")
+	program, parseErrs := p.Parse()
+	if len(parseErrs) > 0 {
+		return "", parseErrs[0]
+	}
+
+	resolve.FlattenStructMethods(program)
+	if err := resolve.ResolveUserModules(program, absSourceDir); err != nil {
+		return "", err
+	}
+
+	ch := checker.New()
+	if checkErrs := ch.Check(program); len(checkErrs) > 0 {
+		return "", checkErrs[0]
+	}
+
+	gen := codegen.New()
+	cCode := gen.Generate(program)
+
+	buildDir := "build"
+	if err := os.MkdirAll(buildDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create build directory: %v", err)
+	}
+
+	baseName := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	cFile := filepath.Join(buildDir, baseName+".c")
+	if err := os.WriteFile(cFile, []byte(cCode), 0644); err != nil {
+		return "", fmt.Errorf("failed to write C file: %v", err)
+	}
+
+	return cFile, nil
+}
+
+func check(filename string) {
+	// Verify cppcheck is installed
+	if _, err := exec.LookPath("cppcheck"); err != nil {
+		fmt.Fprintln(os.Stderr, "cppcheck not found. Install it to use 'dex check':")
+		fmt.Fprintln(os.Stderr, "  macOS:  brew install cppcheck")
+		fmt.Fprintln(os.Stderr, "  Linux:  sudo apt install cppcheck")
+		os.Exit(1)
+	}
+
+	// Generate C code from .dx source
+	cFile, err := generateC(filename)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, formatError(err.Error()))
+		os.Exit(1)
+	}
+	defer os.Remove(cFile)
+
+	fmt.Printf("Checking %s -> %s\n", filename, cFile)
+
+	// Run cppcheck with warning, performance and portability checks
+	cmd := exec.Command("cppcheck",
+		"--enable=warning,performance,portability",
+		"--std=c11",
+		"--suppress=unusedFunction",
+		"--suppress=missingIncludeSystem",
+		"--error-exitcode=0",
+		cFile,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "cppcheck failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 

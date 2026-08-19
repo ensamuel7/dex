@@ -309,11 +309,24 @@ func (g *Generator) nextTemp() string {
 // CompilerFlags returns extra flags needed for the C compiler based on features used.
 // Must be called after Generate().
 func (g *Generator) CompilerFlags() []string {
-	flags := []string{"-O3", "-flto"}
+	flags := []string{
+		"-O3", "-flto",
+		// Security hardening
+		"-fstack-protector-strong",
+		"-D_FORTIFY_SOURCE=2",
+		// Format string security warnings
+		"-Wformat", "-Wformat-security",
+		// Suppress expected noise from static runtime functions
+		"-Wno-unused-function",
+	}
 	if runtime.GOOS == "darwin" {
 		flags = append(flags, "-Wl,-dead_strip")
 	} else if runtime.GOOS == "linux" {
-		flags = append(flags, "-Wl,--gc-sections")
+		flags = append(flags,
+			"-Wl,--gc-sections",
+			// Position-independent executable (default on macOS, explicit on Linux)
+			"-fPIE", "-pie",
+		)
 	}
 	if g.usesConcurrency {
 		flags = append(flags, "-pthread")

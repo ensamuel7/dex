@@ -139,6 +139,36 @@ func tokenKindName(k token.TokenKind) string {
 		return "TokenVoid"
 	case token.TokenCharKw:
 		return "TokenCharKw"
+	case token.TokenNull:
+		return "TokenNull"
+	case token.TokenTry:
+		return "TokenTry"
+	case token.TokenCatch:
+		return "TokenCatch"
+	case token.TokenFinally:
+		return "TokenFinally"
+	case token.TokenThrow:
+		return "TokenThrow"
+	case token.TokenSwitch:
+		return "TokenSwitch"
+	case token.TokenCase:
+		return "TokenCase"
+	case token.TokenDefault:
+		return "TokenDefault"
+	case token.TokenEnum:
+		return "TokenEnum"
+	case token.TokenMap:
+		return "TokenMap"
+	case token.TokenMatch:
+		return "TokenMatch"
+	case token.TokenInterface:
+		return "TokenInterface"
+	case token.TokenDefer:
+		return "TokenDefer"
+	case token.TokenMutex:
+		return "TokenMutex"
+	case token.TokenWeak:
+		return "TokenWeak"
 	default:
 		return fmt.Sprintf("TokenKind(%d)", k)
 	}
@@ -169,84 +199,9 @@ func Generate(projectRoot string) (string, error) {
 			fd := mod.Funcs[fnName]
 			var paramStr string
 			retType := typeName(fd.ReturnType)
-			if name == "fmt" && fnName == "print" {
-				paramStr = "int|long|double|string|bool"
-			} else if name == "json" && fnName == "set" {
-				paramStr = "string, string, int|long|double|string|bool"
-			} else if name == "json" && fnName == "setObj" {
-				paramStr = "obj: string, key: string, value: string"
-			} else if name == "json" && fnName == "stringify" {
-				paramStr = "value: T[]|struct"
-			} else if name == "json" && fnName == "objectify" {
-				paramStr = "json: string"
-				retType = "T (struct)"
-			} else if name == "json" && fnName == "arrayPush" {
-				paramStr = "arr: string, value: int|long|double|string|bool"
-			} else if name == "db" && fnName == "col" {
-				paramStr = "int, int"
-				retType = "int|string|double|bool"
-			} else if name == "http" && fd.Params == nil {
-				// HTTP special-cased functions
-				switch fnName {
-				case "route":
-					paramStr = "method: string, path: string, handler: fn"
-				case "response":
-					paramStr = "statusCode: int, body: string, contentType: string"
-					retType = "HttpResponse"
-				case "get":
-					paramStr = "string, [string]"
-					retType = "HttpResponse"
-				case "post", "put", "patch":
-					paramStr = "string, string, [string]"
-					retType = "HttpResponse"
-				case "delete":
-					paramStr = "string, [string]"
-					retType = "HttpResponse"
-				case "request":
-					paramStr = "string, string, string, string"
-					retType = "HttpResponse"
-				case "header":
-					paramStr = "string, string, string"
-					retType = "string"
-				case "formNew":
-					paramStr = ""
-					retType = "string"
-				case "formField", "formFile":
-					paramStr = "string, string, string"
-					retType = "string"
-				case "postForm":
-					paramStr = "string, string, [string]"
-					retType = "HttpResponse"
-				}
-			} else if name == "time" && fd.Params == nil {
-				// Timer special-cased functions
-				switch fnName {
-				case "setTimeout":
-					paramStr = "fn: fn(): void, ms: int"
-				case "setInterval":
-					paramStr = "fn: fn(): void, ms: int"
-					retType = "int"
-				}
-			} else if name == "ws" && fd.Params == nil {
-				// WebSocket special-cased functions
-				switch fnName {
-				case "handleMessage":
-					paramStr = "handler: fn(ws.Conn, string): void"
-				case "connect":
-					paramStr = "url: string"
-					retType = "Conn"
-				case "send":
-					paramStr = "conn: Conn, msg: string"
-				case "receive":
-					paramStr = "conn: Conn"
-					retType = "string"
-				case "close":
-					paramStr = "conn: Conn"
-				case "handleConnect":
-					paramStr = "handler: fn(ws.Conn, string): void"
-				case "handleDisconnect":
-					paramStr = "handler: fn(ws.Conn): void"
-				}
+			if sp, sr, ok := stdlib.SpecialSignature(name, fnName, &fd); ok {
+				paramStr = sp
+				retType = sr
 			} else {
 				params := make([]string, len(fd.Params))
 				for i, p := range fd.Params {

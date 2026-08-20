@@ -63,6 +63,19 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 		{"default", "Default branch"},
 		{"enum", "Enum type declaration"},
 		{"map", "Map type"},
+		{"for", "C-style for loop"},
+		{"foreach", "Iterate over array elements"},
+		{"as", "Type alias in foreach"},
+		{"break", "Break out of a loop"},
+		{"continue", "Skip to next loop iteration"},
+		{"struct", "Struct type declaration"},
+		{"match", "Pattern matching expression"},
+		{"defer", "Defer statement execution to scope exit"},
+		{"interface", "Interface type declaration"},
+		{"spawn", "Spawn a concurrent task"},
+		{"chan", "Channel type for concurrency"},
+		{"null", "Null value"},
+		{"mutex", "Mutual exclusion lock"},
 	} {
 		items = append(items, CompletionItem{
 			Label:  kw.label,
@@ -72,7 +85,7 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 	}
 
 	// Types
-	for _, t := range []string{"int", "bool", "string", "long", "double", "char", "int[]", "bool[]", "string[]", "long[]", "double[]", "char[]"} {
+	for _, t := range []string{"int", "bool", "string", "long", "double", "char", "void", "int[]", "bool[]", "string[]", "long[]", "double[]", "char[]"} {
 		items = append(items, CompletionItem{
 			Label:  t,
 			Kind:   CompletionKindType,
@@ -146,8 +159,13 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 	if mod != nil {
 		var items []CompletionItem
 		for name, fdef := range mod.Funcs {
-			var params []string
-			if fdef.Params != nil {
+			var paramStr string
+			retStr := typeName(fdef.ReturnType)
+			if sp, sr, ok := stdlib.SpecialSignature(moduleName, name, &fdef); ok {
+				paramStr = sp
+				retStr = sr
+			} else {
+				var params []string
 				for i, p := range fdef.Params {
 					pname := fmt.Sprintf("arg%d", i+1)
 					if i < len(fdef.ParamNames) {
@@ -155,12 +173,9 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 					}
 					params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
 				}
-			} else {
-				for _, pname := range fdef.ParamNames {
-					params = append(params, fmt.Sprintf("%s: %s", pname, "string"))
-				}
+				paramStr = strings.Join(params, ", ")
 			}
-			detail := fmt.Sprintf("(%s): %s", strings.Join(params, ", "), typeName(fdef.ReturnType))
+			detail := fmt.Sprintf("(%s): %s", paramStr, retStr)
 			items = append(items, CompletionItem{
 				Label:         name,
 				Kind:          CompletionKindFunction,
@@ -201,6 +216,9 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 		{Label: "containsUppercase", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one uppercase letter."},
 		{Label: "containsLowercase", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one lowercase letter."},
 		{Label: "containsDigit", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one digit."},
+		// StringBuilder methods
+		{Label: "append", Kind: CompletionKindFunction, Detail: "(value): void", Documentation: "Append a value (string, int, long, double, bool, or char) to the StringBuilder."},
+		{Label: "toString", Kind: CompletionKindFunction, Detail: "(): string", Documentation: "Build the final string from the StringBuilder buffer."},
 		// Map methods
 		{Label: "set", Kind: CompletionKindFunction, Detail: "(key, value): void", Documentation: "Set a key-value pair in the map."},
 		{Label: "get", Kind: CompletionKindFunction, Detail: "(key): value", Documentation: "Get the value for a key."},

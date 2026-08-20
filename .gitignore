@@ -20,6 +20,9 @@ docs/
 # Node modules (editors/vscode — users run npm install)
 node_modules/
 
+# Benchmarks
+benchmarks/
+
 # OS
 .DS_Store
 

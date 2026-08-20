@@ -79,6 +79,36 @@ func (s *Server) hoverAt(uri string, text string, pos Position) string {
 		return "**keyword** `case`\n\nA case branch in a `switch` statement. Supports multiple comma-separated values."
 	case token.TokenDefault:
 		return "**keyword** `default`\n\nDefault branch in a `switch` statement."
+	case token.TokenFor:
+		return "**keyword** `for`\n\nC-style for loop. Syntax: `for (init; cond; step) { ... }`"
+	case token.TokenForeach:
+		return "**keyword** `foreach`\n\nIterate over array elements. Syntax: `foreach arr as item { ... }`"
+	case token.TokenAs:
+		return "**keyword** `as`\n\nBinds loop variable in `foreach`. Syntax: `foreach arr as item { ... }`"
+	case token.TokenBreak:
+		return "**keyword** `break`\n\nExit the nearest enclosing loop immediately."
+	case token.TokenContinue:
+		return "**keyword** `continue`\n\nSkip to the next iteration of the nearest enclosing loop."
+	case token.TokenStruct:
+		return "**keyword** `struct`\n\nDeclares a struct type. Syntax: `struct Name { field: type ... }`"
+	case token.TokenMatch:
+		return "**keyword** `match`\n\nPattern matching expression. Syntax: `match (expr) { pattern => result, ... }`"
+	case token.TokenDefer:
+		return "**keyword** `defer`\n\nDefers execution of a statement until the enclosing scope exits."
+	case token.TokenInterface:
+		return "**keyword** `interface`\n\nDeclares an interface type. Syntax: `interface Name { method(params): ret ... }`"
+	case token.TokenSpawn:
+		return "**keyword** `spawn`\n\nSpawn a concurrent task. Syntax: `spawn functionName(args)`"
+	case token.TokenChan:
+		return "**keyword** `chan`\n\nChannel type for concurrent communication. Syntax: `chan<type>`"
+	case token.TokenNull:
+		return "**keyword** `null`\n\nNull value for weak references and optional types."
+	case token.TokenVoid:
+		return "**type** `void`\n\nReturn type for functions that do not return a value."
+	case token.TokenMutex:
+		return "**keyword** `mutex`\n\nMutual exclusion lock for thread synchronization."
+	case token.TokenWeak:
+		return "**keyword** `weak`\n\nDeclares a weak reference that does not prevent garbage collection."
 	case token.TokenTrue, token.TokenFalse:
 		return "**constant** `bool`\n\nBoolean literal."
 	case token.TokenIdent:
@@ -277,6 +307,35 @@ func formatModuleHover(path string) string {
 
 	var funcs []string
 	for name, fdef := range mod.Funcs {
+		var paramStr string
+		retStr := typeName(fdef.ReturnType)
+		if sp, sr, ok := stdlib.SpecialSignature(path, name, &fdef); ok {
+			paramStr = sp
+			retStr = sr
+		} else {
+			var params []string
+			for i, p := range fdef.Params {
+				pname := fmt.Sprintf("arg%d", i+1)
+				if i < len(fdef.ParamNames) {
+					pname = fdef.ParamNames[i]
+				}
+				params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
+			}
+			paramStr = strings.Join(params, ", ")
+		}
+		funcs = append(funcs, fmt.Sprintf("- `%s(%s): %s`", name, paramStr, retStr))
+	}
+	return fmt.Sprintf("**module** `%s`\n\nFunctions:\n%s", path, strings.Join(funcs, "\n"))
+}
+
+func formatStdlibFuncHover(moduleName, funcName string, fdef *stdlib.FuncDef) string {
+	var paramStr string
+	retStr := typeName(fdef.ReturnType)
+
+	if sp, sr, ok := stdlib.SpecialSignature(moduleName, funcName, fdef); ok {
+		paramStr = sp
+		retStr = sr
+	} else {
 		var params []string
 		for i, p := range fdef.Params {
 			pname := fmt.Sprintf("arg%d", i+1)
@@ -285,40 +344,10 @@ func formatModuleHover(path string) string {
 			}
 			params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
 		}
-		funcs = append(funcs, fmt.Sprintf("- `%s(%s): %s`", name, strings.Join(params, ", "), typeName(fdef.ReturnType)))
-	}
-	return fmt.Sprintf("**module** `%s`\n\nFunctions:\n%s", path, strings.Join(funcs, "\n"))
-}
-
-func formatStdlibFuncHover(moduleName, funcName string, fdef *stdlib.FuncDef) string {
-	var params []string
-
-	if fdef.Params != nil {
-		// Normal function — use actual param types
-		for i, p := range fdef.Params {
-			pname := fmt.Sprintf("arg%d", i+1)
-			if i < len(fdef.ParamNames) {
-				pname = fdef.ParamNames[i]
-			}
-			params = append(params, fmt.Sprintf("%s: %s", pname, typeName(p)))
-		}
-	} else {
-		// Special-cased function (Params nil) — use param names with string type
-		for _, pname := range fdef.ParamNames {
-			params = append(params, fmt.Sprintf("%s: %s", pname, "string"))
-		}
+		paramStr = strings.Join(params, ", ")
 	}
 
-	// Resolve return type — special-cased functions with TypeVoid use module struct type
-	retStr := typeName(fdef.ReturnType)
-	if fdef.ReturnType == ast.TypeVoid && fdef.Params == nil {
-		mod := stdlib.Lookup(moduleName)
-		if mod != nil && len(mod.Types) > 0 {
-			retStr = mod.Types[0].Name
-		}
-	}
-
-	sig := fmt.Sprintf("%s.%s(%s): %s", moduleName, funcName, strings.Join(params, ", "), retStr)
+	sig := fmt.Sprintf("%s.%s(%s): %s", moduleName, funcName, paramStr, retStr)
 	doc := "Standard library function."
 	if fdef.Doc != "" {
 		doc = fdef.Doc

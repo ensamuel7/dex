@@ -732,17 +732,32 @@ The index must be `int`. The assigned value must match the array's element type.
 
 ### Array methods
 
-| Method   | Description                          | Returns |
-|----------|--------------------------------------|---------|
-| `.push(value)` | Append an element to the array | `void`  |
-| `.len()`       | Get the number of elements     | `int`   |
+| Method               | Description                                  | Returns |
+|----------------------|----------------------------------------------|---------|
+| `.push(value)`       | Append an element to the array               | `void`  |
+| `.pop()`             | Remove and return the last element            | element type |
+| `.len()`             | Get the number of elements                    | `int`   |
+| `.remove(index)`     | Remove the element at the given index         | `void`  |
+| `.contains(val)`     | Check if the value is in the array            | `bool`  |
+| `.indexOf(val)`      | Return the index of the value, or -1          | `int`   |
+| `.reverse()`         | Reverse the array in place                    | `void`  |
+| `.sort(direction)`   | Sort the array (`"asc"` or `"desc"`)          | `void`  |
 
 ```dex
 let items: int[] = []
 items.push(10)
 items.push(20)
-let count: int = items.len()  // 2
+items.push(30)
+let count: int = items.len()       // 3
+let last: int = items.pop()        // 30
+let has: bool = items.contains(10) // true
+let idx: int = items.indexOf(20)   // 1
+items.remove(0)                    // removes 10
+items.sort("asc")                  // sort ascending
+items.reverse()                    // reverse in place
 ```
+
+> **Note:** `.sort()` is supported on primitive-typed arrays (`int[]`, `long[]`, `double[]`, `string[]`, `char[]`). Struct arrays do not support sorting.
 
 ### String methods
 
@@ -762,6 +777,15 @@ String variables have built-in methods for common text operations.
 | `.substring(start, end)`   | Extract substring (start inclusive, end exclusive) | `string`   |
 | `.replace(old, new)`       | Replace all occurrences                      | `string`   |
 | `.charAt(index)`           | Get character at index                       | `char`     |
+| `.isAlphanumeric()`        | Check if all characters are alphanumeric (non-empty) | `bool` |
+| `.isAlpha()`               | Check if all characters are alphabetic (non-empty)   | `bool` |
+| `.isDigit()`               | Check if all characters are digits (non-empty)       | `bool` |
+| `.isNumeric()`             | Check if all characters are numeric or `.` (non-empty) | `bool` |
+| `.isWhitespace()`          | Check if all characters are whitespace (non-empty)   | `bool` |
+| `.isEmpty()`               | Check if the string is empty (length 0)              | `bool` |
+| `.containsUppercase()`     | Check if the string contains an uppercase letter     | `bool` |
+| `.containsLowercase()`     | Check if the string contains a lowercase letter      | `bool` |
+| `.containsDigit()`         | Check if the string contains a digit                 | `bool` |
 
 ```dex
 let s: string = "Hello, World"
@@ -772,6 +796,19 @@ let parts: string[] = s.split(",")// ["Hello", " World"]
 let sub: string = s.substring(0, 5) // "Hello"
 let r: string = s.replace("World", "Dex") // "Hello, Dex"
 let c: char = s.charAt(0)         // 'H'
+```
+
+#### String validation
+
+```dex
+let input: string = "Hello123"
+let alnum: bool = input.isAlphanumeric() // true
+let alpha: bool = input.isAlpha()        // false (contains digits)
+let digit: bool = "42".isDigit()         // true
+let empty: bool = "".isEmpty()           // true
+let hasUp: bool = input.containsUppercase() // true
+let hasLo: bool = input.containsLowercase() // true
+let hasDg: bool = input.containsDigit()    // true
 ```
 
 ### StringBuilder

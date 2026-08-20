@@ -346,7 +346,7 @@ CMD ["server"]</code></pre>
 </div>
 <div class="feature-card">
 <h4>String Operations</h4>
-<p>12 built-in string methods, StringBuilder, auto-coercion with +</p>
+<p>21 built-in string methods, StringBuilder, auto-coercion with +</p>
 </div>
 </div>
 </section>
@@ -750,12 +750,26 @@ let length: int = nums.len()   // length</code></pre>
 <table>
 <tr><th>Method</th><th>Description</th><th>Returns</th></tr>
 <tr><td><code>.push(value)</code></td><td>Append an element to the array</td><td><code>void</code></td></tr>
+<tr><td><code>.pop()</code></td><td>Remove and return the last element</td><td>element type</td></tr>
 <tr><td><code>.len()</code></td><td>Get the number of elements</td><td><code>int</code></td></tr>
+<tr><td><code>.remove(index)</code></td><td>Remove the element at the given index</td><td><code>void</code></td></tr>
+<tr><td><code>.contains(val)</code></td><td>Check if the value is in the array</td><td><code>bool</code></td></tr>
+<tr><td><code>.indexOf(val)</code></td><td>Return the index of the value, or -1</td><td><code>int</code></td></tr>
+<tr><td><code>.reverse()</code></td><td>Reverse the array in place</td><td><code>void</code></td></tr>
+<tr><td><code>.sort(direction)</code></td><td>Sort the array (<code>"asc"</code> or <code>"desc"</code>)</td><td><code>void</code></td></tr>
 </table>
 <pre><code>let items: int[] = []
 items.push(10)
 items.push(20)
-let count: int = items.len()  // 2</code></pre>
+items.push(30)
+let count: int = items.len()       // 3
+let last: int = items.pop()        // 30
+let has: bool = items.contains(10) // true
+let idx: int = items.indexOf(20)   // 1
+items.remove(0)                    // removes 10
+items.sort("asc")                  // sort ascending
+items.reverse()                    // reverse in place</code></pre>
+<p><strong>Note:</strong> <code>.sort()</code> is supported on primitive-typed arrays (<code>int[]</code>, <code>long[]</code>, <code>double[]</code>, <code>string[]</code>, <code>char[]</code>). Struct arrays do not support sorting.</p>
 </section>
 
 <!-- StringBuilder -->
@@ -905,6 +919,15 @@ let v2: int = m["bob"]</code></pre>
 <tr><td><code>.substring(start, end)</code></td><td>Extract substring (start inclusive, end exclusive)</td><td><code>string</code></td></tr>
 <tr><td><code>.replace(old, new)</code></td><td>Replace all occurrences</td><td><code>string</code></td></tr>
 <tr><td><code>.charAt(index)</code></td><td>Get character at index</td><td><code>char</code></td></tr>
+<tr><td><code>.isAlphanumeric()</code></td><td>Check if all characters are alphanumeric (non-empty)</td><td><code>bool</code></td></tr>
+<tr><td><code>.isAlpha()</code></td><td>Check if all characters are alphabetic (non-empty)</td><td><code>bool</code></td></tr>
+<tr><td><code>.isDigit()</code></td><td>Check if all characters are digits (non-empty)</td><td><code>bool</code></td></tr>
+<tr><td><code>.isNumeric()</code></td><td>Check if all characters are numeric or '.' (non-empty)</td><td><code>bool</code></td></tr>
+<tr><td><code>.isWhitespace()</code></td><td>Check if all characters are whitespace (non-empty)</td><td><code>bool</code></td></tr>
+<tr><td><code>.isEmpty()</code></td><td>Check if the string is empty (length 0)</td><td><code>bool</code></td></tr>
+<tr><td><code>.containsUppercase()</code></td><td>Check if the string contains an uppercase letter</td><td><code>bool</code></td></tr>
+<tr><td><code>.containsLowercase()</code></td><td>Check if the string contains a lowercase letter</td><td><code>bool</code></td></tr>
+<tr><td><code>.containsDigit()</code></td><td>Check if the string contains a digit</td><td><code>bool</code></td></tr>
 </table>
 
 <h3>Examples</h3>
@@ -923,6 +946,16 @@ let c: char = s.charAt(0)          // 'H'
 let idx: int = s.indexOf("World")  // 7
 let sw: bool = s.startsWith("Hello") // true
 let ew: bool = s.endsWith("World")   // true</code></pre>
+
+<h3>Validation</h3>
+<pre><code>let input: string = "Hello123"
+let alnum: bool = input.isAlphanumeric() // true
+let alpha: bool = input.isAlpha()        // false (contains digits)
+let digit: bool = "42".isDigit()         // true
+let empty: bool = "".isEmpty()           // true
+let hasUp: bool = input.containsUppercase() // true
+let hasLo: bool = input.containsLowercase() // true
+let hasDg: bool = input.containsDigit()    // true</code></pre>
 
 <h3>String Coercion</h3>
 <p>When one operand of <code>+</code> is a <code>string</code> and the other is a non-string type, the non-string operand is automatically converted to its string representation. This works for all primitive types, structs, enums, and arrays.</p>

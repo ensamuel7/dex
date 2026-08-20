@@ -47,6 +47,12 @@ func LookupFunc(moduleName, funcName string) (*FuncDef, bool) {
 
 // RegisterAllModuleTypes registers struct types from all modules into the global ast registry.
 func RegisterAllModuleTypes() {
+	// Re-register map types used by module struct fields. Map type state is reset
+	// between compilations, but module definitions persist from init(). Since type IDs
+	// are assigned sequentially from TypeMapBase, re-calling MapTypeOf in the same
+	// order as init() produces the same IDs.
+	ast.MapTypeOf(ast.TypeString, ast.TypeString) // used by http.HttpRequest.params
+
 	for _, mod := range registry {
 		for _, td := range mod.Types {
 			if _, exists := ast.LookupStructType(td.Name); !exists {

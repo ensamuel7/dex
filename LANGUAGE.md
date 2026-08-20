@@ -1162,7 +1162,8 @@ Build HTTP servers and make HTTP requests.
 ```dex
 import "http"
 
-http.route("GET", "/path", "handler_function_name")
+http.route("GET", "/path", handler)
+http.route("GET", "/users/:id", userHandler)   // route parameters
 http.listen(8080)
 ```
 
@@ -1170,7 +1171,7 @@ http.listen(8080)
 
 | Function   | Signature                                                      | Description                        |
 |------------|----------------------------------------------------------------|------------------------------------|
-| `route`    | `route(method: string, path: string, handler): void`           | Register a route handler           |
+| `route`    | `route(method: string, path: string, handler): void`           | Register a route handler. Path supports `:param` segments for dynamic routes (e.g. `"/users/:id"`). |
 | `listen`   | `listen(port: int, workers?: int): void`                       | Start the server on a port. Optional `workers` forks multiple processes via `SO_REUSEPORT` (0 = auto-detect CPU cores). |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
 
@@ -1180,17 +1181,40 @@ Handler functions can take **0 parameters** (backward-compatible) or **1 paramet
 
 ```dex
 struct HttpRequest {
-  method: string       // "GET", "POST", etc.
-  path: string         // "/api/foo"
-  body: string         // request body (empty string if none)
-  query: string        // raw query string after '?' (empty if none)
+  method: string              // "GET", "POST", etc.
+  path: string                // "/api/foo"
+  body: string                // request body (empty string if none)
+  query: string               // raw query string after '?' (empty if none)
+  params: map[string,string]  // route parameters from :param segments
 }
 ```
+
+**Route Parameters:**
+
+Paths can contain `:param` segments for dynamic routing. Extracted values are available via `req.params`:
+
+```dex
+http.route("GET", "/posts/:id", handleGetPost)
+http.route("GET", "/posts/:postId/comments/:commentId", handleGetComment)
+
+fn handleGetPost(req: http.HttpRequest): http.HttpResponse {
+  let id: string = req.params.get("id")
+  return http.response(200, id, "text/plain")
+}
+
+fn handleGetComment(req: http.HttpRequest): http.HttpResponse {
+  let postId: string = req.params.get("postId")
+  let commentId: string = req.params.get("commentId")
+  return http.response(200, postId, "text/plain")
+}
+```
+
+Routes without `:param` segments continue to use fast exact matching.
 
 **Examples:**
 
 ```dex
-// Handler with request context (new)
+// Handler with request context
 fn handlePost(req: http.HttpRequest): http.HttpResponse {
   let body: string = req.body
   let method: string = req.method
@@ -1205,6 +1229,7 @@ fn handleGet(): string {
 fn main(): void {
   http.route("POST", "/echo", handlePost)
   http.route("GET", "/api", handleGet)
+  http.route("GET", "/users/:id", handleGetUser)
   http.listen(3000)
 }
 ```

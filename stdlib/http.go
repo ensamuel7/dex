@@ -137,6 +137,7 @@ func init() {
 					{Name: "path", Type: ast.TypeString, Doc: "Request path (e.g. \"/api/foo\")."},
 					{Name: "body", Type: ast.TypeString, Doc: "Request body (empty string if none)."},
 					{Name: "query", Type: ast.TypeString, Doc: "Raw query string after '?' (empty if none)."},
+					{Name: "params", Type: ast.MapTypeOf(ast.TypeString, ast.TypeString), Doc: "Route parameters extracted from :param segments (e.g. \"/users/:id\" → params.get(\"id\"))."},
 				},
 			},
 		},

@@ -24,7 +24,9 @@ func checkSource(t *testing.T, source string) error {
 	ast.ResetFuncTypes()
 	ast.ResetMapTypes()
 	ast.ResetEnumTypes()
+	ast.ResetInterfaceTypes()
 	stdlib.RegisterAllModuleTypes()
+	ast.RegisterExceptionType()
 
 	tokens, err := lexer.New(source).Tokenize()
 	if err != nil {
@@ -1022,4 +1024,1865 @@ func TestHttpFormFieldWrongArgCount(t *testing.T) {
 fn main(): void {
 	let form: string = http.formField("a", "b")
 }`, "http.formField() takes exactly 3 arguments")
+}
+
+// --- Route parameters: chained field.method() access on HttpRequest.params ---
+
+func TestHttpRouteParamsGet(t *testing.T) {
+	mustCheck(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let id: string = req.params.get("id")
+	return http.response(200, id, "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/users/:id", handler)
+}`)
+}
+
+func TestHttpRouteParamsHas(t *testing.T) {
+	mustCheck(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let exists: bool = req.params.has("id")
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/users/:id", handler)
+}`)
+}
+
+func TestHttpRouteParamsSet(t *testing.T) {
+	mustCheck(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	req.params.set("key", "value")
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/test", handler)
+}`)
+}
+
+func TestHttpRouteParamsLen(t *testing.T) {
+	mustCheck(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let n: int = req.params.len()
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/test", handler)
+}`)
+}
+
+func TestHttpRouteParamsGetWrongKeyType(t *testing.T) {
+	mustFail(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let id: string = req.params.get(42)
+	return http.response(200, id, "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/users/:id", handler)
+}`, "key must be string, got int")
+}
+
+func TestHttpRouteParamsSetWrongValueType(t *testing.T) {
+	mustFail(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	req.params.set("key", 42)
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/test", handler)
+}`, "value must be string, got int")
+}
+
+func TestHttpRouteParamsGetReturnsString(t *testing.T) {
+	// params.get() returns string — assigning to int should fail
+	mustFail(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let id: int = req.params.get("id")
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/users/:id", handler)
+}`, "type mismatch in let: expected int, got string")
+}
+
+func TestHttpRouteParamsMultiple(t *testing.T) {
+	mustCheck(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let postId: string = req.params.get("postId")
+	let commentId: string = req.params.get("commentId")
+	return http.response(200, postId, "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/posts/:postId/comments/:commentId", handler)
+}`)
+}
+
+func TestHttpRouteWithParamsAndExistingFields(t *testing.T) {
+	// Verify that existing fields (method, path, body, query) still work alongside params
+	mustCheck(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let m: string = req.method
+	let p: string = req.path
+	let b: string = req.body
+	let q: string = req.query
+	let id: string = req.params.get("id")
+	return http.response(200, b, "text/plain")
+}
+fn main(): void {
+	http.route("POST", "/items/:id", handler)
+}`)
+}
+
+func TestHttpRouteNoParamsStillWorks(t *testing.T) {
+	// Routes without :param segments should still compile
+	mustCheck(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	return http.response(200, req.body, "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/static/path", handler)
+}`)
+}
+
+func TestHttpRouteZeroParamHandlerStillWorks(t *testing.T) {
+	// Backward-compatible: 0-param handlers still work
+	mustCheck(t, `import "http"
+fn handler(): string {
+	return "hello"
+}
+fn main(): void {
+	http.route("GET", "/hello", handler)
+}`)
+}
+
+// =============================================================================
+// String methods
+// =============================================================================
+
+func TestStringMethodLen(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let n: int = s.len()
+	}`)
+}
+
+func TestStringMethodContains(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let b: bool = s.contains("ell")
+	}`)
+}
+
+func TestStringMethodStartsWith(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let b: bool = s.startsWith("he")
+	}`)
+}
+
+func TestStringMethodEndsWith(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let b: bool = s.endsWith("lo")
+	}`)
+}
+
+func TestStringMethodIndexOf(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let i: int = s.indexOf("ll")
+	}`)
+}
+
+func TestStringMethodToLower(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "HELLO"
+		let lower: string = s.toLower()
+	}`)
+}
+
+func TestStringMethodToUpper(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let upper: string = s.toUpper()
+	}`)
+}
+
+func TestStringMethodTrim(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "  hello  "
+		let trimmed: string = s.trim()
+	}`)
+}
+
+func TestStringMethodSubstring(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let sub: string = s.substring(1, 3)
+	}`)
+}
+
+func TestStringMethodReplace(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let replaced: string = s.replace("l", "r")
+	}`)
+}
+
+func TestStringMethodCharAt(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello"
+		let ch: char = s.charAt(0)
+	}`)
+}
+
+func TestStringMethodSplit(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "a,b,c"
+		let parts: string[] = s.split(",")
+	}`)
+}
+
+func TestStringMethodIsAlphanumeric(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "abc123"
+		let b: bool = s.isAlphanumeric()
+	}`)
+}
+
+func TestStringMethodIsAlpha(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "abc"
+		let b: bool = s.isAlpha()
+	}`)
+}
+
+func TestStringMethodIsDigit(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "123"
+		let b: bool = s.isDigit()
+	}`)
+}
+
+func TestStringMethodIsEmpty(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = ""
+		let b: bool = s.isEmpty()
+	}`)
+}
+
+func TestStringMethodContainsUppercase(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "Hello"
+		let b: bool = s.containsUppercase()
+	}`)
+}
+
+func TestStringMethodAllMethods(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let s: string = "hello world"
+		let n: int = s.len()
+		let b: bool = s.contains("ell")
+		let b2: bool = s.startsWith("he")
+		let b3: bool = s.endsWith("ld")
+		let i: int = s.indexOf("ll")
+		let lower: string = s.toLower()
+		let upper: string = s.toUpper()
+		let trimmed: string = s.trim()
+		let sub: string = s.substring(1, 3)
+		let replaced: string = s.replace("l", "r")
+		let ch: char = s.charAt(0)
+		let parts: string[] = s.split(",")
+	}`)
+}
+
+// --- String method error cases ---
+
+func TestStringMethodLenWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let n: int = s.len(1)
+	}`, "len() takes no arguments")
+}
+
+func TestStringMethodContainsWrongType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let b: bool = s.contains(42)
+	}`, "contains() argument must be string, got int")
+}
+
+func TestStringMethodStartsWithWrongType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let b: bool = s.startsWith(42)
+	}`, "startsWith() argument must be string, got int")
+}
+
+func TestStringMethodEndsWithWrongArgCount(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let b: bool = s.endsWith("a", "b")
+	}`, "endsWith() takes exactly 1 argument")
+}
+
+func TestStringMethodIndexOfWrongType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let i: int = s.indexOf(42)
+	}`, "indexOf() argument must be string, got int")
+}
+
+func TestStringMethodToLowerWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let r: string = s.toLower("x")
+	}`, "toLower() takes no arguments")
+}
+
+func TestStringMethodToUpperWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let r: string = s.toUpper("x")
+	}`, "toUpper() takes no arguments")
+}
+
+func TestStringMethodTrimWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let r: string = s.trim("x")
+	}`, "trim() takes no arguments")
+}
+
+func TestStringMethodSubstringWrongArgCount(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let r: string = s.substring(1)
+	}`, "substring() takes exactly 2 arguments")
+}
+
+func TestStringMethodSubstringWrongType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let r: string = s.substring("a", 3)
+	}`, "substring() argument 1 must be int, got string")
+}
+
+func TestStringMethodReplaceWrongArgCount(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let r: string = s.replace("a")
+	}`, "replace() takes exactly 2 arguments")
+}
+
+func TestStringMethodReplaceWrongType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let r: string = s.replace("a", 42)
+	}`, "replace() argument 2 must be string, got int")
+}
+
+func TestStringMethodCharAtWrongType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let ch: char = s.charAt("x")
+	}`, "charAt() argument must be int, got string")
+}
+
+func TestStringMethodCharAtWrongArgCount(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		let ch: char = s.charAt(0, 1)
+	}`, "charAt() takes exactly 1 argument")
+}
+
+func TestStringMethodSplitWrongType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "a,b,c"
+		let parts: string[] = s.split(42)
+	}`, "split() argument must be string, got int")
+}
+
+func TestStringMethodUndefined(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let s: string = "hello"
+		s.nonexistent()
+	}`, "undefined method 'nonexistent' on string type")
+}
+
+// =============================================================================
+// StringBuilder methods
+// =============================================================================
+
+func TestStringBuilderCreate(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+	}`)
+}
+
+func TestStringBuilderAppendString(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.append("hello")
+	}`)
+}
+
+func TestStringBuilderAppendInt(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.append(42)
+	}`)
+}
+
+func TestStringBuilderAppendBool(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.append(true)
+	}`)
+}
+
+func TestStringBuilderAppendDouble(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.append(3.14)
+	}`)
+}
+
+func TestStringBuilderLen(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		let n: int = sb.len()
+	}`)
+}
+
+func TestStringBuilderToString(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.append("hello")
+		let s: string = sb.toString()
+	}`)
+}
+
+func TestStringBuilderClear(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.append("hello")
+		sb.clear()
+	}`)
+}
+
+func TestStringBuilderAllMethods(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.append("hello")
+		sb.append(42)
+		sb.append(3.14)
+		sb.append(true)
+		let n: int = sb.len()
+		let s: string = sb.toString()
+		sb.clear()
+	}`)
+}
+
+// --- StringBuilder error cases ---
+
+func TestStringBuilderAppendWrongArgCount(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.append("a", "b")
+	}`, "append() takes exactly 1 argument")
+}
+
+func TestStringBuilderLenWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.len(1)
+	}`, "len() takes no arguments")
+}
+
+func TestStringBuilderToStringWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.toString(1)
+	}`, "toString() takes no arguments")
+}
+
+func TestStringBuilderClearWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.clear(1)
+	}`, "clear() takes no arguments")
+}
+
+func TestStringBuilderUndefinedMethod(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let sb: StringBuilder = StringBuilder()
+		sb.nonexistent()
+	}`, "undefined method 'nonexistent' on StringBuilder type")
+}
+
+// =============================================================================
+// Map methods (remove, clear, keys, values, len)
+// =============================================================================
+
+func TestMapRemove(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.set("a", 1)
+		m.remove("a")
+	}`)
+}
+
+func TestMapClear(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.set("a", 1)
+		m.clear()
+	}`)
+}
+
+func TestMapKeys(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.set("a", 1)
+		let k: string[] = m.keys()
+	}`)
+}
+
+func TestMapValues(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.set("a", 1)
+		let v: int[] = m.values()
+	}`)
+}
+
+func TestMapLen(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+		let n: int = m.len()
+	}`)
+}
+
+func TestMapAllMethods(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.set("a", 1)
+		m.set("b", 2)
+		let v: int = m.get("a")
+		let b: bool = m.has("a")
+		m.remove("a")
+		let k: string[] = m.keys()
+		let vals: int[] = m.values()
+		let n: int = m.len()
+		m.clear()
+	}`)
+}
+
+func TestMapIntKeyMethods(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[int, string] = {}
+		m.set(1, "hello")
+		m.remove(1)
+		let k: int[] = m.keys()
+		let v: string[] = m.values()
+		m.clear()
+	}`)
+}
+
+// --- Map method error cases ---
+
+func TestMapRemoveWrongKeyType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.remove(42)
+	}`, "remove() key must be string, got int")
+}
+
+func TestMapRemoveWrongArgCount(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.remove("a", "b")
+	}`, "remove() takes exactly 1 argument")
+}
+
+func TestMapClearWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.clear(1)
+	}`, "clear() takes no arguments")
+}
+
+func TestMapKeysWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.keys(1)
+	}`, "keys() takes no arguments")
+}
+
+func TestMapValuesWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.values(1)
+	}`, "values() takes no arguments")
+}
+
+func TestMapLenWithArgs(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.len(1)
+	}`, "len() takes no arguments")
+}
+
+func TestMapUndefinedMethod(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m.nonexistent()
+	}`, "undefined method 'nonexistent' on map type")
+}
+
+// =============================================================================
+// Const declarations
+// =============================================================================
+
+func TestConstInt(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		const x: int = 42
+		let y: int = x
+	}`)
+}
+
+func TestConstDouble(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		const PI: double = 3.14
+		let y: double = PI
+	}`)
+}
+
+func TestConstString(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		const NAME: string = "hello"
+		let y: string = NAME
+	}`)
+}
+
+func TestConstBool(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		const flag: bool = true
+		let y: bool = flag
+	}`)
+}
+
+func TestConstLong(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		const big: long = 1000000
+		let y: long = big
+	}`)
+}
+
+func TestConstInferred(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		const x = 42
+		let y: int = x
+	}`)
+}
+
+func TestConstCannotReassign(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		const x: int = 42
+		x = 10
+	}`, "cannot reassign const variable 'x'")
+}
+
+func TestConstCannotIncrement(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		const x: int = 42
+		x++
+	}`, "cannot modify const variable 'x'")
+}
+
+func TestConstCannotDecrement(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		const x: int = 42
+		x--
+	}`, "cannot modify const variable 'x'")
+}
+
+func TestConstCannotCompoundAssign(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		const x: int = 42
+		x += 1
+	}`, "cannot modify const variable 'x'")
+}
+
+// =============================================================================
+// Struct definitions
+// =============================================================================
+
+func TestStructLiteral(t *testing.T) {
+	mustCheck(t, `
+struct Point {
+	x: int
+	y: int
+}
+fn main(): void {
+	let p = Point { x: 1, y: 2 }
+	let px: int = p.x
+	let py: int = p.y
+}`)
+}
+
+func TestStructFieldAccess(t *testing.T) {
+	mustCheck(t, `
+struct Config {
+	name: string
+	value: int
+}
+fn main(): void {
+	let cfg = Config { name: "test", value: 42 }
+	let n: string = cfg.name
+	let v: int = cfg.value
+}`)
+}
+
+func TestStructFieldAssign(t *testing.T) {
+	mustCheck(t, `
+struct Point {
+	x: int
+	y: int
+}
+fn main(): void {
+	let p = Point { x: 1, y: 2 }
+	p.x = 10
+	p.y = 20
+}`)
+}
+
+func TestStructWithConstructor(t *testing.T) {
+	mustCheck(t, `
+struct Point(x: int, y: int) {
+}
+fn main(): void {
+	let p = Point(3, 4)
+	let px: int = p.x
+}`)
+}
+
+func TestStructWithMethods(t *testing.T) {
+	mustCheck(t, `
+struct Point(x: int, y: int) {
+	fn sum(): int {
+		return x + y
+	}
+	fn scale(factor: int): int {
+		return x * factor + y * factor
+	}
+}
+fn main(): void {
+	let p = Point(3, 4)
+	let s: int = p.sum()
+	let sc: int = p.scale(2)
+}`)
+}
+
+func TestStructDuplicateField(t *testing.T) {
+	mustFail(t, `
+struct Bad {
+	x: int
+	x: int
+}
+fn main(): void {}`, "duplicate field 'x' in struct 'Bad'")
+}
+
+func TestStructDuplicateName(t *testing.T) {
+	mustFail(t, `
+struct Foo { x: int }
+struct Foo { y: int }
+fn main(): void {}`, "duplicate struct type 'Foo'")
+}
+
+func TestStructFieldAccessUndefined(t *testing.T) {
+	mustFail(t, `
+struct Point {
+	x: int
+	y: int
+}
+fn main(): void {
+	let p = Point { x: 1, y: 2 }
+	let z: int = p.z
+}`, "struct 'Point' has no field 'z'")
+}
+
+func TestStructFieldAssignTypeMismatch(t *testing.T) {
+	mustFail(t, `
+struct Point {
+	x: int
+	y: int
+}
+fn main(): void {
+	let p = Point { x: 1, y: 2 }
+	p.x = "hello"
+}`, "type mismatch in field assignment")
+}
+
+// =============================================================================
+// Enum definitions
+// =============================================================================
+
+func TestEnumDefinition(t *testing.T) {
+	mustCheck(t, `
+enum Color {
+	Red
+	Green
+	Blue
+}
+fn main(): void {
+	let c: Color = Color.Red
+}`)
+}
+
+func TestEnumComparison(t *testing.T) {
+	mustCheck(t, `
+enum Color {
+	Red
+	Green
+	Blue
+}
+fn main(): void {
+	let c: Color = Color.Red
+	let b: bool = c == Color.Green
+	let b2: bool = c != Color.Blue
+}`)
+}
+
+func TestEnumDuplicateVariant(t *testing.T) {
+	mustFail(t, `
+enum Color {
+	Red
+	Red
+}
+fn main(): void {}`, "duplicate variant 'Red' in enum 'Color'")
+}
+
+func TestEnumUndefinedVariant(t *testing.T) {
+	mustFail(t, `
+enum Color {
+	Red
+	Green
+	Blue
+}
+fn main(): void {
+	let c: Color = Color.Yellow
+}`, "enum 'Color' has no variant 'Yellow'")
+}
+
+func TestEnumInSwitch(t *testing.T) {
+	mustCheck(t, `
+import "fmt"
+enum Direction {
+	North
+	South
+	East
+	West
+}
+fn main(): void {
+	let d: Direction = Direction.East
+	switch (d) {
+		case Direction.North: {
+			fmt.println("north")
+		}
+		case Direction.East: {
+			fmt.println("east")
+		}
+		default: {
+			fmt.println("other")
+		}
+	}
+}`)
+}
+
+func TestEnumReassign(t *testing.T) {
+	mustCheck(t, `
+enum Color {
+	Red
+	Green
+	Blue
+}
+fn main(): void {
+	let c: Color = Color.Red
+	c = Color.Blue
+}`)
+}
+
+func TestEnumArray(t *testing.T) {
+	mustCheck(t, `
+enum Color {
+	Red
+	Green
+	Blue
+}
+fn main(): void {
+	let colors: Color[] = []
+	colors.push(Color.Red)
+	colors.push(Color.Green)
+	let n: int = colors.len()
+}`)
+}
+
+// =============================================================================
+// Switch statements
+// =============================================================================
+
+func TestSwitchInt(t *testing.T) {
+	mustCheck(t, `
+import "fmt"
+fn main(): void {
+	let x: int = 1
+	switch (x) {
+		case 1: {
+			fmt.println("one")
+		}
+		case 2: {
+			fmt.println("two")
+		}
+		default: {
+			fmt.println("other")
+		}
+	}
+}`)
+}
+
+func TestSwitchString(t *testing.T) {
+	mustCheck(t, `
+import "fmt"
+fn main(): void {
+	let action: string = "Heartbeat"
+	switch (action) {
+		case "BootNotification": {
+			fmt.println("boot")
+		}
+		case "Heartbeat", "StatusNotification": {
+			fmt.println("status")
+		}
+		default: {
+			fmt.println("unknown")
+		}
+	}
+}`)
+}
+
+func TestSwitchChar(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let grade: char = 'B'
+		let score: int = 0
+		switch (grade) {
+			case 'A': {
+				score = 100
+			}
+			case 'B': {
+				score = 85
+			}
+			default: {
+				score = 0
+			}
+		}
+	}`)
+}
+
+func TestSwitchWithoutDefault(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: int = 1
+		switch (x) {
+			case 1: {
+				let y: int = 10
+			}
+			case 2: {
+				let y: int = 20
+			}
+		}
+	}`)
+}
+
+func TestSwitchCaseTypeMismatch(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = 1
+		switch (x) {
+			case "one": {
+				let y: int = 10
+			}
+		}
+	}`, "case value type string does not match switch tag type int")
+}
+
+// =============================================================================
+// Try/catch
+// =============================================================================
+
+func TestTryCatch(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		try {
+			let x: int = 1
+		} catch (e: Exception) {
+			let msg: string = e.message
+		}
+	}`)
+}
+
+func TestTryCatchFinally(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		try {
+			let x: int = 1
+		} catch (e: Exception) {
+			let msg: string = e.message
+		} finally {
+			let cleanup: int = 0
+		}
+	}`)
+}
+
+func TestTryFinally(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		try {
+			let x: int = 1
+		} finally {
+			let cleanup: int = 0
+		}
+	}`)
+}
+
+func TestThrow(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		throw Exception("something went wrong")
+	}`)
+}
+
+func TestThrowNonException(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		throw "error"
+	}`, "throw requires Exception type, got string")
+}
+
+// =============================================================================
+// For loop variants
+// =============================================================================
+
+func TestForLoopCompoundAssignStep(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		for (let i: int = 0; i < 10; i += 1) {
+		}
+	}`)
+}
+
+func TestForLoopCompoundAssignDoubleStep(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		for (let i: int = 0; i < 100; i += 2) {
+		}
+	}`)
+}
+
+func TestForLoopSubtractStep(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		for (let i: int = 10; i > 0; i -= 1) {
+		}
+	}`)
+}
+
+func TestForLoopWithBody(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sum: int = 0
+		for (let i: int = 0; i < 10; i += 1) {
+			sum += i
+		}
+	}`)
+}
+
+// =============================================================================
+// canAssign — type assignment compatibility
+// =============================================================================
+
+func TestCanAssignIntLiteralToLong(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: long = 42
+	}`)
+}
+
+func TestCanAssignIntLiteralToDouble(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: double = 42
+	}`)
+}
+
+func TestCanAssignCharLiteralToInt(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: int = 'A'
+	}`)
+}
+
+func TestCanAssignCharLiteralToLong(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: long = 'A'
+	}`)
+}
+
+func TestCanAssignCharLiteralToDouble(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: double = 'A'
+	}`)
+}
+
+func TestCannotAssignIntVarToLong(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let a: int = 42
+		let b: long = a
+	}`, "type mismatch in let: expected long, got int")
+}
+
+func TestCannotAssignStringToInt(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = "hello"
+	}`, "type mismatch in let")
+}
+
+func TestCannotAssignBoolToInt(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = true
+	}`, "type mismatch in let")
+}
+
+func TestCannotAssignIntToString(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: string = 42
+	}`, "type mismatch in let")
+}
+
+func TestCannotAssignIntToBool(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: bool = 42
+	}`, "type mismatch in let")
+}
+
+func TestCanAssignIntLiteralToFunctionParamLong(t *testing.T) {
+	mustCheck(t, `
+fn greet(n: long): long { return n }
+fn main(): void {
+	let x: long = greet(42)
+}`)
+}
+
+func TestCanAssignIntLiteralToFunctionParamDouble(t *testing.T) {
+	mustCheck(t, `
+fn compute(n: double): double { return n }
+fn main(): void {
+	let x: double = compute(42)
+}`)
+}
+
+// =============================================================================
+// Optional types and null
+// =============================================================================
+
+func TestNullToOptionalInt(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: int? = null
+	}`)
+}
+
+func TestNullToOptionalString(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: string? = null
+	}`)
+}
+
+func TestValueToOptional(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: int? = 42
+	}`)
+}
+
+func TestOptionalNullCheck(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: int? = null
+		if (x != null) {
+			let y: int = x
+		}
+	}`)
+}
+
+func TestCannotAssignNullToNonOptional(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = null
+	}`, "type mismatch in let")
+}
+
+// =============================================================================
+// typeName coverage — exercise various type displays
+// =============================================================================
+
+func TestTypeNameLong(t *testing.T) {
+	// Trigger an error that shows "long" in the message
+	mustFail(t, `fn main(): void {
+		let x: long = 42
+		let y: string = x
+	}`, "type mismatch in let: expected string, got long")
+}
+
+func TestTypeNameDouble(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: double = 3.14
+		let y: string = x
+	}`, "type mismatch in let: expected string, got double")
+}
+
+func TestTypeNameChar(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: char = 'A'
+		let y: string = x
+	}`, "type mismatch in let: expected string, got char")
+}
+
+func TestTypeNameBoolArray(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: bool[] = [true, false]
+		let y: int = x
+	}`, "type mismatch in let: expected int, got bool[]")
+}
+
+func TestTypeNameStringArray(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: string[] = ["a", "b"]
+		let y: int = x
+	}`, "type mismatch in let: expected int, got string[]")
+}
+
+func TestTypeNameLongArray(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: long[] = []
+		let y: int = x
+	}`, "type mismatch in let: expected int, got long[]")
+}
+
+func TestTypeNameDoubleArray(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: double[] = []
+		let y: int = x
+	}`, "type mismatch in let: expected int, got double[]")
+}
+
+func TestTypeNameCharArray(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: char[] = []
+		let y: int = x
+	}`, "type mismatch in let: expected int, got char[]")
+}
+
+func TestTypeNameVoid(t *testing.T) {
+	// Return type mismatch triggers void display
+	mustFail(t, `fn foo(): void {}
+fn main(): int {
+		return foo()
+	}`, "return type mismatch: expected int, got void")
+}
+
+func TestTypeNameMapType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		let y: int = m
+	}`, "type mismatch in let: expected int, got map[string, int]")
+}
+
+func TestTypeNameNull(t *testing.T) {
+	mustFail(t, `fn main(): int {
+		return null
+	}`, "return type mismatch: expected int, got null")
+}
+
+// =============================================================================
+// isPrimitiveType — switch tag must be primitive
+// =============================================================================
+
+func TestSwitchBoolTag(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let b: bool = true
+		switch (b) {
+			case true: {
+				let x: int = 1
+			}
+			case false: {
+				let x: int = 0
+			}
+		}
+	}`)
+}
+
+func TestSwitchLongTag(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: long = 42
+		switch (x) {
+			case 1: {
+				let y: int = 1
+			}
+			default: {
+				let y: int = 0
+			}
+		}
+	}`)
+}
+
+func TestSwitchDoubleTag(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: double = 3.14
+		switch (x) {
+			case 3.14: {
+				let y: int = 1
+			}
+			default: {
+				let y: int = 0
+			}
+		}
+	}`)
+}
+
+func TestSwitchNonPrimitiveTagFails(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let a: int[] = [1, 2, 3]
+		switch (a) {
+			default: {
+				let y: int = 0
+			}
+		}
+	}`, "switch tag must be a primitive type")
+}
+
+// =============================================================================
+// isValidFieldType — struct fields
+// =============================================================================
+
+func TestStructFieldInt(t *testing.T) {
+	mustCheck(t, `
+struct S { x: int }
+fn main(): void {
+	let s = S { x: 1 }
+}`)
+}
+
+func TestStructFieldBool(t *testing.T) {
+	mustCheck(t, `
+struct S { x: bool }
+fn main(): void {
+	let s = S { x: true }
+}`)
+}
+
+func TestStructFieldString(t *testing.T) {
+	mustCheck(t, `
+struct S { x: string }
+fn main(): void {
+	let s = S { x: "hello" }
+}`)
+}
+
+func TestStructFieldLong(t *testing.T) {
+	mustCheck(t, `
+struct S { x: long }
+fn main(): void {
+	let s = S { x: 42 }
+}`)
+}
+
+func TestStructFieldDouble(t *testing.T) {
+	mustCheck(t, `
+struct S { x: double }
+fn main(): void {
+	let s = S { x: 3.14 }
+}`)
+}
+
+func TestStructFieldChar(t *testing.T) {
+	mustCheck(t, `
+struct S { x: char }
+fn main(): void {
+	let s = S { x: 'A' }
+}`)
+}
+
+// =============================================================================
+// Named arguments (resolveNamedArgs)
+// =============================================================================
+
+func TestNamedArguments(t *testing.T) {
+	mustCheck(t, `
+fn greet(name: string, age: int): string {
+	return name
+}
+fn main(): void {
+	let r: string = greet(name: "Alice", age: 30)
+}`)
+}
+
+func TestNamedArgumentsReordered(t *testing.T) {
+	mustCheck(t, `
+fn greet(name: string, age: int): string {
+	return name
+}
+fn main(): void {
+	let r: string = greet(age: 30, name: "Alice")
+}`)
+}
+
+func TestNamedArgumentsUnknownParam(t *testing.T) {
+	mustFail(t, `
+fn greet(name: string, age: int): string {
+	return name
+}
+fn main(): void {
+	greet(name: "Alice", height: 170)
+}`, "unknown parameter name 'height'")
+}
+
+func TestNamedArgumentsDuplicate(t *testing.T) {
+	mustFail(t, `
+fn greet(name: string, age: int): string {
+	return name
+}
+fn main(): void {
+	greet(name: "Alice", name: "Bob")
+}`, "duplicate argument for parameter 'name'")
+}
+
+// =============================================================================
+// Default parameters (fillDefaultArgs)
+// =============================================================================
+
+func TestDefaultParameters(t *testing.T) {
+	mustCheck(t, `
+fn greet(name: string, greeting: string = "Hello"): string {
+	return greeting
+}
+fn main(): void {
+	let r1: string = greet("Alice")
+	let r2: string = greet("Bob", "Hi")
+}`)
+}
+
+func TestDefaultParametersMissing(t *testing.T) {
+	mustFail(t, `
+fn greet(name: string, age: int): string {
+	return name
+}
+fn main(): void {
+	greet("Alice")
+}`, "missing argument for required parameter")
+}
+
+// =============================================================================
+// Foreach loop
+// =============================================================================
+
+func TestForeachValueTypeSafety(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let a: string[] = ["a", "b", "c"]
+		foreach (a as s) {
+			let x: string = s
+		}
+	}`)
+}
+
+func TestForeachWithIndexTypeSafety(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let a: int[] = [10, 20, 30]
+		foreach (a as i, n) {
+			let idx: int = i
+			let val: int = n
+		}
+	}`)
+}
+
+// =============================================================================
+// Block statements
+// =============================================================================
+
+func TestBlockScopeIsolation(t *testing.T) {
+	mustFail(t, `fn main(): int {
+		if (true) {
+			let inner: int = 42
+		}
+		return inner
+	}`, "undefined variable 'inner'")
+}
+
+// =============================================================================
+// Return statement
+// =============================================================================
+
+func TestBareReturnInVoid(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		return
+	}`)
+}
+
+func TestBareReturnInNonVoid(t *testing.T) {
+	mustFail(t, `fn main(): int {
+		return
+	}`, "return statement must have a value in non-void function")
+}
+
+// =============================================================================
+// Index assignment
+// =============================================================================
+
+func TestArrayIndexAssignTypeMismatch(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let a: int[] = [1, 2, 3]
+		a[0] = "hello"
+	}`, "type mismatch in index assignment")
+}
+
+func TestMapIndexAssign(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m["key"] = 42
+	}`)
+}
+
+func TestMapIndexAssignTypeMismatch(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m["key"] = "hello"
+	}`, "type mismatch in map assignment")
+}
+
+func TestMapIndexRead(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+		m["key"] = 42
+		let v: int = m["key"]
+	}`)
+}
+
+func TestMapIndexReadWrongKeyType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let m: map[string, int] = {}
+		let v: int = m[42]
+	}`, "map key must be string, got int")
+}
+
+func TestIndexOnNonArrayNonMap(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = 42
+		let y: int = x[0]
+	}`, "index operator requires an array or map type")
+}
+
+// =============================================================================
+// Empty map literal
+// =============================================================================
+
+func TestEmptyMapLiteral(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let m: map[string, int] = {}
+	}`)
+}
+
+func TestEmptyMapLiteralNonMapType(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = {}
+	}`, "cannot assign empty map literal to non-map type")
+}
+
+// =============================================================================
+// validateAnnotations
+// =============================================================================
+
+func TestAnnotationUnknown(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		#[unknown]
+		let x: string = "hello"
+	}`, "unknown annotation '#[unknown]'")
+}
+
+func TestAnnotationOnPrimitive(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		#[owned]
+		let x: int = 42
+	}`, "annotations are only allowed on heap types")
+}
+
+func TestAnnotationOwnedOnString(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		#[owned]
+		let x: string = "hello"
+	}`)
+}
+
+// =============================================================================
+// String interpolation
+// =============================================================================
+
+func TestStringInterpolation(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let name: string = "world"
+		let msg: string = "hello ${name}"
+	}`)
+}
+
+func TestStringInterpolationWithInt(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let n: int = 42
+		let msg: string = "number: ${n}"
+	}`)
+}
+
+// =============================================================================
+// Char literal
+// =============================================================================
+
+func TestCharLiteral(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let c: char = 'A'
+	}`)
+}
+
+func TestCharModulo(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let c: char = 'Z'
+		let r: char = c % 'A'
+	}`)
+}
+
+// =============================================================================
+// Null literal
+// =============================================================================
+
+func TestNullLiteral(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let x: int? = null
+	}`)
+}
+
+func TestCannotInferTypeOfNull(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x = null
+	}`, "cannot infer type of null")
+}
+
+// =============================================================================
+// Function references
+// =============================================================================
+
+func TestFunctionReference(t *testing.T) {
+	mustCheck(t, `
+fn add(a: int, b: int): int { return a + b }
+fn main(): void {
+	let f = add
+	let r: int = f(1, 2)
+}`)
+}
+
+// =============================================================================
+// StringBuilder constructor
+// =============================================================================
+
+func TestStringBuilderConstructorNoArgs(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let sb = StringBuilder()
+	}`)
+}
+
+func TestStringBuilderConstructorWithArgsFails(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let sb = StringBuilder("hello")
+	}`, "StringBuilder() takes no arguments")
+}
+
+// =============================================================================
+// Array widening (array literal with implicit element widening)
+// =============================================================================
+
+func TestArrayWidenIntToLong(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let a: long[] = [1, 2, 3]
+	}`)
+}
+
+func TestArrayWidenIntToDouble(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let a: double[] = [1, 2, 3]
+	}`)
+}
+
+// =============================================================================
+// String coercion in concatenation
+// =============================================================================
+
+func TestStringCoercionIntConcat(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let n: int = 42
+		let s: string = "number: " + n
+	}`)
+}
+
+func TestStringCoercionBoolConcat(t *testing.T) {
+	mustCheck(t, `fn main(): void {
+		let b: bool = true
+		let s: string = "flag: " + b
+	}`)
+}
+
+// =============================================================================
+// Defer statement
+// =============================================================================
+
+func TestDeferStatement(t *testing.T) {
+	mustCheck(t, `
+import "fmt"
+fn main(): void {
+	defer fmt.println("cleanup")
+	fmt.println("main")
+}`)
+}
+
+// =============================================================================
+// Interface definitions and structural typing
+// =============================================================================
+
+func TestInterfaceDefinition(t *testing.T) {
+	// Interface defs register correctly; struct without matching methods fails
+	mustCheck(t, `
+interface Greeter {
+	fn greet(): string
+}
+fn main(): void {
+}`)
+}
+
+func TestInterfaceNotSatisfied(t *testing.T) {
+	mustFail(t, `
+interface Stringer {
+	fn toString(): string
+}
+struct Empty {
+	x: int
+}
+fn printStr(s: Stringer): void {
+}
+fn main(): void {
+	let e = Empty { x: 1 }
+	printStr(e)
+}`, "expected Stringer, got Empty")
+}
+
+// =============================================================================
+// Destructuring let
+// =============================================================================
+
+func TestDestructureLet(t *testing.T) {
+	mustCheck(t, `
+struct Point {
+	x: int
+	y: int
+}
+fn main(): void {
+	let p = Point { x: 1, y: 2 }
+	let { x, y } = p
+	let a: int = x
+	let b: int = y
+}`)
+}
+
+func TestDestructureLetWrongField(t *testing.T) {
+	mustFail(t, `
+struct Point {
+	x: int
+	y: int
+}
+fn main(): void {
+	let p = Point { x: 1, y: 2 }
+	let { z } = p
+}`, "struct 'Point' has no field 'z'")
+}
+
+func TestDestructureNonStruct(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = 42
+		let { y } = x
+	}`, "destructuring requires a struct type")
+}
+
+// =============================================================================
+// Enum switch with isPrimitiveType
+// =============================================================================
+
+func TestEnumSwitchIsPrimitive(t *testing.T) {
+	mustCheck(t, `
+enum Status {
+	Active
+	Inactive
+	Pending
+}
+fn main(): void {
+	let s: Status = Status.Active
+	switch (s) {
+		case Status.Active: {
+			let x: int = 1
+		}
+		case Status.Inactive: {
+			let x: int = 2
+		}
+		default: {
+			let x: int = 0
+		}
+	}
+}`)
+}
+
+// =============================================================================
+// Additional checkExpr coverage: StructLitExpr errors
+// =============================================================================
+
+func TestStructLitExtraFields(t *testing.T) {
+	mustFail(t, `
+struct Point {
+	x: int
+	y: int
+}
+fn main(): void {
+	let p = Point { x: 1, y: 2, z: 3 }
+}`, "struct 'Point' has 2 fields, got 3")
+}
+
+func TestStructLitFieldTypeMismatch(t *testing.T) {
+	mustFail(t, `
+struct Point {
+	x: int
+	y: int
+}
+fn main(): void {
+	let p = Point { x: 1, y: "hello" }
+}`, "field 'y' of struct 'Point': expected int, got string")
+}
+
+// =============================================================================
+// Additional misc coverage
+// =============================================================================
+
+func TestIndexAssignNonArray(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = 42
+		x[0] = 1
+	}`, "index assignment requires an array or map type")
+}
+
+func TestFieldAssignNonStruct(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = 42
+		x.field = 1
+	}`, "field assignment requires a struct type")
+}
+
+func TestFieldAccessNonStruct(t *testing.T) {
+	mustFail(t, `fn main(): void {
+		let x: int = 42
+		let y: int = x.field
+	}`, "field access requires a struct type")
 }

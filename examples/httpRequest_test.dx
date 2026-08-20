@@ -9,6 +9,17 @@ fn handlePost(req: http.HttpRequest): http.HttpResponse {
     return http.response(200, body, "text/plain")
 }
 
+fn handleGetPost(req: http.HttpRequest): http.HttpResponse {
+    let id: string = req.params.get("id")
+    return http.response(200, id, "text/plain")
+}
+
+fn handleGetComment(req: http.HttpRequest): http.HttpResponse {
+    let postId: string = req.params.get("postId")
+    let commentId: string = req.params.get("commentId")
+    return http.response(200, postId, "text/plain")
+}
+
 fn handleGet(): string {
     return "hello"
 }
@@ -16,5 +27,7 @@ fn handleGet(): string {
 fn main(): void {
     http.route("POST", "/echo", handlePost)
     http.route("GET", "/hello", handleGet)
+    http.route("GET", "/posts/:id", handleGetPost)
+    http.route("GET", "/posts/:postId/comments/:commentId", handleGetComment)
     fmt.println("HTTP request context test compiled successfully")
 }

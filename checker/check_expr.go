@@ -546,6 +546,22 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if isVar && ast.IsRefType(varType) {
 				varType = ast.RefInnerType(varType)
 			}
+			// Map method call on dotted field (e.g. req.params.get("id"))
+			if isVar && ast.IsMapType(varType) {
+				retType, err := c.checkMapMethod(e.Module, varType, e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				return retType, nil
+			}
+			// String method call on dotted field (e.g. req.path.len())
+			if isVar && varType == ast.TypeString {
+				retType, err := c.checkStringMethod(e.Module, e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				return retType, nil
+			}
 			// Mutex method call on dotted field (e.g. self.mu.lock())
 			if isVar && varType == ast.TypeMutex {
 				switch e.Name {

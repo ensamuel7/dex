@@ -1,11 +1,11 @@
 
-/* event_loop.c — Platform-abstracted event loop (epoll/kqueue) + worker thread pool
+/* event_loop.c — Platform-abstracted event loop (epoll/kqueue)
  *
  * Provides:
  *   - DexEventLoop:  unified I/O multiplexing over epoll (Linux) and kqueue (macOS/BSD)
- *   - DexThreadPool: fixed-size worker thread pool with condvar work queue
  *   - Notify pipe helpers for worker→event-loop signaling
  *
+ * The thread pool (DexThreadPool) lives in threadpool.c and is emitted before this file.
  * All symbols are static to avoid collisions when linked into a single translation unit.
  */
 
@@ -197,113 +197,6 @@ static int dex_ev_wait(DexEventLoop* loop, DexEvent* out, int max, int timeout_m
 #else
     return -1;
 #endif
-}
-
-/* ── Worker thread pool ──────────────────────────────────────────── */
-
-typedef struct DexWorkItem {
-    void (*func)(void*);
-    void* arg;
-    struct DexWorkItem* next;
-} DexWorkItem;
-
-typedef struct {
-    pthread_t*      threads;
-    int             num_threads;
-    pthread_mutex_t mutex;
-    pthread_cond_t  cond;
-    DexWorkItem*    head;
-    DexWorkItem*    tail;
-    int             shutdown;
-} DexThreadPool;
-
-static void* dex_pool_worker(void* arg) {
-    DexThreadPool* pool = (DexThreadPool*)arg;
-    for (;;) {
-        pthread_mutex_lock(&pool->mutex);
-        while (!pool->head && !pool->shutdown) {
-            pthread_cond_wait(&pool->cond, &pool->mutex);
-        }
-        if (pool->shutdown && !pool->head) {
-            pthread_mutex_unlock(&pool->mutex);
-            break;
-        }
-        DexWorkItem* item = pool->head;
-        pool->head = item->next;
-        if (!pool->head) pool->tail = NULL;
-        pthread_mutex_unlock(&pool->mutex);
-
-        item->func(item->arg);
-        free(item);
-    }
-    return NULL;
-}
-
-static DexThreadPool* dex_pool_create(int num_threads) {
-    if (num_threads <= 0) {
-#ifdef _SC_NPROCESSORS_ONLN
-        long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
-        num_threads = (int)(ncpu > 0 ? ncpu : 4);
-#else
-        num_threads = 4;
-#endif
-        if (num_threads > 16) num_threads = 16;
-        if (num_threads < 4) num_threads = 4;
-    }
-
-    DexThreadPool* pool = (DexThreadPool*)calloc(1, sizeof(DexThreadPool));
-    pool->num_threads = num_threads;
-    pool->threads = (pthread_t*)calloc(num_threads, sizeof(pthread_t));
-    pthread_mutex_init(&pool->mutex, NULL);
-    pthread_cond_init(&pool->cond, NULL);
-    pool->head = NULL;
-    pool->tail = NULL;
-    pool->shutdown = 0;
-
-    for (int i = 0; i < num_threads; i++) {
-        pthread_create(&pool->threads[i], NULL, dex_pool_worker, pool);
-    }
-    return pool;
-}
-
-static void dex_pool_submit(DexThreadPool* pool, void (*func)(void*), void* arg) {
-    DexWorkItem* item = (DexWorkItem*)malloc(sizeof(DexWorkItem));
-    item->func = func;
-    item->arg = arg;
-    item->next = NULL;
-
-    pthread_mutex_lock(&pool->mutex);
-    if (pool->tail) {
-        pool->tail->next = item;
-    } else {
-        pool->head = item;
-    }
-    pool->tail = item;
-    pthread_cond_signal(&pool->cond);
-    pthread_mutex_unlock(&pool->mutex);
-}
-
-static void dex_pool_destroy(DexThreadPool* pool) {
-    if (!pool) return;
-    pthread_mutex_lock(&pool->mutex);
-    pool->shutdown = 1;
-    pthread_cond_broadcast(&pool->cond);
-    pthread_mutex_unlock(&pool->mutex);
-
-    for (int i = 0; i < pool->num_threads; i++) {
-        pthread_join(pool->threads[i], NULL);
-    }
-    /* Free remaining items */
-    DexWorkItem* item = pool->head;
-    while (item) {
-        DexWorkItem* next = item->next;
-        free(item);
-        item = next;
-    }
-    pthread_mutex_destroy(&pool->mutex);
-    pthread_cond_destroy(&pool->cond);
-    free(pool->threads);
-    free(pool);
 }
 
 /* ── Notify pipe (worker → event loop signaling) ─────────────────── */

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DexLang Documentation</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -328,7 +329,7 @@ CMD ["server"]</code></pre>
 </div>
 <div class="feature-card">
 <h4>Concurrency</h4>
-<p>spawn, channels, send/receive — compiled to pthreads</p>
+<p>spawn, channels, send/receive — thread pool + pthreads</p>
 </div>
 <div class="feature-card">
 <h4>HTTP &amp; WebSocket</h4>
@@ -1213,7 +1214,7 @@ while (db.next(rows)) {
 <!-- Concurrency -->
 <section id="concurrency" class="page-section">
 <h2>Concurrency</h2>
-<p>DexLang provides lightweight concurrency with four primitives: <code>spawn</code>, <code>send</code>, <code>receive</code>, and <code>channel</code>. Under the hood these compile to pthreads and a lock-free channel implementation.</p>
+<p>DexLang provides lightweight concurrency with four primitives: <code>spawn</code>, <code>send</code>, <code>receive</code>, and <code>channel</code>. Under the hood these compile to a fixed-size thread pool (backed by pthreads) and a lock-free channel implementation.</p>
 
 <h3>spawn</h3>
 <p>Launch a concurrent task. Returns a task handle that can be used with <code>receive</code> to get results.</p>
@@ -1286,6 +1287,105 @@ let task = spawn {
     send(x * 2)
 }
 let result = receive(task)  // 20</code></pre>
+
+<h3>Mutex</h3>
+<p><code>mutex</code> is a built-in type for mutual exclusion. Use it to protect shared data when multiple threads access the same memory via <code>&amp;Struct</code> references. A mutex has two methods: <code>.lock()</code> and <code>.unlock()</code>.</p>
+<pre><code>let mu: mutex = mutex
+mu.lock()
+// critical section — only one thread at a time
+mu.unlock()</code></pre>
+
+<h4>Protecting shared state</h4>
+<p>The typical pattern is to embed a mutex inside a struct and pass the struct by reference to spawned threads. Without a mutex, concurrent writes cause data races:</p>
+<pre><code>struct Counter {
+    mu: mutex
+    value: int
+}
+
+fn increment(c: &amp;Counter): void {
+    c.mu.lock()
+    c.value = c.value + 1
+    c.mu.unlock()
+}
+
+fn main(): void {
+    let c = Counter{mu: mutex, value: 0}
+    let ch = channel(int)
+
+    for (let i = 0; i &lt; 10; i++) {
+        spawn {
+            increment(c)
+            send(ch, 1)
+        }
+    }
+
+    // Wait for all 10 threads to finish
+    for (let i = 0; i &lt; 10; i++) {
+        receive(ch)
+    }
+
+    assert(c.value == 10)
+}</code></pre>
+
+<h4>Safe unlock with defer</h4>
+<p>If code inside a lock can throw an exception, a bare <code>.unlock()</code> call may never execute — leaving the mutex locked and all other threads deadlocked. Use <code>defer</code> to guarantee the unlock runs on both normal return and exception:</p>
+<pre><code>fn increment(c: &amp;Counter): void {
+    c.mu.lock()
+    defer c.mu.unlock()   // runs when function exits, no matter what
+
+    riskyOperation()       // if this throws, defer still fires
+    c.value = c.value + 1
+}</code></pre>
+<p><code>defer</code> queues a call that executes when the function exits — whether by <code>return</code> or by exception. Multiple defers run in LIFO order (last defer runs first).</p>
+
+<h4>Safe unlock with try/finally</h4>
+<p>Alternatively, use <code>try</code>/<code>finally</code> for block-scoped cleanup:</p>
+<pre><code>fn increment(c: &amp;Counter): void {
+    c.mu.lock()
+    try {
+        riskyOperation()
+        c.value = c.value + 1
+    } catch (e: Exception) {
+        fmt.println("Error: " + e.message)
+    } finally {
+        c.mu.unlock()      // always runs
+    }
+}</code></pre>
+
+<h4>defer vs finally</h4>
+<table>
+<tr><th></th><th><code>defer</code></th><th><code>finally</code></th></tr>
+<tr><td>Scope</td><td>Function-wide</td><td>Block-level (one per try)</td></tr>
+<tr><td>Multiple</td><td>Yes, LIFO order</td><td>One per try block</td></tr>
+<tr><td>Best for</td><td>Resource cleanup (lock, file, connection)</td><td>Handling + cleanup together</td></tr>
+<tr><td>Runs on exception</td><td>Yes</td><td>Yes</td></tr>
+</table>
+<p><code>defer</code> is the idiomatic choice — it pairs the lock and unlock visually and works regardless of how many exit paths the function has.</p>
+
+<h3>Threading Model</h3>
+<p>Each <code>spawn</code> submits work to a <strong>fixed-size thread pool</strong> that is initialized at program start. The pool size is automatically set to the number of CPU cores, clamped between 4 and 16 threads. Worker threads are reused across spawns, so there is no per-spawn thread creation overhead.</p>
+
+<h4>Per-spawn cost</h4>
+<table>
+<tr><th>Resource</th><th>Cost</th></tr>
+<tr><td>Thread creation</td><td>None (reuses pool workers)</td></tr>
+<tr><td>Context struct</td><td>~200 bytes (channel + captured variables)</td></tr>
+<tr><td>Work item</td><td>~24 bytes (function pointer + arg + next pointer)</td></tr>
+<tr><td>Captured primitives</td><td>Copied by value</td></tr>
+<tr><td>Captured heap types</td><td>Pointer copy + atomic refcount increment</td></tr>
+</table>
+
+<h4>Practical limits</h4>
+<table>
+<tr><th>Concurrent spawns</th><th>Memory overhead</th><th>Assessment</th></tr>
+<tr><td>10-100</td><td>Negligible</td><td>Well within pool capacity</td></tr>
+<tr><td>1,000</td><td>~200 KB</td><td>Fine — tasks queue and execute as workers free up</td></tr>
+<tr><td>10,000+</td><td>~2 MB</td><td>Practical — only pool threads consume stack memory</td></tr>
+</table>
+<p>The thread pool is shared between <code>spawn</code> and the HTTP/WebSocket server modules. Worker threads are joined at program exit, ensuring all pending tasks complete before the process terminates. Use channels as synchronization barriers when you need to wait for specific task results.</p>
+
+<h4>When to use spawn</h4>
+<p>Spawn is well-suited for parallelism at any scale: splitting CPU-bound work across cores, running background tasks, or fan-out/fan-in patterns. The thread pool ensures that even thousands of spawns remain efficient, with tasks queued and dispatched to the fixed set of worker threads.</p>
 </section>
 
 <!-- Error Handling -->
@@ -1354,6 +1454,12 @@ fn main(): void {
 
 <h3>print</h3>
 <div class="func-card"><div class="sig"><span class="module">fmt</span>.print(<span class="ptype">value: int|long|double|string|bool</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Print a single value to stdout without a trailing newline. Accepts any primitive type — the compiler selects the correct format string at compile time.</p>
+<pre><code>fmt.print("hello ")
+fmt.print("world")         // output: hello world</code></pre>
+
+<h3>println</h3>
+<div class="func-card"><div class="sig"><span class="module">fmt</span>.println(<span class="ptype">value: int|long|double|string|bool</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Print a single value followed by a newline. Accepts any primitive type — the compiler selects the correct format string at compile time. Each call prints exactly one value. To print multiple values, use multiple calls or build a string with concatenation.</p>
 <pre><code>fmt.println(42)            // prints: 42
 fmt.println("hello")       // prints: hello
@@ -1480,7 +1586,7 @@ let len: int = json.arrayLen(arr)           // 3</code></pre>
 
 <h4>route</h4>
 <div class="func-card"><div class="sig"><span class="module">http</span>.route(<span class="ptype">method: string, path: string, handler: fn</span>) <span class="ret">-&gt; void</span></div></div>
-<p>Register a route handler. The handler is referenced by function name. Handlers can take <strong>0 parameters</strong> (backward-compatible) or <strong>1 parameter</strong> of type <code>http.HttpRequest</code>. They must return a non-void type (typically <code>HttpResponse</code> or <code>string</code>).</p>
+<p>Register a route handler. The path supports <code>:param</code> segments for dynamic routes (e.g. <code>"/users/:id"</code>). Extracted values are available via <code>req.params.get("id")</code>. Handlers can take <strong>0 parameters</strong> (backward-compatible) or <strong>1 parameter</strong> of type <code>http.HttpRequest</code>. They must return a non-void type (typically <code>HttpResponse</code> or <code>string</code>).</p>
 
 <h4>response</h4>
 <div class="func-card"><div class="sig"><span class="module">http</span>.response(<span class="ptype">statusCode: int, body: string, contentType: string</span>) <span class="ret">-&gt; HttpResponse</span></div></div>
@@ -1498,9 +1604,18 @@ let len: int = json.arrayLen(arr)           // 3</code></pre>
 <tr><td><code>path</code></td><td><code>string</code></td><td>Request path (e.g. "/api/foo")</td></tr>
 <tr><td><code>body</code></td><td><code>string</code></td><td>Request body (empty string if none)</td></tr>
 <tr><td><code>query</code></td><td><code>string</code></td><td>Raw query string after '?' (empty if none)</td></tr>
+<tr><td><code>params</code></td><td><code>map[string,string]</code></td><td>Route parameters extracted from <code>:param</code> segments</td></tr>
 </table>
 
-<pre><code>// Handler with request context
+<pre><code>// Handler with route parameters
+http.route("GET", "/posts/:id", handleGetPost)
+
+fn handleGetPost(req: http.HttpRequest): http.HttpResponse {
+    let id: string = req.params.get("id")
+    return http.response(200, id, "text/plain")
+}
+
+// Handler with request context
 fn handlePost(req: http.HttpRequest): http.HttpResponse {
     let body: string = req.body
     return http.response(200, body, "text/plain")
@@ -1571,6 +1686,12 @@ form = http.formField(form, "name", "Alice")
 form = http.formFile(form, "avatar", "/path/to/photo.jpg")
 let r: HttpResponse = http.postForm("https://api.example.com/upload", form)</code></pre>
 
+<h4>upload</h4>
+<div class="func-card"><div class="sig"><span class="module">http</span>.upload(<span class="ptype">path: string, url: string</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Upload a file to a URL via HTTP multipart form POST. The file is sent as a form field named <code>file</code>. Returns the server's response body as a string, or an empty string on failure. Requires <code>libcurl</code> at compile time (<code>brew install curl</code> on macOS).</p>
+<pre><code>let response: string = http.upload("photo.jpg", "https://api.example.com/upload")
+fmt.println(response)</code></pre>
+
 <h3>Server example</h3>
 <pre><code>import "http"
 import "json"
@@ -1602,7 +1723,7 @@ fn main(): void {
 <!-- file module -->
 <section id="mod-file" class="page-section">
 <h2>file<span class="badge">module</span></h2>
-<p>The <code>file</code> module provides filesystem operations and HTTP file uploads.</p>
+<p>The <code>file</code> module provides filesystem operations for reading, writing, and managing files.</p>
 <pre><code>import "file"</code></pre>
 
 <h3>read</h3>
@@ -1641,11 +1762,10 @@ if (!ok) {
 <p>Rename or move a file. Returns <code>true</code> on success.</p>
 <pre><code>file.rename("draft.txt", "final.txt")</code></pre>
 
-<h3>upload</h3>
-<div class="func-card"><div class="sig"><span class="module">file</span>.upload(<span class="ptype">path: string, url: string</span>) <span class="ret">-&gt; string</span></div></div>
-<p>Upload a file to a URL via HTTP multipart form POST. The file is sent as a form field named <code>file</code>. Returns the server's response body as a string, or an empty string on failure. Requires <code>libcurl</code> at compile time (<code>brew install curl</code> on macOS).</p>
-<pre><code>let response: string = file.upload("photo.jpg", "https://api.example.com/upload")
-fmt.println(response)</code></pre>
+<h3>move</h3>
+<div class="func-card"><div class="sig"><span class="module">file</span>.move(<span class="ptype">src: string, dst: string</span>) <span class="ret">-&gt; bool</span></div></div>
+<p>Move a file from <code>src</code> to <code>dst</code>. Returns <code>true</code> on success.</p>
+<pre><code>file.move("uploads/temp.txt", "archive/temp.txt")</code></pre>
 
 <h3>Full example</h3>
 <pre><code>import "file"
@@ -1852,9 +1972,21 @@ fn main(): void {
 
 <h3>Server</h3>
 
+<h4>setProtocol</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.setProtocol(<span class="ptype">protocol: string</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Set the WebSocket subprotocol for server and client handshakes. Must be called before <code>listen</code> or <code>connect</code>.</p>
+
+<h4>handleConnect</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.handleConnect(<span class="ptype">handler: fn(ws.Conn, string): void</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Register a callback function invoked when a client connects. The handler receives the connection and the request path. Must be called before <code>listen</code>.</p>
+
 <h4>handleMessage</h4>
 <div class="func-card"><div class="sig"><span class="module">ws</span>.handleMessage(<span class="ptype">handler: fn(ws.Conn, string): void</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Register a callback function to handle incoming WebSocket messages. The handler receives the connection and the message text. Must be called before <code>listen</code>.</p>
+
+<h4>handleDisconnect</h4>
+<div class="func-card"><div class="sig"><span class="module">ws</span>.handleDisconnect(<span class="ptype">handler: fn(ws.Conn): void</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Register a callback function invoked when a client disconnects. The handler receives the connection. Must be called before <code>listen</code>.</p>
 
 <h4>listen</h4>
 <div class="func-card"><div class="sig"><span class="module">ws</span>.listen(<span class="ptype">port: int</span>) <span class="ret">-&gt; void</span></div></div>
@@ -2034,14 +2166,14 @@ fn main(): void {
 <p>The <code>str</code> module provides type conversion utilities for converting between strings and numeric/boolean types.</p>
 <pre><code>import "str"</code></pre>
 
-<h3>To String</h3>
+<h3>From Other Types</h3>
 
 <div class="func-card"><div class="sig"><span class="module">str</span>.fromInt(<span class="ptype">n: int</span>) <span class="ret">-&gt; string</span></div></div>
 <div class="func-card"><div class="sig"><span class="module">str</span>.fromLong(<span class="ptype">n: long</span>) <span class="ret">-&gt; string</span></div></div>
 <div class="func-card"><div class="sig"><span class="module">str</span>.fromDouble(<span class="ptype">d: double</span>) <span class="ret">-&gt; string</span></div></div>
 <div class="func-card"><div class="sig"><span class="module">str</span>.fromBool(<span class="ptype">b: bool</span>) <span class="ret">-&gt; string</span></div></div>
 
-<h3>From String</h3>
+<h3>To Other Types</h3>
 
 <div class="func-card"><div class="sig"><span class="module">str</span>.toInt(<span class="ptype">s: string</span>) <span class="ret">-&gt; int</span></div></div>
 <div class="func-card"><div class="sig"><span class="module">str</span>.toLong(<span class="ptype">s: string</span>) <span class="ret">-&gt; long</span></div></div>

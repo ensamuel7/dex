@@ -368,6 +368,18 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Pre-scan to determine needed language-level features
 	g.scan(program)
 
+	// Event loop is needed when HTTP or WebSocket server modules are imported.
+	// Map runtime is needed for HTTP (HttpRequest.params is map[string,string]).
+	// This must run before the dependency resolution chain below.
+	for _, imp := range program.Imports {
+		if imp.Path == "http" || imp.Path == "ws" {
+			g.usesEventLoop = true
+		}
+		if imp.Path == "http" {
+			g.usesMap = true // HttpRequest.params is map[string,string]
+		}
+	}
+
 	// String methods need both string and array runtimes (split returns DexArrayString)
 	if g.usesStringMethods {
 		g.usesString = true
@@ -394,14 +406,6 @@ func (g *Generator) Generate(program *ast.Program) string {
 	if g.usesArray {
 		g.usesString = true
 		g.usesSafety = true
-	}
-
-	// Event loop is needed when HTTP or WebSocket server modules are imported
-	for _, imp := range program.Imports {
-		if imp.Path == "http" || imp.Path == "ws" {
-			g.usesEventLoop = true
-			break
-		}
 	}
 
 	// Refcount is needed whenever strings, arrays, or concurrency is used
@@ -532,6 +536,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit concurrency runtime
 	if g.usesConcurrency {
 		out.WriteString(ConcurrencyRuntime)
+	}
+
+	// Emit thread pool runtime (must come after concurrency, before event loop)
+	if g.usesConcurrency || g.usesEventLoop {
+		out.WriteString(ThreadPoolRuntime)
 	}
 
 	// Emit arena runtime (for #[region] annotations)

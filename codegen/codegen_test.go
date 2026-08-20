@@ -961,3 +961,761 @@ fn main(): void {
 		t.Error("struct typedef should appear before module C runtime")
 	}
 }
+
+// --- Route parameters codegen ---
+
+func TestCodegenHttpRouteParamsMapRuntime(t *testing.T) {
+	// Importing http should emit map runtime (needed for HttpRequest.params)
+	out := generate(t, `import "http"
+fn handler(): string { return "ok" }
+fn main(): void {
+	http.route("GET", "/", handler)
+}`)
+	assertContains(t, out, "DexMap_str_str")
+	assertContains(t, out, "dex_map_str_str_new")
+}
+
+func TestCodegenHttpRequestParamsField(t *testing.T) {
+	// HttpRequest struct typedef should contain a params field of type DexMap_str_str*
+	out := generate(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/test", handler)
+}`)
+	assertContains(t, out, "DexMap_str_str* params")
+}
+
+func TestCodegenHttpParamsGet(t *testing.T) {
+	// req.params.get("id") should generate a dex_map_str_str_get() call
+	out := generate(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let id: string = req.params.get("id")
+	return http.response(200, id, "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/users/:id", handler)
+}`)
+	assertContains(t, out, "dex_map_str_str_get(")
+	assertContains(t, out, "req.params")
+}
+
+func TestCodegenHttpParamsHas(t *testing.T) {
+	out := generate(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let exists: bool = req.params.has("id")
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/users/:id", handler)
+}`)
+	assertContains(t, out, "dex_map_str_str_has(")
+}
+
+func TestCodegenHttpParamsSet(t *testing.T) {
+	out := generate(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	req.params.set("key", "value")
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/test", handler)
+}`)
+	assertContains(t, out, "dex_map_str_str_set(")
+}
+
+func TestCodegenHttpMapRuntimeBeforeStructTypedef(t *testing.T) {
+	// Map runtime (DEX_MAP_DEFINE macro) must be emitted before Dex_HttpRequest struct typedef.
+	// The map runtime contains DEX_MAP_DEFINE(..., str_str, ...) which defines DexMap_str_str.
+	out := generate(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	let id: string = req.params.get("id")
+	return http.response(200, id, "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/users/:id", handler)
+}`)
+	// The map macro instantiation defines the DexMap_str_str type
+	mapRuntimeIdx := strings.Index(out, "DEX_MAP_DEFINE(DexString*, DexString*, str_str,")
+	httpRequestIdx := strings.Index(out, "} Dex_HttpRequest;")
+	if mapRuntimeIdx < 0 || httpRequestIdx < 0 {
+		t.Fatal("expected both DEX_MAP_DEFINE for str_str and Dex_HttpRequest in output")
+	}
+	if mapRuntimeIdx > httpRequestIdx {
+		t.Error("map runtime (DEX_MAP_DEFINE) should appear before Dex_HttpRequest struct typedef")
+	}
+}
+
+func TestCodegenHttpRouteParamPattern(t *testing.T) {
+	// Route with :param should still generate dex_route() call
+	out := generate(t, `import "http"
+fn handler(req: http.HttpRequest): http.HttpResponse {
+	return http.response(200, "ok", "text/plain")
+}
+fn main(): void {
+	http.route("GET", "/posts/:id", handler)
+}`)
+	assertContains(t, out, "dex_route(")
+	assertContains(t, out, "/posts/:id")
+}
+
+// generateWithGen runs the full pipeline and returns both the C code and the generator
+// so that post-generation state (e.g. CompilerFlags()) can be inspected.
+func generateWithGen(t *testing.T, source string) (string, *Generator) {
+	t.Helper()
+	ast.ResetStructTypes()
+	ast.ResetChanTypes()
+	ast.ResetTaskTypes()
+	ast.ResetWeakTypes()
+	ast.ResetStructArrayTypes()
+	ast.ResetOptionalTypes()
+	ast.ResetRefTypes()
+	ast.ResetFuncTypes()
+	ast.ResetMapTypes()
+	ast.ResetEnumTypes()
+	stdlib.RegisterAllModuleTypes()
+
+	tokens, err := lexer.New(source).Tokenize()
+	if err != nil {
+		t.Fatalf("lexer error: %v", err)
+	}
+
+	importPaths := extractCodegenImportPaths(tokens)
+	typeNames := stdlib.ModuleTypesForImports(importPaths)
+
+	p := parser.New(tokens)
+	for _, name := range typeNames {
+		p.AddStructName(name)
+	}
+	prog, parseErrs := p.Parse()
+	if len(parseErrs) > 0 {
+		t.Fatalf("parser error: %v", parseErrs[0])
+	}
+	if checkErrs := checker.New().Check(prog); len(checkErrs) > 0 {
+		t.Fatalf("checker error: %v", checkErrs[0])
+	}
+	gen := New()
+	code := gen.Generate(prog)
+	return code, gen
+}
+
+// --- Struct definition codegen ---
+
+func TestCodegenStructDefinition(t *testing.T) {
+	out := generate(t, `struct Point {
+    x: int
+    y: int
+}
+fn main(): void {
+    let p = Point { x: 1, y: 2 }
+}`)
+	assertContains(t, out, "typedef struct {")
+	assertContains(t, out, "Dex_Point")
+	assertContains(t, out, "int x;")
+	assertContains(t, out, "int y;")
+}
+
+func TestCodegenStructWithStringFields(t *testing.T) {
+	out := generate(t, `struct User {
+    name: string
+    age: int
+}
+fn main(): void {
+    let u = User { name: "Alice", age: 30 }
+}`)
+	assertContains(t, out, "typedef struct {")
+	assertContains(t, out, "} Dex_User;")
+	assertContains(t, out, "DexString* name;")
+	assertContains(t, out, "int age;")
+}
+
+// --- Enum definition codegen ---
+
+func TestCodegenEnumDefinition(t *testing.T) {
+	out := generate(t, `enum Color {
+    Red
+    Green
+    Blue
+}
+fn main(): void {
+    let c: Color = Color.Red
+}`)
+	assertContains(t, out, "typedef enum")
+	assertContains(t, out, "Dex_Color_Red")
+	assertContains(t, out, "Dex_Color_Green")
+	assertContains(t, out, "Dex_Color_Blue")
+	assertContains(t, out, "} Dex_Color;")
+}
+
+func TestCodegenEnumValues(t *testing.T) {
+	out := generate(t, `enum Direction {
+    North
+    South
+    East
+    West
+}
+fn main(): void {
+    let d: Direction = Direction.South
+}`)
+	assertContains(t, out, "Dex_Direction_North = 0")
+	assertContains(t, out, "Dex_Direction_South = 1")
+	assertContains(t, out, "Dex_Direction_East = 2")
+	assertContains(t, out, "Dex_Direction_West = 3")
+}
+
+func TestCodegenEnumAccess(t *testing.T) {
+	out := generate(t, `enum Color {
+    Red
+    Green
+    Blue
+}
+fn main(): void {
+    let c: Color = Color.Green
+}`)
+	assertContains(t, out, "Dex_Color c = Dex_Color_Green;")
+}
+
+// --- For loop codegen ---
+
+func TestCodegenForLoopInitCondPost(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    for (let i: int = 0; i < 10; i += 1) {
+        let x: int = i
+    }
+}`)
+	assertContains(t, out, "for (")
+	assertContains(t, out, "int i = 0")
+	assertContains(t, out, "i < 10")
+	assertContains(t, out, "i += 1")
+}
+
+// --- Foreach codegen ---
+
+func TestCodegenForeachValueOnlyCodegen(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let a: int[] = [1, 2, 3]
+    foreach (a as val) {
+        let x: int = val
+    }
+}`)
+	assertContains(t, out, "for (")
+	assertContains(t, out, "a->len")
+	assertContains(t, out, "a->data[")
+}
+
+func TestCodegenForeachIndexValue(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let a: int[] = [10, 20, 30]
+    foreach (a as i, val) {
+        let x: int = i + val
+    }
+}`)
+	assertContains(t, out, "for (")
+	assertContains(t, out, "a->data[")
+	// Index variable should be declared
+	assertContains(t, out, "int i = _foreach_idx_0;")
+}
+
+func TestCodegenForeachStringArray(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let names: string[] = ["a", "b"]
+    foreach (names as name) {
+        let x: string = name
+    }
+}`)
+	assertContains(t, out, "for (")
+	assertContains(t, out, "names->len")
+	assertContains(t, out, "DexString* name = names->data[")
+}
+
+// --- Map operations codegen ---
+
+func TestCodegenMapNew(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let m: map[string, int] = {}
+}`)
+	assertContains(t, out, "dex_map_str_int_new()")
+}
+
+func TestCodegenMapSetGet(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let m: map[string, int] = {}
+    m.set("a", 1)
+    let v: int = m.get("a")
+}`)
+	assertContains(t, out, "dex_map_str_int_new()")
+	assertContains(t, out, "dex_map_str_int_set(")
+	assertContains(t, out, "dex_map_str_int_get(")
+}
+
+func TestCodegenMapHasRemove(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let m: map[string, int] = {}
+    m.set("a", 1)
+    let exists: bool = m.has("a")
+    m.remove("a")
+}`)
+	assertContains(t, out, "dex_map_str_int_has(")
+	assertContains(t, out, "dex_map_str_int_remove(")
+}
+
+func TestCodegenMapClearKeysValues(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let m: map[string, int] = {}
+    m.set("x", 10)
+    let k: string[] = m.keys()
+    let v: int[] = m.values()
+    m.clear()
+}`)
+	assertContains(t, out, "dex_map_str_int_keys(")
+	assertContains(t, out, "dex_map_str_int_values(")
+	assertContains(t, out, "dex_map_str_int_clear(")
+}
+
+func TestCodegenMapIntKey(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let m: map[int, string] = {}
+    m.set(1, "one")
+    let v: string = m.get(1)
+}`)
+	assertContains(t, out, "dex_map_int_str_new()")
+	assertContains(t, out, "dex_map_int_str_set(")
+	assertContains(t, out, "dex_map_int_str_get(")
+}
+
+// --- String concatenation codegen ---
+
+func TestCodegenStringConcatTwo(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let s: string = "hello" + " world"
+}`)
+	assertContains(t, out, "dex_str_concat(")
+}
+
+func TestCodegenStringConcatThree(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let s: string = "a" + "b" + "c"
+}`)
+	// For 3+ operands, codegen may use StringBuilder or chained dex_str_concat
+	// Either way, it should produce valid string concatenation code
+	if !strings.Contains(out, "dex_str_concat(") && !strings.Contains(out, "DexStringBuilder") {
+		t.Errorf("expected string concat code (dex_str_concat or DexStringBuilder) in output.\nOutput:\n%s", out)
+	}
+}
+
+// --- If/else codegen ---
+
+func TestCodegenIfElseDetailed(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let x: int = 1
+    if (x == 1) {
+        let y: int = 2
+    } else {
+        let y: int = 3
+    }
+}`)
+	assertContains(t, out, "if (")
+	assertContains(t, out, "} else {")
+	assertContains(t, out, "int y = 2;")
+	assertContains(t, out, "int y = 3;")
+}
+
+func TestCodegenIfWithoutElse(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let x: int = 5
+    if (x > 3) {
+        let y: int = 10
+    }
+}`)
+	assertContains(t, out, "if (x > 3)")
+	assertNotContains(t, out, "} else {")
+}
+
+// --- While loop codegen ---
+
+func TestCodegenWhileDetailed(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let i: int = 0
+    while (i < 10) {
+        i += 1
+    }
+}`)
+	assertContains(t, out, "while (i < 10)")
+	assertContains(t, out, "i += 1;")
+}
+
+// --- Switch codegen ---
+
+func TestCodegenSwitchInt(t *testing.T) {
+	// Switch generates if/else if chain, not C switch
+	out := generate(t, `fn main(): void {
+    let x: int = 1
+    let result: int = 0
+    switch (x) {
+        case 1: {
+            result = 10
+        }
+        case 2: {
+            result = 20
+        }
+        default: {
+            result = -1
+        }
+    }
+}`)
+	// Switch compiles to if/else if chain
+	assertContains(t, out, "if (")
+	assertContains(t, out, "== 1")
+	assertContains(t, out, "== 2")
+	assertContains(t, out, "} else {")
+}
+
+func TestCodegenSwitchString(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let s: string = "hello"
+    switch (s) {
+        case "hello": {
+            let x: int = 1
+        }
+        case "world": {
+            let x: int = 2
+        }
+        default: {
+            let x: int = 3
+        }
+    }
+}`)
+	// String switch uses strcmp
+	assertContains(t, out, "strcmp(")
+	assertContains(t, out, "== 0")
+}
+
+func TestCodegenSwitchMultipleValues(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let x: int = 2
+    switch (x) {
+        case 1, 2: {
+            let r: int = 10
+        }
+        default: {
+            let r: int = 0
+        }
+    }
+}`)
+	// Multiple values in one case use ||
+	assertContains(t, out, "||")
+}
+
+func TestCodegenSwitchTagTempVar(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let x: int = 1
+    switch (x) {
+        case 1: {
+            let r: int = 10
+        }
+    }
+}`)
+	// The tag is stored in a temp variable _switch_tag_N
+	assertContains(t, out, "_switch_tag_")
+}
+
+// --- Match expression codegen ---
+
+func TestCodegenMatchExpr(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let x: int = 2
+    let result: int = match (x) {
+        1 => 10
+        2 => 20
+        _ => 0
+    }
+}`)
+	// Match compiles to a GCC statement expression
+	assertContains(t, out, "_match_")
+	assertContains(t, out, "_tag_")
+}
+
+// --- Return value codegen ---
+
+func TestCodegenReturnInt(t *testing.T) {
+	out := generate(t, `fn add(a: int, b: int): int {
+    return a + b
+}
+fn main(): void {}`)
+	assertContains(t, out, "return (a + b);")
+}
+
+func TestCodegenReturnString(t *testing.T) {
+	out := generate(t, `fn greet(): string {
+    return "hello"
+}
+fn main(): void {}`)
+	assertContains(t, out, "DexString* greet(void)")
+	// String return involves a retain/temp pattern or direct return
+	assertContains(t, out, "return")
+}
+
+func TestCodegenReturnVoid(t *testing.T) {
+	out := generate(t, `fn doNothing(): void {
+    return
+}
+fn main(): void {}`)
+	assertContains(t, out, "void doNothing(void)")
+	assertContains(t, out, "return;")
+}
+
+// --- CompilerFlags ---
+
+func TestCodegenCompilerFlags(t *testing.T) {
+	// A simple program should return base compiler flags
+	_, gen := generateWithGen(t, `fn main(): void {}`)
+	flags := gen.CompilerFlags()
+
+	// Check base flags are always present
+	foundO3 := false
+	foundFlto := false
+	foundStackProtector := false
+	foundFortify := false
+	for _, f := range flags {
+		if f == "-O3" {
+			foundO3 = true
+		}
+		if f == "-flto" {
+			foundFlto = true
+		}
+		if f == "-fstack-protector-strong" {
+			foundStackProtector = true
+		}
+		if f == "-D_FORTIFY_SOURCE=2" {
+			foundFortify = true
+		}
+	}
+	if !foundO3 {
+		t.Error("expected -O3 in compiler flags")
+	}
+	if !foundFlto {
+		t.Error("expected -flto in compiler flags")
+	}
+	if !foundStackProtector {
+		t.Error("expected -fstack-protector-strong in compiler flags")
+	}
+	if !foundFortify {
+		t.Error("expected -D_FORTIFY_SOURCE=2 in compiler flags")
+	}
+}
+
+func TestCodegenCompilerFlagsNoPthread(t *testing.T) {
+	// A program without concurrency should NOT have -pthread
+	_, gen := generateWithGen(t, `fn main(): void {
+    let x: int = 42
+}`)
+	flags := gen.CompilerFlags()
+	for _, f := range flags {
+		if f == "-pthread" {
+			t.Error("did not expect -pthread for a non-concurrent program")
+		}
+	}
+}
+
+func TestCodegenCompilerFlagsHttp(t *testing.T) {
+	// HTTP module should add -pthread and -lcurl
+	_, gen := generateWithGen(t, `import "http"
+fn handler(): string { return "ok" }
+fn main(): void {
+    http.route("GET", "/", handler)
+    http.listen(8080)
+}`)
+	flags := gen.CompilerFlags()
+	foundPthread := false
+	foundLcurl := false
+	for _, f := range flags {
+		if f == "-pthread" {
+			foundPthread = true
+		}
+		if f == "-lcurl" {
+			foundLcurl = true
+		}
+	}
+	if !foundPthread {
+		t.Error("expected -pthread in compiler flags for http module")
+	}
+	if !foundLcurl {
+		t.Error("expected -lcurl in compiler flags for http module")
+	}
+}
+
+func TestCodegenCompilerFlagsMath(t *testing.T) {
+	// Math module should add -lm
+	_, gen := generateWithGen(t, `import "math"
+fn main(): void {
+    let v: double = math.sqrt(4.0)
+}`)
+	flags := gen.CompilerFlags()
+	foundLm := false
+	for _, f := range flags {
+		if f == "-lm" {
+			foundLm = true
+		}
+	}
+	if !foundLm {
+		t.Error("expected -lm in compiler flags for math module")
+	}
+}
+
+// --- Additional cType coverage ---
+
+func TestCTypeChar(t *testing.T) {
+	g := New()
+	got := g.cType(ast.TypeChar)
+	if got != "unsigned char" {
+		t.Errorf("cType(TypeChar) = %q, want %q", got, "unsigned char")
+	}
+}
+
+func TestCTypeArrayChar(t *testing.T) {
+	g := New()
+	got := g.cType(ast.TypeArrayChar)
+	if got != "DexArrayChar*" {
+		t.Errorf("cType(TypeArrayChar) = %q, want %q", got, "DexArrayChar*")
+	}
+}
+
+func TestCTypeStringBuilder(t *testing.T) {
+	g := New()
+	got := g.cType(ast.TypeStringBuilder)
+	if got != "DexStringBuilder*" {
+		t.Errorf("cType(TypeStringBuilder) = %q, want %q", got, "DexStringBuilder*")
+	}
+}
+
+func TestCTypeMutex(t *testing.T) {
+	g := New()
+	got := g.cType(ast.TypeMutex)
+	if got != "pthread_mutex_t" {
+		t.Errorf("cType(TypeMutex) = %q, want %q", got, "pthread_mutex_t")
+	}
+}
+
+func TestCTypeEnum(t *testing.T) {
+	ast.ResetEnumTypes()
+	enumType := ast.RegisterEnumType(ast.EnumDef{Name: "Status", Variants: []string{"Active", "Inactive"}})
+	g := New()
+	got := g.cType(enumType)
+	if got != "Dex_Status" {
+		t.Errorf("cType(enum Status) = %q, want %q", got, "Dex_Status")
+	}
+}
+
+func TestCTypeMap(t *testing.T) {
+	ast.ResetMapTypes()
+	mapType := ast.MapTypeOf(ast.TypeString, ast.TypeInt)
+	g := New()
+	got := g.cType(mapType)
+	if got != "DexMap_str_int*" {
+		t.Errorf("cType(map[string,int]) = %q, want %q", got, "DexMap_str_int*")
+	}
+}
+
+// --- Struct typedef ordering ---
+
+func TestCodegenStructTypedefBeforeFunctions(t *testing.T) {
+	out := generate(t, `struct Point {
+    x: int
+    y: int
+}
+fn main(): void {
+    let p = Point { x: 1, y: 2 }
+}`)
+	typedefIdx := strings.Index(out, "} Dex_Point;")
+	mainIdx := strings.Index(out, "int main(")
+	if typedefIdx < 0 || mainIdx < 0 {
+		t.Fatal("expected both struct typedef and main function in output")
+	}
+	if typedefIdx > mainIdx {
+		t.Error("struct typedef should appear before main function")
+	}
+}
+
+// --- Enum typedef ordering ---
+
+func TestCodegenEnumTypedefBeforeFunctions(t *testing.T) {
+	out := generate(t, `enum Color {
+    Red
+    Green
+    Blue
+}
+fn main(): void {
+    let c: Color = Color.Red
+}`)
+	typedefIdx := strings.Index(out, "} Dex_Color;")
+	mainIdx := strings.Index(out, "int main(")
+	if typedefIdx < 0 || mainIdx < 0 {
+		t.Fatal("expected both enum typedef and main function in output")
+	}
+	if typedefIdx > mainIdx {
+		t.Error("enum typedef should appear before main function")
+	}
+}
+
+// --- Const let codegen ---
+
+func TestCodegenConstLet(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    const PI: double = 3.14159
+}`)
+	assertContains(t, out, "const double PI = 3.14159;")
+}
+
+// --- Map len codegen ---
+
+func TestCodegenMapLen(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let m: map[string, int] = {}
+    m.set("a", 1)
+    let n: int = m.len()
+}`)
+	assertContains(t, out, "dex_map_str_int_len(")
+}
+
+// --- Map bracket syntax codegen ---
+
+func TestCodegenMapBracketAssign(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let m: map[string, int] = {}
+    m["key"] = 42
+}`)
+	assertContains(t, out, "dex_map_str_int_set(")
+}
+
+// --- Logical operators codegen ---
+
+func TestCodegenLogicalAnd(t *testing.T) {
+	out := generate(t, `fn main(): bool {
+    return true && false
+}`)
+	assertContains(t, out, "(true && false)")
+}
+
+func TestCodegenLogicalOr(t *testing.T) {
+	out := generate(t, `fn main(): bool {
+    return true || false
+}`)
+	assertContains(t, out, "(true || false)")
+}
+
+// --- Comparison operators codegen ---
+
+func TestCodegenLessThanEqual(t *testing.T) {
+	out := generate(t, `fn main(): bool {
+    return 1 <= 2
+}`)
+	assertContains(t, out, "(1 <= 2)")
+}
+
+func TestCodegenGreaterThanEqual(t *testing.T) {
+	out := generate(t, `fn main(): bool {
+    return 3 >= 2
+}`)
+	assertContains(t, out, "(3 >= 2)")
+}

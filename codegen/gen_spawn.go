@@ -26,7 +26,7 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		g.spawnWrappers.WriteString(fmt.Sprintf(" } %s;\n", ctxType))
 
 		// Build wrapper function
-		g.spawnWrappers.WriteString(fmt.Sprintf("void* %s(void* _raw) {\n", wrapperName))
+		g.spawnWrappers.WriteString(fmt.Sprintf("void %s(void* _raw) {\n", wrapperName))
 		g.spawnWrappers.WriteString(fmt.Sprintf("    %s* _ctx = (%s*)_raw;\n", ctxType, ctxType))
 		g.spawnWrappers.WriteString("    DexChan* _ch = _ctx->_ch;\n")
 		for _, cv := range captured {
@@ -47,7 +47,7 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 			}
 		}
 		g.spawnWrappers.WriteString("    dex_release(_ch);\n")
-		g.spawnWrappers.WriteString("    return NULL;\n")
+		// void function — no return needed
 		g.spawnWrappers.WriteString("}\n")
 
 		// Generate call site inline (using GCC statement expression)
@@ -64,9 +64,7 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 				out.WriteString(fmt.Sprintf("dex_retain(%s); ", cv.name))
 			}
 		}
-		out.WriteString(fmt.Sprintf("pthread_t _spawn_t_%d; ", idx))
-		out.WriteString(fmt.Sprintf("pthread_create(&_spawn_t_%d, NULL, %s, _spawn_ctx); ", idx, wrapperName))
-		out.WriteString(fmt.Sprintf("pthread_detach(_spawn_t_%d); ", idx))
+		out.WriteString(fmt.Sprintf("dex_spawn_submit(%s, _spawn_ctx); ", wrapperName))
 		out.WriteString("_spawn_ch; })")
 	} else if e.Call != nil {
 		// Spawn function call: spawn fn(args)
@@ -81,7 +79,7 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		g.spawnWrappers.WriteString(fmt.Sprintf(" } %s;\n", ctxType))
 
 		// Build wrapper function
-		g.spawnWrappers.WriteString(fmt.Sprintf("void* %s(void* _raw) {\n", wrapperName))
+		g.spawnWrappers.WriteString(fmt.Sprintf("void %s(void* _raw) {\n", wrapperName))
 		g.spawnWrappers.WriteString(fmt.Sprintf("    %s* _ctx = (%s*)_raw;\n", ctxType, ctxType))
 		g.spawnWrappers.WriteString("    DexChan* _ch = _ctx->_ch;\n")
 		for i, arg := range call.Args {
@@ -119,7 +117,7 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 			}
 		}
 		g.spawnWrappers.WriteString("    dex_release(_ch);\n")
-		g.spawnWrappers.WriteString("    return NULL;\n")
+		// void function — no return needed
 		g.spawnWrappers.WriteString("}\n")
 
 		// Generate call site
@@ -139,9 +137,7 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 				out.WriteString(fmt.Sprintf("dex_retain(_spawn_ctx->_a%d); ", i))
 			}
 		}
-		out.WriteString(fmt.Sprintf("pthread_t _spawn_t_%d; ", idx))
-		out.WriteString(fmt.Sprintf("pthread_create(&_spawn_t_%d, NULL, %s, _spawn_ctx); ", idx, wrapperName))
-		out.WriteString(fmt.Sprintf("pthread_detach(_spawn_t_%d); ", idx))
+		out.WriteString(fmt.Sprintf("dex_spawn_submit(%s, _spawn_ctx); ", wrapperName))
 		out.WriteString("_spawn_ch; })")
 	}
 }

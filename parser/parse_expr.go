@@ -282,12 +282,44 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		}
 
 		// Check for qualified call or field access: ident.something
+		// Supports chaining: ident.field.field, ident.field.method(), etc.
 		if p.check(token.TokenDot) {
 			p.advance() // consume '.'
 			memberName, err := p.expectIdent()
 			if err != nil {
 				return nil, err
 			}
+
+			// Build dotted chain: keep consuming dots to handle a.b.c.method()
+			// qualifiedName accumulates the dotted prefix (e.g. "req.params")
+			qualifiedName := name + "." + memberName
+			for p.check(token.TokenDot) {
+				p.advance() // consume '.'
+				nextMember, err := p.expectIdent()
+				if err != nil {
+					return nil, err
+				}
+				if p.check(token.TokenLParen) {
+					// This is a method call on the chain: qualifiedName.nextMember(...)
+					p.advance() // consume '('
+					args, err := p.parseArgs()
+					if err != nil {
+						return nil, err
+					}
+					if err := p.expect(token.TokenRParen); err != nil {
+						return nil, err
+					}
+					callExpr := &ast.CallExpr{Pos: pos, Module: qualifiedName, Name: nextMember, Args: args}
+					if p.lastArgNames != nil {
+						callExpr.ArgNames = p.lastArgNames
+						p.lastArgNames = nil
+					}
+					return callExpr, nil
+				}
+				// Not a call, continue building the chain
+				qualifiedName = qualifiedName + "." + nextMember
+			}
+
 			// If followed by '(', it's a method/qualified call
 			if p.check(token.TokenLParen) {
 				p.advance() // consume '('

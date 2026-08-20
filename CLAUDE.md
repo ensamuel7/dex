@@ -43,3 +43,8 @@
 
 - DexLang standard library functions use **camelCase** (e.g. `json.setArray`, `time.nowNs`), not snake_case.
 - After any compiler or stdlib change, always regenerate docs with `go run . docs` and update `LANGUAGE.md` if the change affects the language API.
+
+## Post-Push Checks
+
+- After every push, run code coverage to verify that functions are actually used: `go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out`
+- Review the output to ensure new or modified functions have test coverage and are not dead code.

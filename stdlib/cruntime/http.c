@@ -16,7 +16,12 @@ typedef Dex_HttpResponse (*dex_handler_fn)(Dex_HttpRequest);
 
 typedef struct {
     const char* method;
-    const char* path;
+    const char* pattern;          // original pattern string (e.g. "/posts/:id")
+    int param_count;              // number of :param segments
+    int param_indices[16];        // which segment index has a param (max 16 params)
+    char param_names[16][64];     // param names without ':'
+    int segment_count;            // total segments in pattern
+    char segments[32][256];       // pre-split pattern segments
     dex_handler_fn handler;
 } dex_route_entry;
 
@@ -25,12 +30,37 @@ static dex_route_entry dex_routes[DEX_MAX_ROUTES];
 static int dex_route_count = 0;
 
 void dex_route(const char* method, const char* path, dex_handler_fn handler) {
-    if (dex_route_count < DEX_MAX_ROUTES) {
-        dex_routes[dex_route_count].method = method;
-        dex_routes[dex_route_count].path = path;
-        dex_routes[dex_route_count].handler = handler;
-        dex_route_count++;
+    if (dex_route_count >= DEX_MAX_ROUTES) return;
+    dex_route_entry* r = &dex_routes[dex_route_count];
+    r->method = method;
+    r->pattern = path;
+    r->handler = handler;
+    r->param_count = 0;
+    r->segment_count = 0;
+
+    // Parse pattern into segments, identify :param segments
+    const char* p = path;
+    if (*p == '/') p++; // skip leading slash
+    while (*p && r->segment_count < 32) {
+        const char* end = strchr(p, '/');
+        int len = end ? (int)(end - p) : (int)strlen(p);
+        if (len >= 256) len = 255;
+        memcpy(r->segments[r->segment_count], p, len);
+        r->segments[r->segment_count][len] = '\0';
+        if (p[0] == ':' && len > 1 && r->param_count < 16) {
+            r->param_indices[r->param_count] = r->segment_count;
+            int name_len = len - 1;
+            if (name_len >= 64) name_len = 63;
+            memcpy(r->param_names[r->param_count], p + 1, name_len);
+            r->param_names[r->param_count][name_len] = '\0';
+            r->param_count++;
+        }
+        r->segment_count++;
+        if (!end) break;
+        p = end + 1;
     }
+
+    dex_route_count++;
 }
 
 static void dex_send_response(int fd, const char* status, const char* body, const char* content_type, int keep_alive) {
@@ -263,13 +293,81 @@ static void dex_http_worker_func(void* arg) {
     req.path = dex_string_from_lit(conn->path);
     req.body = dex_string_from_lit(body_data);
     req.query = dex_string_from_lit(conn->query);
+    req.params = dex_map_str_str_new();
+
+    /* Split incoming path into segments for matching */
+    char path_copy[2048];
+    strncpy(path_copy, conn->path, sizeof(path_copy) - 1);
+    path_copy[sizeof(path_copy) - 1] = '\0';
+
+    char* req_segments[32];
+    int req_segment_count = 0;
+    {
+        char* p = path_copy;
+        if (*p == '/') p++;
+        while (*p && req_segment_count < 32) {
+            req_segments[req_segment_count] = p;
+            char* slash = strchr(p, '/');
+            if (slash) {
+                *slash = '\0';
+                p = slash + 1;
+            } else {
+                p = p + strlen(p);
+            }
+            req_segment_count++;
+        }
+    }
 
     /* Match route */
     int matched = 0;
     for (int i = 0; i < dex_route_count; i++) {
-        if (strcmp(conn->method, dex_routes[i].method) == 0 &&
-            strcmp(conn->path, dex_routes[i].path) == 0) {
-            Dex_HttpResponse resp = dex_routes[i].handler(req);
+        if (strcmp(conn->method, dex_routes[i].method) != 0) continue;
+
+        dex_route_entry* r = &dex_routes[i];
+
+        /* Fast path: no params, use exact string match */
+        if (r->param_count == 0) {
+            if (strcmp(conn->path, r->pattern) == 0) {
+                Dex_HttpResponse resp = r->handler(req);
+                const char* status = dex_http_status_text(resp.statusCode);
+                const char* ct = "application/json";
+                if (resp.contentType && resp.contentType->data[0] != '\0') {
+                    ct = resp.contentType->data;
+                }
+                dex_http_build_response(conn, status, resp.body->data, ct);
+                if (resp.contentType) dex_release(resp.contentType);
+                dex_release(resp.body);
+                matched = 1;
+                break;
+            }
+            continue;
+        }
+
+        /* Parameterized route: segment-by-segment matching */
+        if (r->segment_count != req_segment_count) continue;
+
+        int seg_match = 1;
+        for (int s = 0; s < r->segment_count; s++) {
+            if (r->segments[s][0] == ':') {
+                /* Param segment — any non-empty value matches */
+                if (req_segments[s][0] == '\0') { seg_match = 0; break; }
+            } else {
+                if (strcmp(r->segments[s], req_segments[s]) != 0) { seg_match = 0; break; }
+            }
+        }
+
+        if (seg_match) {
+            /* Populate params map with extracted values */
+            for (int pi = 0; pi < r->param_count; pi++) {
+                int seg_idx = r->param_indices[pi];
+                DexString* key = dex_string_from_lit(r->param_names[pi]);
+                DexString* val = dex_string_from_lit(req_segments[seg_idx]);
+                dex_map_str_str_set(req.params, key, val);
+                dex_release(key);
+                dex_release(val);
+            }
+
+            Dex_HttpResponse resp = r->handler(req);
             const char* status = dex_http_status_text(resp.statusCode);
             const char* ct = "application/json";
             if (resp.contentType && resp.contentType->data[0] != '\0') {
@@ -283,11 +381,12 @@ static void dex_http_worker_func(void* arg) {
         }
     }
 
-    /* Release request strings */
+    /* Release request strings and params map */
     dex_release(req.method);
     dex_release(req.path);
     dex_release(req.body);
     dex_release(req.query);
+    dex_release(req.params);
 
     if (!matched) {
         dex_http_build_response(conn, "404 Not Found",

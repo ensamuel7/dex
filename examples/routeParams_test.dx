@@ -1,0 +1,47 @@
+import "http"
+import "fmt"
+
+// Test: handler with single route parameter
+fn handleUser(req: http.HttpRequest): http.HttpResponse {
+    let id: string = req.params.get("id")
+    let hasId: bool = req.params.has("id")
+    let count: int = req.params.len()
+    return http.response(200, id, "text/plain")
+}
+
+// Test: handler with multiple route parameters
+fn handleComment(req: http.HttpRequest): http.HttpResponse {
+    let postId: string = req.params.get("postId")
+    let commentId: string = req.params.get("commentId")
+    return http.response(200, postId, "text/plain")
+}
+
+// Test: handler with no route parameters (static path)
+fn handleStatic(req: http.HttpRequest): http.HttpResponse {
+    let method: string = req.method
+    let path: string = req.path
+    let body: string = req.body
+    let query: string = req.query
+    let count: int = req.params.len()
+    return http.response(200, "static", "text/plain")
+}
+
+// Test: zero-param handler (backward-compatible)
+fn handleSimple(): string {
+    return "ok"
+}
+
+fn main(): void {
+    // Static routes (no params)
+    http.route("GET", "/health", handleSimple)
+    http.route("POST", "/echo", handleStatic)
+
+    // Single param routes
+    http.route("GET", "/users/:id", handleUser)
+    http.route("DELETE", "/users/:id", handleUser)
+
+    // Multi-param routes
+    http.route("GET", "/posts/:postId/comments/:commentId", handleComment)
+
+    fmt.println("Route parameters test compiled successfully")
+}

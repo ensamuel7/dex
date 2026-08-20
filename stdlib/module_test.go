@@ -243,3 +243,232 @@ func TestAllModules(t *testing.T) {
 		}
 	}
 }
+
+// --- HttpRequest struct type tests ---
+
+func TestHttpRequestStructFields(t *testing.T) {
+	mod := Lookup("http")
+	if mod == nil {
+		t.Fatal("http module not found")
+	}
+
+	var httpReq *ast.StructDef
+	for i := range mod.Types {
+		if mod.Types[i].Name == "HttpRequest" {
+			httpReq = &mod.Types[i]
+			break
+		}
+	}
+	if httpReq == nil {
+		t.Fatal("HttpRequest struct not found in http module")
+	}
+
+	expectedFields := []string{"method", "path", "body", "query", "params"}
+	if len(httpReq.Fields) != len(expectedFields) {
+		t.Fatalf("HttpRequest field count = %d, want %d", len(httpReq.Fields), len(expectedFields))
+	}
+	for i, name := range expectedFields {
+		if httpReq.Fields[i].Name != name {
+			t.Errorf("HttpRequest.Fields[%d].Name = %q, want %q", i, httpReq.Fields[i].Name, name)
+		}
+	}
+}
+
+func TestHttpRequestParamsFieldType(t *testing.T) {
+	mod := Lookup("http")
+	if mod == nil {
+		t.Fatal("http module not found")
+	}
+
+	var httpReq *ast.StructDef
+	for i := range mod.Types {
+		if mod.Types[i].Name == "HttpRequest" {
+			httpReq = &mod.Types[i]
+			break
+		}
+	}
+	if httpReq == nil {
+		t.Fatal("HttpRequest struct not found in http module")
+	}
+
+	// Find the params field
+	var paramsField *ast.StructField
+	for i := range httpReq.Fields {
+		if httpReq.Fields[i].Name == "params" {
+			paramsField = &httpReq.Fields[i]
+			break
+		}
+	}
+	if paramsField == nil {
+		t.Fatal("HttpRequest.params field not found")
+	}
+
+	if !ast.IsMapType(paramsField.Type) {
+		t.Fatalf("HttpRequest.params type is not a map type")
+	}
+
+	// Verify it's map[string,string]
+	ast.ResetMapTypes()
+	expectedType := ast.MapTypeOf(ast.TypeString, ast.TypeString)
+	if paramsField.Type != expectedType {
+		t.Errorf("HttpRequest.params type = %d, want map[string,string] (%d)", paramsField.Type, expectedType)
+	}
+}
+
+func TestRegisterAllModuleTypes(t *testing.T) {
+	ast.ResetStructTypes()
+	ast.ResetMapTypes()
+
+	// Before registration, HttpRequest/HttpResponse should not be in the struct registry
+	_, ok := ast.LookupStructType("HttpRequest")
+	if ok {
+		t.Error("HttpRequest should not be registered before RegisterAllModuleTypes()")
+	}
+
+	RegisterAllModuleTypes()
+
+	// After registration, module types should be registered
+	_, ok = ast.LookupStructType("HttpRequest")
+	if !ok {
+		t.Error("HttpRequest should be registered after RegisterAllModuleTypes()")
+	}
+	_, ok = ast.LookupStructType("HttpResponse")
+	if !ok {
+		t.Error("HttpResponse should be registered after RegisterAllModuleTypes()")
+	}
+
+	// Calling again should not panic or duplicate
+	RegisterAllModuleTypes()
+	_, ok = ast.LookupStructType("HttpRequest")
+	if !ok {
+		t.Error("HttpRequest should still be registered after second RegisterAllModuleTypes()")
+	}
+}
+
+func TestRegisterAllModuleTypesReregistersMapTypes(t *testing.T) {
+	ast.ResetMapTypes()
+	RegisterAllModuleTypes()
+
+	// After RegisterAllModuleTypes, map[string,string] should be registered
+	mapStrStr := ast.MapTypeOf(ast.TypeString, ast.TypeString)
+	if !ast.IsMapType(mapStrStr) {
+		t.Error("map[string,string] should be a map type after RegisterAllModuleTypes()")
+	}
+	if ast.MapKeyType(mapStrStr) != ast.TypeString {
+		t.Error("map[string,string] key type should be TypeString")
+	}
+	if ast.MapValueType(mapStrStr) != ast.TypeString {
+		t.Error("map[string,string] value type should be TypeString")
+	}
+}
+
+func TestModuleTypesForImportsHttp(t *testing.T) {
+	names := ModuleTypesForImports([]string{"http"})
+	found := map[string]bool{}
+	for _, n := range names {
+		found[n] = true
+	}
+	if !found["HttpRequest"] {
+		t.Error("ModuleTypesForImports([http]) missing HttpRequest")
+	}
+	if !found["HttpResponse"] {
+		t.Error("ModuleTypesForImports([http]) missing HttpResponse")
+	}
+}
+
+func TestModuleTypesForImportsEmpty(t *testing.T) {
+	names := ModuleTypesForImports([]string{})
+	if len(names) != 0 {
+		t.Errorf("ModuleTypesForImports([]) = %v, want empty", names)
+	}
+}
+
+func TestModuleTypesForImportsUnknown(t *testing.T) {
+	names := ModuleTypesForImports([]string{"nonexistent"})
+	if len(names) != 0 {
+		t.Errorf("ModuleTypesForImports([nonexistent]) = %v, want empty", names)
+	}
+}
+
+func TestModuleTypesForImportsNoTypes(t *testing.T) {
+	names := ModuleTypesForImports([]string{"fmt"})
+	if len(names) != 0 {
+		t.Errorf("ModuleTypesForImports([fmt]) = %v, want empty (fmt has no types)", names)
+	}
+}
+
+func TestTimeFunctionSignatures(t *testing.T) {
+	mod := Lookup("time")
+	if mod == nil {
+		t.Fatal("time module not found")
+	}
+	if len(mod.Funcs) == 0 {
+		t.Fatal("time module has no functions")
+	}
+	// Verify some time functions exist
+	for _, name := range []string{"now", "nowNs", "sleep"} {
+		fd, ok := LookupFunc("time", name)
+		if !ok || fd == nil {
+			t.Errorf("LookupFunc(time, %q) not found", name)
+		}
+	}
+}
+
+func TestModuleCRuntimeNotEmpty(t *testing.T) {
+	// Modules with embedded C runtime should have non-empty CRuntime
+	// Note: fmt uses inline codegen rather than embedded CRuntime
+	for _, name := range []string{"json", "http", "db", "math", "time"} {
+		mod := Lookup(name)
+		if mod == nil {
+			t.Errorf("module %q not found", name)
+			continue
+		}
+		if mod.CRuntime == "" {
+			t.Errorf("module %q has empty CRuntime", name)
+		}
+	}
+}
+
+func TestModuleDocStrings(t *testing.T) {
+	// Functions should have doc strings for editor support
+	for _, modName := range []string{"fmt", "json", "http", "db", "math", "time"} {
+		mod := Lookup(modName)
+		if mod == nil {
+			continue
+		}
+		for fnName, fd := range mod.Funcs {
+			if fd.Doc == "" {
+				t.Errorf("%s.%s has empty Doc string", modName, fnName)
+			}
+		}
+	}
+}
+
+func TestHttpResponseStructUnchanged(t *testing.T) {
+	mod := Lookup("http")
+	if mod == nil {
+		t.Fatal("http module not found")
+	}
+
+	var httpResp *ast.StructDef
+	for i := range mod.Types {
+		if mod.Types[i].Name == "HttpResponse" {
+			httpResp = &mod.Types[i]
+			break
+		}
+	}
+	if httpResp == nil {
+		t.Fatal("HttpResponse struct not found in http module")
+	}
+
+	// HttpResponse should still have exactly 3 fields
+	expectedFields := []string{"statusCode", "body", "contentType"}
+	if len(httpResp.Fields) != len(expectedFields) {
+		t.Fatalf("HttpResponse field count = %d, want %d", len(httpResp.Fields), len(expectedFields))
+	}
+	for i, name := range expectedFields {
+		if httpResp.Fields[i].Name != name {
+			t.Errorf("HttpResponse.Fields[%d].Name = %q, want %q", i, httpResp.Fields[i].Name, name)
+		}
+	}
+}

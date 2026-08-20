@@ -74,6 +74,11 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		out.WriteString("    DexArena* _arena = dex_arena_new(65536);\n")
 	}
 
+	// Initialize thread pool for spawn (must happen before any spawn calls)
+	if fn.Name == "main" && g.usesConcurrency {
+		out.WriteString("    dex_spawn_pool_init();\n")
+	}
+
 	for _, stmt := range fn.Body {
 		g.genStmt(out, stmt, 1)
 	}
@@ -87,6 +92,10 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 
 	// For void main(), insert cleanup + implicit return 0
 	if fn.Name == "main" && fn.ReturnType == ast.TypeVoid {
+		// Shut down thread pool (joins all workers, ensuring pending tasks complete)
+		if g.usesConcurrency {
+			out.WriteString("    dex_spawn_pool_shutdown();\n")
+		}
 		g.popScope(out, "    ")
 		out.WriteString("    return 0;\n")
 	} else {

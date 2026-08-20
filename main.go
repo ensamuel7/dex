@@ -28,6 +28,9 @@ import (
 // Pattern: "filename:line:col: message" → bold location, red "error:", normal message
 var errorLocPattern = regexp.MustCompile(`^(.+?:\d+:\d+:)\s*(.*)$`)
 
+// Version is set at build time via -ldflags "-X main.Version=..."
+var Version = "dev"
+
 func formatError(msg string) string {
 	if !term.IsTerminal(int(os.Stderr.Fd())) {
 		return msg
@@ -42,11 +45,16 @@ func formatError(msg string) string {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs|version> <file.dx>")
 		os.Exit(1)
 	}
 
 	command := os.Args[1]
+
+	if command == "version" {
+		fmt.Println("dex version " + Version)
+		return
+	}
 
 	if command == "lsp" {
 		lsp.Run()
@@ -78,7 +86,7 @@ func main() {
 	}
 
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|check> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|check|version> <file.dx>")
 		os.Exit(1)
 	}
 
@@ -121,7 +129,7 @@ func main() {
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs|version> <file.dx>")
 		os.Exit(1)
 	}
 }

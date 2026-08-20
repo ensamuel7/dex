@@ -44,6 +44,29 @@ dex run examples/hello.dx
 dex build examples/hello.dx
 ```
 
+## Docker
+
+Run DexLang without installing Go or a C toolchain:
+
+```bash
+docker pull dexlang/dexlang:0.1.3
+
+# compile a .dx file (binary appears in ./build/)
+docker run --rm -v "$(pwd):/workspace" dexlang/dexlang build app.dx
+
+# run a .dx file
+docker run --rm -v "$(pwd):/workspace" dexlang/dexlang run app.dx
+
+# run an HTTP server with port mapping
+docker run --rm -v "$(pwd):/workspace" -p 8080:8080 dexlang/dexlang run server.dx
+```
+
+To update to a new version:
+
+```bash
+docker pull dexlang/dexlang:0.1.4
+```
+
 ## What It Looks Like
 
 ```dex

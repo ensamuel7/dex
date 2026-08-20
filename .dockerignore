@@ -1,0 +1,9 @@
+build/
+docs/
+.git/
+.claude/
+.vscode/
+.idea/
+node_modules/
+*.swp
+.DS_Store

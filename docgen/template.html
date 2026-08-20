@@ -209,6 +209,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
       <div class="nav-group-links">
         <a onclick="show('arrays')">Arrays</a>
         <a onclick="show('structs')">Structs</a>
+        <a onclick="show('interfaces')">Interfaces</a>
         <a onclick="show('enums')">Enums</a>
         <a onclick="show('maps')">Maps</a>
         <a onclick="show('string-methods')">String Methods</a>
@@ -1058,6 +1059,87 @@ struct Service {
 
 let db = Database{host: "localhost"}
 let svc = Service{db: db}   // svc.db points to db</code></pre>
+</section>
+
+<!-- Interfaces -->
+<section id="interfaces" class="page-section">
+<h2>Interfaces</h2>
+<p>Interfaces define a contract — a set of method signatures that a type must have. DexLang uses <strong>structural typing</strong>: a struct satisfies an interface automatically if it has all the required methods with matching signatures. There is no <code>implements</code> keyword.</p>
+
+<h3>Defining an Interface</h3>
+<p>An interface lists method signatures only — no implementations, no fields:</p>
+<pre><code>interface Greeter {
+    fn greet(): string
+}</code></pre>
+
+<h3>Satisfying an Interface</h3>
+<p>A struct satisfies an interface if it defines methods that match every signature. The matching is checked at compile time — no explicit declaration is needed:</p>
+<pre><code>interface Greeter {
+    fn greet(): string
+}
+
+struct Person {
+    name: string
+
+    fn greet(): string {
+        return "Hello, I'm " + name
+    }
+}
+
+// Person satisfies Greeter because it has greet(): string</code></pre>
+
+<h3>Using Interfaces as Types</h3>
+<p>Interface types can be used as function parameters. Any struct that satisfies the interface can be passed:</p>
+<pre><code>fn printGreeting(g: Greeter): void {
+    fmt.println(g.greet())
+}
+
+let p = Person{name: "Alice"}
+printGreeting(p)    // "Hello, I'm Alice"</code></pre>
+
+<h3>Multiple Methods</h3>
+<p>Interfaces can require multiple methods. All must be present with matching parameter and return types:</p>
+<pre><code>interface Shape {
+    fn area(): double
+    fn perimeter(): double
+}
+
+struct Circle {
+    radius: double
+
+    fn area(): double {
+        return math.pi() * radius * radius
+    }
+
+    fn perimeter(): double {
+        return 2.0 * math.pi() * radius
+    }
+}
+
+// Circle satisfies Shape — both area() and perimeter() match</code></pre>
+
+<h3>Compile-Time Checking</h3>
+<p>If a struct is missing a required method or the signature doesn't match, the compiler reports an error at the call site:</p>
+<pre><code>interface Stringer {
+    fn toString(): string
+}
+
+struct Empty {
+    x: int
+}
+
+fn show(s: Stringer): void {}
+
+fn main(): void {
+    let e = Empty{x: 1}
+    show(e)    // compile error: expected Stringer, got Empty
+}</code></pre>
+
+<h3>How It Works</h3>
+<p>Interfaces compile to C vtable structs. Each interface value holds a pointer to the underlying data and a table of function pointers. The compiler wires up the vtable at the call site based on the concrete struct type. All dispatch is resolved at compile time — there is no runtime type metadata or reflection.</p>
+
+<h4>Why no <code>instanceof</code> or <code>typeof</code>?</h4>
+<p>DexLang is statically typed. The compiler knows every variable's type at compile time, so there is no runtime type ambiguity to resolve. Languages that need <code>instanceof</code> typically have class inheritance hierarchies (Java, C#) where a parent-typed variable could hold different child types at runtime, or dynamic typing (JavaScript, Python) where types aren't known until execution. DexLang has neither — interfaces use structural typing resolved entirely at compile time.</p>
 </section>
 
 <!-- Standard Library -->

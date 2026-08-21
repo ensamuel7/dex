@@ -3,7 +3,7 @@
   "displayName": "Dex Language",
   "description": "Syntax highlighting and language support for DexLang (.dx files)",
   "version": "0.2.0",
-  "publisher": "dex",
+  "publisher": "DexLang",
   "repository": {
     "type": "git",
     "url": "https://github.com/ensamuel7/dex"

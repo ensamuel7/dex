@@ -177,7 +177,16 @@ func (c *Checker) Check(program *ast.Program) []error {
 		}
 	}
 
-	// Second pass: check function bodies
+	// Check module-level let/const declarations in a global scope
+	c.pushScope()
+
+	for i := range program.GlobalLets {
+		if err := c.checkStmt(&program.GlobalLets[i], ast.TypeVoid); err != nil {
+			c.addError(err)
+		}
+	}
+
+	// Second pass: check function bodies (global scope remains so functions can resolve globals)
 	for _, fn := range program.Functions {
 		c.pushScope()
 
@@ -198,6 +207,8 @@ func (c *Checker) Check(program *ast.Program) []error {
 			break
 		}
 	}
+
+	c.popScope() // pop global scope
 
 	return c.errors
 }

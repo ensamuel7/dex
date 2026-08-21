@@ -39,7 +39,8 @@ func (p *Parser) synchronize() {
 	for !p.atEnd() {
 		switch p.current().Kind {
 		case token.TokenFn, token.TokenFunction, token.TokenStruct, token.TokenEnum,
-			token.TokenPublic, token.TokenPrivate, token.TokenAnnotation:
+			token.TokenPublic, token.TokenPrivate, token.TokenAnnotation,
+			token.TokenLet, token.TokenConst:
 			return
 		}
 		p.advance()
@@ -121,6 +122,28 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 		}
 	}
 
+	// Parse module-level let/const declarations
+	for p.isGlobalLetAhead() {
+		annotations := p.collectAnnotations()
+		var stmt ast.Stmt
+		var err error
+		if p.check(token.TokenLet) {
+			stmt, err = p.parseLetStmt()
+		} else {
+			stmt, err = p.parseConstStmt()
+		}
+		if err != nil {
+			p.recordError(err)
+			p.synchronize()
+			continue
+		}
+		if letStmt, ok := stmt.(*ast.LetStmt); ok {
+			letStmt.Annotations = annotations
+			program.GlobalLets = append(program.GlobalLets, *letStmt)
+		}
+		p.match(token.TokenSemicolon)
+	}
+
 	for !p.atEnd() {
 		annotations := p.collectAnnotations()
 		fn, err := p.parseFunction()
@@ -134,6 +157,16 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 	}
 
 	return program, p.errors
+}
+
+// isGlobalLetAhead returns true if the current tokens form a module-level let/const
+// declaration, possibly preceded by annotations.
+func (p *Parser) isGlobalLetAhead() bool {
+	i := p.pos
+	for i < len(p.tokens) && p.tokens[i].Kind == token.TokenAnnotation {
+		i++
+	}
+	return i < len(p.tokens) && (p.tokens[i].Kind == token.TokenLet || p.tokens[i].Kind == token.TokenConst)
 }
 
 // isStructDefAhead returns true if the current tokens form a struct definition,

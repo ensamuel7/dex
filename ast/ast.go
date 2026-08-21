@@ -259,6 +259,7 @@ type Program struct {
 	Imports      []Import
 	Structs      []StructDef
 	Enums        []EnumDef
+	GlobalLets   []LetStmt         // module-level let/const declarations
 	Functions    []Function
 	Interfaces   []InterfaceDef
 	UserModules  []string          // module names (last path segment) of resolved user imports

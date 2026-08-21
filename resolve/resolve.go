@@ -234,6 +234,9 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		program.Functions = append(program.Functions, fn)
 	}
 
+	// Merge global let declarations from module
+	program.GlobalLets = append(program.GlobalLets, modProgram.GlobalLets...)
+
 	// Track which module each struct belongs to
 	for _, sd := range modProgram.Structs {
 		if program.StructModule == nil {

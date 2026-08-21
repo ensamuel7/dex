@@ -24,6 +24,26 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.narrowedVars = make(map[string]string)
 	g.deferExprs = nil
 
+	// Register global variables so all functions can resolve them
+	for name, typ := range g.globalVars {
+		g.varTypes[name] = typ
+		if typ == ast.TypeString {
+			g.strVars[name] = true
+		}
+		if ast.IsArrayType(typ) {
+			g.arrVars[name] = typ
+		}
+		if ast.IsStructType(typ) {
+			g.structVars[name] = typ
+		}
+		if ast.IsMapType(typ) {
+			g.mapVars[name] = typ
+		}
+		if typ == ast.TypeStringBuilder {
+			g.sbVars[name] = true
+		}
+	}
+
 	// Register params (not tracked in scope — callee-borrows convention)
 	for _, p := range fn.Params {
 		g.varTypes[p.Name] = p.Type
@@ -79,6 +99,13 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		out.WriteString("    dex_spawn_pool_init();\n")
 	}
 
+	// Initialize global variables at the top of main()
+	if fn.Name == "main" && len(g.globalLets) > 0 {
+		for i := range g.globalLets {
+			g.genGlobalInit(out, &g.globalLets[i])
+		}
+	}
+
 	for _, stmt := range fn.Body {
 		g.genStmt(out, stmt, 1)
 	}
@@ -97,6 +124,12 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 			out.WriteString("    dex_spawn_pool_shutdown();\n")
 		}
 		g.popScope(out, "    ")
+		// Release global heap-typed variables
+		for _, gl := range g.globalLets {
+			if ast.NeedsRelease(gl.Type) {
+				g.emitReleaseVar(out, "    ", gl.Name, gl.Type)
+			}
+		}
 		out.WriteString("    return 0;\n")
 	} else {
 		// Pop function scope (cleanup for functions that fall through without return)
@@ -104,6 +137,84 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	}
 
 	out.WriteString("}\n")
+}
+
+// genGlobalInit emits initialization code for a module-level let/const variable.
+// The static declaration is already emitted at file scope; this just assigns the value in main().
+func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
+	prefix := "    "
+	name := gl.Name
+
+	// Track type info so other codegen can resolve it
+	g.varTypes[name] = gl.Type
+	if gl.Type == ast.TypeString {
+		g.strVars[name] = true
+	}
+	if ast.IsArrayType(gl.Type) {
+		g.arrVars[name] = gl.Type
+	}
+	if ast.IsStructType(gl.Type) {
+		g.structVars[name] = gl.Type
+	}
+	if ast.IsMapType(gl.Type) {
+		g.mapVars[name] = gl.Type
+	}
+	if gl.Type == ast.TypeStringBuilder {
+		g.sbVars[name] = true
+	}
+
+	switch {
+	case gl.Type == ast.TypeString:
+		if strLit, ok := gl.Value.(*ast.StringLit); ok {
+			out.WriteString(fmt.Sprintf("%s%s = dex_string_from_lit(%q);\n", prefix, name, strLit.Value))
+		} else {
+			out.WriteString(fmt.Sprintf("%s%s = ", prefix, name))
+			g.genExpr(out, gl.Value)
+			out.WriteString(";\n")
+		}
+	case ast.IsMapType(gl.Type):
+		if _, ok := gl.Value.(*ast.MapLitExpr); ok {
+			suffix := g.mapSuffix(gl.Type)
+			out.WriteString(fmt.Sprintf("%s%s = dex_map_%s_new();\n", prefix, name, suffix))
+		} else {
+			out.WriteString(fmt.Sprintf("%s%s = ", prefix, name))
+			g.genExpr(out, gl.Value)
+			out.WriteString(";\n")
+		}
+	case ast.IsArrayType(gl.Type):
+		if arrLit, ok := gl.Value.(*ast.ArrayLitExpr); ok {
+			if ast.IsStructArrayType(gl.Type) {
+				elemType := ast.ElementType(gl.Type)
+				elemCType := g.cType(elemType)
+				cleanupFn := g.structArrayCleanupFunc(elemType)
+				out.WriteString(fmt.Sprintf("%s%s = dex_array_struct_new(sizeof(%s), %s);\n", prefix, name, elemCType, cleanupFn))
+				for _, elem := range arrLit.Elems {
+					out.WriteString(fmt.Sprintf("%s{ %s _tmp_elem = ", prefix, elemCType))
+					g.genExpr(out, elem)
+					out.WriteString(fmt.Sprintf("; dex_array_struct_push(%s, &_tmp_elem); }\n", name))
+				}
+			} else {
+				cNewFn := g.arrayNewFunc(gl.Type)
+				out.WriteString(fmt.Sprintf("%s%s = %s();\n", prefix, name, cNewFn))
+				for i, elem := range arrLit.Elems {
+					out.WriteString(fmt.Sprintf("%s%s->data[%d] = ", prefix, name, i))
+					g.genExpr(out, elem)
+					out.WriteString(";\n")
+				}
+				if len(arrLit.Elems) > 0 {
+					out.WriteString(fmt.Sprintf("%s%s->len = %d;\n", prefix, name, len(arrLit.Elems)))
+				}
+			}
+		} else {
+			out.WriteString(fmt.Sprintf("%s%s = ", prefix, name))
+			g.genExpr(out, gl.Value)
+			out.WriteString(";\n")
+		}
+	default:
+		out.WriteString(fmt.Sprintf("%s%s = ", prefix, name))
+		g.genExpr(out, gl.Value)
+		out.WriteString(";\n")
+	}
 }
 
 func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {

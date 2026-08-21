@@ -76,6 +76,10 @@ type Generator struct {
 
 	// Defer tracking
 	deferExprs []ast.Expr // accumulated defer expressions for current function (LIFO order)
+
+	// Global variable tracking
+	globalLets []ast.LetStmt       // module-level let/const declarations
+	globalVars map[string]ast.Type // global variable name -> type
 }
 
 func New() *Generator {
@@ -93,6 +97,7 @@ func New() *Generator {
 		funcTypedefs:    make(map[ast.Type]string),
 		varAnnotations:  make(map[string][]string),
 		narrowedVars:    make(map[string]string),
+		globalVars:      make(map[string]ast.Type),
 	}
 }
 
@@ -365,6 +370,12 @@ func (g *Generator) Generate(program *ast.Program) string {
 		g.funcs[program.Functions[i].Name] = &program.Functions[i]
 	}
 
+	// Store global lets for codegen
+	g.globalLets = program.GlobalLets
+	for _, gl := range g.globalLets {
+		g.globalVars[gl.Name] = gl.Type
+	}
+
 	// Pre-scan to determine needed language-level features
 	g.scan(program)
 
@@ -619,6 +630,19 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 	}
 
+	// Emit global variable declarations as static C variables
+	for _, gl := range program.GlobalLets {
+		ctyp := g.cType(gl.Type)
+		if gl.IsConst && !ast.IsHeapType(gl.Type) && !ast.IsStructType(gl.Type) {
+			out.WriteString(fmt.Sprintf("static const %s %s;\n", ctyp, gl.Name))
+		} else {
+			out.WriteString(fmt.Sprintf("static %s %s;\n", ctyp, gl.Name))
+		}
+	}
+	if len(program.GlobalLets) > 0 {
+		out.WriteString("\n")
+	}
+
 	// Emit interface typedef structs (vtable-based)
 	for _, ifaceDef := range program.Interfaces {
 		out.WriteString(fmt.Sprintf("typedef struct {\n"))
@@ -827,6 +851,10 @@ func (g *Generator) scan(program *ast.Program) {
 		for _, f := range sd.Fields {
 			g.scanType(f.Type)
 		}
+	}
+	// Scan global let declarations
+	for i := range program.GlobalLets {
+		g.scanStmt(&program.GlobalLets[i])
 	}
 	for _, fn := range program.Functions {
 		g.scanType(fn.ReturnType)

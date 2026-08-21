@@ -12,59 +12,55 @@ This is currently an independent project developed and maintained primarily by m
 
 The boilerplate and most of the verbose code was written with the help of Claude. The language design, architecture decisions, fine tuning, and implementation verification are all mine.
 
-## Quick Start
+## Install
 
-You need Go 1.24+ and a C compiler (`gcc` or `cc`).
+### One-line install (macOS / Linux)
 
 ```bash
-# build the compiler
-go build -o dex
-
-# run a program
-./dex run examples/hello.dx
-
-# compile to a binary
-./dex build examples/hello.dx
-./build/hello
-
-# run tests
-./dex test
+curl -fsSL https://raw.githubusercontent.com/ensamuel7/dex/main/install.sh | sh
 ```
 
-To install `dex` globally so you can use it from anywhere:
+### Prerequisites
+
+You need a C compiler since `dex` compiles to C:
+
+- **macOS:** `xcode-select --install`
+- **Ubuntu/Debian:** `sudo apt install gcc`
+- **Fedora:** `sudo dnf install gcc`
+
+### From source
+
+```bash
+go install github.com/ensamuel7/dex@latest
+```
+
+Or build manually:
 
 ```bash
 go build -o dex && sudo mv dex /usr/local/bin/
 ```
 
-Then you can run `dex` directly from any directory:
+## Usage
 
 ```bash
+# run a program
 dex run examples/hello.dx
+
+# compile to a binary
 dex build examples/hello.dx
+./build/hello
+
+# run tests
+dex test
 ```
 
 ## Docker
 
-Run DexLang without installing Go or a C toolchain:
+Docker images are available for CI/CD or environments where you don't want to install `dex` directly:
 
 ```bash
-docker pull dexlang/dexlang:0.1.3
-
-# compile a .dx file (binary appears in ./build/)
-docker run --rm -v "$(pwd):/workspace" dexlang/dexlang build app.dx
-
-# run a .dx file
+docker pull dexlang/dexlang:latest
 docker run --rm -v "$(pwd):/workspace" dexlang/dexlang run app.dx
-
-# run an HTTP server with port mapping
-docker run --rm -v "$(pwd):/workspace" -p 8080:8080 dexlang/dexlang run server.dx
-```
-
-To update to a new version:
-
-```bash
-docker pull dexlang/dexlang:0.1.4
 ```
 
 ## What It Looks Like
@@ -187,6 +183,34 @@ DexLang compiles `.dx` source to native binaries through C. See the [Language Re
 ## Project Layout
 
 See [CONTRIBUTING.md](CONTRIBUTING.md#project-structure) for the full directory structure.
+
+## Releasing
+
+Releases are automated via GitHub Actions. When you push a version tag, the workflow cross-compiles binaries for all platforms, creates a GitHub Release, and deploys docs to GitHub Pages.
+
+**First-time setup:**
+
+1. Push the workflow and install script to `main` (just a normal `git push`)
+2. In your GitHub repo, go to **Settings > Pages** and set the source to **GitHub Actions**
+
+**To cut a release:**
+
+```bash
+make release VERSION=0.1.4
+```
+
+This runs `git tag v0.1.4` and `git push origin v0.1.4`. The tag push triggers the workflow which:
+- Builds `dex` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
+- Creates a GitHub Release with all 4 tarballs attached
+- Deploys docs to GitHub Pages
+
+**To also publish Docker images** (separate from the GitHub release):
+
+```bash
+make docker-publish DEX_VERSION=0.1.4
+```
+
+`make release` and `make docker-publish` are independent — run either or both.
 
 ---
 

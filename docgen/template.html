@@ -254,19 +254,29 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
 
 <h2>Getting Started</h2>
 
-<h3>Prerequisites</h3>
-<table>
-<tr><th>Requirement</th><th>Purpose</th><th>Install</th></tr>
-<tr><td><code>Go</code> (1.21+)</td><td>Build the DexLang compiler</td><td><a href="https://go.dev/dl/">go.dev/dl</a> or <code>brew install go</code></td></tr>
-<tr><td><code>gcc</code> / <code>cc</code></td><td>Compile generated C code to native binaries</td><td>Xcode CLI tools (macOS) or <code>apt install gcc</code> (Linux)</td></tr>
-</table>
-<p>Go and a C compiler are needed for <strong>development</strong>. For <strong>deployment</strong>, the compiled binary is a standalone native executable — no runtime dependencies. You can also use Docker (see below).</p>
-
 <h3>Installation</h3>
+<p>One-line install (macOS / Linux):</p>
 <div class="install">
-<pre><code>git clone https://github.com/ensamuel7/dex.git
-cd dex
-go build -o dex .</code></pre>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/ensamuel7/dex/main/install.sh | sh</code></pre>
+</div>
+<p>This downloads the latest prebuilt binary for your platform and installs it to <code>/usr/local/bin</code>.</p>
+
+<h4>Prerequisites</h4>
+<p>You need a C compiler since <code>dex</code> compiles to C:</p>
+<ul>
+<li><strong>macOS:</strong> <code>xcode-select --install</code></li>
+<li><strong>Ubuntu/Debian:</strong> <code>sudo apt install gcc</code></li>
+<li><strong>Fedora:</strong> <code>sudo dnf install gcc</code></li>
+</ul>
+
+<h4>From source</h4>
+<p>If you have <a href="https://go.dev/dl/">Go</a> (1.21+) installed:</p>
+<div class="install">
+<pre><code>go install github.com/ensamuel7/dex@latest</code></pre>
+</div>
+<p>Or build manually:</p>
+<div class="install">
+<pre><code>go build -o dex && sudo mv dex /usr/local/bin/</code></pre>
 </div>
 
 <h3>Your first program</h3>

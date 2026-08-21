@@ -111,6 +111,17 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 
 	switch s := stmt.(type) {
 	case *ast.LetStmt:
+		// Expand multi-declaration into individual let statements
+		if len(s.Names) > 0 {
+			for _, name := range s.Names {
+				individual := &ast.LetStmt{
+					Pos: s.Pos, Name: name, Type: s.Type,
+					Value: s.Value, IsConst: s.IsConst, Annotations: s.Annotations,
+				}
+				g.genStmt(out, individual, indent)
+			}
+			break
+		}
 		g.varTypes[s.Name] = s.Type
 		if len(s.Annotations) > 0 {
 			g.varAnnotations[s.Name] = s.Annotations

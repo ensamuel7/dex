@@ -295,7 +295,8 @@ type Expr interface {
 
 type LetStmt struct {
 	Pos         Pos
-	Name        string
+	Name        string   // single declaration
+	Names       []string // multi-declaration (let x, y, z: int = 0)
 	Type        Type
 	Value       Expr
 	IsConst     bool

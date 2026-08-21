@@ -114,6 +114,11 @@ func (p *Parser) parseLetStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 
+	// Check for multi-declaration: let x, y, z: type = value
+	if p.check(token.TokenComma) {
+		return p.parseMultiLetStmt(pos, name, false)
+	}
+
 	// Type inference: if next token is '=' instead of ':', infer the type
 	if p.check(token.TokenAssign) {
 		p.advance() // consume '='
@@ -162,6 +167,11 @@ func (p *Parser) parseConstStmt() (ast.Stmt, error) {
 	name, err := p.expectIdent()
 	if err != nil {
 		return nil, err
+	}
+
+	// Check for multi-declaration: const x, y, z: type = value
+	if p.check(token.TokenComma) {
+		return p.parseMultiLetStmt(pos, name, true)
 	}
 
 	// Type inference: if next token is '=' instead of ':', infer the type
@@ -879,4 +889,40 @@ func (p *Parser) parseDestructureLetStmt(pos ast.Pos, isConst bool) (ast.Stmt, e
 	}
 
 	return &ast.DestructureLetStmt{Pos: pos, Names: names, Value: value, IsConst: isConst}, nil
+}
+
+func (p *Parser) parseMultiLetStmt(pos ast.Pos, firstName string, isConst bool) (ast.Stmt, error) {
+	names := []string{firstName}
+	for p.match(token.TokenComma) {
+		name, err := p.expectIdent()
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+
+	if err := p.expect(token.TokenColon); err != nil {
+		return nil, err
+	}
+
+	typ, err := p.parseType()
+	if err != nil {
+		return nil, err
+	}
+
+	// Optional types without initializer default to null
+	if ast.IsOptionalType(typ) && !p.check(token.TokenAssign) {
+		return &ast.LetStmt{Pos: pos, Names: names, Type: typ, Value: &ast.NullLit{}, IsConst: isConst}, nil
+	}
+
+	if err := p.expect(token.TokenAssign); err != nil {
+		return nil, err
+	}
+
+	value, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.LetStmt{Pos: pos, Names: names, Type: typ, Value: value, IsConst: isConst}, nil
 }

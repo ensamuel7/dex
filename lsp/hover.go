@@ -248,6 +248,11 @@ func findLetInStmts(stmts []ast.Stmt, name string) string {
 			if s.Name == name {
 				return typeName(s.Type)
 			}
+			for _, n := range s.Names {
+				if n == name {
+					return typeName(s.Type)
+				}
+			}
 		case *ast.IfStmt:
 			if t := findLetInStmts(s.Then, name); t != "" {
 				return t
@@ -444,6 +449,11 @@ func findLetTypeIDInStmts(stmts []ast.Stmt, name string) (ast.Type, bool) {
 		case *ast.LetStmt:
 			if s.Name == name {
 				return s.Type, true
+			}
+			for _, n := range s.Names {
+				if n == name {
+					return s.Type, true
+				}
 			}
 		case *ast.IfStmt:
 			if t, ok := findLetTypeIDInStmts(s.Then, name); ok {

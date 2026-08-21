@@ -237,6 +237,18 @@ Type inference does **not** work with empty array literals — these still requi
 let items: int[] = []   // explicit type required
 ```
 
+### Multi-declaration
+
+Multiple variables of the same type can be declared on one line:
+
+```dex
+let x, y, z: int = 0
+let a, b: string?          // both default to null
+const width, height: int = 100
+```
+
+Multi-declaration requires an explicit type annotation.
+
 ### Assignment
 
 ```dex

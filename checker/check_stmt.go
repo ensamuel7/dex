@@ -9,6 +9,19 @@ import (
 func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 	switch s := stmt.(type) {
 	case *ast.LetStmt:
+		// Expand multi-declaration into individual let statements
+		if len(s.Names) > 0 {
+			for _, name := range s.Names {
+				individual := &ast.LetStmt{
+					Pos: s.Pos, Name: name, Type: s.Type,
+					Value: s.Value, IsConst: s.IsConst, Annotations: s.Annotations,
+				}
+				if err := c.checkStmt(individual, returnType); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		// Check if RHS is an #[owned] variable — aliasing is not allowed
 		if ident, ok := s.Value.(*ast.Ident); ok {
 			rhsAnnots := c.resolveAnnotations(ident.Name)

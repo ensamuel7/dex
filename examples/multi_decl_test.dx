@@ -1,0 +1,22 @@
+import "fmt"
+
+fn main(): void {
+    let x, y, z: int = 0
+    assert(x == 0)
+    assert(y == 0)
+    assert(z == 0)
+
+    let a, b: double = 3.14
+    assert(a == 3.14)
+    assert(b == 3.14)
+
+    const p, q: int = 42
+    assert(p == 42)
+    assert(q == 42)
+
+    let m, n: string?
+    assert(m == null)
+    assert(n == null)
+
+    fmt.println("All multi-declaration tests passed!")
+}

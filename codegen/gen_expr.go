@@ -503,11 +503,11 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		if ok {
 			arrType := g.arrVars[argIdent.Name]
 			if ast.IsStructArrayType(arrType) {
-				// Struct array stringify: use dex_json_set_struct_arr with empty obj
+				// Struct array stringify: use dex_json_stringify_struct_arr for bare array output
 				elemType := ast.ElementType(arrType)
 				elemCType := g.cType(elemType)
 				def := ast.GetStructDef(elemType)
-				out.WriteString(fmt.Sprintf("dex_string_from_cstr(dex_json_set_struct_arr(\"{}\", \"_\", %s, sizeof(%s), %d, ", argIdent.Name, elemCType, len(def.Fields)))
+				out.WriteString(fmt.Sprintf("dex_string_from_cstr(dex_json_stringify_struct_arr(%s, sizeof(%s), %d, ", argIdent.Name, elemCType, len(def.Fields)))
 				out.WriteString("(DexStructFieldDesc[]){ ")
 				for i, f := range def.Fields {
 					if i > 0 {
@@ -787,11 +787,11 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			fn = "dex_db_col_int"
 		}
 		if e.ResolvedType == ast.TypeString {
-			out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", fn))
+			out.WriteString("dex_db_col_dexstr(")
 			g.genExpr(out, e.Args[0])
 			out.WriteString(", ")
 			g.genExpr(out, e.Args[1])
-			out.WriteString("))")
+			out.WriteString(")")
 		} else {
 			out.WriteString(fn + "(")
 			g.genExpr(out, e.Args[0])

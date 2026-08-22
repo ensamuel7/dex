@@ -17,12 +17,23 @@
 #define DEX_DB_MAX_CONNS 16
 #define DEX_DB_MAX_RESULTS 64
 #define DEX_DB_MAX_STMTS 64
+#define DEX_DB_POOL_SIZE 16
 
 #define DEX_DB_DRIVER_NONE 0
 #define DEX_DB_DRIVER_SQLITE 1
 #define DEX_DB_DRIVER_POSTGRES 2
 #define DEX_DB_DRIVER_MYSQL 3
 #define DEX_DB_DRIVER_MONGO 4
+
+#ifdef DEX_HAS_POSTGRES
+typedef struct {
+    PGconn* connections[DEX_DB_POOL_SIZE];
+    int in_use[DEX_DB_POOL_SIZE];    // 0 = free, 1 = acquired
+    int size;                         // actual number of connections
+    pthread_mutex_t lock;
+    pthread_cond_t available;
+} DexDbPool;
+#endif
 
 #ifdef DEX_HAS_MONGO
 static int dex_mongo_initialized = 0;
@@ -32,7 +43,7 @@ typedef struct {
     int driver;
     sqlite3* sqlite_conn;
 #ifdef DEX_HAS_POSTGRES
-    PGconn* pg_conn;
+    DexDbPool pg_pool;
 #endif
 #ifdef DEX_HAS_MYSQL
     MYSQL* mysql_conn;
@@ -53,6 +64,8 @@ typedef struct {
     PGresult* pg_result;
     int pg_row;
     int pg_nrows;
+    int pool_entry;   // index into the pool's connections array
+    int pool_conn;    // which DexDbConn slot this came from
 #endif
 #ifdef DEX_HAS_MYSQL
     // MySQL
@@ -175,17 +188,32 @@ int dex_db_open(const char* driver, const char* dsn) {
 
 #ifdef DEX_HAS_POSTGRES
     } else if (strcmp(driver, "postgres") == 0) {
-        PGconn* pg = PQconnectdb(dsn);
-        if (PQstatus(pg) != CONNECTION_OK) {
-            PQfinish(pg);
-            pthread_mutex_lock(&dex_db_mutex);
-            memset(&dex_db_conns[slot], 0, sizeof(DexDbConn));
-            pthread_mutex_unlock(&dex_db_mutex);
-            return -1;
+        DexDbPool* pool = &dex_db_conns[slot].pg_pool;
+        memset(pool, 0, sizeof(DexDbPool));
+        pthread_mutex_init(&pool->lock, NULL);
+        pthread_cond_init(&pool->available, NULL);
+        // Open DEX_DB_POOL_SIZE connections to the same DSN
+        for (int i = 0; i < DEX_DB_POOL_SIZE; i++) {
+            PGconn* pg = PQconnectdb(dsn);
+            if (PQstatus(pg) != CONNECTION_OK) {
+                PQfinish(pg);
+                // Close any connections already opened
+                for (int j = 0; j < i; j++) {
+                    PQfinish(pool->connections[j]);
+                }
+                pthread_mutex_destroy(&pool->lock);
+                pthread_cond_destroy(&pool->available);
+                pthread_mutex_lock(&dex_db_mutex);
+                memset(&dex_db_conns[slot], 0, sizeof(DexDbConn));
+                pthread_mutex_unlock(&dex_db_mutex);
+                return -1;
+            }
+            pool->connections[i] = pg;
+            pool->in_use[i] = 0;
         }
+        pool->size = DEX_DB_POOL_SIZE;
         pthread_mutex_lock(&dex_db_mutex);
         dex_db_conns[slot].driver = DEX_DB_DRIVER_POSTGRES;
-        dex_db_conns[slot].pg_conn = pg;
         pthread_mutex_unlock(&dex_db_mutex);
         return slot;
 #endif
@@ -276,10 +304,33 @@ int dex_db_exec(int conn, const char* sql) {
 
 #ifdef DEX_HAS_POSTGRES
     } else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
-        PGresult* res = PQexec(c->pg_conn, sql);
+        // Acquire a free connection from the pool
+        DexDbPool* pool = &c->pg_pool;
+        pthread_mutex_lock(&pool->lock);
+        int entry = -1;
+        while (entry < 0) {
+            for (int i = 0; i < pool->size; i++) {
+                if (!pool->in_use[i]) {
+                    pool->in_use[i] = 1;
+                    entry = i;
+                    break;
+                }
+            }
+            if (entry < 0) {
+                pthread_cond_wait(&pool->available, &pool->lock);
+            }
+        }
+        pthread_mutex_unlock(&pool->lock);
+
+        PGresult* res = PQexec(pool->connections[entry], sql);
         ExecStatusType status = PQresultStatus(res);
         if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
             PQclear(res);
+            // Release pool entry
+            pthread_mutex_lock(&pool->lock);
+            pool->in_use[entry] = 0;
+            pthread_cond_signal(&pool->available);
+            pthread_mutex_unlock(&pool->lock);
             return -1;
         }
         char* affected = PQcmdTuples(res);
@@ -288,6 +339,11 @@ int dex_db_exec(int conn, const char* sql) {
             n = atoi(affected);
         }
         PQclear(res);
+        // Release pool entry
+        pthread_mutex_lock(&pool->lock);
+        pool->in_use[entry] = 0;
+        pthread_cond_signal(&pool->available);
+        pthread_mutex_unlock(&pool->lock);
         return n;
 #endif
 
@@ -362,9 +418,32 @@ int dex_db_query(int conn, const char* sql) {
 
 #ifdef DEX_HAS_POSTGRES
     } else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
-        PGresult* res = PQexec(c->pg_conn, sql);
+        // Acquire a free connection from the pool
+        DexDbPool* pool = &c->pg_pool;
+        pthread_mutex_lock(&pool->lock);
+        int entry = -1;
+        while (entry < 0) {
+            for (int i = 0; i < pool->size; i++) {
+                if (!pool->in_use[i]) {
+                    pool->in_use[i] = 1;
+                    entry = i;
+                    break;
+                }
+            }
+            if (entry < 0) {
+                pthread_cond_wait(&pool->available, &pool->lock);
+            }
+        }
+        pthread_mutex_unlock(&pool->lock);
+
+        PGresult* res = PQexec(pool->connections[entry], sql);
         if (PQresultStatus(res) != PGRES_TUPLES_OK) {
             PQclear(res);
+            // Release pool entry
+            pthread_mutex_lock(&pool->lock);
+            pool->in_use[entry] = 0;
+            pthread_cond_signal(&pool->available);
+            pthread_mutex_unlock(&pool->lock);
             pthread_mutex_lock(&dex_db_mutex);
             memset(&dex_db_results[slot], 0, sizeof(DexDbResult));
             pthread_mutex_unlock(&dex_db_mutex);
@@ -375,6 +454,8 @@ int dex_db_query(int conn, const char* sql) {
         dex_db_results[slot].pg_result = res;
         dex_db_results[slot].pg_row = -1;
         dex_db_results[slot].pg_nrows = PQntuples(res);
+        dex_db_results[slot].pool_entry = entry;
+        dex_db_results[slot].pool_conn = conn;
         pthread_mutex_unlock(&dex_db_mutex);
         return slot;
 #endif
@@ -531,10 +612,11 @@ const char* dex_db_col_str(int rows, int col) {
             empty[0] = '\0';
             return empty;
         }
-        size_t len = strlen(val);
+        size_t len = (size_t)PQgetlength(r->pg_result, r->pg_row, col);
         char* copy = (char*)malloc(len + 1);
         if (!copy) return strdup("");
-        memcpy(copy, val, len + 1);
+        memcpy(copy, val, len);
+        copy[len] = '\0';
         return copy;
 #endif
 
@@ -597,6 +679,67 @@ const char* dex_db_col_str(int rows, int col) {
     if (!empty) return strdup("");
     empty[0] = '\0';
     return empty;
+}
+
+// ==========================================================================
+// dex_db_col_dexstr — return DexString* directly (single alloc, single copy)
+// ==========================================================================
+DexString* dex_db_col_dexstr(int rows, int col) {
+    if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) {
+        return dex_string_new("", 0);
+    }
+    DexDbResult* r = &dex_db_results[rows];
+
+    if (r->driver == DEX_DB_DRIVER_SQLITE) {
+        const unsigned char* text = sqlite3_column_text(r->sqlite_stmt, col);
+        if (!text) return dex_string_new("", 0);
+        int nbytes = sqlite3_column_bytes(r->sqlite_stmt, col);
+        return dex_string_new((const char*)text, (size_t)nbytes);
+
+#ifdef DEX_HAS_POSTGRES
+    } else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
+        char* val = PQgetvalue(r->pg_result, r->pg_row, col);
+        if (!val) return dex_string_new("", 0);
+        int len = PQgetlength(r->pg_result, r->pg_row, col);
+        return dex_string_new(val, (size_t)len);
+#endif
+
+#ifdef DEX_HAS_MYSQL
+    } else if (r->driver == DEX_DB_DRIVER_MYSQL) {
+        if (!r->mysql_row || !r->mysql_row[col]) return dex_string_new("", 0);
+        size_t len = strlen(r->mysql_row[col]);
+        return dex_string_new(r->mysql_row[col], len);
+#endif
+
+#ifdef DEX_HAS_MONGO
+    } else if (r->driver == DEX_DB_DRIVER_MONGO) {
+        bson_iter_t iter;
+        if (!dex_db_mongo_iter_to(r->mongo_doc, col, &iter)) return dex_string_new("", 0);
+        if (BSON_ITER_HOLDS_UTF8(&iter)) {
+            uint32_t ulen = 0;
+            const char* val = bson_iter_utf8(&iter, &ulen);
+            return dex_string_new(val, (size_t)ulen);
+        }
+        // Convert non-string types to string
+        char buf[64];
+        if (BSON_ITER_HOLDS_INT32(&iter)) {
+            snprintf(buf, sizeof(buf), "%d", bson_iter_int32(&iter));
+        } else if (BSON_ITER_HOLDS_INT64(&iter)) {
+            snprintf(buf, sizeof(buf), "%lld", (long long)bson_iter_int64(&iter));
+        } else if (BSON_ITER_HOLDS_DOUBLE(&iter)) {
+            snprintf(buf, sizeof(buf), "%g", bson_iter_double(&iter));
+        } else if (BSON_ITER_HOLDS_BOOL(&iter)) {
+            snprintf(buf, sizeof(buf), "%s", bson_iter_bool(&iter) ? "true" : "false");
+        } else if (BSON_ITER_HOLDS_OID(&iter)) {
+            bson_oid_to_string(bson_iter_oid(&iter), buf);
+        } else {
+            buf[0] = '\0';
+        }
+        return dex_string_new(buf, strlen(buf));
+#endif
+    }
+
+    return dex_string_new("", 0);
 }
 
 // ==========================================================================
@@ -688,6 +831,16 @@ void dex_db_free(int rows) {
 #ifdef DEX_HAS_POSTGRES
     else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
         if (r->pg_result) PQclear(r->pg_result);
+        // Release pool entry back to the pool
+        int pc = r->pool_conn;
+        int pe = r->pool_entry;
+        if (pc >= 0 && pc < DEX_DB_MAX_CONNS) {
+            DexDbPool* pool = &dex_db_conns[pc].pg_pool;
+            pthread_mutex_lock(&pool->lock);
+            pool->in_use[pe] = 0;
+            pthread_cond_signal(&pool->available);
+            pthread_mutex_unlock(&pool->lock);
+        }
     }
 #endif
 #ifdef DEX_HAS_MYSQL
@@ -717,7 +870,12 @@ void dex_db_close(int conn) {
     }
 #ifdef DEX_HAS_POSTGRES
     else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
-        if (c->pg_conn) PQfinish(c->pg_conn);
+        DexDbPool* pool = &c->pg_pool;
+        for (int i = 0; i < pool->size; i++) {
+            if (pool->connections[i]) PQfinish(pool->connections[i]);
+        }
+        pthread_mutex_destroy(&pool->lock);
+        pthread_cond_destroy(&pool->available);
     }
 #endif
 #ifdef DEX_HAS_MYSQL
@@ -772,10 +930,11 @@ int dex_db_prepare(int conn, const char* sql) {
 
 #ifdef DEX_HAS_POSTGRES
     } else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
-        // PostgreSQL prepared statements
+        // PostgreSQL prepared statements — use first pool connection
+        PGconn* pg = c->pg_pool.connections[0];
         snprintf(dex_db_stmts[slot].pg_stmt_name, sizeof(dex_db_stmts[slot].pg_stmt_name),
                  "dex_ps_%d", slot);
-        PGresult* res = PQprepare(c->pg_conn, dex_db_stmts[slot].pg_stmt_name, sql, 0, NULL);
+        PGresult* res = PQprepare(pg, dex_db_stmts[slot].pg_stmt_name, sql, 0, NULL);
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
             PQclear(res);
             pthread_mutex_lock(&dex_db_mutex);
@@ -787,7 +946,7 @@ int dex_db_prepare(int conn, const char* sql) {
         pthread_mutex_lock(&dex_db_mutex);
         dex_db_stmts[slot].driver = DEX_DB_DRIVER_POSTGRES;
         dex_db_stmts[slot].conn_slot = conn;
-        dex_db_stmts[slot].pg_conn = c->pg_conn;
+        dex_db_stmts[slot].pg_conn = pg;
         dex_db_stmts[slot].pg_sql = strdup(sql);
         pthread_mutex_unlock(&dex_db_mutex);
         return slot;

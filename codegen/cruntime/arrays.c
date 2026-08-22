@@ -660,6 +660,55 @@ const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArraySt
     return result;
 }
 
+const char* dex_json_stringify_struct_arr(DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields) {
+    // Build JSON array of objects — returns just [...] without wrapping in an object
+    size_t cap = 256;
+    char* buf = (char*)malloc(cap);
+    int pos = 0;
+    buf[pos++] = '[';
+    for (int i = 0; i < arr->len; i++) {
+        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        buf[pos++] = '{';
+        void* elem = (char*)arr->data + (size_t)i * elem_size;
+        for (int f = 0; f < num_fields; f++) {
+            if (f > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+            // Ensure capacity
+            if ((size_t)pos + 256 > cap) {
+                cap *= 2;
+                buf = (char*)realloc(buf, cap);
+            }
+            int n = 0;
+            switch (fields[f].kind) {
+            case 0: // int
+                n = snprintf(buf + pos, cap - pos, "\"%s\": %d", fields[f].name, *(int*)((char*)elem + fields[f].offset));
+                break;
+            case 1: // bool
+                n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false");
+                break;
+            case 2: // string
+                { DexString* s = *(DexString**)((char*)elem + fields[f].offset);
+                  n = snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"", fields[f].name, s ? s->data : ""); }
+                break;
+            case 3: // long
+                n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)elem + fields[f].offset));
+                break;
+            case 4: // double
+                n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)elem + fields[f].offset));
+                break;
+            }
+            pos += n;
+            if ((size_t)pos + 256 > cap) {
+                cap *= 2;
+                buf = (char*)realloc(buf, cap);
+            }
+        }
+        buf[pos++] = '}';
+    }
+    buf[pos++] = ']';
+    buf[pos] = '\0';
+    return buf;
+}
+
 // === JSON stringify helpers (still return const char* for stdlib bridging) ===
 
 const char* dex_json_stringify_int(DexArrayInt* a) {

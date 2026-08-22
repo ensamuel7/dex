@@ -602,8 +602,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		def := ast.GetStructDef(structType)
 		cType := g.cType(structType)
 		out.WriteString(fmt.Sprintf("({ %s _jobj_tmp = {0}; dex_json_decode_struct(", cType))
-		g.genExpr(out, e.Args[0])
-		out.WriteString(fmt.Sprintf("->data, &_jobj_tmp, %d, ", len(def.Fields)))
+		g.genStringData(out, e.Args[0])
+		out.WriteString(fmt.Sprintf(", &_jobj_tmp, %d, ", len(def.Fields)))
 		out.WriteString("(DexStructFieldDesc[]){ ")
 		for i, f := range def.Fields {
 			if i > 0 {
@@ -627,10 +627,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				elemCType := g.cType(elemType)
 				def := ast.GetStructDef(elemType)
 				out.WriteString("dex_string_from_cstr(dex_json_set_struct_arr(")
-				g.genExpr(out, e.Args[0])
-				out.WriteString("->data, ")
-				g.genExpr(out, e.Args[1])
-				out.WriteString("->data, ")
+				g.genStringData(out, e.Args[0])
+				out.WriteString(", ")
+				g.genStringData(out, e.Args[1])
+				out.WriteString(", ")
 				out.WriteString(argIdent.Name)
 				out.WriteString(fmt.Sprintf(", sizeof(%s), %d, ", elemCType, len(def.Fields)))
 				out.WriteString("(DexStructFieldDesc[]){ ")
@@ -675,10 +675,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				}
 				// Bridge: extract ->data for string args, wrap result in dex_string_from_cstr
 				out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", fn))
-				g.genExpr(out, e.Args[0])
-				out.WriteString("->data, ")
-				g.genExpr(out, e.Args[1])
-				out.WriteString("->data, ")
+				g.genStringData(out, e.Args[0])
+				out.WriteString(", ")
+				g.genStringData(out, e.Args[1])
+				out.WriteString(", ")
 				out.WriteString(argIdent.Name)
 				out.WriteString("))")
 			}
@@ -703,11 +703,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			fn = "dex_json_array_push_str"
 		}
 		out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", fn))
-		g.genExpr(out, e.Args[0])
-		out.WriteString("->data, ")
+		g.genStringData(out, e.Args[0])
+		out.WriteString(", ")
 		if valType == ast.TypeString {
-			g.genExpr(out, e.Args[1])
-			out.WriteString("->data")
+			g.genStringData(out, e.Args[1])
 		} else {
 			g.genExpr(out, e.Args[1])
 		}
@@ -731,10 +730,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			def := ast.GetStructDef(elemType)
 			// Generate inline serialization using dex_json_set_arr_struct helper pattern
 			out.WriteString("dex_string_from_cstr(dex_json_set_struct_arr(")
-			g.genExpr(out, e.Args[0])
-			out.WriteString("->data, ")
-			g.genExpr(out, e.Args[1])
-			out.WriteString("->data, ")
+			g.genStringData(out, e.Args[0])
+			out.WriteString(", ")
+			g.genStringData(out, e.Args[1])
+			out.WriteString(", ")
 			g.genExpr(out, e.Args[2])
 			out.WriteString(fmt.Sprintf(", sizeof(%s), %d, ", elemCType, len(def.Fields)))
 			// Emit field descriptors as a compound literal
@@ -785,10 +784,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					setArrFn = "dex_json_set_arr_char"
 				}
 				out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", setArrFn))
-				g.genExpr(out, e.Args[0])
-				out.WriteString("->data, ")
-				g.genExpr(out, e.Args[1])
-				out.WriteString("->data, ")
+				g.genStringData(out, e.Args[0])
+				out.WriteString(", ")
+				g.genStringData(out, e.Args[1])
+				out.WriteString(", ")
 				out.WriteString(argIdent.Name)
 				out.WriteString("))")
 			}
@@ -809,14 +808,13 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		}
 		// Bridge: string args need ->data, result needs wrapping
 		out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(", fn))
-		g.genExpr(out, e.Args[0])
-		out.WriteString("->data, ")
-		g.genExpr(out, e.Args[1])
-		out.WriteString("->data, ")
+		g.genStringData(out, e.Args[0])
+		out.WriteString(", ")
+		g.genStringData(out, e.Args[1])
+		out.WriteString(", ")
 		// For the value arg: if string type, extract ->data
 		if valType == ast.TypeString {
-			g.genExpr(out, e.Args[2])
-			out.WriteString("->data")
+			g.genStringData(out, e.Args[2])
 		} else {
 			g.genExpr(out, e.Args[2])
 		}

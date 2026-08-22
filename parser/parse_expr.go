@@ -341,17 +341,48 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			return &ast.FieldAccessExpr{Pos: pos, Object: &ast.Ident{Pos: pos, Name: name}, Field: memberName}, nil
 		}
 
-		// Check for index expression: ident[expr]
+		// Check for index or slice expression: ident[expr] or ident[start:end]
 		if p.check(token.TokenLBracket) {
 			p.advance() // consume '['
-			index, err := p.parseExpr(0)
+			// Check for [:end] form
+			if p.check(token.TokenColon) {
+				p.advance() // consume ':'
+				var end ast.Expr
+				if !p.check(token.TokenRBracket) {
+					var err error
+					end, err = p.parseExpr(0)
+					if err != nil {
+						return nil, err
+					}
+				}
+				if err := p.expect(token.TokenRBracket); err != nil {
+					return nil, err
+				}
+				return &ast.SliceExpr{Pos: pos, Array: &ast.Ident{Pos: pos, Name: name}, Start: nil, End: end}, nil
+			}
+			first, err := p.parseExpr(0)
 			if err != nil {
 				return nil, err
+			}
+			// Check for slice syntax: arr[start:end]
+			if p.check(token.TokenColon) {
+				p.advance() // consume ':'
+				var end ast.Expr
+				if !p.check(token.TokenRBracket) {
+					end, err = p.parseExpr(0)
+					if err != nil {
+						return nil, err
+					}
+				}
+				if err := p.expect(token.TokenRBracket); err != nil {
+					return nil, err
+				}
+				return &ast.SliceExpr{Pos: pos, Array: &ast.Ident{Pos: pos, Name: name}, Start: first, End: end}, nil
 			}
 			if err := p.expect(token.TokenRBracket); err != nil {
 				return nil, err
 			}
-			return &ast.IndexExpr{Pos: pos, Array: &ast.Ident{Pos: pos, Name: name}, Index: index}, nil
+			return &ast.IndexExpr{Pos: pos, Array: &ast.Ident{Pos: pos, Name: name}, Index: first}, nil
 		}
 
 		// Check for function call

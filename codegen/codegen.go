@@ -1054,6 +1054,14 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 	case *ast.IndexExpr:
 		g.scanExpr(e.Array)
 		g.scanExpr(e.Index)
+	case *ast.SliceExpr:
+		g.scanExpr(e.Array)
+		if e.Start != nil {
+			g.scanExpr(e.Start)
+		}
+		if e.End != nil {
+			g.scanExpr(e.End)
+		}
 	case *ast.StructLitExpr:
 		for _, v := range e.FieldValues {
 			g.scanExpr(v)

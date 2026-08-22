@@ -175,6 +175,63 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			out.WriteString("])")
 		}
 
+	case *ast.SliceExpr:
+		arrType := g.typeOfExpr(e.Array)
+		var fn string
+		switch arrType {
+		case ast.TypeArrayInt:
+			fn = "dex_array_int_slice"
+		case ast.TypeArrayBool:
+			fn = "dex_array_bool_slice"
+		case ast.TypeArrayString:
+			fn = "dex_array_string_slice"
+		case ast.TypeArrayLong:
+			fn = "dex_array_long_slice"
+		case ast.TypeArrayDouble:
+			fn = "dex_array_double_slice"
+		case ast.TypeArrayChar:
+			fn = "dex_array_char_slice"
+		default:
+			if ast.IsStructArrayType(arrType) {
+				fn = "dex_array_struct_slice"
+			}
+		}
+		if fn == "dex_array_struct_slice" {
+			out.WriteString(fmt.Sprintf("%s(", fn))
+			g.genExpr(out, e.Array)
+			out.WriteString(", ")
+			if e.Start != nil {
+				g.genExpr(out, e.Start)
+			} else {
+				out.WriteString("0")
+			}
+			out.WriteString(", ")
+			if e.End != nil {
+				g.genExpr(out, e.End)
+			} else {
+				g.genExpr(out, e.Array)
+				out.WriteString("->len")
+			}
+			out.WriteString(")")
+		} else {
+			out.WriteString(fmt.Sprintf("%s(", fn))
+			g.genExpr(out, e.Array)
+			out.WriteString(", ")
+			if e.Start != nil {
+				g.genExpr(out, e.Start)
+			} else {
+				out.WriteString("0")
+			}
+			out.WriteString(", ")
+			if e.End != nil {
+				g.genExpr(out, e.End)
+			} else {
+				g.genExpr(out, e.Array)
+				out.WriteString("->len")
+			}
+			out.WriteString(")")
+		}
+
 	case *ast.ArrayLitExpr:
 		// Non-let context — shouldn't normally happen since checker ensures array literals
 		// are used in let statements, but handle defensively

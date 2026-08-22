@@ -393,6 +393,8 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 			}
 		}
 		return false
+	case *ast.SliceExpr:
+		return false // slice returns an array, not a string
 	case *ast.BinaryExpr:
 		if e.Op == ast.BinAdd {
 			return g.isStringExpr(e.Left) || g.isStringExpr(e.Right)

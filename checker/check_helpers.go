@@ -389,6 +389,14 @@ func collectReferencedVarsExpr(expr ast.Expr, used map[string]bool) {
 	case *ast.IndexExpr:
 		collectReferencedVarsExpr(e.Array, used)
 		collectReferencedVarsExpr(e.Index, used)
+	case *ast.SliceExpr:
+		collectReferencedVarsExpr(e.Array, used)
+		if e.Start != nil {
+			collectReferencedVarsExpr(e.Start, used)
+		}
+		if e.End != nil {
+			collectReferencedVarsExpr(e.End, used)
+		}
 	case *ast.FieldAccessExpr:
 		collectReferencedVarsExpr(e.Object, used)
 	case *ast.ArrayLitExpr:

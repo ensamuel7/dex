@@ -250,6 +250,14 @@ func (g *Generator) collectUsedVarsExpr(expr ast.Expr, used map[string]bool) {
 	case *ast.IndexExpr:
 		g.collectUsedVarsExpr(e.Array, used)
 		g.collectUsedVarsExpr(e.Index, used)
+	case *ast.SliceExpr:
+		g.collectUsedVarsExpr(e.Array, used)
+		if e.Start != nil {
+			g.collectUsedVarsExpr(e.Start, used)
+		}
+		if e.End != nil {
+			g.collectUsedVarsExpr(e.End, used)
+		}
 	case *ast.FieldAccessExpr:
 		g.collectUsedVarsExpr(e.Object, used)
 	case *ast.ArrayLitExpr:

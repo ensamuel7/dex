@@ -90,6 +90,22 @@ void dex_array_int_sort_desc(DexArrayInt* a) {
     qsort(a->data, a->len, sizeof(int), dex_cmp_int_desc);
 }
 
+DexArrayInt* dex_array_int_slice(DexArrayInt* a, int start, int end) {
+    if (start < 0) start = 0;
+    if (end > a->len) end = a->len;
+    if (start > end) start = end;
+    int count = end - start;
+    DexArrayInt* result = dex_array_int_new();
+    if (count > result->cap) {
+        result->cap = count;
+        result->data = (int*)realloc(result->data, sizeof(int) * result->cap);
+        if (!result->data) { dex_panic("out of memory"); }
+    }
+    memcpy(result->data, a->data + start, sizeof(int) * count);
+    result->len = count;
+    return result;
+}
+
 // === DexArrayBool ===
 typedef struct {
     DexObjHeader hdr;
@@ -155,6 +171,22 @@ void dex_array_bool_reverse(DexArrayBool* a) {
         a->data[i] = a->data[j];
         a->data[j] = tmp;
     }
+}
+
+DexArrayBool* dex_array_bool_slice(DexArrayBool* a, int start, int end) {
+    if (start < 0) start = 0;
+    if (end > a->len) end = a->len;
+    if (start > end) start = end;
+    int count = end - start;
+    DexArrayBool* result = dex_array_bool_new();
+    if (count > result->cap) {
+        result->cap = count;
+        result->data = (_Bool*)realloc(result->data, sizeof(_Bool) * result->cap);
+        if (!result->data) { dex_panic("out of memory"); }
+    }
+    memcpy(result->data, a->data + start, sizeof(_Bool) * count);
+    result->len = count;
+    return result;
 }
 
 // === DexArrayString ===
@@ -249,6 +281,25 @@ void dex_array_string_sort_desc(DexArrayString* a) {
     qsort(a->data, a->len, sizeof(DexString*), dex_cmp_string_desc);
 }
 
+DexArrayString* dex_array_string_slice(DexArrayString* a, int start, int end) {
+    if (start < 0) start = 0;
+    if (end > a->len) end = a->len;
+    if (start > end) start = end;
+    int count = end - start;
+    DexArrayString* result = dex_array_string_new();
+    if (count > result->cap) {
+        result->cap = count;
+        result->data = (DexString**)realloc(result->data, sizeof(DexString*) * result->cap);
+        if (!result->data) { dex_panic("out of memory"); }
+    }
+    for (int i = 0; i < count; i++) {
+        result->data[i] = a->data[start + i];
+        dex_retain(result->data[i]);
+    }
+    result->len = count;
+    return result;
+}
+
 // === DexArrayLong ===
 typedef struct {
     DexObjHeader hdr;
@@ -332,6 +383,22 @@ void dex_array_long_sort_asc(DexArrayLong* a) {
 
 void dex_array_long_sort_desc(DexArrayLong* a) {
     qsort(a->data, a->len, sizeof(long), dex_cmp_long_desc);
+}
+
+DexArrayLong* dex_array_long_slice(DexArrayLong* a, int start, int end) {
+    if (start < 0) start = 0;
+    if (end > a->len) end = a->len;
+    if (start > end) start = end;
+    int count = end - start;
+    DexArrayLong* result = dex_array_long_new();
+    if (count > result->cap) {
+        result->cap = count;
+        result->data = (long*)realloc(result->data, sizeof(long) * result->cap);
+        if (!result->data) { dex_panic("out of memory"); }
+    }
+    memcpy(result->data, a->data + start, sizeof(long) * count);
+    result->len = count;
+    return result;
 }
 
 // === DexArrayDouble ===
@@ -419,6 +486,22 @@ void dex_array_double_sort_desc(DexArrayDouble* a) {
     qsort(a->data, a->len, sizeof(double), dex_cmp_double_desc);
 }
 
+DexArrayDouble* dex_array_double_slice(DexArrayDouble* a, int start, int end) {
+    if (start < 0) start = 0;
+    if (end > a->len) end = a->len;
+    if (start > end) start = end;
+    int count = end - start;
+    DexArrayDouble* result = dex_array_double_new();
+    if (count > result->cap) {
+        result->cap = count;
+        result->data = (double*)realloc(result->data, sizeof(double) * result->cap);
+        if (!result->data) { dex_panic("out of memory"); }
+    }
+    memcpy(result->data, a->data + start, sizeof(double) * count);
+    result->len = count;
+    return result;
+}
+
 // === DexArrayChar ===
 typedef struct {
     DexObjHeader hdr;
@@ -504,6 +587,22 @@ void dex_array_char_sort_desc(DexArrayChar* a) {
     qsort(a->data, a->len, sizeof(unsigned char), dex_cmp_char_desc);
 }
 
+DexArrayChar* dex_array_char_slice(DexArrayChar* a, int start, int end) {
+    if (start < 0) start = 0;
+    if (end > a->len) end = a->len;
+    if (start > end) start = end;
+    int count = end - start;
+    DexArrayChar* result = dex_array_char_new();
+    if (count > result->cap) {
+        result->cap = count;
+        result->data = (unsigned char*)realloc(result->data, sizeof(unsigned char) * result->cap);
+        if (!result->data) { dex_panic("out of memory"); }
+    }
+    memcpy(result->data, a->data + start, sizeof(unsigned char) * count);
+    result->len = count;
+    return result;
+}
+
 // === DexArrayStruct (generic struct array) ===
 typedef void (*DexStructElemCleanup)(void* elem);
 
@@ -583,6 +682,22 @@ void dex_array_struct_reverse(DexArrayStruct* a) {
         memcpy(pj, tmp, a->elem_size);
     }
     free(tmp);
+}
+
+DexArrayStruct* dex_array_struct_slice(DexArrayStruct* a, int start, int end) {
+    if (start < 0) start = 0;
+    if (end > a->len) end = a->len;
+    if (start > end) start = end;
+    int count = end - start;
+    DexArrayStruct* result = dex_array_struct_new(a->elem_size, a->cleanup);
+    if (count > result->cap) {
+        result->cap = count;
+        result->data = realloc(result->data, a->elem_size * result->cap);
+        if (!result->data) { dex_panic("out of memory"); }
+    }
+    memcpy(result->data, (char*)a->data + (size_t)start * a->elem_size, a->elem_size * count);
+    result->len = count;
+    return result;
 }
 
 // === Struct array JSON serialization ===

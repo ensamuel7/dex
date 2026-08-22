@@ -539,6 +539,13 @@ type IndexExpr struct {
 	Index Expr
 }
 
+type SliceExpr struct {
+	Pos   Pos
+	Array Expr
+	Start Expr // nil means 0
+	End   Expr // nil means len
+}
+
 type StructLitExpr struct {
 	Pos         Pos
 	Name        string
@@ -563,6 +570,7 @@ func (e *UnaryExpr) exprNode()       {}
 func (e *CallExpr) exprNode()        {}
 func (e *ArrayLitExpr) exprNode()    {}
 func (e *IndexExpr) exprNode()       {}
+func (e *SliceExpr) exprNode()       {}
 func (e *StructLitExpr) exprNode()   {}
 func (e *FieldAccessExpr) exprNode() {}
 

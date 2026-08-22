@@ -376,6 +376,14 @@ func prefixCallsInExpr(expr ast.Expr, moduleName string, modFuncNames map[string
 	case *ast.IndexExpr:
 		prefixCallsInExpr(e.Array, moduleName, modFuncNames)
 		prefixCallsInExpr(e.Index, moduleName, modFuncNames)
+	case *ast.SliceExpr:
+		prefixCallsInExpr(e.Array, moduleName, modFuncNames)
+		if e.Start != nil {
+			prefixCallsInExpr(e.Start, moduleName, modFuncNames)
+		}
+		if e.End != nil {
+			prefixCallsInExpr(e.End, moduleName, modFuncNames)
+		}
 	case *ast.ArrayLitExpr:
 		for _, elem := range e.Elems {
 			prefixCallsInExpr(elem, moduleName, modFuncNames)
@@ -548,6 +556,15 @@ func rewriteFieldRefsInExpr(expr ast.Expr, fieldNames, localNames map[string]boo
 	case *ast.IndexExpr:
 		e.Array = rewriteFieldRefsInExpr(e.Array, fieldNames, localNames)
 		e.Index = rewriteFieldRefsInExpr(e.Index, fieldNames, localNames)
+		return e
+	case *ast.SliceExpr:
+		e.Array = rewriteFieldRefsInExpr(e.Array, fieldNames, localNames)
+		if e.Start != nil {
+			e.Start = rewriteFieldRefsInExpr(e.Start, fieldNames, localNames)
+		}
+		if e.End != nil {
+			e.End = rewriteFieldRefsInExpr(e.End, fieldNames, localNames)
+		}
 		return e
 	case *ast.ArrayLitExpr:
 		for i, elem := range e.Elems {

@@ -742,6 +742,19 @@ nums[0] = 99
 
 The index must be `int`. The assigned value must match the array's element type.
 
+### Slicing
+
+Use `arr[start:end]` to create a new array from a sub-range. Start is inclusive, end is exclusive. Either bound can be omitted: `arr[:end]` starts from 0, `arr[start:]` goes to the end.
+
+```dex
+let nums: int[] = [10, 20, 30, 40, 50]
+let mid: int[] = nums[1:4]     // [20, 30, 40]
+let head: int[] = nums[:3]     // [10, 20, 30]
+let tail: int[] = nums[3:]     // [40, 50]
+```
+
+The result is always a new array. Start and end are clamped to valid bounds.
+
 ### Array methods
 
 | Method               | Description                                  | Returns |

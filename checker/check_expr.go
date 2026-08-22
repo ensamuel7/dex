@@ -221,6 +221,34 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		}
 		return ast.ElementType(arrType), nil
 
+	case *ast.SliceExpr:
+		arrType, err := c.checkExpr(e.Array)
+		if err != nil {
+			return 0, err
+		}
+		if !ast.IsArrayType(arrType) {
+			return 0, c.errAt(e.Pos, "slice operator requires an array type, got %s", typeName(arrType))
+		}
+		if e.Start != nil {
+			startType, err := c.checkExpr(e.Start)
+			if err != nil {
+				return 0, err
+			}
+			if startType != ast.TypeInt {
+				return 0, c.errAt(e.Pos, "slice start must be int, got %s", typeName(startType))
+			}
+		}
+		if e.End != nil {
+			endType, err := c.checkExpr(e.End)
+			if err != nil {
+				return 0, err
+			}
+			if endType != ast.TypeInt {
+				return 0, c.errAt(e.Pos, "slice end must be int, got %s", typeName(endType))
+			}
+		}
+		return arrType, nil
+
 	case *ast.StructLitExpr:
 		t, ok := ast.LookupStructType(e.Name)
 		if !ok {

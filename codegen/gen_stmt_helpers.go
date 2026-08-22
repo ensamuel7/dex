@@ -119,6 +119,8 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 		return false // borrowed from struct field
 	case *ast.IndexExpr:
 		return false // borrowed from array/map element
+	case *ast.SliceExpr:
+		return true // slice produces a new array (+1 ref)
 	case *ast.StringLit:
 		return true // dex_string_from_lit produces +1
 	case *ast.CallExpr:

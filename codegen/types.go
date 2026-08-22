@@ -491,6 +491,12 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 				return ast.ElementType(arrType)
 			}
 		}
+	case *ast.SliceExpr:
+		if ident, ok := e.Array.(*ast.Ident); ok {
+			if arrType, ok := g.arrVars[ident.Name]; ok {
+				return arrType // slice returns same array type
+			}
+		}
 	case *ast.StructLitExpr:
 		if t, ok := ast.LookupStructType(e.Name); ok {
 			return t

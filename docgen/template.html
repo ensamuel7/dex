@@ -762,6 +762,14 @@ nums[1] = 25                    // index assignment
 nums.push(40)                   // append
 let length: int = nums.len()   // length</code></pre>
 
+<h3>Slicing</h3>
+<p>Use <code>arr[start:end]</code> to create a new array from a sub-range. Start is inclusive, end is exclusive. Either bound can be omitted:</p>
+<pre><code>let nums: int[] = [10, 20, 30, 40, 50]
+let mid: int[] = nums[1:4]     // [20, 30, 40]
+let head: int[] = nums[:3]     // [10, 20, 30]
+let tail: int[] = nums[3:]     // [40, 50]</code></pre>
+<p>The result is always a new array. Start and end are clamped to valid bounds. Slicing works on all array types (<code>int[]</code>, <code>string[]</code>, <code>bool[]</code>, struct arrays, etc.).</p>
+
 <h3>Array Methods</h3>
 <p>Every array has the following built-in methods:</p>
 <table>

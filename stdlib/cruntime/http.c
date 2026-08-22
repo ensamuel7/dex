@@ -193,9 +193,9 @@ static void dex_http_conn_reset(DexHttpConn* conn) {
     conn->content_length = -1;
     conn->headers_end = -1;
     conn->keep_alive = 1;
-    memset(conn->method, 0, sizeof(conn->method));
-    memset(conn->path, 0, sizeof(conn->path));
-    memset(conn->query, 0, sizeof(conn->query));
+    conn->method[0] = '\0';
+    conn->path[0] = '\0';
+    conn->query[0] = '\0';
     free(conn->write_buf);
     conn->write_buf = NULL;
     conn->write_len = 0;
@@ -221,20 +221,15 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
     char save = conn->read_buf[conn->headers_end];
     conn->read_buf[conn->headers_end] = '\0';
 
-    /* Parse method and path from request line */
-    char raw_path[2048] = {0};
-    sscanf(conn->read_buf, "%15s %2047s", conn->method, raw_path);
+    /* Parse method and path directly into conn buffers */
+    sscanf(conn->read_buf, "%15s %2047s", conn->method, conn->path);
 
-    /* Split path and query at '?' */
-    char* qmark = strchr(raw_path, '?');
+    /* Split path and query at '?' in-place */
+    char* qmark = strchr(conn->path, '?');
     if (qmark) {
-        size_t plen = (size_t)(qmark - raw_path);
-        if (plen >= sizeof(conn->path)) plen = sizeof(conn->path) - 1;
-        memcpy(conn->path, raw_path, plen);
-        conn->path[plen] = '\0';
         strncpy(conn->query, qmark + 1, sizeof(conn->query) - 1);
-    } else {
-        strncpy(conn->path, raw_path, sizeof(conn->path) - 1);
+        conn->query[sizeof(conn->query) - 1] = '\0';
+        *qmark = '\0';
     }
 
     /* Check keep-alive */
@@ -255,9 +250,8 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
 }
 
 /* Build the write buffer for a response */
-static void dex_http_build_response(DexHttpConn* conn, const char* status,
-                                     const char* body, const char* content_type) {
-    int body_len = (int)strlen(body);
+static void dex_http_build_response_len(DexHttpConn* conn, const char* status,
+                                     const char* body, int body_len, const char* content_type) {
     int needed = 512 + body_len;
     conn->write_buf = (char*)malloc(needed);
     if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
@@ -271,6 +265,11 @@ static void dex_http_build_response(DexHttpConn* conn, const char* status,
     memcpy(conn->write_buf + hlen, body, body_len);
     conn->write_len = hlen + body_len;
     conn->write_pos = 0;
+}
+
+static inline void dex_http_build_response(DexHttpConn* conn, const char* status,
+                                     const char* body, const char* content_type) {
+    dex_http_build_response_len(conn, status, body, (int)strlen(body), content_type);
 }
 
 /* Worker function: run handler, build response, enqueue for event loop */
@@ -287,12 +286,14 @@ static void dex_http_worker_func(void* arg) {
         body_data[body_len] = '\0';
     }
 
-    /* Build HttpRequest struct */
+    /* Build HttpRequest struct — use known lengths to avoid strlen */
     Dex_HttpRequest req;
-    req.method = dex_string_from_lit(conn->method);
-    req.path = dex_string_from_lit(conn->path);
-    req.body = dex_string_from_lit(body_data);
-    req.query = dex_string_from_lit(conn->query);
+    req.method = dex_string_new(conn->method, strlen(conn->method));
+    req.path = dex_string_new(conn->path, strlen(conn->path));
+    req.body = (body_len > 0)
+        ? dex_string_new(body_data, (size_t)body_len)
+        : dex_string_new("", 0);
+    req.query = dex_string_new(conn->query, strlen(conn->query));
     req.params = dex_map_str_str_new();
 
     /* Split incoming path into segments for matching */
@@ -334,7 +335,7 @@ static void dex_http_worker_func(void* arg) {
                 if (resp.contentType && resp.contentType->data[0] != '\0') {
                     ct = resp.contentType->data;
                 }
-                dex_http_build_response(conn, status, resp.body->data, ct);
+                dex_http_build_response_len(conn, status, resp.body->data, (int)resp.body->len, ct);
                 if (resp.contentType) dex_release(resp.contentType);
                 dex_release(resp.body);
                 matched = 1;
@@ -373,7 +374,7 @@ static void dex_http_worker_func(void* arg) {
             if (resp.contentType && resp.contentType->data[0] != '\0') {
                 ct = resp.contentType->data;
             }
-            dex_http_build_response(conn, status, resp.body->data, ct);
+            dex_http_build_response_len(conn, status, resp.body->data, (int)resp.body->len, ct);
             if (resp.contentType) dex_release(resp.contentType);
             dex_release(resp.body);
             matched = 1;

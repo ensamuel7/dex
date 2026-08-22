@@ -599,7 +599,7 @@ typedef struct {
 
 const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields) {
     // Build JSON array of objects
-    size_t cap = 256;
+    size_t cap = 1024;
     char* buf = (char*)malloc(cap);
     int pos = 0;
     buf[pos++] = '[';
@@ -662,7 +662,7 @@ const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArraySt
 
 const char* dex_json_stringify_struct_arr(DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields) {
     // Build JSON array of objects — returns just [...] without wrapping in an object
-    size_t cap = 256;
+    size_t cap = 1024;
     char* buf = (char*)malloc(cap);
     int pos = 0;
     buf[pos++] = '[';

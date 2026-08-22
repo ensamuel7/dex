@@ -1369,12 +1369,32 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					out.WriteString(fmt.Sprintf("{ %s _push_tmp = ", elemCType))
 					g.genExpr(out, e.Args[0])
 					out.WriteString("; ")
-					// Retain heap fields before push
+					// Retain heap fields before push — but only borrowed ones.
+					// New allocations (string literals, function calls) already have
+					// refcount=1 which transfers to the array via memcpy.
 					def := ast.GetStructDef(elemType)
 					if def != nil {
-						for _, f := range def.Fields {
-							if ast.IsHeapType(f.Type) {
-								out.WriteString(fmt.Sprintf("dex_retain(_push_tmp.%s); ", f.Name))
+						if structLit, ok := e.Args[0].(*ast.StructLitExpr); ok {
+							// Struct literal: check each field individually
+							fieldValueMap := make(map[string]ast.Expr, len(structLit.FieldNames))
+							for i, fn := range structLit.FieldNames {
+								fieldValueMap[fn] = structLit.FieldValues[i]
+							}
+							for _, f := range def.Fields {
+								if ast.IsHeapType(f.Type) {
+									if valExpr, found := fieldValueMap[f.Name]; found {
+										if !g.isNewAlloc(valExpr) {
+											out.WriteString(fmt.Sprintf("dex_retain(_push_tmp.%s); ", f.Name))
+										}
+									}
+								}
+							}
+						} else {
+							// Variable or other expression: retain all heap fields
+							for _, f := range def.Fields {
+								if ast.IsHeapType(f.Type) {
+									out.WriteString(fmt.Sprintf("dex_retain(_push_tmp.%s); ", f.Name))
+								}
 							}
 						}
 					}

@@ -8,6 +8,7 @@ import (
 	"github.com/ensamuel7/dex/lexer"
 	"github.com/ensamuel7/dex/parser"
 	"github.com/ensamuel7/dex/stdlib"
+	"github.com/ensamuel7/dex/token"
 )
 
 func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
@@ -150,13 +151,21 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 	}
 
 	mod := stdlib.Lookup(moduleName)
+	lookupName := moduleName
 	// If direct lookup fails, check if moduleName is an alias
 	if mod == nil {
 		if resolved := resolveAliasToPath(moduleName, text); resolved != "" {
 			mod = stdlib.Lookup(resolved)
+			lookupName = resolved
 		}
 	}
 	if mod != nil {
+		// Build auto-import edit if this module isn't imported yet
+		var autoImportEdits []TextEdit
+		if !isModuleImported(lookupName, text) {
+			autoImportEdits = buildImportEdit(lookupName, text)
+		}
+
 		var items []CompletionItem
 		for name, fdef := range mod.Funcs {
 			var paramStr string
@@ -176,12 +185,17 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 				paramStr = strings.Join(params, ", ")
 			}
 			detail := fmt.Sprintf("(%s): %s", paramStr, retStr)
-			items = append(items, CompletionItem{
-				Label:         name,
-				Kind:          CompletionKindFunction,
-				Detail:        detail,
-				Documentation: fdef.Doc,
-			})
+			item := CompletionItem{
+				Label:               name,
+				Kind:                CompletionKindFunction,
+				Detail:              detail,
+				Documentation:       fdef.Doc,
+				AdditionalTextEdits: autoImportEdits,
+			}
+			if len(autoImportEdits) > 0 {
+				item.Detail = detail + " (auto-import)"
+			}
+			items = append(items, item)
 		}
 		return items
 	}
@@ -227,5 +241,56 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 		{Label: "clear", Kind: CompletionKindFunction, Detail: "(): void", Documentation: "Remove all entries from the map."},
 		{Label: "keys", Kind: CompletionKindFunction, Detail: "(): key[]", Documentation: "Return an array of all keys."},
 		{Label: "values", Kind: CompletionKindFunction, Detail: "(): value[]", Documentation: "Return an array of all values."},
+	}
+}
+
+// isModuleImported checks whether a module is already imported in the source text.
+func isModuleImported(moduleName string, text string) bool {
+	lex := lexer.New(text)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return false
+	}
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
+			if tokens[i+1].Value == moduleName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// buildImportEdit creates a TextEdit to insert an import statement at the correct position.
+func buildImportEdit(moduleName string, text string) []TextEdit {
+	lines := strings.Split(text, "\n")
+	insertLine := 0
+	lastImportLine := -1
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "import ") {
+			lastImportLine = i
+		}
+	}
+
+	if lastImportLine >= 0 {
+		// Insert after the last import
+		insertLine = lastImportLine + 1
+	} else {
+		// No imports yet — insert at top of file
+		insertLine = 0
+	}
+
+	newText := fmt.Sprintf("import \"%s\"\n", moduleName)
+
+	return []TextEdit{
+		{
+			Range: Range{
+				Start: Position{Line: insertLine, Character: 0},
+				End:   Position{Line: insertLine, Character: 0},
+			},
+			NewText: newText,
+		},
 	}
 }

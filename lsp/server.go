@@ -60,11 +60,17 @@ type Diagnostic struct {
 	Message  string `json:"message"`
 }
 
+type TextEdit struct {
+	Range   Range  `json:"range"`
+	NewText string `json:"newText"`
+}
+
 type CompletionItem struct {
-	Label         string `json:"label"`
-	Kind          int    `json:"kind"`
-	Detail        string `json:"detail,omitempty"`
-	Documentation string `json:"documentation,omitempty"`
+	Label               string     `json:"label"`
+	Kind                int        `json:"kind"`
+	Detail              string     `json:"detail,omitempty"`
+	Documentation       string     `json:"documentation,omitempty"`
+	AdditionalTextEdits []TextEdit `json:"additionalTextEdits,omitempty"`
 }
 
 // Completion item kinds

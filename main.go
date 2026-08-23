@@ -1,12 +1,18 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -45,7 +51,7 @@ func formatError(msg string) string {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs|version> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs|update|version> <file.dx>")
 		os.Exit(1)
 	}
 
@@ -85,8 +91,14 @@ func main() {
 		return
 	}
 
+	if command == "update" {
+		force := len(os.Args) >= 3 && os.Args[2] == "--force"
+		selfUpdate(force)
+		return
+	}
+
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|check|version> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|check|update|version> <file.dx>")
 		os.Exit(1)
 	}
 
@@ -129,7 +141,7 @@ func main() {
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs|version> <file.dx>")
+		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs|update|version> <file.dx>")
 		os.Exit(1)
 	}
 }
@@ -524,6 +536,154 @@ func generateC(filename string) (string, error) {
 	}
 
 	return cFile, nil
+}
+
+func selfUpdate(force bool) {
+	// 1. Query GitHub API for latest release
+	resp, err := http.Get("https://api.github.com/repos/ensamuel7/dex/releases/latest")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to check for updates: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		fmt.Fprintf(os.Stderr, "Failed to check for updates: HTTP %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to parse release info: %v\n", err)
+		os.Exit(1)
+	}
+
+	latest := strings.TrimPrefix(release.TagName, "v")
+
+	// 2. Compare versions (skip if already up-to-date, unless forced or dev build)
+	if !force && Version != "dev" && Version == latest {
+		fmt.Printf("dex is already up to date (v%s)\n", Version)
+		return
+	}
+
+	if Version == "dev" {
+		fmt.Println("Running dev build, downloading latest release...")
+	} else if !force {
+		fmt.Printf("Updating dex: v%s -> v%s\n", Version, latest)
+	} else {
+		fmt.Printf("Force updating dex to v%s\n", latest)
+	}
+
+	// 3. Build tarball name for current OS/arch
+	tarballName := fmt.Sprintf("dex-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	downloadURL := fmt.Sprintf("https://github.com/ensamuel7/dex/releases/latest/download/%s", tarballName)
+
+	// 4. Download tarball
+	dlResp, err := http.Get(downloadURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to download update: %v\n", err)
+		os.Exit(1)
+	}
+	defer dlResp.Body.Close()
+
+	if dlResp.StatusCode != 200 {
+		fmt.Fprintf(os.Stderr, "Failed to download update: HTTP %d\n", dlResp.StatusCode)
+		fmt.Fprintf(os.Stderr, "No release found for %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		os.Exit(1)
+	}
+
+	// 5. Extract binary from tar.gz
+	gz, err := gzip.NewReader(dlResp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to decompress archive: %v\n", err)
+		os.Exit(1)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	var binaryData []byte
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to read archive: %v\n", err)
+			os.Exit(1)
+		}
+		if filepath.Base(hdr.Name) == "dex" && !hdr.FileInfo().IsDir() {
+			binaryData, err = io.ReadAll(tr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to extract binary: %v\n", err)
+				os.Exit(1)
+			}
+			break
+		}
+	}
+
+	if binaryData == nil {
+		fmt.Fprintln(os.Stderr, "Could not find 'dex' binary in archive")
+		os.Exit(1)
+	}
+
+	// Write extracted binary to a temp file
+	tmpFile, err := os.CreateTemp("", "dex-update-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create temp file: %v\n", err)
+		os.Exit(1)
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.Write(binaryData); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "Failed to write temp binary: %v\n", err)
+		os.Exit(1)
+	}
+	if err := tmpFile.Chmod(0755); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "Failed to set permissions: %v\n", err)
+		os.Exit(1)
+	}
+	tmpFile.Close()
+
+	// 6. Get current executable path
+	execPath, err := os.Executable()
+	if err != nil {
+		os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "Failed to determine executable path: %v\n", err)
+		os.Exit(1)
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "Failed to resolve executable path: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 7. Replace binary - try direct rename, fall back to sudo mv
+	if err := os.Rename(tmpPath, execPath); err != nil {
+		// Rename failed (likely permission denied), try sudo mv
+		cmd := exec.Command("sudo", "mv", tmpPath, execPath)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			os.Remove(tmpPath)
+			fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// 8. Print success
+	if Version == "dev" {
+		fmt.Printf("Updated dex: dev -> v%s\n", latest)
+	} else {
+		fmt.Printf("Updated dex: v%s -> v%s\n", Version, latest)
+	}
 }
 
 func check(filename string) {

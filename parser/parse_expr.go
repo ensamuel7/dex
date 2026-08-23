@@ -320,6 +320,37 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				qualifiedName = qualifiedName + "." + nextMember
 			}
 
+			// Check for module-qualified struct literal: module.StructName { field: value, ... }
+			if p.structNames[memberName] && p.check(token.TokenLBrace) {
+				p.advance() // consume '{'
+				var fieldNames []string
+				var fieldValues []ast.Expr
+				if !p.check(token.TokenRBrace) {
+					for {
+						fn, err := p.expectIdent()
+						if err != nil {
+							return nil, err
+						}
+						if err := p.expect(token.TokenColon); err != nil {
+							return nil, err
+						}
+						val, err := p.parseExpr(0)
+						if err != nil {
+							return nil, err
+						}
+						fieldNames = append(fieldNames, fn)
+						fieldValues = append(fieldValues, val)
+						if !p.match(token.TokenComma) {
+							break
+						}
+					}
+				}
+				if err := p.expect(token.TokenRBrace); err != nil {
+					return nil, err
+				}
+				return &ast.StructLitExpr{Pos: pos, Name: memberName, FieldNames: fieldNames, FieldValues: fieldValues}, nil
+			}
+
 			// If followed by '(', it's a method/qualified call
 			if p.check(token.TokenLParen) {
 				p.advance() // consume '('

@@ -313,6 +313,7 @@ typedef struct DexWsConn {
     DexWsState    state;
     Dex_Conn      dex_conn;
     DexWsServer*  srv;   /* listener this connection was accepted by */
+    int           close_requested; /* ws.close() called from a handler */
 
     /* Handshake read buffer */
     char*         read_buf;
@@ -364,6 +365,13 @@ struct DexWsServer {
     /* Completed message dispatches (worker → event loop) */
     DexWsConn*      completed_head;
     pthread_mutex_t completed_mutex;
+
+    /* Highest fd this server has ever accepted. The notify sweep below walks the
+     * connection table, and fds are small in practice, so this keeps that walk
+     * proportional to the connections actually in use instead of the table's
+     * 65536-slot capacity. Only ever grows, and only the event-loop thread
+     * writes it. */
+    int             max_fd;
 };
 
 /* Connection table indexed by fd. This one stays process-wide: fds are unique
@@ -392,6 +400,7 @@ static DexWsConn* dex_ws_conn_new(DexWsServer* srv, int fd) {
     pthread_mutex_init(&conn->write_mutex, NULL);
     if (fd >= 0 && fd < DEX_WS_MAX_FD) {
         dex_ws_conn_table[fd] = conn;
+        if (srv && fd > srv->max_fd) srv->max_fd = fd;
     }
     return conn;
 }
@@ -587,6 +596,32 @@ static void dex_ws_worker_func(void* arg) {
     dex_notify_pipe_signal(&srv->notify);
 }
 
+/* Send a WebSocket close frame, then tear the connection down. Used when a
+ * handler called ws.close(): the peer sees a clean close rather than the
+ * connection simply going quiet. */
+static void dex_ws_ev_close_conn(DexWsConn* conn);
+
+static int dex_ws_flush_writes(DexWsConn* conn);
+
+static void dex_ws_ev_finish_close(DexWsConn* conn) {
+    /* Deliver anything the handler queued before asking to close — a final
+     * reply is a normal thing to send on the way out. Bounded so a peer that
+     * has stopped reading cannot wedge the event loop; whatever is still
+     * unsent at that point is dropped along with the connection. */
+    for (int i = 0; i < 64 && dex_ws_flush_writes(conn) == 1; i++) {
+        /* partial write — retry */
+    }
+    static const unsigned char close_frame[2] = {0x88, 0x00};
+    dex_ws_write(conn->fd, (SSL*)conn->dex_conn.ssl, close_frame, sizeof(close_frame));
+
+    /* Half-close first. close() on a socket still holding unread input resets
+     * the connection and throws away everything queued for sending, which would
+     * lose the close frame we just wrote; shutting the write side down pushes it
+     * out and sends FIN before the teardown below releases the fd. */
+    shutdown(conn->fd, SHUT_WR);
+    dex_ws_ev_close_conn(conn);
+}
+
 /* Close a server-side WS connection from within the event loop */
 static void dex_ws_ev_close_conn(DexWsConn* conn) {
     DexWsServer* srv = conn->srv;
@@ -735,6 +770,12 @@ void dex_ws_listen(int port) {
                     completed->next = NULL;
                     completed->state = WS_READING_FRAME;
                     dex_ws_reset_frame_parser(completed);
+                    /* Handler closed this connection while dispatching */
+                    if (completed->close_requested) {
+                        dex_ws_ev_finish_close(completed);
+                        completed = next;
+                        continue;
+                    }
                     /* Re-register for read (and write if pending) */
                     int ev_flags = DEX_EV_READ;
                     pthread_mutex_lock(&completed->write_mutex);
@@ -744,11 +785,16 @@ void dex_ws_listen(int port) {
                     completed = next;
                 }
 
-                /* Also check all connections for pending writes from dex_ws_send */
-                /* (dex_ws_send signals the notify pipe when enqueuing) */
-                for (int j = 0; j < DEX_WS_MAX_FD; j++) {
+                /* Also check all connections for pending writes from dex_ws_send,
+                 * and for closes requested off the event-loop thread.
+                 * (both signal the notify pipe) */
+                for (int j = 0; j <= srv->max_fd; j++) {
                     DexWsConn* wc = dex_ws_conn_table[j];
-                    if (wc && wc->state == WS_READING_FRAME) {
+                    if (wc && wc->srv == srv && wc->state == WS_READING_FRAME) {
+                        if (wc->close_requested) {
+                            dex_ws_ev_finish_close(wc);
+                            continue;
+                        }
                         pthread_mutex_lock(&wc->write_mutex);
                         int has_writes = (wc->write_head != NULL);
                         pthread_mutex_unlock(&wc->write_mutex);
@@ -783,10 +829,15 @@ void dex_ws_listen(int port) {
                         dex_ws_reset_frame_parser(conn);
 
                         /* Call on_connect callback */
-                        if (dex_ws_on_connect) {
+                        if (srv->on_connect) {
                             DexString* path_str = dex_string_new(conn->path, strlen(conn->path));
-                            dex_ws_on_connect(conn->dex_conn, path_str);
+                            srv->on_connect(conn->dex_conn, path_str);
                             dex_release(path_str);
+                        }
+                        /* Handler rejected this client via ws.close() */
+                        if (conn->close_requested) {
+                            dex_ws_ev_finish_close(conn);
+                            continue;
                         }
                     }
                     dex_ev_mod(srv->loop, conn->fd, DEX_EV_READ, conn);
@@ -930,7 +981,7 @@ void dex_ws_listen(int port) {
                     }
 
                     /* Text frame: dispatch to worker pool */
-                    if (opcode == 0x1 && dex_ws_on_message) {
+                    if (opcode == 0x1 && srv->on_message) {
                         conn->state = WS_DISPATCHED;
                         dex_ev_del(srv->loop, conn->fd);
 
@@ -1133,6 +1184,20 @@ DexString* dex_ws_receive(Dex_Conn conn) {
 
 void dex_ws_close(Dex_Conn conn) {
     if (conn.fd < 0) return;
+
+    /* Server-side connections are owned by an event loop: closing the fd here
+     * would leave the loop holding a freed registration and risk a double close
+     * once the fd is reused. Flag it instead and let the loop tear it down at a
+     * safe point. Works from a handler or any other thread. */
+    if (conn.isServer && conn.fd < DEX_WS_MAX_FD) {
+        DexWsConn* wc = dex_ws_conn_table[conn.fd];
+        if (wc) {
+            wc->close_requested = 1;
+            dex_notify_pipe_signal(&wc->srv->notify);
+            return;
+        }
+    }
+
     // Send close frame
     unsigned char close_frame[2] = {0x88, 0x00};
     dex_ws_write(conn.fd, (SSL*)conn.ssl, close_frame, 2);

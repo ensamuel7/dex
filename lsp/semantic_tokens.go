@@ -296,16 +296,20 @@ func scanSemanticTokens(tokens []token.Token) []int {
 				continue
 			}
 
-			// Module.func() pattern: ident "." ident "("
+			// Module.func() or Module.StructName { ... } pattern
 			if next != nil && next.Kind == token.TokenDot && importedModules[tok.Value] {
 				p2 := peek2(i)
 				if p2 != nil && p2.Kind == token.TokenIdent {
 					emit(tok, semTypeNamespace, 0)
-					// Check if it's a function call (followed by "(")
-					if i+3 < len(tokens) && tokens[i+3].Kind == token.TokenLParen {
+					// Check if it's a struct literal (known struct name followed by "{")
+					if structNames[p2.Value] && i+3 < len(tokens) && tokens[i+3].Kind == token.TokenLBrace {
+						emit(*p2, semTypeType, 0)
+						structBraceStack = append(structBraceStack, braceDepth)
+					} else if i+3 < len(tokens) && tokens[i+3].Kind == token.TokenLParen {
+						// Function call (followed by "(")
 						emit(*p2, semTypeFunction, 0)
 					}
-					i += 2 // skip dot and func name
+					i += 2 // skip dot and func/struct name
 					continue
 				}
 			}

@@ -2,6 +2,8 @@ package lsp
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -11,7 +13,7 @@ import (
 	"github.com/ensamuel7/dex/token"
 )
 
-func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
+func (s *Server) completionsAt(text string, pos Position, uri string) []CompletionItem {
 	lines := strings.Split(text, "\n")
 	if pos.Line >= len(lines) {
 		return nil
@@ -31,7 +33,7 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 		words := strings.Fields(before)
 		if len(words) > 0 {
 			moduleName := words[len(words)-1]
-			return s.moduleCompletions(moduleName, text)
+			return s.moduleCompletions(moduleName, text, uri)
 		}
 	}
 
@@ -133,7 +135,7 @@ func (s *Server) completionsAt(text string, pos Position) []CompletionItem {
 	return items
 }
 
-func (s *Server) moduleCompletions(moduleName string, text string) []CompletionItem {
+func (s *Server) moduleCompletions(moduleName string, text string, uri string) []CompletionItem {
 	// Check if moduleName is an enum type — offer variant completions
 	if enumType, ok := ast.LookupEnumType(moduleName); ok {
 		def := ast.GetEnumDef(enumType)
@@ -197,6 +199,11 @@ func (s *Server) moduleCompletions(moduleName string, text string) []CompletionI
 			}
 			items = append(items, item)
 		}
+		return items
+	}
+
+	// Check if moduleName is a user module import
+	if items := s.userModuleCompletions(moduleName, text, uri); items != nil {
 		return items
 	}
 
@@ -293,4 +300,89 @@ func buildImportEdit(moduleName string, text string) []TextEdit {
 			NewText: newText,
 		},
 	}
+}
+
+// userModuleCompletions returns completion items for a user module import.
+// It resolves the module file path, parses it, and extracts exported functions
+// and struct names. Returns nil if moduleName is not a user module import.
+func (s *Server) userModuleCompletions(moduleName string, text string, uri string) []CompletionItem {
+	// Find the import path for this module name
+	importPath := resolveModuleNameToPath(moduleName, text)
+	if importPath == "" || stdlib.Lookup(importPath) != nil {
+		return nil
+	}
+
+	// Resolve to absolute .dx file path
+	filePath := uriToPath(uri)
+	sourceDir := filepath.Dir(filePath)
+	modFile := filepath.Join(sourceDir, importPath+".dx")
+
+	source, err := os.ReadFile(modFile)
+	if err != nil {
+		return nil
+	}
+
+	lex := lexer.New(string(source))
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return nil
+	}
+
+	p := parser.New(tokens)
+	seedParserModuleTypes(p, tokens)
+	program, errs := p.Parse()
+	if len(errs) > 0 {
+		return nil
+	}
+
+	var items []CompletionItem
+
+	for _, fn := range program.Functions {
+		if fn.Name == "main" || fn.IsPrivate {
+			continue
+		}
+		items = append(items, CompletionItem{
+			Label:  fn.Name,
+			Kind:   CompletionKindFunction,
+			Detail: formatFuncSignature(&fn),
+		})
+	}
+
+	for _, sd := range program.Structs {
+		items = append(items, CompletionItem{
+			Label:  sd.Name,
+			Kind:   CompletionKindType,
+			Detail: "Struct type",
+		})
+	}
+
+	return items
+}
+
+// resolveModuleNameToPath scans the text for import declarations and returns
+// the import path for a given module name (either the path itself if it matches
+// filepath.Base, or the path if an alias matches).
+func resolveModuleNameToPath(moduleName string, text string) string {
+	lex := lexer.New(text)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return ""
+	}
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
+			path := tokens[i+1].Value
+			// Check for alias: import "path" as "alias"
+			if i+3 < len(tokens) && tokens[i+2].Kind == token.TokenAs && tokens[i+3].Kind == token.TokenString {
+				if tokens[i+3].Value == moduleName {
+					return path
+				}
+				continue
+			}
+			// No alias — check if the base name matches
+			if filepath.Base(path) == moduleName {
+				return path
+			}
+		}
+	}
+	return ""
 }

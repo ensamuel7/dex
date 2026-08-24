@@ -348,7 +348,7 @@ func (s *Server) handleCompletion(msg *jsonrpcMessage) {
 		return
 	}
 
-	items := s.completionsAt(text, params.Position)
+	items := s.completionsAt(text, params.Position, params.TextDocument.URI)
 	s.sendResponse(msg.ID, items)
 }
 

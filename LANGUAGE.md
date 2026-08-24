@@ -1522,7 +1522,7 @@ obj = json.set(obj, "pi", 3.14)
 | `set`        | `set(obj: string, key: string, value: string\|int\|bool\|long\|double): string` | Set a value (type auto-detected) |
 | `setArray`   | `setArray(obj: string, key: string, arr: T[]): string`                          | Set an array value             |
 | `setObj`     | `setObj(obj: string, key: string, value: string): string`                       | Set a key to a raw JSON object/array value (not quoted) |
-| `stringify`  | `stringify(value: T[]\|struct): string`                                         | Convert an array or struct to JSON string |
+| `stringify`  | `stringify(value: T[]\|struct\|map[string, V]): string`                         | Convert an array, struct, or map to JSON string |
 | `objectify`  | `objectify(json: string): T`                                                    | Convert a JSON string into a typed struct |
 | `get`        | `get(json: string, key: string): string`                                        | Get a string value by key      |
 | `getInt`     | `getInt(json: string, key: string): int`                                        | Get an integer value by key    |

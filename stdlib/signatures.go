@@ -24,7 +24,7 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 		case "set":
 			return "string, string, int|long|double|string|bool", "string", true
 		case "stringify":
-			return "value: T[]|struct", "string", true
+			return "value: T[]|struct|map[string, V]", "string", true
 		case "objectify":
 			return "json: string", "T (struct)", true
 		case "arrayPush":

@@ -1639,8 +1639,8 @@ obj = json.setArray(obj, "numbers", nums)
 // {"numbers": [1, 2, 3]}</code></pre>
 
 <h3>stringify</h3>
-<div class="func-card"><div class="sig"><span class="module">json</span>.stringify(<span class="ptype">value: T[]|struct</span>) <span class="ret">-&gt; string</span></div></div>
-<p>Convert an array or struct to a JSON string. Works with any array type (<code>int[]</code>, <code>string[]</code>, etc.) and any struct type.</p>
+<div class="func-card"><div class="sig"><span class="module">json</span>.stringify(<span class="ptype">value: T[]|struct|map[string, V]</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Convert an array, struct, or map to a JSON string. Works with any array type (<code>int[]</code>, <code>string[]</code>, etc.), any struct type, and <code>map[string, V]</code> types.</p>
 
 <h4>Arrays</h4>
 <pre><code>let nums: int[] = [10, 20, 30]
@@ -1660,6 +1660,14 @@ let s2: string = json.stringify(names) // ["alice", "bob"]</code></pre>
 let p = Person{name: "Alice", age: 30, active: true}
 let jsonStr: string = json.stringify(p)
 // {"name": "Alice", "age": 30, "active": true}</code></pre>
+
+<h4>Maps</h4>
+<p>When given a <code>map[string, V]</code>, <code>stringify</code> serializes all key-value pairs into a JSON object:</p>
+<pre><code>let m: map[string, int] = map[string, int]{}
+m.set("x", 1)
+m.set("y", 2)
+let jsonStr: string = json.stringify(m)
+// {"x": 1, "y": 2}</code></pre>
 
 <h3>objectify</h3>
 <div class="func-card"><div class="sig"><span class="module">json</span>.objectify(<span class="ptype">json: string</span>) <span class="ret">-&gt; T (struct)</span></div></div>

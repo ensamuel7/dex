@@ -294,6 +294,48 @@ func (g *Generator) hasDefers() bool {
 	return len(g.deferExprs) > 0
 }
 
+// isBorrowedExpr reports whether an expression yields a reference owned by
+// someone else (a variable, an array element, or a struct field) rather than a
+// freshly-created temporary. Borrowed references must be retained when they are
+// stored somewhere that outlives the current owner; owned temporaries must not
+// be, or they leak.
+func isBorrowedExpr(e ast.Expr) bool {
+	switch e.(type) {
+	case *ast.Ident, *ast.IndexExpr, *ast.FieldAccessExpr:
+		return true
+	}
+	return false
+}
+
+// emitRetainReturnedLitFields retains the heap fields of a returned struct
+// literal that were initialised from a borrowed reference. Those references are
+// owned by locals that the caller-side cleanup is about to release, so without
+// this the returned struct would carry dangling pointers. Fields built from a
+// fresh temporary already carry the only reference and are deliberately skipped
+// so ownership simply moves to the caller.
+func (g *Generator) emitRetainReturnedLitFields(out *strings.Builder, prefix string, retType ast.Type, lit *ast.StructLitExpr) {
+	def := ast.GetStructDef(retType)
+	if def == nil {
+		return
+	}
+	fieldTypes := make(map[string]ast.Type, len(def.Fields))
+	for _, f := range def.Fields {
+		fieldTypes[f.Name] = f.Type
+	}
+	for i, name := range lit.FieldNames {
+		if i >= len(lit.FieldValues) {
+			break
+		}
+		ft, ok := fieldTypes[name]
+		if !ok || !ast.NeedsRelease(ft) || !ast.IsHeapType(ft) {
+			continue
+		}
+		if isBorrowedExpr(lit.FieldValues[i]) {
+			out.WriteString(fmt.Sprintf("%sdex_retain(_ret_tmp.%s);\n", prefix, name))
+		}
+	}
+}
+
 // hasHeapVarsInScope checks if there are any heap vars tracked in any scope
 func (g *Generator) hasHeapVarsInScope() bool {
 	for _, scope := range g.scopeStack {

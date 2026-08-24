@@ -512,6 +512,12 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 				out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, g.cType(retType)))
 				g.genExpr(out, s.Value)
 				out.WriteString(";\n")
+				// A borrowed result (e.g. `return arr[i]` or `return s.field`) is owned
+				// by a container that the cleanup below releases. Retain it so the
+				// caller receives a live reference instead of a dangling one.
+				if isBorrowedExpr(s.Value) {
+					out.WriteString(fmt.Sprintf("%sdex_retain(_ret_tmp);\n", prefix))
+				}
 				g.emitDeferredCalls(out, prefix)
 				g.emitCleanupAll(out, prefix, "")
 				out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
@@ -525,8 +531,22 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 					out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
 					g.genExpr(out, s.Value)
 					out.WriteString(";\n")
+					// A returned struct is a shallow copy, so its heap fields alias the
+					// very references the cleanup below would release. Move ownership to
+					// the caller instead of freeing what we are about to hand back.
+					exceptVar := ""
+					if ast.IsStructType(retType) {
+						if ident, ok := s.Value.(*ast.Ident); ok {
+							// `return m` — leave m's fields alone; the caller owns them now.
+							exceptVar = ident.Name
+						} else if lit, ok := s.Value.(*ast.StructLitExpr); ok {
+							// `return Msg{...}` — only fields taken from a borrowed
+							// reference need a retain to survive the cleanup.
+							g.emitRetainReturnedLitFields(out, prefix, retType, lit)
+						}
+					}
 					g.emitDeferredCalls(out, prefix)
-					g.emitCleanupAll(out, prefix, "")
+					g.emitCleanupAll(out, prefix, exceptVar)
 					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 				} else {
 					g.emitDeferredCalls(out, prefix)
@@ -859,20 +879,29 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		fieldType := g.typeOfExpr(s.Value)
 		// For ref-type objects (&Struct), retain/release heap-typed fields
 		// to keep proper reference counts when the struct outlives the function scope
-		if ast.IsRefType(objType) && ast.IsHeapType(fieldType) {
-			// Evaluate value once into a temp to avoid double-evaluation of side effects
+		if ast.IsHeapType(fieldType) {
+			// A struct field owns its reference, whether the struct is behind a ref or
+			// held by value. Evaluate once into a temp to avoid double-evaluating side
+			// effects, retain a borrowed value (an owned temporary already carries the
+			// only reference, so retaining it would leak), release whatever the field
+			// held before, then assign.
+			accessOp := "."
+			if ast.IsRefType(objType) {
+				accessOp = "->"
+			}
 			tmpVal := g.nextTemp()
 			out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(fieldType), tmpVal))
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
-			// Retain new value, release old, then assign
-			out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, tmpVal))
+			if isBorrowedExpr(s.Value) {
+				out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, tmpVal))
+			}
 			out.WriteString(fmt.Sprintf("%sdex_release(", prefix))
 			g.genExpr(out, s.Object)
-			out.WriteString(fmt.Sprintf("->%s);\n", s.Field))
+			out.WriteString(fmt.Sprintf("%s%s);\n", accessOp, s.Field))
 			out.WriteString(prefix)
 			g.genExpr(out, s.Object)
-			out.WriteString(fmt.Sprintf("->%s = %s;\n", s.Field, tmpVal))
+			out.WriteString(fmt.Sprintf("%s%s = %s;\n", accessOp, s.Field, tmpVal))
 		} else {
 			out.WriteString(prefix)
 			g.genExpr(out, s.Object)

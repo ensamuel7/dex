@@ -159,7 +159,11 @@ static void dex_ws_accept_key(const char* client_key, char* out_accept, size_t o
 
 // --- Subprotocol config ---
 
-static char dex_ws_subprotocol[128] = {0};
+/* Pending registration state. A program may run several WS servers, each
+ * configured and started from its own thread (`spawn { handler.start() }`), so
+ * this is per-thread: a listener snapshots it into its own DexWsServer when it
+ * starts, and one listener's configuration can never clobber another's. */
+_Thread_local char dex_ws_subprotocol[128] = {0};
 
 void dex_ws_set_protocol(const char* protocol) {
     strncpy(dex_ws_subprotocol, protocol, sizeof(dex_ws_subprotocol) - 1);
@@ -279,9 +283,12 @@ static int dex_ws_frame_recv(int fd, SSL* ssl, char* buf, size_t bufsize, int* o
 
 // --- WebSocket server (event-loop driven) ---
 
-static void (*dex_ws_on_message)(Dex_Conn, DexString*) = NULL;
-static void (*dex_ws_on_connect)(Dex_Conn, DexString*) = NULL;
-static void (*dex_ws_on_disconnect)(Dex_Conn) = NULL;
+/* Pending handler registration — per-thread for the same reason as the
+ * subprotocol above. Generated code assigns these directly before calling
+ * dex_ws_listen(), which snapshots them into the listener it creates. */
+_Thread_local void (*dex_ws_on_message)(Dex_Conn, DexString*) = NULL;
+_Thread_local void (*dex_ws_on_connect)(Dex_Conn, DexString*) = NULL;
+_Thread_local void (*dex_ws_on_disconnect)(Dex_Conn) = NULL;
 
 typedef enum {
     WS_HANDSHAKE_READ,
@@ -299,10 +306,13 @@ typedef struct DexWsWriteItem {
     struct DexWsWriteItem*  next;
 } DexWsWriteItem;
 
+typedef struct DexWsServer DexWsServer;
+
 typedef struct DexWsConn {
     int           fd;
     DexWsState    state;
     Dex_Conn      dex_conn;
+    DexWsServer*  srv;   /* listener this connection was accepted by */
 
     /* Handshake read buffer */
     char*         read_buf;
@@ -337,22 +347,35 @@ typedef struct DexWsConn {
     struct DexWsConn* next;
 } DexWsConn;
 
-/* Global event-loop state for WS server */
-static DexEventLoop*  dex_ws_loop = NULL;
-static DexThreadPool* dex_ws_pool = NULL;
-static DexNotifyPipe  dex_ws_notify;
+/* Per-listener server state. Each dex_ws_listen() owns one of these, so running
+ * several WS servers in one process (e.g. OCPP 1.6 on one port and 2.0.1 on
+ * another) keeps its own event loop, thread pool and handlers. */
+struct DexWsServer {
+    DexEventLoop*  loop;
+    DexThreadPool* pool;
+    DexNotifyPipe  notify;
+    int            server_fd;
 
-/* Connection table indexed by fd */
+    void (*on_message)(Dex_Conn, DexString*);
+    void (*on_connect)(Dex_Conn, DexString*);
+    void (*on_disconnect)(Dex_Conn);
+    char subprotocol[128];
+
+    /* Completed message dispatches (worker → event loop) */
+    DexWsConn*      completed_head;
+    pthread_mutex_t completed_mutex;
+};
+
+/* Connection table indexed by fd. This one stays process-wide: fds are unique
+ * across listeners, so there is nothing to collide, and ws.send() needs to find
+ * a connection knowing only its fd. */
 #define DEX_WS_MAX_FD 65536
 static DexWsConn*     dex_ws_conn_table[DEX_WS_MAX_FD];
 
-/* Completed message dispatches (worker → event loop) */
-static DexWsConn*     dex_ws_completed_head = NULL;
-static pthread_mutex_t dex_ws_completed_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-static DexWsConn* dex_ws_conn_new(int fd) {
+static DexWsConn* dex_ws_conn_new(DexWsServer* srv, int fd) {
     DexWsConn* conn = (DexWsConn*)calloc(1, sizeof(DexWsConn));
     if (!conn) return NULL;
+    conn->srv = srv;
     conn->fd = fd;
     conn->state = WS_HANDSHAKE_READ;
     conn->read_cap = 4096;
@@ -544,11 +567,12 @@ typedef struct {
 static void dex_ws_worker_func(void* arg) {
     DexWsWorkItem* item = (DexWsWorkItem*)arg;
     DexWsConn* conn = item->conn;
+    DexWsServer* srv = conn->srv;
 
-    if (dex_ws_on_message) {
+    if (srv->on_message) {
         DexString* msg = dex_string_from_cstr(item->message);
         item->message = NULL; /* dex_string_from_cstr already freed it */
-        dex_ws_on_message(conn->dex_conn, msg);
+        srv->on_message(conn->dex_conn, msg);
         dex_release(msg);
     }
 
@@ -556,19 +580,20 @@ static void dex_ws_worker_func(void* arg) {
     free(item);
 
     /* Signal event loop that this connection is ready to read again */
-    pthread_mutex_lock(&dex_ws_completed_mutex);
-    conn->next = dex_ws_completed_head;
-    dex_ws_completed_head = conn;
-    pthread_mutex_unlock(&dex_ws_completed_mutex);
-    dex_notify_pipe_signal(&dex_ws_notify);
+    pthread_mutex_lock(&srv->completed_mutex);
+    conn->next = srv->completed_head;
+    srv->completed_head = conn;
+    pthread_mutex_unlock(&srv->completed_mutex);
+    dex_notify_pipe_signal(&srv->notify);
 }
 
 /* Close a server-side WS connection from within the event loop */
 static void dex_ws_ev_close_conn(DexWsConn* conn) {
-    if (dex_ws_on_disconnect) {
-        dex_ws_on_disconnect(conn->dex_conn);
+    DexWsServer* srv = conn->srv;
+    if (srv->on_disconnect) {
+        srv->on_disconnect(conn->dex_conn);
     }
-    dex_ev_del(dex_ws_loop, conn->fd);
+    dex_ev_del(srv->loop, conn->fd);
     close(conn->fd);
     dex_ws_conn_free(conn);
 }
@@ -603,11 +628,18 @@ static int dex_ws_flush_writes(DexWsConn* conn) {
     return 0;
 }
 
-static volatile int dex_ws_server_fd = -1;
+/* Listening fds, recorded so the signal handler can close every server, not
+ * just the most recently started one. */
+#define DEX_WS_MAX_SERVERS 32
+static volatile int dex_ws_server_fds[DEX_WS_MAX_SERVERS];
+static volatile int dex_ws_server_fd_count = 0;
 
 static void dex_ws_shutdown_handler(int sig) {
     (void)sig;
-    if (dex_ws_server_fd >= 0) close(dex_ws_server_fd);
+    int n = dex_ws_server_fd_count;
+    for (int i = 0; i < n && i < DEX_WS_MAX_SERVERS; i++) {
+        if (dex_ws_server_fds[i] >= 0) close(dex_ws_server_fds[i]);
+    }
     _exit(0);
 }
 
@@ -618,7 +650,6 @@ void dex_ws_listen(int port) {
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) { perror("ws socket"); return; }
-    dex_ws_server_fd = server_fd;
 
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -640,14 +671,26 @@ void dex_ws_listen(int port) {
 
     dex_set_nonblocking(server_fd);
 
-    /* Initialize event loop, thread pool, and notify pipe */
-    dex_ws_loop = dex_ev_create(1024);
-    dex_ws_pool = dex_pool_create(0);
-    dex_notify_pipe_init(&dex_ws_notify);
-    memset(dex_ws_conn_table, 0, sizeof(dex_ws_conn_table));
+    /* This listener's own state: event loop, thread pool, notify pipe and the
+     * handlers registered on this thread before listen() was called. */
+    DexWsServer* srv = (DexWsServer*)calloc(1, sizeof(DexWsServer));
+    if (!srv) { perror("ws server alloc"); close(server_fd); return; }
+    srv->server_fd    = server_fd;
+    srv->loop         = dex_ev_create(1024);
+    srv->pool         = dex_pool_create(0);
+    srv->on_message   = dex_ws_on_message;
+    srv->on_connect   = dex_ws_on_connect;
+    srv->on_disconnect= dex_ws_on_disconnect;
+    memcpy(srv->subprotocol, dex_ws_subprotocol, sizeof(srv->subprotocol));
+    pthread_mutex_init(&srv->completed_mutex, NULL);
+    dex_notify_pipe_init(&srv->notify);
 
-    dex_ev_add(dex_ws_loop, server_fd, DEX_EV_READ, NULL);
-    dex_ev_add(dex_ws_loop, dex_ws_notify.read_fd, DEX_EV_READ, (void*)(intptr_t)-2);
+    if (dex_ws_server_fd_count < DEX_WS_MAX_SERVERS) {
+        dex_ws_server_fds[dex_ws_server_fd_count++] = server_fd;
+    }
+
+    dex_ev_add(srv->loop, server_fd, DEX_EV_READ, NULL);
+    dex_ev_add(srv->loop, srv->notify.read_fd, DEX_EV_READ, (void*)(intptr_t)-2);
 
     printf("Dex WebSocket server listening on port %d\n", port);
     fflush(stdout);
@@ -655,7 +698,7 @@ void dex_ws_listen(int port) {
     DexEvent events[256];
 
     for (;;) {
-        int n = dex_ev_wait(dex_ws_loop, events, 256, -1);
+        int n = dex_ev_wait(srv->loop, events, 256, -1);
 
         for (int i = 0; i < n; i++) {
             DexEvent* ev = &events[i];
@@ -668,24 +711,24 @@ void dex_ws_listen(int port) {
                     int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
                     if (client_fd < 0) break;
                     dex_set_nonblocking(client_fd);
-                    DexWsConn* conn = dex_ws_conn_new(client_fd);
+                    DexWsConn* conn = dex_ws_conn_new(srv, client_fd);
                     if (!conn) {
                         close(client_fd);
                         break;
                     }
-                    dex_ev_add(dex_ws_loop, client_fd, DEX_EV_READ, conn);
+                    dex_ev_add(srv->loop, client_fd, DEX_EV_READ, conn);
                 }
                 continue;
             }
 
             /* Notify pipe: drain and process completed dispatches */
             if (ev->user_data == (void*)(intptr_t)-2) {
-                dex_notify_pipe_drain(&dex_ws_notify);
+                dex_notify_pipe_drain(&srv->notify);
 
-                pthread_mutex_lock(&dex_ws_completed_mutex);
-                DexWsConn* completed = dex_ws_completed_head;
-                dex_ws_completed_head = NULL;
-                pthread_mutex_unlock(&dex_ws_completed_mutex);
+                pthread_mutex_lock(&srv->completed_mutex);
+                DexWsConn* completed = srv->completed_head;
+                srv->completed_head = NULL;
+                pthread_mutex_unlock(&srv->completed_mutex);
 
                 while (completed) {
                     DexWsConn* next = completed->next;
@@ -697,7 +740,7 @@ void dex_ws_listen(int port) {
                     pthread_mutex_lock(&completed->write_mutex);
                     if (completed->write_head) ev_flags |= DEX_EV_WRITE;
                     pthread_mutex_unlock(&completed->write_mutex);
-                    dex_ev_add(dex_ws_loop, completed->fd, ev_flags, completed);
+                    dex_ev_add(srv->loop, completed->fd, ev_flags, completed);
                     completed = next;
                 }
 
@@ -710,7 +753,7 @@ void dex_ws_listen(int port) {
                         int has_writes = (wc->write_head != NULL);
                         pthread_mutex_unlock(&wc->write_mutex);
                         if (has_writes) {
-                            dex_ev_mod(dex_ws_loop, wc->fd, DEX_EV_READ | DEX_EV_WRITE, wc);
+                            dex_ev_mod(srv->loop, wc->fd, DEX_EV_READ | DEX_EV_WRITE, wc);
                         }
                     }
                 }
@@ -746,7 +789,7 @@ void dex_ws_listen(int port) {
                             dex_release(path_str);
                         }
                     }
-                    dex_ev_mod(dex_ws_loop, conn->fd, DEX_EV_READ, conn);
+                    dex_ev_mod(srv->loop, conn->fd, DEX_EV_READ, conn);
                 }
             }
 
@@ -820,14 +863,14 @@ void dex_ws_listen(int port) {
                     /* Build handshake response */
                     char response[512];
                     int rlen;
-                    if (dex_ws_subprotocol[0] != '\0') {
+                    if (srv->subprotocol[0] != '\0') {
                         rlen = snprintf(response, sizeof(response),
                             "HTTP/1.1 101 Switching Protocols\r\n"
                             "Upgrade: websocket\r\n"
                             "Connection: Upgrade\r\n"
                             "Sec-WebSocket-Accept: %s\r\n"
                             "Sec-WebSocket-Protocol: %s\r\n"
-                            "\r\n", accept_key, dex_ws_subprotocol);
+                            "\r\n", accept_key, srv->subprotocol);
                     } else {
                         rlen = snprintf(response, sizeof(response),
                             "HTTP/1.1 101 Switching Protocols\r\n"
@@ -856,7 +899,7 @@ void dex_ws_listen(int port) {
                     conn->write_tail = wi;
 
                     conn->state = WS_HANDSHAKE_WRITE;
-                    dex_ev_mod(dex_ws_loop, conn->fd, DEX_EV_WRITE, conn);
+                    dex_ev_mod(srv->loop, conn->fd, DEX_EV_WRITE, conn);
                     continue;
                 }
 
@@ -889,7 +932,7 @@ void dex_ws_listen(int port) {
                     /* Text frame: dispatch to worker pool */
                     if (opcode == 0x1 && dex_ws_on_message) {
                         conn->state = WS_DISPATCHED;
-                        dex_ev_del(dex_ws_loop, conn->fd);
+                        dex_ev_del(srv->loop, conn->fd);
 
                         DexWsWorkItem* item = (DexWsWorkItem*)malloc(sizeof(DexWsWorkItem));
                         if (!item) {
@@ -899,7 +942,7 @@ void dex_ws_listen(int port) {
                         item->conn = conn;
                         item->message = conn->frame_payload;
                         conn->frame_payload = NULL; /* ownership transferred */
-                        dex_pool_submit(dex_ws_pool, dex_ws_worker_func, item);
+                        dex_pool_submit(srv->pool, dex_ws_worker_func, item);
                     } else {
                         /* Unknown opcode or no handler, skip */
                         dex_ws_reset_frame_parser(conn);
@@ -1070,8 +1113,8 @@ void dex_ws_send(Dex_Conn conn, const char* msg) {
         wc->write_tail = item;
         pthread_mutex_unlock(&wc->write_mutex);
 
-        /* Signal event loop to register for write */
-        dex_notify_pipe_signal(&dex_ws_notify);
+        /* Signal the owning listener's event loop to register for write */
+        dex_notify_pipe_signal(&wc->srv->notify);
         return;
     }
 

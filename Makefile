@@ -1,4 +1,4 @@
-DEX_VERSION ?= 0.2.9
+DEX_VERSION ?= 0.3.0
 IMAGE_NAME  := dexlang/dexlang
 
 docker-build:

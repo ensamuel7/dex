@@ -161,32 +161,52 @@ const char* dex_json_set_obj(const char* obj, const char* key, const char* val) 
 
 // --- JSON get (parse) ---
 
+static const char* dex_json_skip_value(const char* p);
+
+#define DEX_JSON_SKIP_WS(p) while (*(p)==' '||*(p)=='\t'||*(p)=='\n'||*(p)=='\r') (p)++
+
 // Find the raw value for a key in a JSON object string.
 // Returns pointer into json (or NULL). Does NOT allocate.
+//
+// Walks the object one member at a time rather than scanning for a matching
+// quoted run, so it only ever matches a real key at this object's own level:
+// a key buried in a nested object is not visible here, and a *value* that
+// happens to read like the key can never be mistaken for one.
 static const char* dex_json_find_value(const char* json, const char* key) {
     size_t klen = strlen(key);
     const char* p = json;
+
+    DEX_JSON_SKIP_WS(p);
+    if (*p != '{') return NULL;
+    p++;
+
     while (*p) {
-        // Find next quote
-        p = strchr(p, '"');
-        if (!p) return NULL;
-        p++; // skip opening quote
-        // Check if this key matches
-        if (strncmp(p, key, klen) == 0 && p[klen] == '"') {
-            p += klen + 1; // past closing quote
-            // Skip whitespace and colon
-            while (*p == ' ' || *p == '\t' || *p == ':') p++;
+        DEX_JSON_SKIP_WS(p);
+        if (*p == ',') { p++; continue; }
+        if (*p == '}') return NULL;
+        if (*p != '"') return NULL; /* malformed */
+
+        const char* kstart = ++p;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1]) p++;
+            p++;
+        }
+        if (*p != '"') return NULL;
+        size_t this_klen = (size_t)(p - kstart);
+        p++;
+
+        DEX_JSON_SKIP_WS(p);
+        if (*p != ':') return NULL;
+        p++;
+        DEX_JSON_SKIP_WS(p);
+
+        if (this_klen == klen && memcmp(kstart, key, klen) == 0) {
             return p;
         }
-        // Skip past this quoted string
-        const char* end = strchr(p, '"');
-        if (!end) return NULL;
-        p = end + 1;
+        p = dex_json_skip_value(p);
     }
     return NULL;
 }
-
-static const char* dex_json_skip_value(const char* p);
 
 const char* dex_json_get(const char* json, const char* key) {
     const char* val = dex_json_find_value(json, key);

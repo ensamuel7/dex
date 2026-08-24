@@ -1538,7 +1538,7 @@ obj = json.set(obj, "pi", 3.14)
 
 `set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). `stringify` also accepts struct types, serializing all fields to a JSON object. `objectify` converts a JSON string back into a typed struct — the target type must be specified via type annotation (e.g., `let p: Person = json.objectify(str)`). `setObj` inserts raw JSON without quoting, which is essential for nesting objects. The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
 
-**Reading nested objects** — `get` returns a string value unquoted, but an object or array value comes back as raw JSON. Feed that straight back into `get` to walk down a level at a time:
+**Reading nested objects** — the `get*` functions match **top-level keys only**. A string value comes back unquoted; an object or array value comes back as raw JSON, which you feed straight back into `get` to descend one level at a time:
 
 ```dex
 let msg: string = "{\"device\":{\"model\":\"MX-9\",\"vendor\":\"Acme\"},\"reason\":\"PowerUp\"}"
@@ -1546,7 +1546,11 @@ let msg: string = "{\"device\":{\"model\":\"MX-9\",\"vendor\":\"Acme\"},\"reason
 let device: string = json.get(msg, "device")     // {"model":"MX-9","vendor":"Acme"}
 let model: string  = json.get(device, "model")   // MX-9
 let reason: string = json.get(msg, "reason")     // PowerUp
+
+json.get(msg, "model")                           // "" — nested keys are not searched
 ```
+
+Because lookup stops at the current level, a key nested deeper can never shadow the one you asked for, and a *value* that happens to read like your key is never mistaken for it.
 
 **JSON Arrays** — for working with JSON arrays as strings (useful for wire protocols that frame each message as a JSON array):
 

@@ -87,6 +87,13 @@ typedef struct {
     PGconn* pg_conn;
     char* pg_sql;
     char pg_stmt_name[32];
+    int pg_param_count;
+    int pg_param_cap;
+    char** pg_param_values;
+    int* pg_param_lengths;
+    PGresult* pg_result;
+    int pg_current_row;
+    int pg_num_rows;
 #endif
 #ifdef DEX_HAS_MYSQL
     MYSQL_STMT* mysql_stmt;
@@ -948,6 +955,13 @@ int dex_db_prepare(int conn, const char* sql) {
         dex_db_stmts[slot].conn_slot = conn;
         dex_db_stmts[slot].pg_conn = pg;
         dex_db_stmts[slot].pg_sql = strdup(sql);
+        dex_db_stmts[slot].pg_param_count = 0;
+        dex_db_stmts[slot].pg_param_cap = 8;
+        dex_db_stmts[slot].pg_param_values = (char**)calloc(8, sizeof(char*));
+        dex_db_stmts[slot].pg_param_lengths = (int*)calloc(8, sizeof(int));
+        dex_db_stmts[slot].pg_result = NULL;
+        dex_db_stmts[slot].pg_current_row = 0;
+        dex_db_stmts[slot].pg_num_rows = 0;
         pthread_mutex_unlock(&dex_db_mutex);
         return slot;
 #endif
@@ -993,10 +1007,24 @@ void dex_db_bind_int(int stmt_id, int idx, int val) {
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_bind_int(s->sqlite_stmt, idx, val);
+#ifdef DEX_HAS_POSTGRES
+    } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        int pidx = idx - 1;
+        while (pidx >= s->pg_param_cap) {
+            s->pg_param_cap *= 2;
+            s->pg_param_values = (char**)realloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
+            s->pg_param_lengths = (int*)realloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
+        }
+        if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", val);
+        free(s->pg_param_values[pidx]);
+        s->pg_param_values[pidx] = strdup(buf);
+        s->pg_param_lengths[pidx] = (int)strlen(buf);
+#endif
 #ifdef DEX_HAS_MYSQL
     } else if (s->driver == DEX_DB_DRIVER_MYSQL) {
         // MySQL bind handled at step time via MYSQL_BIND array
-        // For simplicity, we use the SQLite-style approach
 #endif
     }
 }
@@ -1010,6 +1038,21 @@ void dex_db_bind_double(int stmt_id, int idx, double val) {
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_bind_double(s->sqlite_stmt, idx, val);
+#ifdef DEX_HAS_POSTGRES
+    } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        int pidx = idx - 1;
+        while (pidx >= s->pg_param_cap) {
+            s->pg_param_cap *= 2;
+            s->pg_param_values = (char**)realloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
+            s->pg_param_lengths = (int*)realloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
+        }
+        if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%g", val);
+        free(s->pg_param_values[pidx]);
+        s->pg_param_values[pidx] = strdup(buf);
+        s->pg_param_lengths[pidx] = (int)strlen(buf);
+#endif
     }
 }
 
@@ -1022,6 +1065,19 @@ void dex_db_bind_str(int stmt_id, int idx, const char* val) {
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_bind_text(s->sqlite_stmt, idx, val, -1, SQLITE_TRANSIENT);
+#ifdef DEX_HAS_POSTGRES
+    } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        int pidx = idx - 1;
+        while (pidx >= s->pg_param_cap) {
+            s->pg_param_cap *= 2;
+            s->pg_param_values = (char**)realloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
+            s->pg_param_lengths = (int*)realloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
+        }
+        if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+        free(s->pg_param_values[pidx]);
+        s->pg_param_values[pidx] = strdup(val);
+        s->pg_param_lengths[pidx] = (int)strlen(val);
+#endif
     }
 }
 
@@ -1036,6 +1092,34 @@ _Bool dex_db_step(int stmt_id) {
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         int rc = sqlite3_step(s->sqlite_stmt);
         return rc == SQLITE_ROW;
+#ifdef DEX_HAS_POSTGRES
+    } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        // First call after bind: execute the prepared statement
+        if (!s->pg_result) {
+            s->pg_result = PQexecPrepared(s->pg_conn, s->pg_stmt_name,
+                s->pg_param_count, (const char* const*)s->pg_param_values,
+                s->pg_param_lengths, NULL, 0);
+            ExecStatusType st = PQresultStatus(s->pg_result);
+            if (st == PGRES_TUPLES_OK) {
+                s->pg_num_rows = PQntuples(s->pg_result);
+                s->pg_current_row = 0;
+            } else if (st == PGRES_COMMAND_OK) {
+                s->pg_num_rows = 0;
+                s->pg_current_row = 0;
+                return 0;
+            } else {
+                fprintf(stderr, "db.step error: %s\n", PQerrorMessage(s->pg_conn));
+                PQclear(s->pg_result);
+                s->pg_result = NULL;
+                return 0;
+            }
+        }
+        if (s->pg_current_row < s->pg_num_rows) {
+            s->pg_current_row++;
+            return 1;
+        }
+        return 0;
+#endif
     }
     return 0;
 }
@@ -1050,6 +1134,20 @@ void dex_db_reset(int stmt_id) {
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_reset(s->sqlite_stmt);
         sqlite3_clear_bindings(s->sqlite_stmt);
+#ifdef DEX_HAS_POSTGRES
+    } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        if (s->pg_result) {
+            PQclear(s->pg_result);
+            s->pg_result = NULL;
+        }
+        s->pg_current_row = 0;
+        s->pg_num_rows = 0;
+        for (int i = 0; i < s->pg_param_count; i++) {
+            free(s->pg_param_values[i]);
+            s->pg_param_values[i] = NULL;
+        }
+        s->pg_param_count = 0;
+#endif
     }
 }
 
@@ -1065,6 +1163,10 @@ void dex_db_finalize(int stmt_id) {
     }
 #ifdef DEX_HAS_POSTGRES
     else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        if (s->pg_result) PQclear(s->pg_result);
+        for (int i = 0; i < s->pg_param_count; i++) free(s->pg_param_values[i]);
+        free(s->pg_param_values);
+        free(s->pg_param_lengths);
         if (s->pg_sql) free(s->pg_sql);
         // Deallocate the prepared statement on the server
         char dealloc[64];

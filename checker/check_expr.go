@@ -719,8 +719,11 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if err != nil {
 					return 0, err
 				}
-				if !ast.IsArrayType(argType) && !ast.IsStructType(argType) {
-					return 0, c.errAt(e.Pos, "json.stringify() argument must be an array or struct type, got %s", typeName(argType))
+				if !ast.IsArrayType(argType) && !ast.IsStructType(argType) && !ast.IsMapType(argType) {
+					return 0, c.errAt(e.Pos, "json.stringify() argument must be an array, struct, or map type, got %s", typeName(argType))
+				}
+				if ast.IsMapType(argType) && ast.MapKeyType(argType) != ast.TypeString {
+					return 0, c.errAt(e.Pos, "json.stringify() map key type must be string for JSON serialization, got %s", typeName(ast.MapKeyType(argType)))
 				}
 				return ast.TypeString, nil
 			}
@@ -870,6 +873,15 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 					handlerName = h.Value
 				case *ast.Ident:
 					handlerName = h.Name
+					if _, exists := c.funcs[handlerName]; !exists {
+						for mod := range c.userModules {
+							prefixed := mod + "_" + handlerName
+							if _, ok := c.funcs[prefixed]; ok {
+								handlerName = prefixed
+								break
+							}
+						}
+					}
 				case *ast.CallExpr:
 					if len(h.Args) != 0 {
 						return 0, c.errAt(e.Pos, "http.route() handler function must take no arguments")
@@ -943,6 +955,15 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				switch h := e.Args[0].(type) {
 				case *ast.Ident:
 					handlerName = h.Name
+					if _, exists := c.funcs[handlerName]; !exists {
+						for mod := range c.userModules {
+							prefixed := mod + "_" + handlerName
+							if _, ok := c.funcs[prefixed]; ok {
+								handlerName = prefixed
+								break
+							}
+						}
+					}
 				case *ast.CallExpr:
 					if len(h.Args) != 0 {
 						return 0, c.errAt(e.Pos, "ws.handleMessage() handler must take exactly 2 parameters")
@@ -986,6 +1007,15 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				switch h := e.Args[0].(type) {
 				case *ast.Ident:
 					handlerName = h.Name
+					if _, exists := c.funcs[handlerName]; !exists {
+						for mod := range c.userModules {
+							prefixed := mod + "_" + handlerName
+							if _, ok := c.funcs[prefixed]; ok {
+								handlerName = prefixed
+								break
+							}
+						}
+					}
 				case *ast.CallExpr:
 					if len(h.Args) != 0 {
 						return 0, c.errAt(e.Pos, "ws.handleConnect() handler must take exactly 2 parameters")
@@ -1029,6 +1059,15 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				switch h := e.Args[0].(type) {
 				case *ast.Ident:
 					handlerName = h.Name
+					if _, exists := c.funcs[handlerName]; !exists {
+						for mod := range c.userModules {
+							prefixed := mod + "_" + handlerName
+							if _, ok := c.funcs[prefixed]; ok {
+								handlerName = prefixed
+								break
+							}
+						}
+					}
 				case *ast.CallExpr:
 					if len(h.Args) != 0 {
 						return 0, c.errAt(e.Pos, "ws.handleDisconnect() handler must take exactly 1 parameter")

@@ -368,6 +368,10 @@ func prefixCallsInExpr(expr ast.Expr, moduleName string, modFuncNames map[string
 		for _, arg := range e.Args {
 			prefixCallsInExpr(arg, moduleName, modFuncNames)
 		}
+	case *ast.Ident:
+		if modFuncNames[e.Name] {
+			e.Name = moduleName + "_" + e.Name
+		}
 	case *ast.BinaryExpr:
 		prefixCallsInExpr(e.Left, moduleName, modFuncNames)
 		prefixCallsInExpr(e.Right, moduleName, modFuncNames)

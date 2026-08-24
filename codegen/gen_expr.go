@@ -538,6 +538,38 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	// json.stringify(array or struct) — special codegen (returns const char*, needs wrapping)
 	if e.Module == "json" && e.Name == "stringify" {
 		argType := g.typeOfExpr(e.Args[0])
+		if ast.IsMapType(argType) {
+			valType := ast.MapValueType(argType)
+			suffix := g.mapSuffix(argType)
+			mapCType := "DexMap_" + suffix
+			wrapperName := fmt.Sprintf("_dex_json_map_%s_%d", suffix, g.routeWrapperCount)
+			g.routeWrapperCount++
+			var w strings.Builder
+			w.WriteString(fmt.Sprintf("DexString* %s(%s* _m) {\n", wrapperName, mapCType))
+			w.WriteString("    const char* _r = dex_json_new();\n")
+			w.WriteString("    for (int _i = 0; _i < _m->cap; _i++) {\n")
+			w.WriteString("        if (!_m->entries[_i].occupied) continue;\n")
+			switch valType {
+			case ast.TypeString:
+				w.WriteString("        _r = dex_json_set(_r, _m->entries[_i].key->data, _m->entries[_i].value->data);\n")
+			case ast.TypeInt:
+				w.WriteString("        _r = dex_json_set_int(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+			case ast.TypeBool:
+				w.WriteString("        _r = dex_json_set_bool(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+			case ast.TypeLong:
+				w.WriteString("        _r = dex_json_set_long(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+			case ast.TypeDouble:
+				w.WriteString("        _r = dex_json_set_double(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+			}
+			w.WriteString("    }\n")
+			w.WriteString("    return dex_string_from_cstr(_r);\n")
+			w.WriteString("}\n")
+			g.spawnWrappers.WriteString(w.String())
+			out.WriteString(wrapperName + "(")
+			g.genExpr(out, e.Args[0])
+			out.WriteString(")")
+			return
+		}
 		if ast.IsStructType(argType) && !ast.IsArrayType(argType) {
 			// Struct stringify: use dex_json_encode_struct
 			def := ast.GetStructDef(argType)
@@ -866,6 +898,15 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			handlerName = h.Value
 		case *ast.Ident:
 			handlerName = h.Name
+			if _, exists := g.funcs[handlerName]; !exists {
+				for mod := range g.userModules {
+					prefixed := mod + "_" + handlerName
+					if _, ok := g.funcs[prefixed]; ok {
+						handlerName = prefixed
+						break
+					}
+				}
+			}
 		case *ast.CallExpr:
 			handlerName = h.Name
 			if h.Module != "" && g.userModules[h.Module] {
@@ -960,6 +1001,15 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		switch h := e.Args[0].(type) {
 		case *ast.Ident:
 			handlerName = h.Name
+			if _, exists := g.funcs[handlerName]; !exists {
+				for mod := range g.userModules {
+					prefixed := mod + "_" + handlerName
+					if _, ok := g.funcs[prefixed]; ok {
+						handlerName = prefixed
+						break
+					}
+				}
+			}
 		case *ast.CallExpr:
 			handlerName = h.Name
 			if h.Module != "" && g.userModules[h.Module] {
@@ -977,6 +1027,15 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		switch h := e.Args[0].(type) {
 		case *ast.Ident:
 			handlerName = h.Name
+			if _, exists := g.funcs[handlerName]; !exists {
+				for mod := range g.userModules {
+					prefixed := mod + "_" + handlerName
+					if _, ok := g.funcs[prefixed]; ok {
+						handlerName = prefixed
+						break
+					}
+				}
+			}
 		case *ast.CallExpr:
 			handlerName = h.Name
 			if h.Module != "" && g.userModules[h.Module] {
@@ -994,6 +1053,15 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		switch h := e.Args[0].(type) {
 		case *ast.Ident:
 			handlerName = h.Name
+			if _, exists := g.funcs[handlerName]; !exists {
+				for mod := range g.userModules {
+					prefixed := mod + "_" + handlerName
+					if _, ok := g.funcs[prefixed]; ok {
+						handlerName = prefixed
+						break
+					}
+				}
+			}
 		case *ast.CallExpr:
 			handlerName = h.Name
 			if h.Module != "" && g.userModules[h.Module] {

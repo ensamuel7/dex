@@ -1524,7 +1524,7 @@ obj = json.set(obj, "pi", 3.14)
 | `setObj`     | `setObj(obj: string, key: string, value: string): string`                       | Set a key to a raw JSON object/array value (not quoted) |
 | `stringify`  | `stringify(value: T[]\|struct\|map[string, V]): string`                         | Convert an array, struct, or map to JSON string |
 | `objectify`  | `objectify(json: string): T`                                                    | Convert a JSON string into a typed struct |
-| `get`        | `get(json: string, key: string): string`                                        | Get a string value by key      |
+| `get`        | `get(json: string, key: string): string`                                        | Get a value by key — strings unquoted, objects/arrays as raw JSON |
 | `getInt`     | `getInt(json: string, key: string): int`                                        | Get an integer value by key    |
 | `getBool`    | `getBool(json: string, key: string): bool`                                      | Get a boolean value by key     |
 | `getDouble`  | `getDouble(json: string, key: string): double`                                  | Get a double value by key      |
@@ -1538,7 +1538,17 @@ obj = json.set(obj, "pi", 3.14)
 
 `set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). `stringify` also accepts struct types, serializing all fields to a JSON object. `objectify` converts a JSON string back into a typed struct — the target type must be specified via type annotation (e.g., `let p: Person = json.objectify(str)`). `setObj` inserts raw JSON without quoting, which is essential for nesting objects. The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
 
-**JSON Arrays** — for working with JSON arrays as strings (useful for protocols like OCPP that use JSON arrays as message format):
+**Reading nested objects** — `get` returns a string value unquoted, but an object or array value comes back as raw JSON. Feed that straight back into `get` to walk down a level at a time:
+
+```dex
+let msg: string = "{\"device\":{\"model\":\"MX-9\",\"vendor\":\"Acme\"},\"reason\":\"PowerUp\"}"
+
+let device: string = json.get(msg, "device")     // {"model":"MX-9","vendor":"Acme"}
+let model: string  = json.get(device, "model")   // MX-9
+let reason: string = json.get(msg, "reason")     // PowerUp
+```
+
+**JSON Arrays** — for working with JSON arrays as strings (useful for wire protocols that frame each message as a JSON array):
 
 ```dex
 // Build a JSON array
@@ -1756,11 +1766,11 @@ struct Conn {
 
 | Function           | Signature                         | Description                               |
 |--------------------|-----------------------------------|-------------------------------------------|
-| `handleMessage`    | `handleMessage(fn): void`         | Register message handler                  |
+| `handleMessage`    | `handleMessage(fn): void`         | Register message handler for this thread's server |
 | `handleConnect`    | `handleConnect(fn): void`         | Register connect handler (called with path) |
 | `handleDisconnect` | `handleDisconnect(fn): void`      | Register disconnect handler               |
-| `setProtocol`      | `setProtocol(protocol: string): void` | Set WebSocket subprotocol for handshakes |
-| `listen`           | `listen(port: int): void`         | Start WebSocket server on port            |
+| `setProtocol`      | `setProtocol(protocol: string): void` | Set the subprotocol offered by this thread's handshakes |
+| `listen`           | `listen(port: int): void`         | Start a server on `port`, capturing this thread's registration; blocks |
 
 Message handlers must take `(conn: ws.Conn, msg: string)` and return `void`. Connect handlers take `(conn: ws.Conn, path: string)`. Disconnect handlers take `(conn: ws.Conn)`.
 
@@ -1782,13 +1792,51 @@ fn onDisconnect(conn: ws.Conn): void {
 }
 
 fn main(): void {
-  ws.setProtocol("ocpp1.6")
+  ws.setProtocol("chat.v1")
   ws.handleConnect(onConnect)
   ws.handleMessage(onMessage)
   ws.handleDisconnect(onDisconnect)
   ws.listen(9090)
 }
 ```
+
+##### Running several servers
+
+Handler and subprotocol registration is **per-thread**, and `listen` captures
+whatever is registered on its thread at the moment it starts. Each server then
+owns that configuration — along with its own event loop and worker pool — so
+registering on one thread can never disturb a server started on another.
+
+To run more than one server, `spawn` each on its own thread and register inside
+it. Registering from the parent and then spawning will not work: the spawned
+thread starts with no handlers.
+
+```dex
+fn startChat(): void {
+  ws.setProtocol("chat.v1")       // this thread's registration...
+  ws.handleConnect(onChatConnect)
+  ws.handleMessage(onChatMessage)
+  ws.listen(9000)                 // ...captured by this server
+}
+
+fn startTelemetry(): void {
+  ws.setProtocol("telemetry.v1")
+  ws.handleConnect(onTelemetryConnect)
+  ws.handleMessage(onTelemetryMessage)
+  ws.listen(9001)
+}
+
+fn main(): void {
+  spawn { startChat() }
+  startTelemetry()                // the last one blocks, keeping main alive
+}
+```
+
+Port 9000 negotiates `chat.v1` and dispatches to `onChatMessage`; port 9001
+negotiates `telemetry.v1` and dispatches to `onTelemetryMessage`.
+
+`ws.send` works from any thread — it queues the frame and wakes the event loop
+belonging to that connection's server.
 
 #### Client
 

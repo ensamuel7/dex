@@ -1,4 +1,4 @@
-DEX_VERSION ?= 0.3.0
+DEX_VERSION ?= 0.3.1
 IMAGE_NAME  := dexlang/dexlang
 
 docker-build:
@@ -14,7 +14,7 @@ docker-publish: docker-build
 	@echo "Published $(IMAGE_NAME):$(DEX_VERSION)"
 
 release:
-	@test -n "$(VERSION)" || (echo "Usage: make release VERSION=0.1.4" && exit 1)
+	@test -n "$(VERSION)" || (echo "Usage: D" && exit 1)
 	git tag -a v$(VERSION) -m "Release v$(VERSION)"
 	git push origin v$(VERSION)
 	@echo "Tagged v$(VERSION) — GitHub Actions will build and publish"

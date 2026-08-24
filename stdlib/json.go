@@ -52,7 +52,7 @@ func init() {
 				ParamNames: []string{"json", "key"},
 				ReturnType: ast.TypeString,
 				CName:      "dex_json_get",
-				Doc:        "Get a string value from a JSON object by key. Returns empty string if key not found.",
+				Doc:        "Get a value from a JSON object by key. String values come back unquoted; objects and arrays come back as raw JSON you can pass straight back into json.get. Returns empty string if the key is not found.",
 			},
 			"getInt": {
 				Params:     []ast.Type{ast.TypeString, ast.TypeString},

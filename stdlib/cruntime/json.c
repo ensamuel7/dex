@@ -186,6 +186,8 @@ static const char* dex_json_find_value(const char* json, const char* key) {
     return NULL;
 }
 
+static const char* dex_json_skip_value(const char* p);
+
 const char* dex_json_get(const char* json, const char* key) {
     const char* val = dex_json_find_value(json, key);
     if (!val) return strdup("");
@@ -200,9 +202,10 @@ const char* dex_json_get(const char* json, const char* key) {
         result[len] = '\0';
         return result;
     }
-    // Non-string value — return raw up to delimiter
-    const char* end = val;
-    while (*end && *end != ',' && *end != '}' && *end != ']' && *end != ' ' && *end != '\n') end++;
+    // Non-string value — return it raw. Objects and arrays are scanned with
+    // brace matching so a nested structure comes back whole rather than being
+    // cut at its first comma; scalars still stop at the usual delimiters.
+    const char* end = dex_json_skip_value(val);
     size_t len = (size_t)(end - val);
     char* result = (char*)malloc(len + 1);
     if (!result) return strdup("");

@@ -1106,7 +1106,7 @@ The `default` branch is optional. Each case body has its own scope. There is no 
 
 ## Concurrency
 
-DexLang provides lightweight concurrency with four primitives: `spawn`, `send`, `receive`, and `channel`.
+DexLang provides lightweight concurrency with four primitives: `spawn`, `send`, `receive`, and `channel`, plus `mutex` for guarding state that threads share.
 
 ### spawn
 
@@ -1204,6 +1204,85 @@ Use `chan` followed by an element type for explicit type annotations:
 ```dex
 let ch: chan int = channel(int)
 ```
+
+### mutex
+
+Channels pass values *between* threads. When threads instead need to share the
+same data, guard it with a `mutex`. Write `mutex` in value position to create
+one, already unlocked:
+
+```dex
+let mu: mutex = mutex
+
+mu.lock()
+// critical section — one thread at a time
+mu.unlock()
+```
+
+**Shared state needs a lock.** Module-level variables are shared by every
+thread, and maps and arrays are not internally synchronised — two threads
+writing one at the same time can corrupt it, not merely lose an update. A `map`
+that resizes while another thread is reading it will follow freed memory.
+
+```dex
+let mu: mutex = mutex
+let totals: map[int, int] = {}
+
+fn record(key: int, amount: int): void {
+    mu.lock()
+    totals.set(key, amount)
+    mu.unlock()
+}
+
+fn lookup(key: int): int {
+    mu.lock()
+    let found: int = -1
+    if (totals.has(key)) {
+        found = totals.get(key)
+    }
+    mu.unlock()          // unlock before returning, not after
+    return found
+}
+```
+
+Note the shape of `lookup`: read what you need into a local, unlock, *then*
+return. Returning from inside the critical section would skip the `unlock` and
+deadlock every other thread.
+
+A mutex can also live in a struct, which keeps the lock next to the data it
+protects — useful when you pass state to threads by reference rather than
+reaching for a module-level variable:
+
+```dex
+struct Counter {
+    mu: mutex
+    value: int
+}
+
+fn increment(c: &Counter): void {
+    c.mu.lock()
+    c.value = c.value + 1
+    c.mu.unlock()
+}
+```
+
+**Use `defer` when the critical section can throw.** A bare `unlock()` is
+skipped if an exception unwinds past it, leaving the mutex held forever and
+every other thread blocked. `defer` runs on both the normal and the exceptional
+path:
+
+```dex
+fn increment(c: &Counter): void {
+    c.mu.lock()
+    defer c.mu.unlock()   // runs however the function exits
+    riskyOperation()      // safe: the unlock still happens if this throws
+    c.value = c.value + 1
+}
+```
+
+Hold a lock for as little as possible, and avoid doing I/O — a database call, a
+socket write — while holding one, since every other thread waits on you. Take
+the value you need under the lock, release it, then do the slow work.
 
 ---
 

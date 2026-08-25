@@ -126,8 +126,10 @@ func (s *Server) hoverAt(uri string, text string, pos Position) string {
 
 func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *token.Token) string {
 	// Parse the file for function/variable info
+	filePath := uriToPath(uri)
+	sourceDir := filepath.Dir(filePath)
 	p := parser.New(tokens)
-	seedParserModuleTypes(p, tokens)
+	seedParserModuleTypes(p, tokens, sourceDir)
 	program, errs := p.Parse()
 	if len(errs) > 0 {
 		// Still attempt hover with partial parse results
@@ -138,8 +140,6 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 
 	// Resolve user modules for cross-module hover info
 	resolve.FlattenStructMethods(program)
-	filePath := uriToPath(uri)
-	sourceDir := filepath.Dir(filePath)
 	_ = resolve.ResolveUserModules(program, sourceDir)
 
 	name := tok.Value
@@ -150,6 +150,9 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 		objTok := tokens[idx-2]
 		if objTok.Kind == token.TokenIdent {
 			if result := s.hoverFieldAccess(program, objTok.Value, name); result != "" {
+				return result
+			}
+			if result := hoverUserModuleFunc(program, objTok.Value, name); result != "" {
 				return result
 			}
 		}
@@ -291,6 +294,34 @@ func findLetInStmts(stmts []ast.Stmt, name string) string {
 				return t
 			}
 		}
+	}
+	return ""
+}
+
+// hoverUserModuleFunc returns hover info for a user-module function referenced
+// as module.name. ResolveUserModules merges module functions into the program
+// under a "<module>_<name>" prefix, so a lookup by the bare name never matches.
+func hoverUserModuleFunc(program *ast.Program, moduleName, name string) string {
+	isUserModule := false
+	for _, m := range program.UserModules {
+		if m == moduleName {
+			isUserModule = true
+			break
+		}
+	}
+	if !isUserModule {
+		return ""
+	}
+
+	qualified := moduleName + "_" + name
+	for i := range program.Functions {
+		if program.Functions[i].Name != qualified {
+			continue
+		}
+		// Display the call-site spelling (module.name), not the merged name.
+		fn := program.Functions[i]
+		fn.Name = moduleName + "." + name
+		return formatFunctionHover(&fn)
 	}
 	return ""
 }

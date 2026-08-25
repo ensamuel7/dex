@@ -52,6 +52,11 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	case *ast.NullLit:
 		out.WriteString("NULL")
 
+	case *ast.MutexLit:
+		// Static initialiser, so it works equally as a local, a global, or a
+		// designated initialiser inside a struct literal.
+		out.WriteString("PTHREAD_MUTEX_INITIALIZER")
+
 	case *ast.Ident:
 		if narrowed, ok := g.narrowedVars[e.Name]; ok {
 			out.WriteString(narrowed)

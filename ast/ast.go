@@ -581,6 +581,14 @@ type NullLit struct {
 
 func (e *NullLit) exprNode() {}
 
+// MutexLit represents the `mutex` literal expression, which yields a fresh
+// unlocked mutex: `let mu: mutex = mutex`.
+type MutexLit struct {
+	Pos Pos
+}
+
+func (e *MutexLit) exprNode() {}
+
 // DeferStmt represents a defer statement: defer expr
 // The expression is executed when the enclosing function returns.
 type DeferStmt struct {

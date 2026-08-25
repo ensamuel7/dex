@@ -163,6 +163,13 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 		g.sbVars[name] = true
 	}
 
+	// A module-level mutex carries PTHREAD_MUTEX_INITIALIZER on its declaration.
+	// That macro expands to a brace initialiser, which is only valid where an
+	// initialiser is expected — assigning it here would not compile.
+	if _, ok := gl.Value.(*ast.MutexLit); ok {
+		return
+	}
+
 	switch {
 	case gl.Type == ast.TypeString:
 		if strLit, ok := gl.Value.(*ast.StringLit); ok {

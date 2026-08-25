@@ -1429,14 +1429,37 @@ let task = spawn {
 let result = receive(task)  // 20</code></pre>
 
 <h3>Mutex</h3>
-<p><code>mutex</code> is a built-in type for mutual exclusion. Use it to protect shared data when multiple threads access the same memory via <code>&amp;Struct</code> references. A mutex has two methods: <code>.lock()</code> and <code>.unlock()</code>.</p>
+<p>Channels pass values <em>between</em> threads. When threads instead need to share the same data, guard it with a <code>mutex</code>. Write <code>mutex</code> in value position to create one, already unlocked. It has two methods: <code>.lock()</code> and <code>.unlock()</code>.</p>
 <pre><code>let mu: mutex = mutex
 mu.lock()
 // critical section — only one thread at a time
 mu.unlock()</code></pre>
 
+<h4>Module-level state needs a lock</h4>
+<p>Module-level variables are shared by every thread, and maps and arrays are not internally synchronised — two threads writing one at the same time can corrupt it, not merely lose an update. A <code>map</code> that resizes while another thread reads it will follow freed memory.</p>
+<pre><code>let mu: mutex = mutex
+let totals: map[int, int] = {}
+
+fn record(key: int, amount: int): void {
+    mu.lock()
+    totals.set(key, amount)
+    mu.unlock()
+}
+
+fn lookup(key: int): int {
+    mu.lock()
+    let found: int = -1
+    if (totals.has(key)) {
+        found = totals.get(key)
+    }
+    mu.unlock()          // unlock before returning, not after
+    return found
+}</code></pre>
+<p>Note the shape of <code>lookup</code>: read what you need into a local, unlock, <em>then</em> return. Returning from inside the critical section would skip the <code>unlock</code> and deadlock every other thread.</p>
+<p>Hold a lock for as little as possible, and avoid doing I/O — a database call, a socket write — while holding one, since every other thread waits on you. Take the value you need under the lock, release it, then do the slow work.</p>
+
 <h4>Protecting shared state</h4>
-<p>The typical pattern is to embed a mutex inside a struct and pass the struct by reference to spawned threads. Without a mutex, concurrent writes cause data races:</p>
+<p>A mutex can also live in a struct, which keeps the lock next to the data it protects — useful when you pass state to threads by reference rather than reaching for a module-level variable. Without a mutex, concurrent writes cause data races:</p>
 <pre><code>struct Counter {
     mu: mutex
     value: int
@@ -2178,7 +2201,7 @@ fn onDisconnect(conn: ws.Conn): void {
 
 fn main(): void {
     // 1. Register handlers
-    ws.setProtocol("ocpp1.6")           // optional subprotocol
+    ws.setProtocol("chat.v1")           // optional subprotocol
     ws.handleConnect(onConnect)          // called when a client connects
     ws.handleMessage(onMessage)          // called on each message
     ws.handleDisconnect(onDisconnect)    // called when a client disconnects

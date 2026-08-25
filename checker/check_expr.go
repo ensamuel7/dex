@@ -24,6 +24,9 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 	case *ast.NullLit:
 		return ast.TypeNull, nil
 
+	case *ast.MutexLit:
+		return ast.TypeMutex, nil
+
 	case *ast.CharLit:
 		return ast.TypeChar, nil
 

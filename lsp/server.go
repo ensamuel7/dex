@@ -476,13 +476,7 @@ func (s *Server) diagnose(uri string, text string) {
 
 	// Parse
 	p := parser.New(tokens)
-	seedParserModuleTypes(p, tokens)
-	// Pre-register struct/enum names from user module files so the parser
-	// recognizes struct literal syntax (e.g. User { field: value }).
-	importPaths := resolve.ExtractImportPaths(tokens)
-	for _, name := range resolve.PreRegisterUserStructs(importPaths, sourceDir) {
-		p.AddStructName(name)
-	}
+	seedParserModuleTypes(p, tokens, sourceDir)
 	program, parseErrs := p.Parse()
 	if len(parseErrs) > 0 {
 		for _, e := range parseErrs {
@@ -730,16 +724,19 @@ func typeName(t ast.Type) string {
 }
 
 // seedParserModuleTypes extracts import paths from tokens and seeds the parser
-// with struct type names from imported modules.
-func seedParserModuleTypes(p *parser.Parser, tokens []token.Token) {
-	var importPaths []string
-	for i := 0; i < len(tokens)-1; i++ {
-		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
-			importPaths = append(importPaths, tokens[i+1].Value)
-		}
-	}
+// with struct type names from imported modules — both stdlib modules and user
+// .dx modules resolved relative to sourceDir. Without the user-module names the
+// parser rejects qualified type annotations (e.g. ocppMessage.OcppMessage) and
+// struct literal syntax for types defined in imported files.
+func seedParserModuleTypes(p *parser.Parser, tokens []token.Token, sourceDir string) {
+	importPaths := resolve.ExtractImportPaths(tokens)
 	for _, name := range stdlib.ModuleTypesForImports(importPaths) {
 		p.AddStructName(name)
+	}
+	if sourceDir != "" {
+		for _, name := range resolve.PreRegisterUserStructs(importPaths, sourceDir) {
+			p.AddStructName(name)
+		}
 	}
 	p.AddStructName("Exception") // built-in Exception type
 }
@@ -792,7 +789,7 @@ func diagnoseImportedFile(filePath string) []Diagnostic {
 	}
 
 	p := parser.New(tokens)
-	seedParserModuleTypes(p, tokens)
+	seedParserModuleTypes(p, tokens, filepath.Dir(filePath))
 	_, parseErrs := p.Parse()
 	for _, e := range parseErrs {
 		diags = append(diags, makeDiagnosticWithSource(e.Error(), text))

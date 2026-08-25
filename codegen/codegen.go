@@ -675,7 +675,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit global variable declarations as static C variables
 	for _, gl := range program.GlobalLets {
 		ctyp := g.cType(gl.Type)
-		if gl.IsConst && !ast.IsHeapType(gl.Type) && !ast.IsStructType(gl.Type) {
+		if _, isMutex := gl.Value.(*ast.MutexLit); isMutex {
+			// Must be initialised here: the macro is a brace initialiser, so it
+			// cannot be assigned later from main().
+			out.WriteString(fmt.Sprintf("static %s %s = PTHREAD_MUTEX_INITIALIZER;\n", ctyp, gl.Name))
+		} else if gl.IsConst && !ast.IsHeapType(gl.Type) && !ast.IsStructType(gl.Type) {
 			out.WriteString(fmt.Sprintf("static const %s %s;\n", ctyp, gl.Name))
 		} else {
 			out.WriteString(fmt.Sprintf("static %s %s;\n", ctyp, gl.Name))

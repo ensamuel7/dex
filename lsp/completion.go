@@ -101,7 +101,7 @@ func (s *Server) completionsAt(text string, pos Position, uri string) []Completi
 	tokens, err := lex.Tokenize()
 	if err == nil {
 		p := parser.New(tokens)
-		seedParserModuleTypes(p, tokens)
+		seedParserModuleTypes(p, tokens, filepath.Dir(uriToPath(uri)))
 		program, errs := p.Parse()
 		if len(errs) == 0 {
 			for _, fn := range program.Functions {
@@ -329,7 +329,7 @@ func (s *Server) userModuleCompletions(moduleName string, text string, uri strin
 	}
 
 	p := parser.New(tokens)
-	seedParserModuleTypes(p, tokens)
+	seedParserModuleTypes(p, tokens, filepath.Dir(modFile))
 	program, errs := p.Parse()
 	if len(errs) > 0 {
 		return nil

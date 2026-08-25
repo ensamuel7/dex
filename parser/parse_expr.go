@@ -172,6 +172,12 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		p.advance()
 		return &ast.NullLit{Pos: pos}, nil
 
+	case token.TokenMutex:
+		// `mutex` in value position yields a fresh unlocked mutex,
+		// as in `let mu: mutex = mutex`.
+		p.advance()
+		return &ast.MutexLit{Pos: pos}, nil
+
 	case token.TokenLBrace:
 		// Empty map literal: {}
 		if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenRBrace {

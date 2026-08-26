@@ -139,6 +139,7 @@ let s: string? = null  // optional string
 | `bool?`    | Optional boolean         |
 | `string?`  | Optional string          |
 | `char?`    | Optional character       |
+| `Struct?`  | Optional struct          |
 
 **Null checks and type narrowing:**
 
@@ -382,6 +383,27 @@ private struct InternalConfig {
   debug: bool
 }
 ```
+
+**Field types** — a struct field may be any primitive, another struct, an enum, a
+map, an optional, a reference, or an **array** (including an array of structs):
+
+```dex
+struct Connector {
+  id: int
+  kind: string
+}
+
+struct Charger {
+  tag: string
+  connectors: int[]        // primitive array
+  names: string[]
+  ports: Connector[]       // struct array
+}
+```
+
+Array fields are reference-counted like any other array, so they stay valid after
+the value that supplied them goes out of scope. They also round-trip through
+`json.encode` / `json.decode`.
 
 ### Zero values
 
@@ -1601,8 +1623,8 @@ obj = json.set(obj, "pi", 3.14)
 | `set`        | `set(obj: string, key: string, value: string\|int\|bool\|long\|double): string` | Set a value (type auto-detected) |
 | `setArray`   | `setArray(obj: string, key: string, arr: T[]): string`                          | Set an array value             |
 | `setObj`     | `setObj(obj: string, key: string, value: string): string`                       | Set a key to a raw JSON object/array value (not quoted) |
-| `stringify`  | `stringify(value: T[]\|struct\|map[string, V]): string`                         | Convert an array, struct, or map to JSON string |
-| `objectify`  | `objectify(json: string): T`                                                    | Convert a JSON string into a typed struct |
+| `encode`     | `encode(value: T[]\|struct\|map[string, V]): string`                           | Convert an array, struct, or map to JSON string |
+| `decode`     | `decode(json: string): T` (T = struct, struct array, or either optional)        | Convert a JSON string into a typed struct |
 | `get`        | `get(json: string, key: string): string`                                        | Get a value by key — strings unquoted, objects/arrays as raw JSON |
 | `getInt`     | `getInt(json: string, key: string): int`                                        | Get an integer value by key    |
 | `getBool`    | `getBool(json: string, key: string): bool`                                      | Get a boolean value by key     |
@@ -1615,7 +1637,7 @@ obj = json.set(obj, "pi", 3.14)
 | `arrayPush`    | `arrayPush(arr: string, value: string\|int\|bool\|long\|double): string`      | Append a primitive value to a JSON array |
 | `arrayPushObj` | `arrayPushObj(arr: string, obj: string): string`                              | Append a JSON object/array to a JSON array |
 
-`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `stringify` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). `stringify` also accepts struct types, serializing all fields to a JSON object. `objectify` converts a JSON string back into a typed struct — the target type must be specified via type annotation (e.g., `let p: Person = json.objectify(str)`). `setObj` inserts raw JSON without quoting, which is essential for nesting objects. The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
+`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `encode` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). `encode` also accepts struct types, serializing all fields to a JSON object. `decode` converts a JSON string back into a typed struct — the target type must be specified via type annotation (e.g., `let p: Person = json.decode(str)`). Both `encode` and `decode` recurse into nested struct fields to any depth, and handle array fields (primitive or struct element types). `setObj` inserts raw JSON without quoting, which is essential for nesting objects. The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
 
 **Reading nested objects** — the `get*` functions match **top-level keys only**. A string value comes back unquoted; an object or array value comes back as raw JSON, which you feed straight back into `get` to descend one level at a time:
 
@@ -1660,11 +1682,11 @@ let obj: string = json.new()
 obj = json.setArray(obj, "numbers", nums)
 // obj is now: {"numbers": [1, 2, 3]}
 
-let s: string = json.stringify(nums)
+let s: string = json.encode(nums)
 // s is now: [1, 2, 3]
 ```
 
-**Struct serialization** — `json.stringify` converts a struct to a JSON object string, and `json.objectify` parses a JSON string back into a typed struct:
+**Struct serialization** — `json.encode` converts a struct to a JSON object string, and `json.decode` parses a JSON string back into a typed struct:
 
 ```dex
 struct Person {
@@ -1674,12 +1696,83 @@ struct Person {
 }
 
 let p: Person = Person { name: "Alice", age: 30, active: true }
-let jsonStr: string = json.stringify(p)
+let jsonStr: string = json.encode(p)
 // jsonStr is now: {"name": "Alice", "age": 30, "active": true}
 
-let p2: Person = json.objectify(jsonStr)
+let p2: Person = json.decode(jsonStr)
 // p2.name == "Alice", p2.age == 30, p2.active == true
 ```
+
+Both directions recurse through nested struct fields, to any depth:
+
+```dex
+struct Geo { lat: double
+    lng: double
+}
+struct Address { city: string
+    geo: Geo
+}
+struct Employee { name: string
+    addr: Address
+}
+
+let e: Employee = Employee { name: "Zoe", addr: Address { city: "Lagos", geo: Geo { lat: 6.5, lng: 3.4 } } }
+let s: string = json.encode(e)
+// {"name": "Zoe", "addr": {"city": "Lagos", "geo": {"lat": 6.5, "lng": 3.4}}}
+
+let back: Employee = json.decode(s)
+// back.addr.geo.lat == 6.5
+```
+
+Nested structs inside struct arrays are serialized the same way by `json.encode`
+and `json.setArray`. If a nested object is missing from the JSON, the corresponding
+sub-struct is left zeroed rather than failing.
+
+**Checked decoding** — annotating the target as optional (`T?`) makes `json.decode`
+report failure instead of silently producing zero values. This is what you want at
+a trust boundary such as an HTTP request body:
+
+```dex
+let c: Charger? = json.decode(req.body)
+if (c != null) {
+    return http.response(201, json.encode(c), "application/json")
+}
+return http.response(400, "{\"error\":\"invalid JSON body\"}", "application/json")
+```
+
+`T?` returns `null` when the input is not well-formed JSON, is not a JSON object,
+or has a key whose type does not fit the corresponding field. A key that is absent,
+or explicitly `null`, is not an error — that field keeps its zero value, matching
+Go's `encoding/json`. A plain `T` target keeps the lenient behaviour, decoding
+whatever it can and zeroing the rest.
+
+**Decoding arrays** — a JSON array of objects decodes into a struct array, with the
+same lenient/checked distinction:
+
+```dex
+let items: Item[] = json.decode(raw)      // lenient — non-arrays give an empty array
+let checked: Item[]? = json.decode(raw)   // null unless raw is an array of valid Items
+```
+
+Elements are decoded with full nesting support, so an element may itself contain
+nested structs. For the checked form, a single bad element rejects the whole array.
+
+**Array fields** — struct fields that are arrays are encoded and decoded as JSON
+arrays, for both primitive element types and struct element types:
+
+```dex
+struct Charger { tag: string
+    connectors: int[]
+    ports: Connector[]
+}
+
+json.encode(c)
+// {"tag": "CP", "connectors": [7, 8], "ports": [{"id": 1, "kind": "AC"}]}
+```
+
+A key that is absent from the JSON yields an empty array rather than a null one.
+Note this differs from a struct literal, where an omitted array field is `null`
+per the zero-value table above.
 
 **Nested JSON objects** — use `json.setObj` to embed one JSON object inside another without quoting:
 

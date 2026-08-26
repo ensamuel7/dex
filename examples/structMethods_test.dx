@@ -13,6 +13,26 @@ struct Config {
   value: int
 }
 
+struct Inner {
+  depth: int
+  label: string
+}
+
+struct Middle {
+  inner: Inner
+}
+
+struct Outer {
+  middle: Middle
+  name: string
+}
+
+struct Bag {
+  nums: int[]
+  words: string[]
+  items: Config[]
+}
+
 fn main(): void {
   let p = Point(3, 4)
   assert(p.sum() == 7)
@@ -29,4 +49,33 @@ fn main(): void {
 
   let p3 = Point(1, -1)
   assert(p3.sum() == 0)
+
+  // Chained field access must read through every level, not stop at the first
+  let o: Outer = Outer {
+    middle: Middle { inner: Inner { depth: 42, label: "deep" } },
+    name: "outer"
+  }
+  assert(o.name == "outer")
+  assert(o.middle.inner.depth == 42)
+  assert(o.middle.inner.label == "deep")
+
+  let mid: Middle = o.middle
+  assert(mid.inner.depth == 42)
+
+  // Array struct fields: methods and indexing through a field chain
+  let nums: int[] = [10, 20, 30]
+  let words: string[] = ["a", "b"]
+  let cfgs: Config[] = [Config{name: "x", value: 1}]
+  let b: Bag = Bag { nums: nums, words: words, items: cfgs }
+  assert(b.nums.len() == 3)
+  assert(b.words.len() == 2)
+  assert(b.items.len() == 1)
+  assert(b.nums[2] == 30)
+  assert(b.words[0] == "a")
+  let firstCfg: Config = b.items[0]
+  assert(firstCfg.name == "x")
+
+  // Array methods must type correctly inside string concatenation
+  let msg: string = "count=" + b.nums.len()
+  assert(msg == "count=3")
 }

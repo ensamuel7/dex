@@ -23,10 +23,12 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 		switch funcName {
 		case "set":
 			return "string, string, int|long|double|string|bool", "string", true
-		case "stringify":
+		case "encode":
 			return "value: T[]|struct|map[string, V]", "string", true
-		case "objectify":
-			return "json: string", "T (struct)", true
+		case "decode":
+			return "json: string", "T | T? | T[] | T[]?  (struct target; T? and T[]? are checked)", true
+		case "setArray":
+			return "json: string, key: string, arr: T[]", "string", true
 		case "arrayPush":
 			return "arr: string, value: int|long|double|string|bool", "string", true
 		}

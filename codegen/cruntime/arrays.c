@@ -702,15 +702,97 @@ DexArrayStruct* dex_array_struct_slice(DexArrayStruct* a, int start, int end) {
 
 // === Struct array JSON serialization ===
 // Field descriptor for generic struct-to-JSON serialization
-// kind: 0=int, 1=bool, 2=string, 3=long, 4=double
+// kind: 0=int, 1=bool, 2=string, 3=long, 4=double, 5=nested struct
 #ifndef DEX_STRUCT_FIELD_DESC_DEFINED
 #define DEX_STRUCT_FIELD_DESC_DEFINED
-typedef struct {
+typedef struct DexStructFieldDesc {
     const char* name;
     size_t offset;
     int kind;
+    int num_sub;                     // kind 5: field count of the nested struct
+    struct DexStructFieldDesc* sub;  // kind 5: descriptors for the nested struct
+    const char* (*enc_arr)(void* field);   // kind 6
+    void (*dec_arr)(const char* json, void* field);
 } DexStructFieldDesc;
 #endif
+
+// Encodes one struct instance as a JSON object from field descriptors, recursing
+// into nested struct fields (kind 5). Mirrors dex_json_encode_struct in the json
+// module runtime, which is emitted after this file and so cannot be called here.
+static char* dex_arr_encode_struct(void* elem, int num_fields, DexStructFieldDesc* fields) {
+    size_t cap = 256;
+    char* buf = (char*)malloc(cap);
+    if (!buf) return NULL;
+    int pos = 0;
+    buf[pos++] = '{';
+    int wrote = 0;
+    for (int f = 0; f < num_fields; f++) {
+        if (fields[f].kind == 7) continue; // no codec — omit rather than emit garbage
+        if (wrote) { buf[pos++] = ','; buf[pos++] = ' '; }
+        wrote = 1;
+        if ((size_t)pos + 256 > cap) {
+            cap *= 2;
+            char* t = (char*)realloc(buf, cap);
+            if (!t) { buf[pos] = '\0'; return buf; }
+            buf = t;
+        }
+        int n = 0;
+        switch (fields[f].kind) {
+        case 0: // int
+            n = snprintf(buf + pos, cap - pos, "\"%s\": %d", fields[f].name, *(int*)((char*)elem + fields[f].offset));
+            break;
+        case 1: // bool
+            n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false");
+            break;
+        case 2: // string
+            { DexString* s = *(DexString**)((char*)elem + fields[f].offset);
+              n = snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"", fields[f].name, s ? s->data : ""); }
+            break;
+        case 3: // long
+            n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)elem + fields[f].offset));
+            break;
+        case 4: // double
+            n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)elem + fields[f].offset));
+            break;
+        case 6: // array — codegen-supplied codec
+            { const char* asub = fields[f].enc_arr ? fields[f].enc_arr((char*)elem + fields[f].offset) : NULL;
+              const char* asubs = asub ? asub : "[]";
+              size_t need = strlen(fields[f].name) + strlen(asubs) + 8;
+              while ((size_t)pos + need > cap) {
+                  cap *= 2;
+                  char* t = (char*)realloc(buf, cap);
+                  if (!t) { buf[pos] = '\0'; free((void*)asub); return buf; }
+                  buf = t;
+              }
+              n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, asubs);
+              free((void*)asub); }
+            break;
+        case 5: // nested struct
+            { char* sub = dex_arr_encode_struct((char*)elem + fields[f].offset, fields[f].num_sub, fields[f].sub);
+              const char* subs = sub ? sub : "{}";
+              size_t need = strlen(fields[f].name) + strlen(subs) + 8;
+              while ((size_t)pos + need > cap) {
+                  cap *= 2;
+                  char* t = (char*)realloc(buf, cap);
+                  if (!t) { buf[pos] = '\0'; free(sub); return buf; }
+                  buf = t;
+              }
+              n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, subs);
+              free(sub); }
+            break;
+        }
+        pos += n;
+        if ((size_t)pos + 256 > cap) {
+            cap *= 2;
+            char* t = (char*)realloc(buf, cap);
+            if (!t) { buf[pos] = '\0'; return buf; }
+            buf = t;
+        }
+    }
+    buf[pos++] = '}';
+    buf[pos] = '\0';
+    return buf;
+}
 
 const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields) {
     // Build JSON array of objects
@@ -720,41 +802,19 @@ const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArraySt
     buf[pos++] = '[';
     for (int i = 0; i < arr->len; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
-        buf[pos++] = '{';
         void* elem = (char*)arr->data + (size_t)i * elem_size;
-        for (int f = 0; f < num_fields; f++) {
-            if (f > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
-            // Ensure capacity
-            if ((size_t)pos + 256 > cap) {
-                cap *= 2;
-                buf = (char*)realloc(buf, cap);
-            }
-            int n = 0;
-            switch (fields[f].kind) {
-            case 0: // int
-                n = snprintf(buf + pos, cap - pos, "\"%s\": %d", fields[f].name, *(int*)((char*)elem + fields[f].offset));
-                break;
-            case 1: // bool
-                n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false");
-                break;
-            case 2: // string
-                { DexString* s = *(DexString**)((char*)elem + fields[f].offset);
-                  n = snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"", fields[f].name, s ? s->data : ""); }
-                break;
-            case 3: // long
-                n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)elem + fields[f].offset));
-                break;
-            case 4: // double
-                n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)elem + fields[f].offset));
-                break;
-            }
-            pos += n;
-            if ((size_t)pos + 256 > cap) {
-                cap *= 2;
-                buf = (char*)realloc(buf, cap);
-            }
+        char* obj_str = dex_arr_encode_struct(elem, num_fields, fields);
+        const char* objs = obj_str ? obj_str : "{}";
+        size_t objlen = strlen(objs);
+        while ((size_t)pos + objlen + 8 > cap) {
+            cap *= 2;
+            char* t = (char*)realloc(buf, cap);
+            if (!t) { free(obj_str); buf[pos] = '\0'; return buf; }
+            buf = t;
         }
-        buf[pos++] = '}';
+        memcpy(buf + pos, objs, objlen);
+        pos += (int)objlen;
+        free(obj_str);
     }
     buf[pos++] = ']';
     buf[pos] = '\0';
@@ -783,41 +843,19 @@ const char* dex_json_stringify_struct_arr(DexArrayStruct* arr, size_t elem_size,
     buf[pos++] = '[';
     for (int i = 0; i < arr->len; i++) {
         if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
-        buf[pos++] = '{';
         void* elem = (char*)arr->data + (size_t)i * elem_size;
-        for (int f = 0; f < num_fields; f++) {
-            if (f > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
-            // Ensure capacity
-            if ((size_t)pos + 256 > cap) {
-                cap *= 2;
-                buf = (char*)realloc(buf, cap);
-            }
-            int n = 0;
-            switch (fields[f].kind) {
-            case 0: // int
-                n = snprintf(buf + pos, cap - pos, "\"%s\": %d", fields[f].name, *(int*)((char*)elem + fields[f].offset));
-                break;
-            case 1: // bool
-                n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false");
-                break;
-            case 2: // string
-                { DexString* s = *(DexString**)((char*)elem + fields[f].offset);
-                  n = snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"", fields[f].name, s ? s->data : ""); }
-                break;
-            case 3: // long
-                n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)elem + fields[f].offset));
-                break;
-            case 4: // double
-                n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)elem + fields[f].offset));
-                break;
-            }
-            pos += n;
-            if ((size_t)pos + 256 > cap) {
-                cap *= 2;
-                buf = (char*)realloc(buf, cap);
-            }
+        char* obj_str = dex_arr_encode_struct(elem, num_fields, fields);
+        const char* objs = obj_str ? obj_str : "{}";
+        size_t objlen = strlen(objs);
+        while ((size_t)pos + objlen + 8 > cap) {
+            cap *= 2;
+            char* t = (char*)realloc(buf, cap);
+            if (!t) { free(obj_str); buf[pos] = '\0'; return buf; }
+            buf = t;
         }
-        buf[pos++] = '}';
+        memcpy(buf + pos, objs, objlen);
+        pos += (int)objlen;
+        free(obj_str);
     }
     buf[pos++] = ']';
     buf[pos] = '\0';

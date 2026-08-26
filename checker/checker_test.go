@@ -545,14 +545,14 @@ func TestJsonSet(t *testing.T) {
 func TestJsonStringify(t *testing.T) {
 	mustCheck(t, `import "json" fn main(): string {
 		let a: int[] = [1, 2, 3]
-		return json.stringify(a)
+		return json.encode(a)
 	}`)
 }
 
 func TestJsonStringifyNonArray(t *testing.T) {
 	mustFail(t, `import "json" fn main(): string {
-		return json.stringify(42)
-	}`, "json.stringify() argument must be an array, struct, or map type")
+		return json.encode(42)
+	}`, "json.encode() argument must be an array, struct, or map type")
 }
 
 func TestJsonSetArr(t *testing.T) {

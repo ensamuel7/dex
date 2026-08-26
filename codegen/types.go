@@ -352,6 +352,10 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 	case *ast.StringLit:
 		return ast.TypeString
 	case *ast.Ident:
+		// A narrowed optional reads as its inner type inside the guarded block
+		if t, ok := g.narrowedTypes[e.Name]; ok {
+			return t
+		}
 		if t, ok := g.varTypes[e.Name]; ok {
 			return t
 		}
@@ -415,6 +419,28 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			}
 		}
 		// String method calls
+		// Array method calls, on a variable or a struct field chain
+		if e.Module != "" {
+			arrType, isArr := g.arrVars[e.Module]
+			if !isArr && strings.Contains(e.Module, ".") {
+				chainType := g.resolveFieldChainType(e.Module)
+				if ast.IsArrayType(chainType) {
+					arrType, isArr = chainType, true
+				}
+			}
+			if isArr {
+				switch e.Name {
+				case "len", "indexOf":
+					return ast.TypeInt
+				case "contains":
+					return ast.TypeBool
+				case "pop":
+					return ast.ElementType(arrType)
+				case "push", "remove", "reverse", "sort":
+					return ast.TypeVoid
+				}
+			}
+		}
 		if e.Module != "" && g.strVars[e.Module] {
 			switch e.Name {
 			case "len", "indexOf":
@@ -507,6 +533,10 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		if ast.IsRefType(objType) {
 			objType = ast.RefInnerType(objType)
 		}
+		// Unwrap optional struct — narrowed access reads the inner struct's fields
+		if ast.IsOptionalType(objType) && ast.IsStructType(ast.OptionalInnerType(objType)) {
+			objType = ast.OptionalInnerType(objType)
+		}
 		if ast.IsStructType(objType) {
 			def := ast.GetStructDef(objType)
 			if def != nil {
@@ -587,8 +617,55 @@ func (g *Generator) jsonFieldKind(t ast.Type) string {
 	case ast.TypeDouble:
 		return "4"
 	default:
+		if ast.IsStructType(t) {
+			return "5" // nested struct — carries its own descriptor array
+		}
 		return "0"
 	}
+}
+
+// maxJSONStructDepth bounds nested struct descriptor emission. A struct cannot
+// contain itself by value in C, so this only guards against pathological input.
+const maxJSONStructDepth = 32
+
+// genStructFieldDescs emits a C compound literal of DexStructFieldDesc describing
+// every field of structType. Nested struct fields are emitted as kind 5 carrying
+// their own descriptor array, so dex_json_encode_struct/dex_json_decode_struct
+// can recurse into them instead of treating them as ints.
+func (g *Generator) genStructFieldDescs(out *strings.Builder, structType ast.Type, depth int) {
+	def := ast.GetStructDef(structType)
+	cType := g.cType(structType)
+	out.WriteString("(DexStructFieldDesc[]){ ")
+	for i, f := range def.Fields {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fieldOffset := fmt.Sprintf("offsetof(%s, %s)", cType, f.Name)
+		if ast.IsStructType(f.Type) && depth < maxJSONStructDepth {
+			sub := ast.GetStructDef(f.Type)
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 5, %d, ", f.Name, fieldOffset, len(sub.Fields)))
+			g.genStructFieldDescs(out, f.Type, depth+1)
+			out.WriteString(", NULL, NULL}")
+			continue
+		}
+		if encFn, decFn, ok := jsonArrayCodecNames(f.Type); ok {
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s}", f.Name, fieldOffset, encFn, decFn))
+			continue
+		}
+		if ast.IsStructArrayType(f.Type) && depth < maxJSONStructDepth {
+			encFn, decFn := jsonStructArrayCodecNames(f.Type)
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s}", f.Name, fieldOffset, encFn, decFn))
+			continue
+		}
+		if ast.IsArrayType(f.Type) {
+			// No codec available — kind 7 is skipped by encode and decode rather
+			// than being misread as an int.
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 7, 0, NULL, NULL, NULL}", f.Name, fieldOffset))
+			continue
+		}
+		out.WriteString(fmt.Sprintf("{\"%s\", %s, %s, 0, NULL, NULL, NULL}", f.Name, fieldOffset, g.jsonFieldKind(f.Type)))
+	}
+	out.WriteString(" }")
 }
 
 func (g *Generator) cBinOp(op ast.BinOp) string {
@@ -625,5 +702,129 @@ func (g *Generator) cBinOp(op ast.BinOp) string {
 		return "||"
 	default:
 		return "?"
+	}
+}
+
+// arrayCodecSpec describes the JSON codec pair emitted for one primitive array
+// element type.
+type arrayCodecSpec struct {
+	suffix    string // dex_array_<suffix>_new / _push
+	stringify string // dex_json_stringify_<stringify>
+	elemCType string
+	parse     string // expression converting the element string `_el` to elemCType
+}
+
+var arrayCodecSpecs = map[ast.Type]arrayCodecSpec{
+	ast.TypeArrayInt:    {"int", "int", "int", "atoi(_el)"},
+	ast.TypeArrayLong:   {"long", "long", "long", "atol(_el)"},
+	ast.TypeArrayDouble: {"double", "double", "double", "atof(_el)"},
+	ast.TypeArrayBool:   {"bool", "bool", "_Bool", "(strcmp(_el, \"true\") == 0)"},
+	ast.TypeArrayChar:   {"char", "char", "unsigned char", "(unsigned char)_el[0]"},
+	ast.TypeArrayString: {"string", "str", "DexString*", ""},
+}
+
+// jsonArrayCodecNames returns the encode/decode function names for an array
+// field type, and whether a codec exists for it. Struct arrays have none.
+func jsonArrayCodecNames(t ast.Type) (string, string, bool) {
+	spec, ok := arrayCodecSpecs[t]
+	if !ok {
+		return "", "", false
+	}
+	return "dex_jarr_enc_" + spec.suffix, "dex_jarr_dec_" + spec.suffix, true
+}
+
+// jsonStructArrayCodecNames returns the encode/decode function names for a
+// struct-array field type.
+func jsonStructArrayCodecNames(t ast.Type) (string, string) {
+	name := ast.StructName(ast.ElementType(t))
+	return "dex_jarr_enc_s_" + name, "dex_jarr_dec_s_" + name
+}
+
+// emitArrayFieldCodecs emits one encode/decode pair per array element type that
+// appears as a struct field anywhere in the program, for both primitive element
+// types and struct element types.
+func (g *Generator) emitArrayFieldCodecs(out *strings.Builder, program *ast.Program) {
+	// These bridge the array runtime and the json module runtime, so they are
+	// only valid when the json module is actually imported.
+	if _, ok := g.importedModules["json"]; !ok {
+		return
+	}
+	needed := map[ast.Type]bool{}
+	var structArrs []ast.Type
+	seenStructArr := map[ast.Type]bool{}
+	for _, sd := range program.Structs {
+		for _, f := range sd.Fields {
+			if _, ok := arrayCodecSpecs[f.Type]; ok {
+				needed[f.Type] = true
+			}
+			if ast.IsStructArrayType(f.Type) && !seenStructArr[f.Type] {
+				seenStructArr[f.Type] = true
+				structArrs = append(structArrs, f.Type)
+			}
+		}
+	}
+	for _, t := range structArrs {
+		elemType := ast.ElementType(t)
+		elemCType := g.cType(elemType)
+		def := ast.GetStructDef(elemType)
+		encName, decName := jsonStructArrayCodecNames(t)
+		cleanupFn := g.structArrayCleanupFunc(elemType)
+
+		out.WriteString(fmt.Sprintf("static const char* %s(void* _field) {\n", encName))
+		out.WriteString("    DexArrayStruct* _a = *(DexArrayStruct**)_field;\n")
+		out.WriteString("    if (!_a) return NULL;\n")
+		out.WriteString(fmt.Sprintf("    return dex_json_stringify_struct_arr(_a, sizeof(%s), %d, ", elemCType, len(def.Fields)))
+		g.genStructFieldDescs(out, elemType, 0)
+		out.WriteString(");\n}\n")
+
+		out.WriteString(fmt.Sprintf("static void %s(const char* _json, void* _field) {\n", decName))
+		out.WriteString(fmt.Sprintf("    DexArrayStruct* _a = dex_array_struct_new(sizeof(%s), %s);\n", elemCType, cleanupFn))
+		out.WriteString("    int _n = dex_json_array_len(_json);\n")
+		out.WriteString("    for (int _i = 0; _i < _n; _i++) {\n")
+		out.WriteString("        const char* _el = dex_json_array_get_raw(_json, _i);\n")
+		out.WriteString(fmt.Sprintf("        %s _t; memset(&_t, 0, sizeof(%s));\n", elemCType, elemCType))
+		out.WriteString(fmt.Sprintf("        dex_json_decode_struct(_el, &_t, %d, ", len(def.Fields)))
+		g.genStructFieldDescs(out, elemType, 0)
+		out.WriteString(");\n")
+		out.WriteString("        dex_array_struct_push(_a, &_t);\n")
+		out.WriteString("        free((void*)_el);\n")
+		out.WriteString("    }\n")
+		out.WriteString("    *(DexArrayStruct**)_field = _a;\n}\n")
+	}
+	if len(needed) == 0 {
+		return
+	}
+	// Deterministic order so output is reproducible.
+	order := []ast.Type{ast.TypeArrayInt, ast.TypeArrayLong, ast.TypeArrayDouble,
+		ast.TypeArrayBool, ast.TypeArrayChar, ast.TypeArrayString}
+	for _, t := range order {
+		if !needed[t] {
+			continue
+		}
+		spec := arrayCodecSpecs[t]
+		encName, decName, _ := jsonArrayCodecNames(t)
+		arrCType := g.cType(t)
+
+		out.WriteString(fmt.Sprintf("static const char* %s(void* _field) {\n", encName))
+		out.WriteString(fmt.Sprintf("    %s _a = *(%s*)_field;\n", arrCType, arrCType))
+		out.WriteString("    if (!_a) return NULL;\n")
+		out.WriteString(fmt.Sprintf("    return dex_json_stringify_%s(_a);\n", spec.stringify))
+		out.WriteString("}\n")
+
+		out.WriteString(fmt.Sprintf("static void %s(const char* _json, void* _field) {\n", decName))
+		out.WriteString(fmt.Sprintf("    %s _a = dex_array_%s_new();\n", arrCType, spec.suffix))
+		out.WriteString("    int _n = dex_json_array_len(_json);\n")
+		out.WriteString("    for (int _i = 0; _i < _n; _i++) {\n")
+		out.WriteString("        const char* _el = dex_json_array_get(_json, _i);\n")
+		if t == ast.TypeArrayString {
+			// dex_string_from_cstr takes ownership of _el, so it must not be freed here.
+			out.WriteString(fmt.Sprintf("        dex_array_%s_push(_a, dex_string_from_cstr(_el));\n", spec.suffix))
+		} else {
+			out.WriteString(fmt.Sprintf("        dex_array_%s_push(_a, %s);\n", spec.suffix, spec.parse))
+			out.WriteString("        free((void*)_el);\n")
+		}
+		out.WriteString("    }\n")
+		out.WriteString(fmt.Sprintf("    *(%s*)_field = _a;\n", arrCType))
+		out.WriteString("}\n")
 	}
 }

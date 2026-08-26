@@ -121,6 +121,43 @@ func (p *Parser) parseUnary() (ast.Expr, error) {
 	return p.parsePrimary()
 }
 
+
+// parsePostfix consumes trailing index and field-access operators after a base
+// expression, so chains like a.b[i], arr[i].field, and m[i][j].x parse fully
+// instead of stopping at the first operator. A ".name(" sequence is left
+// unconsumed: method calls on an arbitrary expression are not representable.
+func (p *Parser) parsePostfix(base ast.Expr, pos ast.Pos) (ast.Expr, error) {
+	for {
+		if p.check(token.TokenLBracket) {
+			p.advance() // consume '['
+			idx, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			if err := p.expect(token.TokenRBracket); err != nil {
+				return nil, err
+			}
+			base = &ast.IndexExpr{Pos: pos, Array: base, Index: idx}
+			continue
+		}
+		if p.check(token.TokenDot) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenIdent {
+			// Stop before a method call — that needs a receiver expression the
+			// CallExpr node cannot carry.
+			if p.pos+2 < len(p.tokens) && p.tokens[p.pos+2].Kind == token.TokenLParen {
+				return base, nil
+			}
+			p.advance() // consume '.'
+			field, err := p.expectIdent()
+			if err != nil {
+				return nil, err
+			}
+			base = &ast.FieldAccessExpr{Pos: pos, Object: base, Field: field}
+			continue
+		}
+		return base, nil
+	}
+}
+
 func (p *Parser) parsePrimary() (ast.Expr, error) {
 	tok := p.current()
 	pos := p.nodePos()
@@ -297,7 +334,11 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			}
 
 			// Build dotted chain: keep consuming dots to handle a.b.c.method()
-			// qualifiedName accumulates the dotted prefix (e.g. "req.params")
+			// qualifiedName accumulates the dotted prefix (e.g. "req.params").
+			// members accumulates the same chain as individual field names, so a
+			// chain that does not end in a call can be rebuilt as nested
+			// FieldAccessExpr nodes instead of being collapsed to its first segment.
+			members := []string{memberName}
 			qualifiedName := name + "." + memberName
 			for p.check(token.TokenDot) {
 				p.advance() // consume '.'
@@ -323,11 +364,12 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 					return callExpr, nil
 				}
 				// Not a call, continue building the chain
+				members = append(members, nextMember)
 				qualifiedName = qualifiedName + "." + nextMember
 			}
 
 			// Check for module-qualified struct literal: module.StructName { field: value, ... }
-			if p.structNames[memberName] && p.check(token.TokenLBrace) {
+			if len(members) == 1 && p.structNames[memberName] && p.check(token.TokenLBrace) {
 				p.advance() // consume '{'
 				var fieldNames []string
 				var fieldValues []ast.Expr
@@ -358,7 +400,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			}
 
 			// If followed by '(', it's a method/qualified call
-			if p.check(token.TokenLParen) {
+			if len(members) == 1 && p.check(token.TokenLParen) {
 				p.advance() // consume '('
 				args, err := p.parseArgs()
 				if err != nil {
@@ -374,8 +416,12 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				}
 				return callExpr, nil
 			}
-			// Otherwise it's a field access
-			return &ast.FieldAccessExpr{Pos: pos, Object: &ast.Ident{Pos: pos, Name: name}, Field: memberName}, nil
+			// Otherwise it's a field access chain: a.b.c parses as ((a.b).c)
+			var chain ast.Expr = &ast.Ident{Pos: pos, Name: name}
+			for _, m := range members {
+				chain = &ast.FieldAccessExpr{Pos: pos, Object: chain, Field: m}
+			}
+			return p.parsePostfix(chain, pos)
 		}
 
 		// Check for index or slice expression: ident[expr] or ident[start:end]
@@ -419,7 +465,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRBracket); err != nil {
 				return nil, err
 			}
-			return &ast.IndexExpr{Pos: pos, Array: &ast.Ident{Pos: pos, Name: name}, Index: first}, nil
+			return p.parsePostfix(&ast.IndexExpr{Pos: pos, Array: &ast.Ident{Pos: pos, Name: name}, Index: first}, pos)
 		}
 
 		// Check for function call

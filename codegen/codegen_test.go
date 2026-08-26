@@ -398,7 +398,7 @@ func TestCodegenJsonSet(t *testing.T) {
 func TestCodegenJsonStringify(t *testing.T) {
 	out := generate(t, `import "json" fn main(): string {
 		let a: int[] = [1, 2]
-		return json.stringify(a)
+		return json.encode(a)
 	}`)
 	assertContains(t, out, "dex_string_from_cstr(dex_json_stringify_int(a))")
 }

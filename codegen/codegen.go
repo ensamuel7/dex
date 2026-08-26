@@ -68,6 +68,7 @@ type Generator struct {
 
 	// Type narrowing for optional types in null checks
 	narrowedVars   map[string]string   // varName -> narrowed C var name in current scope
+	narrowedTypes  map[string]ast.Type // varName -> narrowed (non-optional) type in current scope
 	narrowStack    []map[string]string // stack of narrowedVars snapshots for scope management
 
 	// Statement-level temp tracking for string concat intermediates
@@ -97,6 +98,7 @@ func New() *Generator {
 		funcTypedefs:    make(map[ast.Type]string),
 		varAnnotations:  make(map[string][]string),
 		narrowedVars:    make(map[string]string),
+		narrowedTypes:   make(map[string]ast.Type),
 		globalVars:      make(map[string]ast.Type),
 	}
 }
@@ -716,6 +718,12 @@ func (g *Generator) Generate(program *ast.Program) string {
 			out.WriteString(mod.CRuntime)
 		}
 	}
+
+	// Emit JSON codecs for primitive array struct fields. These must come after
+	// both the array runtime and the json module runtime, since they bridge the
+	// two; emitting them here keeps json.c free of any link-time dependency on
+	// the conditionally-emitted array runtime.
+	g.emitArrayFieldCodecs(&out, program)
 
 	// Emit function pointer typedefs
 	for t, name := range g.funcTypedefs {

@@ -7,14 +7,48 @@ struct Person {
     active: bool
 }
 
+struct Geo {
+    lat: double
+    lng: double
+}
+
+struct Address {
+    city: string
+    zip: int
+    geo: Geo
+}
+
+struct Employee {
+    name: string
+    active: bool
+    addr: Address
+}
+
+struct Item {
+    label: string
+    geo: Geo
+}
+
+struct Connector {
+    id: int
+    kind: string
+}
+
+struct Charger {
+    tag: string
+    connectors: int[]
+    names: string[]
+    ports: Connector[]
+}
+
 fn main(): void {
-    //Test json.stringify with struct
+    //Test json.encode with struct
     let p: Person = Person { name: "Alice", age: 30, active: true }
-    let jsonStr: string = json.stringify(p)
+    let jsonStr: string = json.encode(p)
     fmt.println(jsonStr)
 
-    //Test json.objectify to parse JSON back to struct
-    let p2: Person = json.objectify(jsonStr)
+    //Test json.decode to parse JSON back to struct
+    let p2: Person = json.decode(jsonStr)
     assert(p2.name == "Alice")
     assert(p2.age == 30)
     assert(p2.active == true)
@@ -26,17 +60,172 @@ fn main(): void {
     raw = json.set(raw, "name", "Bob")
     raw = json.set(raw, "age", 25)
     raw = json.set(raw, "active", false)
-    let p3: Person = json.objectify(raw)
+    let p3: Person = json.decode(raw)
     assert(p3.name == "Bob")
     assert(p3.age == 25)
     assert(p3.active == false)
 
     //Test round-trip
-    let jsonStr2: string = json.stringify(p3)
-    let p4: Person = json.objectify(jsonStr2)
+    let jsonStr2: string = json.encode(p3)
+    let p4: Person = json.decode(jsonStr2)
     assert(p4.name == "Bob")
     assert(p4.age == 25)
     assert(p4.active == false)
+
+    //Test nested structs — objectify and stringify multiple levels deep
+    let home: Address = Address { city: "Lagos", zip: 100001, geo: Geo { lat: 6.5, lng: 3.4 } }
+    let emp: Employee = Employee { name: "Zoe", active: true, addr: home }
+
+    let encoded: string = json.encode(emp)
+    let decoded: Employee = json.decode(encoded)
+    assert(decoded.name == "Zoe")
+    assert(decoded.active == true)
+    assert(decoded.addr.city == "Lagos")
+    assert(decoded.addr.zip == 100001)
+    assert(decoded.addr.geo.lat == 6.5)
+    assert(decoded.addr.geo.lng == 3.4)
+
+    //Nested decode from hand-written JSON
+    let handRaw: string = "{\"name\":\"Ada\",\"active\":false,\"addr\":{\"city\":\"Accra\",\"zip\":233,\"geo\":{\"lat\":5.6,\"lng\":0.2}}}"
+    let hand: Employee = json.decode(handRaw)
+    assert(hand.name == "Ada")
+    assert(hand.addr.city == "Accra")
+    assert(hand.addr.zip == 233)
+    assert(hand.addr.geo.lat == 5.6)
+
+    //A missing nested object leaves the sub-struct zeroed rather than crashing
+    let partial: Employee = json.decode("{\"name\":\"Bo\",\"active\":true}")
+    assert(partial.name == "Bo")
+    assert(partial.addr.zip == 0)
+    assert(partial.addr.city == "")
+
+    //Nested structs inside struct arrays
+    let items: Item[] = [
+        Item { label: "a", geo: Geo { lat: 1.5, lng: 2.5 } },
+        Item { label: "b", geo: Geo { lat: 3.5, lng: 4.5 } }
+    ]
+    let arrJson: string = json.encode(items)
+    assert(arrJson == "[{\"label\": \"a\", \"geo\": {\"lat\": 1.5, \"lng\": 2.5}}, {\"label\": \"b\", \"geo\": {\"lat\": 3.5, \"lng\": 4.5}}]")
+
+    let wrapped: string = json.new()
+    wrapped = json.setArray(wrapped, "items", items)
+    assert(json.get(wrapped, "items") == "[{\"label\": \"a\", \"geo\": {\"lat\": 1.5, \"lng\": 2.5}}, {\"label\": \"b\", \"geo\": {\"lat\": 3.5, \"lng\": 4.5}}]")
+
+    //Checked decode — an optional target rejects bad input instead of zeroing it
+    let okDec: Person? = json.decode("{\"name\":\"Ivy\",\"age\":31,\"active\":true}")
+    assert(okDec != null)
+    if (okDec != null) {
+        assert(okDec.name == "Ivy")
+        assert(okDec.age == 31)
+    }
+
+    //Missing keys are still accepted — they keep their zero value
+    let missing: Person? = json.decode("{\"name\":\"Jo\"}")
+    assert(missing != null)
+    if (missing != null) {
+        assert(missing.name == "Jo")
+        assert(missing.age == 0)
+    }
+
+    //An explicit JSON null leaves a string field empty, not the text "null"
+    let nulled: Person? = json.decode("{\"name\":null,\"age\":5}")
+    assert(nulled != null)
+    if (nulled != null) {
+        assert(nulled.name == "")
+        assert(nulled.age == 5)
+    }
+
+    //Malformed, truncated, empty, and type-mismatched input all decode to null
+    let bad1: Person? = json.decode("hello world")
+    assert(bad1 == null)
+    let bad2: Person? = json.decode("")
+    assert(bad2 == null)
+    let bad3: Person? = json.decode("{\"name\":\"Kai\"")
+    assert(bad3 == null)
+    let bad4: Person? = json.decode("{\"name\":42}")
+    assert(bad4 == null)
+    let bad5: Person? = json.decode("{\"age\":\"not-a-number\"}")
+    assert(bad5 == null)
+
+    //Checked decode recurses into nested structs too
+    let deepOk: Employee? = json.decode(handRaw)
+    assert(deepOk != null)
+    if (deepOk != null) {
+        assert(deepOk.addr.geo.lat == 5.6)
+    }
+    let deepBad: Employee? = json.decode("{\"name\":\"Ada\",\"addr\":{\"zip\":\"nope\"}}")
+    assert(deepBad == null)
+
+    //The non-optional target keeps its lenient behaviour
+    let lenient: Person = json.decode("garbage")
+    assert(lenient.name == "")
+    assert(lenient.age == 0)
+
+    //Decoding a JSON array into a struct array, elements nested included
+    let arrRaw: string = "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}}, {\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]"
+    let decodedItems: Item[] = json.decode(arrRaw)
+    let itemCount: int = decodedItems.len()
+    assert(itemCount == 2)
+    let it0: Item = decodedItems[0]
+    let it1: Item = decodedItems[1]
+    assert(it0.label == "a")
+    assert(it0.geo.lat == 1.5)
+    assert(it1.label == "b")
+    assert(it1.geo.lng == 4.5)
+
+    //Round-trips back through encode (which spaces after colons)
+    assert(json.encode(decodedItems) == "[{\"label\": \"a\", \"geo\": {\"lat\": 1.5, \"lng\": 2.5}}, {\"label\": \"b\", \"geo\": {\"lat\": 3.5, \"lng\": 4.5}}]")
+
+    let emptyItems: Item[] = json.decode("[]")
+    let emptyCount: int = emptyItems.len()
+    assert(emptyCount == 0)
+
+    //Checked struct array decode
+    let okArr: Item[]? = json.decode(arrRaw)
+    assert(okArr != null)
+    if (okArr != null) {
+        let okCount: int = okArr.len()
+        assert(okCount == 2)
+    }
+    let notArr: Item[]? = json.decode("{\"label\":\"a\"}")
+    assert(notArr == null)
+    let badArr: Item[]? = json.decode("garbage")
+    assert(badArr == null)
+    let badElem: Item[]? = json.decode("[{\"label\":\"a\"},{\"label\":99}]")
+    assert(badElem == null)
+    let truncArr: Item[]? = json.decode("[{\"label\":\"a\"}")
+    assert(truncArr == null)
+
+    //Array struct fields — primitive, string, and struct element types
+    let ids: int[] = [7, 8]
+    let ns: string[] = ["a", "b"]
+    let ports: Connector[] = [Connector{id: 1, kind: "AC"}, Connector{id: 2, kind: "DC"}]
+    let ch: Charger = Charger { tag: "CP", connectors: ids, names: ns, ports: ports }
+
+    let chJson: string = json.encode(ch)
+    assert(chJson == "{\"tag\": \"CP\", \"connectors\": [7, 8], \"names\": [\"a\", \"b\"], \"ports\": [{\"id\": 1, \"kind\": \"AC\"}, {\"id\": 2, \"kind\": \"DC\"}]}")
+
+    let chBack: Charger = json.decode(chJson)
+    assert(chBack.tag == "CP")
+    let cn: int = chBack.connectors.len()
+    let nn: int = chBack.names.len()
+    let pn: int = chBack.ports.len()
+    assert(cn == 2)
+    assert(nn == 2)
+    assert(pn == 2)
+    assert(chBack.connectors[1] == 8)
+    assert(chBack.names[1] == "b")
+    let port0: Connector = chBack.ports[0]
+    assert(port0.id == 1)
+    assert(port0.kind == "AC")
+
+    //Re-encoding is byte-identical
+    assert(json.encode(chBack) == chJson)
+
+    //An absent array key decodes to an empty array, not null
+    let chPartial: Charger = json.decode("{\"tag\":\"X\"}")
+    let pc: int = chPartial.connectors.len()
+    assert(pc == 0)
 
     fmt.println("json_struct_test: all assertions passed")
 }

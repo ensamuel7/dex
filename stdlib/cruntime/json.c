@@ -466,10 +466,16 @@ const char* dex_json_array_push_bool(const char* arr, _Bool val) {
 
 #ifndef DEX_STRUCT_FIELD_DESC_DEFINED
 #define DEX_STRUCT_FIELD_DESC_DEFINED
-typedef struct {
+typedef struct DexStructFieldDesc {
     const char* name;
     size_t offset;
-    int kind; // 0=int, 1=bool, 2=string, 3=long, 4=double
+    int kind; // 0=int,1=bool,2=string,3=long,4=double,5=nested struct,6=array,7=unsupported
+    int num_sub;                     // kind 5: field count of the nested struct
+    struct DexStructFieldDesc* sub;  // kind 5: descriptors for the nested struct
+    // kind 6: codecs emitted by codegen. Held as pointers so this runtime never
+    // has to link against the array runtime, which is emitted conditionally.
+    const char* (*enc_arr)(void* field);
+    void (*dec_arr)(const char* json, void* field);
 } DexStructFieldDesc;
 #endif
 
@@ -479,8 +485,11 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
     if (!buf) return strdup("");
     int pos = 0;
     buf[pos++] = '{';
+    int wrote = 0;
     for (int f = 0; f < num_fields; f++) {
-        if (f > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (fields[f].kind == 7) continue; // no codec — omit rather than emit garbage
+        if (wrote) { buf[pos++] = ','; buf[pos++] = ' '; }
+        wrote = 1;
         if ((size_t)pos + 256 > cap) {
             cap *= 2;
             char* tmp = (char*)realloc(buf, cap);
@@ -523,6 +532,50 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
         case 4: // double
             n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)data + fields[f].offset));
             break;
+        case 6: // array — encoded by a codegen-supplied codec
+            { const char* sub = fields[f].enc_arr ? fields[f].enc_arr((char*)data + fields[f].offset) : NULL;
+              const char* subs = sub ? sub : "[]";
+              size_t eklen = dex_json_escaped_len(fields[f].name);
+              size_t sublen = strlen(subs);
+              size_t field_need = eklen + sublen + 8;
+              while ((size_t)pos + field_need > cap) {
+                  cap *= 2;
+                  char* tmp = (char*)realloc(buf, cap);
+                  if (!tmp) { buf[pos] = '\0'; free((void*)sub); return buf; }
+                  buf = tmp;
+              }
+              buf[pos++] = '"';
+              pos += dex_json_escape(buf + pos, fields[f].name);
+              buf[pos++] = '"';
+              buf[pos++] = ':';
+              buf[pos++] = ' ';
+              memcpy(buf + pos, subs, sublen);
+              pos += (int)sublen;
+              free((void*)sub);
+              n = 0; }
+            break;
+        case 5: // nested struct — encode recursively and splice in
+            { const char* sub = dex_json_encode_struct((char*)data + fields[f].offset,
+                                                       fields[f].num_sub, fields[f].sub);
+              size_t eklen = dex_json_escaped_len(fields[f].name);
+              size_t sublen = strlen(sub);
+              size_t field_need = eklen + sublen + 8; // "key": {...}
+              while ((size_t)pos + field_need > cap) {
+                  cap *= 2;
+                  char* tmp = (char*)realloc(buf, cap);
+                  if (!tmp) { buf[pos] = '\0'; free((void*)sub); return buf; }
+                  buf = tmp;
+              }
+              buf[pos++] = '"';
+              pos += dex_json_escape(buf + pos, fields[f].name);
+              buf[pos++] = '"';
+              buf[pos++] = ':';
+              buf[pos++] = ' ';
+              memcpy(buf + pos, sub, sublen);
+              pos += (int)sublen;
+              free((void*)sub);
+              n = 0; }
+            break;
         }
         pos += n;
         if ((size_t)pos + 256 > cap) {
@@ -547,8 +600,14 @@ void dex_json_decode_struct(const char* json, void* out, int num_fields, DexStru
             *(_Bool*)((char*)out + fields[f].offset) = dex_json_get_bool(json, fields[f].name);
             break;
         case 2: // string
-            { const char* val = dex_json_get(json, fields[f].name);
-              *(DexString**)((char*)out + fields[f].offset) = dex_string_from_cstr(val); }
+            { const char* raw = dex_json_find_value(json, fields[f].name);
+              if (raw && strncmp(raw, "null", 4) == 0) {
+                  // JSON null decodes to the empty string, not the text "null"
+                  *(DexString**)((char*)out + fields[f].offset) = dex_string_from_cstr(strdup(""));
+              } else {
+                  const char* val = dex_json_get(json, fields[f].name);
+                  *(DexString**)((char*)out + fields[f].offset) = dex_string_from_cstr(val);
+              } }
             break;
         case 3: // long
             *(long*)((char*)out + fields[f].offset) = dex_json_get_long(json, fields[f].name);
@@ -556,8 +615,160 @@ void dex_json_decode_struct(const char* json, void* out, int num_fields, DexStru
         case 4: // double
             *(double*)((char*)out + fields[f].offset) = dex_json_get_double(json, fields[f].name);
             break;
+        case 6: // array — decoded by a codegen-supplied codec
+            { if (fields[f].dec_arr) {
+                  const char* raw = dex_json_get(json, fields[f].name);
+                  fields[f].dec_arr(raw, (char*)out + fields[f].offset);
+                  free((void*)raw);
+              } }
+            break;
+        case 5: // nested struct — decode the raw sub-object recursively
+            { const char* sub_json = dex_json_get(json, fields[f].name);
+              dex_json_decode_struct(sub_json, (char*)out + fields[f].offset,
+                                     fields[f].num_sub, fields[f].sub);
+              free((void*)sub_json); }
+            break;
         }
     }
+}
+
+// --- Strict validation, used by the checked (optional-returning) decode ---
+
+static int dex_json_check_value(const char** pp);
+
+static int dex_json_check_string(const char** pp) {
+    const char* p = *pp;
+    if (*p != '"') return 0;
+    p++;
+    while (*p && *p != '"') {
+        if (*p == '\\') { p++; if (!*p) return 0; }
+        p++;
+    }
+    if (*p != '"') return 0;
+    *pp = p + 1;
+    return 1;
+}
+
+static int dex_json_check_value(const char** pp) {
+    const char* p = *pp;
+    DEX_JSON_SKIP_WS(p);
+    if (*p == '"') { *pp = p; return dex_json_check_string(pp); }
+    if (*p == '{') {
+        p++;
+        DEX_JSON_SKIP_WS(p);
+        if (*p == '}') { *pp = p + 1; return 1; }
+        for (;;) {
+            DEX_JSON_SKIP_WS(p);
+            *pp = p;
+            if (!dex_json_check_string(pp)) return 0;
+            p = *pp;
+            DEX_JSON_SKIP_WS(p);
+            if (*p != ':') return 0;
+            p++;
+            *pp = p;
+            if (!dex_json_check_value(pp)) return 0;
+            p = *pp;
+            DEX_JSON_SKIP_WS(p);
+            if (*p == ',') { p++; continue; }
+            if (*p == '}') { *pp = p + 1; return 1; }
+            return 0;
+        }
+    }
+    if (*p == '[') {
+        p++;
+        DEX_JSON_SKIP_WS(p);
+        if (*p == ']') { *pp = p + 1; return 1; }
+        for (;;) {
+            *pp = p;
+            if (!dex_json_check_value(pp)) return 0;
+            p = *pp;
+            DEX_JSON_SKIP_WS(p);
+            if (*p == ',') { p++; continue; }
+            if (*p == ']') { *pp = p + 1; return 1; }
+            return 0;
+        }
+    }
+    if (strncmp(p, "true", 4) == 0)  { *pp = p + 4; return 1; }
+    if (strncmp(p, "false", 5) == 0) { *pp = p + 5; return 1; }
+    if (strncmp(p, "null", 4) == 0)  { *pp = p + 4; return 1; }
+    if (*p == '-') p++;
+    if (!(*p >= '0' && *p <= '9')) return 0;
+    while (*p >= '0' && *p <= '9') p++;
+    if (*p == '.') {
+        p++;
+        if (!(*p >= '0' && *p <= '9')) return 0;
+        while (*p >= '0' && *p <= '9') p++;
+    }
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        if (*p == '+' || *p == '-') p++;
+        if (!(*p >= '0' && *p <= '9')) return 0;
+        while (*p >= '0' && *p <= '9') p++;
+    }
+    *pp = p;
+    return 1;
+}
+
+// Returns 1 when the whole string is one well-formed JSON value.
+int dex_json_valid(const char* json) {
+    if (!json) return 0;
+    const char* p = json;
+    if (!dex_json_check_value(&p)) return 0;
+    DEX_JSON_SKIP_WS(p);
+    return *p == '\0';
+}
+
+// Returns 1 when the string is one well-formed JSON array.
+int dex_json_is_array(const char* json) {
+    if (!dex_json_valid(json)) return 0;
+    const char* p = json;
+    DEX_JSON_SKIP_WS(p);
+    return *p == '[';
+}
+
+// Does the raw value at v plausibly fit a field of this descriptor kind?
+// Kind 2 (string) also accepts a raw object/array so that raw-JSON passthrough
+// into a string field keeps working.
+static int dex_json_kind_ok(const char* v, int kind) {
+    switch (kind) {
+    case 0: case 3: case 4: return (*v == '-' || (*v >= '0' && *v <= '9'));
+    case 1: return (strncmp(v, "true", 4) == 0 || strncmp(v, "false", 5) == 0);
+    case 2: return (*v == '"' || *v == '{' || *v == '[');
+    case 5: return (*v == '{');
+    case 6: return (*v == '[');
+    }
+    return 1;
+}
+
+// A key that is absent, or explicitly null, is fine — the field keeps its zero
+// value, matching what encoding/json does for missing keys. A key that is
+// present with an incompatible type is a decode failure.
+static int dex_json_check_fields(const char* json, int num_fields, DexStructFieldDesc* fields) {
+    for (int f = 0; f < num_fields; f++) {
+        const char* v = dex_json_find_value(json, fields[f].name);
+        if (!v) continue;
+        if (strncmp(v, "null", 4) == 0) continue;
+        if (!dex_json_kind_ok(v, fields[f].kind)) return 0;
+        if (fields[f].kind == 5) {
+            const char* subj = dex_json_get(json, fields[f].name);
+            int ok = dex_json_check_fields(subj, fields[f].num_sub, fields[f].sub);
+            free((void*)subj);
+            if (!ok) return 0;
+        }
+    }
+    return 1;
+}
+
+// Decodes only if the input is a well-formed JSON object whose present keys have
+// types compatible with the struct. Returns 1 on success, 0 without touching out.
+int dex_json_decode_struct_checked(const char* json, void* out, int num_fields, DexStructFieldDesc* fields) {
+    if (!dex_json_valid(json)) return 0;
+    const char* p = json;
+    DEX_JSON_SKIP_WS(p);
+    if (*p != '{') return 0;
+    if (!dex_json_check_fields(json, num_fields, fields)) return 0;
+    dex_json_decode_struct(json, out, num_fields, fields);
+    return 1;
 }
 
 const char* dex_json_array_push_obj(const char* arr, const char* obj) {

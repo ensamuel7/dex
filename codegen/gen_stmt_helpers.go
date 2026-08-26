@@ -41,14 +41,28 @@ func (g *Generator) emitNarrowing(out *strings.Builder, prefix, varName string) 
 		narrowedName := "_narrow_" + varName
 		out.WriteString(fmt.Sprintf("%s%s %s = %s.value;\n", prefix, g.cType(inner), narrowedName, varName))
 		g.narrowedVars[varName] = narrowedName
+		g.narrowedTypes[varName] = inner
+		return
 	}
-	// For heap types (string, array), no narrowing needed — same pointer
-	// For struct types, no narrowing needed — it's already a pointer
+	if ast.IsStructType(inner) {
+		// Optional structs are Dex_Foo* — bind a value copy so everything
+		// downstream (field access, encode, calls) sees a plain struct.
+		narrowedName := "_narrow_" + varName
+		out.WriteString(fmt.Sprintf("%s%s %s = *%s;\n", prefix, g.cType(inner), narrowedName, varName))
+		g.narrowedVars[varName] = narrowedName
+		g.narrowedTypes[varName] = inner
+		return
+	}
+	// Heap types (string, array, struct array) keep the same C variable — the
+	// pointer is already the value — but the narrowed *type* still matters so
+	// method calls and field access resolve against the inner type.
+	g.narrowedTypes[varName] = inner
 }
 
 // clearNarrowing removes a variable from the narrowedVars map.
 func (g *Generator) clearNarrowing(varName string) {
 	delete(g.narrowedVars, varName)
+	delete(g.narrowedTypes, varName)
 }
 
 // genForInit generates the init part of a for loop (no trailing semicolon).

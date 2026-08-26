@@ -26,15 +26,15 @@ func init() {
 				CName:      "",
 				Doc:        "Set a key-value pair on a JSON object. Value can be string, int, bool, long, double, or array.",
 			},
-			"stringify": {
-				Params:     []ast.Type{ast.TypeInt}, // placeholder — special-cased in checker/codegen
+			"encode": {
+				Params:     nil, // polymorphic — special-cased in checker/codegen
 				ParamNames: []string{"value"},
 				ReturnType: ast.TypeString,
 				CName:      "",
-				Doc:        "Convert a value to a JSON string.",
+				Doc:        "Convert a value to a JSON string. Structs serialize all fields, recursing into nested struct fields to any depth.",
 			},
 			"setArray": {
-				Params:     []ast.Type{ast.TypeString, ast.TypeString, ast.TypeInt}, // placeholder
+				Params:     nil, // polymorphic — special-cased in checker/codegen
 				ParamNames: []string{"json", "key", "length"},
 				ReturnType: ast.TypeString,
 				CName:      "",
@@ -116,12 +116,12 @@ func init() {
 				CName:      "",
 				Doc:        "Append a value to a JSON array. Value can be string, int, long, double, or bool.",
 			},
-			"objectify": {
+			"decode": {
 				Params:     nil, // polymorphic — resolved from assignment context
 				ParamNames: []string{"json"},
 				ReturnType: ast.TypeString, // placeholder — overridden by ResolvedType
 				CName:      "",
-				Doc:        "Convert a JSON string into a typed struct.",
+				Doc:        "Convert a JSON string into a typed struct. Recurses into nested struct fields to any depth; a nested object missing from the JSON leaves that sub-struct zeroed. Annotate the target as optional (let x: MyStruct? = json.decode(...)) for a checked decode that returns null on malformed JSON or a type mismatch instead of zero values. The target may also be a struct array (let xs: MyStruct[] = json.decode(...)), decoding a JSON array of objects.",
 			},
 			"arrayPushObj": {
 				Params:     []ast.Type{ast.TypeString, ast.TypeString},

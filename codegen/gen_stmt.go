@@ -22,6 +22,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.isInLoop = false
 	g.loopDepth = 0
 	g.narrowedVars = make(map[string]string)
+	g.narrowedTypes = make(map[string]ast.Type)
 	g.deferExprs = nil
 
 	// Register global variables so all functions can resolve them
@@ -253,6 +254,17 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		if ast.IsStructType(s.Type) {
 			g.structVars[s.Name] = s.Type
 		}
+		// An optional container resolves to its inner type once narrowed, so
+		// register it under the inner type for method dispatch.
+		if ast.IsOptionalType(s.Type) {
+			inner := ast.OptionalInnerType(s.Type)
+			if ast.IsArrayType(inner) {
+				g.arrVars[s.Name] = inner
+			}
+			if ast.IsStructType(inner) {
+				g.structVars[s.Name] = inner
+			}
+		}
 		if ast.IsMapType(s.Type) {
 			g.mapVars[s.Name] = s.Type
 		}
@@ -388,6 +400,11 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 				ctyp := g.cType(s.Type) // Dex_Foo*
 				if isNull {
 					out.WriteString(fmt.Sprintf("%s%s %s = NULL;\n", prefix, ctyp, s.Name))
+				} else if valIsOptional {
+					// RHS already produces the optional pointer — take it as-is
+					out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
+					g.genExpr(out, s.Value)
+					out.WriteString(";\n")
 				} else {
 					innerCType := "Dex_" + ast.StructName(inner)
 					out.WriteString(fmt.Sprintf("%s%s %s = (%s*)malloc(sizeof(%s));\n", prefix, ctyp, s.Name, innerCType, innerCType))
@@ -498,6 +515,17 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 						g.emitCleanupAll(out, prefix, "")
 						out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 					}
+				} else if ast.IsStructType(inner) && g.typeOfExpr(s.Value) != retType {
+					// Bare struct value returned as T? — box it so the caller
+					// receives the Dex_Foo* that the optional representation expects.
+					innerCType := "Dex_" + ast.StructName(inner)
+					out.WriteString(fmt.Sprintf("%s%s* _ret_tmp = (%s*)malloc(sizeof(%s));\n", prefix, innerCType, innerCType, innerCType))
+					out.WriteString(fmt.Sprintf("%s*_ret_tmp = ", prefix))
+					g.genExpr(out, s.Value)
+					out.WriteString(";\n")
+					g.emitDeferredCalls(out, prefix)
+					g.emitCleanupAll(out, prefix, "")
+					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 				} else {
 					g.emitDeferredCalls(out, prefix)
 					out.WriteString(fmt.Sprintf("%sreturn ", prefix))

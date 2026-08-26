@@ -293,7 +293,8 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 	case *ast.FieldAccessExpr:
 		g.genExpr(out, e.Object)
 		objType := g.typeOfExpr(e.Object)
-		if ast.IsRefType(objType) {
+		// Optional structs are represented as Dex_Foo*, so they dereference too.
+		if ast.IsRefType(objType) || (ast.IsOptionalType(objType) && ast.IsStructType(ast.OptionalInnerType(objType))) {
 			out.WriteString(fmt.Sprintf("->%s", e.Field))
 		} else {
 			out.WriteString(fmt.Sprintf(".%s", e.Field))
@@ -540,8 +541,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		out.WriteString(")")
 		return
 	}
-	// json.stringify(array or struct) — special codegen (returns const char*, needs wrapping)
-	if e.Module == "json" && e.Name == "stringify" {
+	// json.encode(array or struct) — special codegen (returns const char*, needs wrapping)
+	if e.Module == "json" && e.Name == "encode" {
 		argType := g.typeOfExpr(e.Args[0])
 		if ast.IsMapType(argType) {
 			valType := ast.MapValueType(argType)
@@ -578,19 +579,11 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		if ast.IsStructType(argType) && !ast.IsArrayType(argType) {
 			// Struct stringify: use dex_json_encode_struct
 			def := ast.GetStructDef(argType)
-			cType := g.cType(argType)
-			out.WriteString(fmt.Sprintf("dex_string_from_cstr(dex_json_encode_struct(&"))
+			out.WriteString("dex_string_from_cstr(dex_json_encode_struct(&")
 			g.genExpr(out, e.Args[0])
 			out.WriteString(fmt.Sprintf(", %d, ", len(def.Fields)))
-			out.WriteString("(DexStructFieldDesc[]){ ")
-			for i, f := range def.Fields {
-				if i > 0 {
-					out.WriteString(", ")
-				}
-				fieldOffset := fmt.Sprintf("offsetof(%s, %s)", cType, f.Name)
-				out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, g.jsonFieldKind(f.Type)))
-			}
-			out.WriteString(" }))")
+			g.genStructFieldDescs(out, argType, 0)
+			out.WriteString("))")
 			return
 		}
 		argIdent, ok := e.Args[0].(*ast.Ident)
@@ -602,15 +595,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				elemCType := g.cType(elemType)
 				def := ast.GetStructDef(elemType)
 				out.WriteString(fmt.Sprintf("dex_string_from_cstr(dex_json_stringify_struct_arr(%s, sizeof(%s), %d, ", argIdent.Name, elemCType, len(def.Fields)))
-				out.WriteString("(DexStructFieldDesc[]){ ")
-				for i, f := range def.Fields {
-					if i > 0 {
-						out.WriteString(", ")
-					}
-					fieldOffset := fmt.Sprintf("offsetof(%s, %s)", elemCType, f.Name)
-					out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, g.jsonFieldKind(f.Type)))
-				}
-				out.WriteString(" }))")
+				g.genStructFieldDescs(out, elemType, 0)
+				out.WriteString("))")
 			} else {
 				var fn string
 				switch arrType {
@@ -633,23 +619,73 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
-	// json.objectify(jsonStr) — decode JSON string into a struct
-	if e.Module == "json" && e.Name == "objectify" {
+	// json.decode(jsonStr) — decode JSON string into a struct
+	if e.Module == "json" && e.Name == "decode" {
+		// Struct array target: walk the JSON array and decode each element.
+		// Composed from json.c and arrays.c primitives, both of which are emitted
+		// before user code whenever this expression can appear.
+		arrTarget := e.ResolvedType
+		checkedArr := false
+		if ast.IsOptionalType(arrTarget) && ast.IsStructArrayType(ast.OptionalInnerType(arrTarget)) {
+			arrTarget = ast.OptionalInnerType(arrTarget)
+			checkedArr = true
+		}
+		if ast.IsStructArrayType(arrTarget) {
+			elemType := ast.ElementType(arrTarget)
+			elemCType := g.cType(elemType)
+			def := ast.GetStructDef(elemType)
+			cleanupFn := g.structArrayCleanupFunc(elemType)
+
+			out.WriteString("({ const char* _jsrc = ")
+			g.genStringData(out, e.Args[0])
+			out.WriteString("; DexArrayStruct* _jarr = NULL; ")
+			if checkedArr {
+				out.WriteString("if (dex_json_is_array(_jsrc)) { ")
+			} else {
+				out.WriteString("{ ")
+			}
+			out.WriteString(fmt.Sprintf("_jarr = dex_array_struct_new(sizeof(%s), %s); ", elemCType, cleanupFn))
+			out.WriteString("int _jn = dex_json_array_len(_jsrc); ")
+			out.WriteString("for (int _ji = 0; _ji < _jn; _ji++) { ")
+			out.WriteString("const char* _jel = dex_json_array_get_raw(_jsrc, _ji); ")
+			out.WriteString(fmt.Sprintf("%s _jtmp; memset(&_jtmp, 0, sizeof(%s)); ", elemCType, elemCType))
+			if checkedArr {
+				out.WriteString(fmt.Sprintf("int _jok = dex_json_decode_struct_checked(_jel, &_jtmp, %d, ", len(def.Fields)))
+				g.genStructFieldDescs(out, elemType, 0)
+				out.WriteString("); free((void*)_jel); ")
+				out.WriteString("if (!_jok) { dex_release(_jarr); _jarr = NULL; break; } ")
+				out.WriteString("dex_array_struct_push(_jarr, &_jtmp); ")
+			} else {
+				out.WriteString(fmt.Sprintf("dex_json_decode_struct(_jel, &_jtmp, %d, ", len(def.Fields)))
+				g.genStructFieldDescs(out, elemType, 0)
+				out.WriteString("); free((void*)_jel); ")
+				out.WriteString("dex_array_struct_push(_jarr, &_jtmp); ")
+			}
+			out.WriteString("} } _jarr; })")
+			return
+		}
+
+		// An optional target means a checked decode: malformed JSON, or a present
+		// key whose type does not fit the struct, yields NULL instead of zeroes.
+		if ast.IsOptionalType(e.ResolvedType) && ast.IsStructType(ast.OptionalInnerType(e.ResolvedType)) {
+			structType := ast.OptionalInnerType(e.ResolvedType)
+			def := ast.GetStructDef(structType)
+			innerCType := g.cType(structType)
+			out.WriteString(fmt.Sprintf("({ %s* _jopt_tmp = (%s*)calloc(1, sizeof(%s)); if (!dex_json_decode_struct_checked(", innerCType, innerCType, innerCType))
+			g.genStringData(out, e.Args[0])
+			out.WriteString(fmt.Sprintf(", _jopt_tmp, %d, ", len(def.Fields)))
+			g.genStructFieldDescs(out, structType, 0)
+			out.WriteString(")) { free(_jopt_tmp); _jopt_tmp = NULL; } _jopt_tmp; })")
+			return
+		}
 		structType := e.ResolvedType
 		def := ast.GetStructDef(structType)
 		cType := g.cType(structType)
 		out.WriteString(fmt.Sprintf("({ %s _jobj_tmp = {0}; dex_json_decode_struct(", cType))
 		g.genStringData(out, e.Args[0])
 		out.WriteString(fmt.Sprintf(", &_jobj_tmp, %d, ", len(def.Fields)))
-		out.WriteString("(DexStructFieldDesc[]){ ")
-		for i, f := range def.Fields {
-			if i > 0 {
-				out.WriteString(", ")
-			}
-			fieldOffset := fmt.Sprintf("offsetof(%s, %s)", cType, f.Name)
-			out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, g.jsonFieldKind(f.Type)))
-		}
-		out.WriteString(" }); _jobj_tmp; })")
+		g.genStructFieldDescs(out, structType, 0)
+		out.WriteString("); _jobj_tmp; })")
 		return
 	}
 
@@ -670,30 +706,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString(", ")
 				out.WriteString(argIdent.Name)
 				out.WriteString(fmt.Sprintf(", sizeof(%s), %d, ", elemCType, len(def.Fields)))
-				out.WriteString("(DexStructFieldDesc[]){ ")
-				for i, f := range def.Fields {
-					if i > 0 {
-						out.WriteString(", ")
-					}
-					fieldOffset := fmt.Sprintf("offsetof(%s, %s)", elemCType, f.Name)
-					var fieldKind string
-					switch f.Type {
-					case ast.TypeInt:
-						fieldKind = "0"
-					case ast.TypeBool:
-						fieldKind = "1"
-					case ast.TypeString:
-						fieldKind = "2"
-					case ast.TypeLong:
-						fieldKind = "3"
-					case ast.TypeDouble:
-						fieldKind = "4"
-					default:
-						fieldKind = "0"
-					}
-					out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, fieldKind))
-				}
-				out.WriteString(" }))")
+				g.genStructFieldDescs(out, elemType, 0)
+				out.WriteString("))")
 			} else {
 				var fn string
 				switch arrType {
@@ -774,30 +788,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			g.genExpr(out, e.Args[2])
 			out.WriteString(fmt.Sprintf(", sizeof(%s), %d, ", elemCType, len(def.Fields)))
 			// Emit field descriptors as a compound literal
-			out.WriteString(fmt.Sprintf("(DexStructFieldDesc[]){ "))
-			for i, f := range def.Fields {
-				if i > 0 {
-					out.WriteString(", ")
-				}
-				fieldOffset := fmt.Sprintf("offsetof(%s, %s)", elemCType, f.Name)
-				var fieldKind string
-				switch f.Type {
-				case ast.TypeInt:
-					fieldKind = "0"
-				case ast.TypeBool:
-					fieldKind = "1"
-				case ast.TypeString:
-					fieldKind = "2"
-				case ast.TypeLong:
-					fieldKind = "3"
-				case ast.TypeDouble:
-					fieldKind = "4"
-				default:
-					fieldKind = "0"
-				}
-				out.WriteString(fmt.Sprintf("{\"%s\", %s, %s}", f.Name, fieldOffset, fieldKind))
-			}
-			out.WriteString(" }))")
+			g.genStructFieldDescs(out, elemType, 0)
+			out.WriteString("))")
 			return
 		}
 		// Handle primitive arrays with json.set
@@ -1430,9 +1422,18 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		}
 	}
 
-	// Check if this is an array method call (e.Module is a variable name)
+	// Check if this is an array method call (e.Module is a variable name or field chain)
 	if e.Module != "" {
-		if arrType, ok := g.arrVars[e.Module]; ok {
+		arrType, ok := g.arrVars[e.Module]
+		// Field chain resolution: e.g., charger.connectors → look up field type
+		if !ok && strings.Contains(e.Module, ".") {
+			chainType := g.resolveFieldChainType(e.Module)
+			if ast.IsArrayType(chainType) {
+				arrType = chainType
+				ok = true
+			}
+		}
+		if ok {
 			if ast.IsStructArrayType(arrType) {
 				// Struct array methods
 				elemType := ast.ElementType(arrType)

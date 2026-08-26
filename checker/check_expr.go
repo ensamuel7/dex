@@ -577,6 +577,14 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if isVar && ast.IsRefType(varType) {
 				varType = ast.RefInnerType(varType)
 			}
+			// Array method call on dotted field (e.g. charger.connectors.len())
+			if isVar && ast.IsArrayType(varType) {
+				retType, err := c.checkArrayMethod(e.Module, varType, e.Name, e.Args)
+				if err != nil {
+					return 0, err
+				}
+				return retType, nil
+			}
 			// Map method call on dotted field (e.g. req.params.get("id"))
 			if isVar && ast.IsMapType(varType) {
 				retType, err := c.checkMapMethod(e.Module, varType, e.Name, e.Args, e.Pos)
@@ -713,38 +721,45 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return ast.TypeVoid, nil
 			}
 
-			// Special case: json.stringify(array or struct) -> string
-			if e.Module == "json" && e.Name == "stringify" {
+			// Special case: json.encode(array or struct) -> string
+			if e.Module == "json" && e.Name == "encode" {
 				if len(e.Args) != 1 {
-					return 0, c.errAt(e.Pos, "json.stringify() takes exactly 1 argument, got %d", len(e.Args))
+					return 0, c.errAt(e.Pos, "json.encode() takes exactly 1 argument, got %d", len(e.Args))
 				}
 				argType, err := c.checkExpr(e.Args[0])
 				if err != nil {
 					return 0, err
 				}
 				if !ast.IsArrayType(argType) && !ast.IsStructType(argType) && !ast.IsMapType(argType) {
-					return 0, c.errAt(e.Pos, "json.stringify() argument must be an array, struct, or map type, got %s", typeName(argType))
+					return 0, c.errAt(e.Pos, "json.encode() argument must be an array, struct, or map type, got %s", typeName(argType))
 				}
 				if ast.IsMapType(argType) && ast.MapKeyType(argType) != ast.TypeString {
-					return 0, c.errAt(e.Pos, "json.stringify() map key type must be string for JSON serialization, got %s", typeName(ast.MapKeyType(argType)))
+					return 0, c.errAt(e.Pos, "json.encode() map key type must be string for JSON serialization, got %s", typeName(ast.MapKeyType(argType)))
 				}
 				return ast.TypeString, nil
 			}
 
-			// Special case: json.objectify(jsonStr) -> struct (resolved from context)
-			if e.Module == "json" && e.Name == "objectify" {
+			// Special case: json.decode(jsonStr) -> struct (resolved from context)
+			if e.Module == "json" && e.Name == "decode" {
 				if len(e.Args) != 1 {
-					return 0, c.errAt(e.Pos, "json.objectify() takes exactly 1 argument, got %d", len(e.Args))
+					return 0, c.errAt(e.Pos, "json.decode() takes exactly 1 argument, got %d", len(e.Args))
 				}
 				argType, err := c.checkExpr(e.Args[0])
 				if err != nil {
 					return 0, err
 				}
 				if argType != ast.TypeString {
-					return 0, c.errAt(e.Pos, "json.objectify() argument must be string, got %s", typeName(argType))
+					return 0, c.errAt(e.Pos, "json.decode() argument must be string, got %s", typeName(argType))
 				}
-				if e.ResolvedType == 0 || !ast.IsStructType(e.ResolvedType) {
-					return 0, c.errAt(e.Pos, "json.objectify() requires an explicit struct type annotation (e.g., let x: MyStruct = json.objectify(...))")
+				// The target may be a struct or a struct array, each either plain
+				// (lenient: a bad payload decodes to zero values) or optional
+				// (checked: a bad payload yields null).
+				target := e.ResolvedType
+				if ast.IsOptionalType(target) {
+					target = ast.OptionalInnerType(target)
+				}
+				if e.ResolvedType == 0 || !(ast.IsStructType(target) || ast.IsStructArrayType(target)) {
+					return 0, c.errAt(e.Pos, "json.decode() requires an explicit struct or struct array type annotation (e.g., let x: MyStruct = json.decode(...))")
 				}
 				return e.ResolvedType, nil
 			}

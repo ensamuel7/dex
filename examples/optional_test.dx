@@ -1,5 +1,18 @@
 import "fmt"
 
+struct OptPoint {
+    x: int
+    label: string
+}
+
+// Returns a struct optional — null for negative input
+fn makePoint(x: int): OptPoint? {
+    if (x < 0) {
+        return null
+    }
+    return OptPoint { x: x, label: "p" + x }
+}
+
 // Test 1: int? with null
 fn testIntOptionalNull(): void {
     let x: int?
@@ -167,4 +180,14 @@ fn main(): void {
     testLongOptional()
     testStringReassign()
     fmt.println("All optional tests passed!")
+
+    // Optional structs: value, null, and narrowing through fields
+    let some: OptPoint? = makePoint(3)
+    assert(some != null)
+    if (some != null) {
+        assert(some.x == 3)
+        assert(some.label == "p3")
+    }
+    let none: OptPoint? = makePoint(-1)
+    assert(none == null)
 }

@@ -36,7 +36,7 @@ func TestLookupFuncExisting(t *testing.T) {
 		{"fmt", "println"},
 		{"json", "new"},
 		{"json", "set"},
-		{"json", "stringify"},
+		{"json", "encode"},
 		{"json", "setArray"},
 		{"http", "route"},
 		{"http", "listen"},

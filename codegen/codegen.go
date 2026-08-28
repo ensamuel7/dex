@@ -316,7 +316,15 @@ func isBorrowedExpr(e ast.Expr) bool {
 // fresh temporary already carry the only reference and are deliberately skipped
 // so ownership simply moves to the caller.
 func (g *Generator) emitRetainReturnedLitFields(out *strings.Builder, prefix string, retType ast.Type, lit *ast.StructLitExpr) {
-	def := ast.GetStructDef(retType)
+	g.emitRetainStructLitFields(out, prefix, "_ret_tmp", retType, lit)
+}
+
+// emitRetainStructLitFields retains the heap fields of a struct literal that were
+// initialised from a borrowed reference. The literal is a C compound literal, so
+// it copies those pointers without taking ownership; without this the struct and
+// the borrowed variable would each release the same reference at scope exit.
+func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, target string, structType ast.Type, lit *ast.StructLitExpr) {
+	def := ast.GetStructDef(structType)
 	if def == nil {
 		return
 	}
@@ -333,7 +341,7 @@ func (g *Generator) emitRetainReturnedLitFields(out *strings.Builder, prefix str
 			continue
 		}
 		if isBorrowedExpr(lit.FieldValues[i]) {
-			out.WriteString(fmt.Sprintf("%sdex_retain(_ret_tmp.%s);\n", prefix, name))
+			out.WriteString(fmt.Sprintf("%sdex_retain(%s.%s);\n", prefix, target, name))
 		}
 	}
 }

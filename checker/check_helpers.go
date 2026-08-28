@@ -523,3 +523,20 @@ func typeName(t ast.Type) string {
 		return "unknown"
 	}
 }
+
+// alwaysExits reports whether a statement list unconditionally leaves the
+// enclosing block, so that code after it is only reachable when the branch was
+// not taken. Used to narrow optionals after a guard clause.
+func alwaysExits(stmts []ast.Stmt) bool {
+	if len(stmts) == 0 {
+		return false
+	}
+	switch last := stmts[len(stmts)-1].(type) {
+	case *ast.ReturnStmt, *ast.ThrowStmt, *ast.BreakStmt, *ast.ContinueStmt:
+		return true
+	case *ast.IfStmt:
+		// Both arms must exit for the whole statement to.
+		return last.Else != nil && alwaysExits(last.Then) && alwaysExits(last.Else)
+	}
+	return false
+}

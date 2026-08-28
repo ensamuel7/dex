@@ -151,3 +151,18 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 		return false // conservative: assume borrowed to avoid premature free
 	}
 }
+
+// alwaysExitsCodegen mirrors the checker's alwaysExits: does this statement list
+// unconditionally leave the enclosing block?
+func alwaysExitsCodegen(stmts []ast.Stmt) bool {
+	if len(stmts) == 0 {
+		return false
+	}
+	switch last := stmts[len(stmts)-1].(type) {
+	case *ast.ReturnStmt, *ast.ThrowStmt, *ast.BreakStmt, *ast.ContinueStmt:
+		return true
+	case *ast.IfStmt:
+		return last.Else != nil && alwaysExitsCodegen(last.Then) && alwaysExitsCodegen(last.Else)
+	}
+	return false
+}

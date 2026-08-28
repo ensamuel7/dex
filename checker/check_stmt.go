@@ -217,6 +217,14 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			}
 			c.popScope()
 		}
+		// Guard clause: `if (x == null) { return ... }` with no else means every
+		// path that reaches the rest of this block has a non-null x, so narrow it
+		// in the enclosing scope for the statements that follow.
+		if varName != "" && !isNotNull && s.Else == nil && alwaysExits(s.Then) {
+			if varType, ok := c.resolve(varName); ok && ast.IsOptionalType(varType) {
+				c.define(varName, ast.OptionalInnerType(varType))
+			}
+		}
 		return nil
 
 	case *ast.WhileStmt:

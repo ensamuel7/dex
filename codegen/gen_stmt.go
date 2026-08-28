@@ -462,6 +462,10 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		out.WriteString(fmt.Sprintf("%s%s%s %s = ", prefix, constPrefix, g.cType(s.Type), s.Name))
 		g.genExpr(out, s.Value)
 		out.WriteString(";\n")
+		// A struct literal copies borrowed heap fields without owning them.
+		if lit, ok := s.Value.(*ast.StructLitExpr); ok && ast.IsStructType(s.Type) {
+			g.emitRetainStructLitFields(out, prefix, s.Name, s.Type, lit)
+		}
 		g.registerScopeVar(s.Name, s.Type)
 		// Emit debug cycle tracking if annotated
 		if ast.HasAnnotation(s.Annotations, ast.AnnotDebugCycles) && ast.IsHeapType(s.Type) {
@@ -706,6 +710,30 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 				out.WriteString(fmt.Sprintf(" dex_retain(%s);", s.Name))
 			}
 			out.WriteString(" dex_release(_dex_old); }\n")
+		} else if ast.IsStructType(varType) && ast.NeedsRelease(varType) {
+			// Reassigning a struct replaces every heap field it owns. Retain what the
+			// new value borrows before releasing the old, so `x = T{f: x.f}` is safe.
+			def := ast.GetStructDef(varType)
+			ctyp := g.cType(varType)
+			out.WriteString(fmt.Sprintf("%s{ %s _dex_old = %s; %s = ", prefix, ctyp, s.Name, s.Name))
+			g.genExpr(out, s.Value)
+			out.WriteString(";\n")
+			if lit, ok := s.Value.(*ast.StructLitExpr); ok {
+				g.emitRetainStructLitFields(out, prefix+"    ", s.Name, varType, lit)
+			} else if isBorrowedExpr(s.Value) {
+				// Borrowed whole struct — the target becomes a second owner.
+				for _, f := range def.Fields {
+					if ast.IsHeapType(f.Type) {
+						out.WriteString(fmt.Sprintf("%s    dex_retain(%s.%s);\n", prefix, s.Name, f.Name))
+					}
+				}
+			}
+			for _, f := range def.Fields {
+				if ast.NeedsRelease(f.Type) {
+					g.emitReleaseVar(out, prefix+"    ", "_dex_old."+f.Name, f.Type)
+				}
+			}
+			out.WriteString(fmt.Sprintf("%s}\n", prefix))
 		} else {
 			out.WriteString(fmt.Sprintf("%s%s = ", prefix, s.Name))
 			g.genExpr(out, s.Value)
@@ -742,6 +770,11 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			g.popScope(out, prefix+"    ")
 		}
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
+		// Guard clause: everything after `if (x == null) { return ... }` runs only
+		// when x is non-null, so bind the narrowed form for the rest of the block.
+		if varName != "" && !isNotNull && s.Else == nil && alwaysExitsCodegen(s.Then) {
+			g.emitNarrowing(out, prefix, varName)
+		}
 
 	case *ast.WhileStmt:
 		out.WriteString(fmt.Sprintf("%swhile (", prefix))

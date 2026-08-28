@@ -152,7 +152,7 @@ func StructName(t Type) string {
 }
 
 func IsHeapType(t Type) bool {
-	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t)
+	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t) || IsFuncType(t)
 }
 
 func NeedsRelease(t Type) bool {
@@ -578,6 +578,11 @@ type FieldAccessExpr struct {
 	Pos    Pos
 	Object Expr
 	Field  string
+	// IsMethodValue is set by the checker when Field names a method rather than
+	// a field: the expression evaluates to that method bound to Object, the way
+	// Go's method values work. StructType is the receiver's type.
+	IsMethodValue bool
+	StructType    Type
 }
 
 func (e *IntLit) exprNode()          {}

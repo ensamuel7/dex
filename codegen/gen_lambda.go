@@ -61,10 +61,16 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 			}
 		}
 
+		// The body's `return` belongs to the lambda, not to the function the
+		// lambda is written inside, so the current signature is swapped for the
+		// duration.
+		savedFn := g.currentFn
+		g.currentFn = &ast.Function{Name: fnName, Params: e.Params, ReturnType: e.ReturnType}
 		var bodyBuf strings.Builder
 		for _, stmt := range e.Body {
 			g.genStmt(&bodyBuf, stmt, 1)
 		}
+		g.currentFn = savedFn
 		g.lambdaWrappers.WriteString(bodyBuf.String())
 		g.lambdaWrappers.WriteString("}\n")
 
@@ -77,92 +83,107 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 		// At call site, just reference the function name
 		out.WriteString(fnName)
 	} else {
-		// Has captures — generate a closure with environment struct
-		// For simplicity, we use the same approach as spawn:
-		// but since closures need to be called synchronously, we use a struct with env + function.
-		// However, the existing FuncType system in DexLang uses plain function pointers.
-		// For now, we'll generate a static function that takes the captures as extra first params,
-		// and use a wrapper approach.
+		// Has captures — build an environment holding a copy of each captured
+		// value, and a wrapper that unpacks it. This is the same shape as a
+		// method value; only the contents of the environment differ.
+		//
+		// The environment takes a reference to every heap value it captures, so a
+		// closure stays valid after the scope it was created in has gone.
+		envName := fmt.Sprintf("_DexLambdaEnv_%d", idx)
+		g.closureTypes.WriteString(fmt.Sprintf("typedef struct { DexObjHeader hdr;"))
+		for _, cv := range captured {
+			g.closureTypes.WriteString(fmt.Sprintf(" %s %s;", g.cType(cv.typ), cv.name))
+		}
+		g.closureTypes.WriteString(fmt.Sprintf(" } %s;\n", envName))
 
-		// Actually, let's keep it simple: generate a static function that reads from a global
-		// or use a GCC nested function (which captures variables from enclosing scope).
-		// GCC nested functions are the simplest approach for captured variables.
-
-		// Use GCC statement expression with nested function:
-		out.WriteString("({ ")
-
-		// Declare the nested function
-		out.WriteString(fmt.Sprintf("%s %s(", g.cType(e.ReturnType), fnName))
-		if len(e.Params) == 0 {
-			out.WriteString("void")
-		} else {
-			for i, p := range e.Params {
-				if i > 0 {
-					out.WriteString(", ")
-				}
-				out.WriteString(fmt.Sprintf("%s %s", g.cType(p.Type), p.Name))
+		destroyName := envName + "_destroy"
+		g.closureWrappers.WriteString(fmt.Sprintf("static void %s(void* _p) {\n", destroyName))
+		g.closureWrappers.WriteString(fmt.Sprintf("    %s* _e = (%s*)_p;\n    (void)_e;\n", envName, envName))
+		for _, cv := range captured {
+			if ast.IsHeapType(cv.typ) {
+				g.closureWrappers.WriteString(fmt.Sprintf("    dex_release(_e->%s);\n", cv.name))
 			}
 		}
-		out.WriteString(") { ")
+		g.closureWrappers.WriteString("}\n")
 
-		// Generate body inline
+		// The wrapper reads the captures back into locals of the same names, so
+		// the body generates exactly as it would have inline.
+		var w strings.Builder
+		w.WriteString(fmt.Sprintf("static %s %s(void* _env", g.cType(e.ReturnType), fnName))
+		for _, p := range e.Params {
+			w.WriteString(fmt.Sprintf(", %s %s", g.cType(p.Type), p.Name))
+		}
+		w.WriteString(") {\n")
+		w.WriteString(fmt.Sprintf("    %s* _e = (%s*)_env;\n", envName, envName))
+		for _, cv := range captured {
+			w.WriteString(fmt.Sprintf("    %s %s = _e->%s;\n", g.cType(cv.typ), cv.name, cv.name))
+		}
+
 		savedVarTypes := g.varTypes
 		savedStrVars := g.strVars
 		savedArrVars := g.arrVars
 		savedStructVars := g.structVars
 
-		// Create new maps with captured variables + params
 		newVarTypes := make(map[string]ast.Type)
 		newStrVars := make(map[string]bool)
 		newArrVars := make(map[string]ast.Type)
 		newStructVars := make(map[string]ast.Type)
-
-		// Copy captured vars
+		register := func(name string, typ ast.Type) {
+			newVarTypes[name] = typ
+			if typ == ast.TypeString {
+				newStrVars[name] = true
+			}
+			if ast.IsArrayType(typ) {
+				newArrVars[name] = typ
+			}
+			if ast.IsStructType(typ) {
+				newStructVars[name] = typ
+			}
+		}
 		for _, cv := range captured {
-			newVarTypes[cv.name] = cv.typ
-			if cv.typ == ast.TypeString {
-				newStrVars[cv.name] = true
-			}
-			if ast.IsArrayType(cv.typ) {
-				newArrVars[cv.name] = cv.typ
-			}
-			if ast.IsStructType(cv.typ) {
-				newStructVars[cv.name] = cv.typ
-			}
+			register(cv.name, cv.typ)
 		}
-
-		// Add params
 		for _, p := range e.Params {
-			newVarTypes[p.Name] = p.Type
-			if p.Type == ast.TypeString {
-				newStrVars[p.Name] = true
-			}
-			if ast.IsArrayType(p.Type) {
-				newArrVars[p.Name] = p.Type
-			}
-			if ast.IsStructType(p.Type) {
-				newStructVars[p.Name] = p.Type
-			}
+			register(p.Name, p.Type)
 		}
-
 		g.varTypes = newVarTypes
 		g.strVars = newStrVars
 		g.arrVars = newArrVars
 		g.structVars = newStructVars
 
+		// Captured values belong to the environment, not to this invocation, so
+		// the body must not release them on the way out.
+		savedScopes := g.scopeStack
+		savedFn := g.currentFn
+		g.currentFn = &ast.Function{Name: fnName, Params: e.Params, ReturnType: e.ReturnType}
+		g.scopeStack = nil
+		g.pushScope()
 		var bodyBuf strings.Builder
 		for _, stmt := range e.Body {
-			g.genStmt(&bodyBuf, stmt, 0)
+			g.genStmt(&bodyBuf, stmt, 1)
 		}
-		out.WriteString(bodyBuf.String())
-		out.WriteString("} ")
+		g.scopeStack = savedScopes
+		g.currentFn = savedFn
 
-		// Restore state
+		w.WriteString(bodyBuf.String())
+		w.WriteString("}\n")
+		g.closureWrappers.WriteString(w.String())
+
 		g.varTypes = savedVarTypes
 		g.strVars = savedStrVars
 		g.arrVars = savedArrVars
 		g.structVars = savedStructVars
 
-		out.WriteString(fmt.Sprintf("%s; })", fnName))
+		// Build the environment at the point the lambda is written.
+		tmp := g.nextTemp()
+		out.WriteString(fmt.Sprintf("({ %s* %s = (%s*)dex_closure_env_alloc(sizeof(%s), %s); ",
+			envName, tmp, envName, envName, destroyName))
+		for _, cv := range captured {
+			out.WriteString(fmt.Sprintf("%s->%s = %s; ", tmp, cv.name, cv.name))
+			if ast.IsHeapType(cv.typ) {
+				out.WriteString(fmt.Sprintf("dex_retain(%s->%s); ", tmp, cv.name))
+			}
+		}
+		out.WriteString(fmt.Sprintf("dex_closure_new((void*)%s, %s); })", fnName, tmp))
 	}
 }

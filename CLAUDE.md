@@ -40,6 +40,11 @@
   fifteen older functions (`set`, `get*`, `array*`, ...) are deprecated and warn; do
   not use them in new examples or docs.
 - `CallExpr.ResolvedType` is used for return-type polymorphism (set by checker, read by codegen).
+- A function value is a **closure**: `DexClosure*`, a code pointer plus the
+  environment it carries, with the environment passed as a hidden first argument
+  so every kind is invoked identically. A plain function gets a thunk that
+  ignores it; a lambda gets a generated environment struct; a method value gets a
+  copy of its receiver. See `codegen/gen_closure.go` and `cruntime/closure.c`.
 - Concurrency (`spawn`, `send`, `receive`, `channel`, `close`) compiles to pthreads + lock-free channels in C.
 
 ## Naming Conventions
@@ -48,6 +53,11 @@
 - After any compiler or stdlib change, always regenerate docs with `go run . docs` and update `LANGUAGE.md` if the change affects the language API.
 
 ## Verifying a change
+
+The editor extension shells out to whatever `dex` is on PATH, so after any
+parser, checker, or LSP change run `make install` — otherwise the IDE reports
+errors the current compiler does not have. The language server is spawned once
+per session, so it also needs restarting to pick the new binary up.
 
 A compiler change is not verified until all three pass:
 
@@ -86,6 +96,13 @@ or a use-after-free, so change them deliberately:
   function with no locals of its own.
 - `json.Value` has its own ownership rules — indexing a document mints a reference
   where indexing an array only borrows one. See `jsonValueOwned` in `gen_jsonvalue.go`.
+- A method value is a fresh closure even though it reads like a field access, so
+  ownership questions go through `borrowsHeapValue`, never `isBorrowedExpr`
+  directly.
+- Traversals over the AST use the shared walker in `resolve/resolve.go`
+  (`walkStmtsWith`, `walkExpr`). Hand-written walkers drift: both the module
+  prefixer and the method-body field rewriter had silently stopped visiting
+  `switch` bodies and object literals.
 
 ## Post-Push Checks
 

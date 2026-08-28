@@ -46,3 +46,6 @@ var EventLoopRuntime string
 
 //go:embed cruntime/stringbuilder.c
 var StringBuilderRuntime string
+
+//go:embed cruntime/closure.c
+var ClosureRuntime string

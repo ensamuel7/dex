@@ -24,9 +24,8 @@ func ExtractImportPaths(tokens []token.Token) []string {
 	return paths
 }
 
-// PreRegisterUserStructs scans user module files (non-stdlib imports) for struct
-// and enum declarations and registers them globally so the main file parser
-// recognizes struct literal syntax (e.g. User { field: value }).
+// Registers struct and enum declarations from user modules globally so the main
+// file's parser recognizes their literal and type-annotation syntax.
 func PreRegisterUserStructs(importPaths []string, sourceDir string) []string {
 	var names []string
 	visited := map[string]bool{}
@@ -57,11 +56,8 @@ func preRegisterStructsFromFile(filePath string, visited map[string]bool, names 
 		return
 	}
 
-	// Scan for struct/enum declarations and sub-imports.
-	// Register placeholder types so ast.LookupStructType/LookupEnumType works
-	// when the main file parser resolves type annotations (e.g. ": User").
-	// The full definitions get filled in later when modules are fully parsed,
-	// and RegisterStructType/RegisterEnumType are idempotent (update existing).
+	// Placeholders; the full definitions are filled in when the modules are
+	// parsed, and registration is idempotent.
 	for i := 0; i < len(tokens)-1; i++ {
 		if tokens[i].Kind == token.TokenStruct && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
@@ -75,7 +71,6 @@ func preRegisterStructsFromFile(filePath string, visited map[string]bool, names 
 		}
 	}
 
-	// Recurse into sub-imports
 	subPaths := ExtractImportPaths(tokens)
 	modDir := filepath.Dir(absPath)
 	for _, subPath := range subPaths {
@@ -156,7 +151,6 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 		}
 	}
 
-	// Replace imports with only stdlib imports (user imports are resolved)
 	program.Imports = stdlibImports
 
 	for _, imp := range userImports {
@@ -189,8 +183,8 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 	return nil
 }
 
-// resolveModuleFile resolves a single user module: reads, lexes, resolves sub-imports
-// FIRST (so their struct types are registered), then parses, prefixes, and merges.
+// Sub-imports are resolved before this module is parsed, so their struct types
+// are registered by the time its type annotations are read.
 func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Program, visited, processing map[string]bool) error {
 	processing[absPath] = true
 
@@ -199,18 +193,14 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		return fmt.Errorf("cannot open user module '%s': %v", filePath, err)
 	}
 
-	// Lex
 	lex := lexer.NewWithFile(string(source), filePath)
 	tokens, err := lex.Tokenize()
 	if err != nil {
 		return err
 	}
 
-	// Extract import paths from tokens BEFORE parsing
 	importPaths := ExtractImportPaths(tokens)
 
-	// Resolve user sub-imports FIRST so their struct types are registered globally.
-	// This ensures the parser for this module can reference struct types from dependencies.
 	modDir := filepath.Dir(absPath)
 	for _, subPath := range importPaths {
 		if stdlib.Lookup(subPath) != nil {
@@ -238,13 +228,11 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		}
 	}
 
-	// NOW parse — all dependency struct types are registered globally
 	typeNames := stdlib.ModuleTypesForImports(importPaths)
 	p := parser.New(tokens)
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
-	// Seed parser with struct names from already-resolved dependencies
 	for _, name := range ast.AllStructNames() {
 		p.AddStructName(name)
 	}
@@ -253,16 +241,13 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		return errs[0]
 	}
 
-	// Flatten struct methods
 	FlattenStructMethods(modProgram)
 
 	delete(processing, absPath)
 	visited[absPath] = true
 
-	// Collect this module's own function and global names (before prefixing).
-	// Globals are prefixed alongside functions: they are merged into one flat
-	// namespace, so two modules each declaring `let svc` would otherwise become
-	// the same variable without anything reporting it.
+	// Globals are prefixed alongside functions: everything merges into one flat
+	// namespace, so two modules declaring `let svc` would otherwise collide.
 	ownNames := map[string]bool{}
 	for _, fn := range modProgram.Functions {
 		ownNames[fn.Name] = true
@@ -271,7 +256,6 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		ownNames[gl.Name] = true
 	}
 
-	// Prefix only this module's own functions
 	for i := range modProgram.Functions {
 		fn := &modProgram.Functions[i]
 		if fn.Name == "main" || !ownNames[fn.Name] {
@@ -294,7 +278,6 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		gl.Name = moduleName + "_" + gl.Name
 	}
 
-	// Merge functions into program
 	for _, fn := range modProgram.Functions {
 		if fn.Name == "main" {
 			continue
@@ -302,10 +285,8 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		program.Functions = append(program.Functions, fn)
 	}
 
-	// Merge global let declarations from module
 	program.GlobalLets = append(program.GlobalLets, modProgram.GlobalLets...)
 
-	// Track which module each struct belongs to
 	for _, sd := range modProgram.Structs {
 		if program.StructModule == nil {
 			program.StructModule = make(map[string]string)
@@ -314,14 +295,12 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	}
 	program.Structs = append(program.Structs, modProgram.Structs...)
 
-	// Merge stdlib imports from this module
 	for _, modImp := range modProgram.Imports {
 		if stdlib.Lookup(modImp.Path) != nil && !containsImport(program.Imports, modImp.Path) {
 			program.Imports = append(program.Imports, modImp)
 		}
 	}
 
-	// Register user sub-module names
 	for _, subPath := range importPaths {
 		if stdlib.Lookup(subPath) == nil {
 			subModName := filepath.Base(subPath)
@@ -356,13 +335,8 @@ func containsImport(imports []ast.Import, path string) bool {
 	return false
 }
 
-// prefixCallsInStmt walks a statement tree and rewrites unqualified calls
-// to module-internal functions with the module prefix.
-// prefixCallsInStmt rewrites every reference to one of this module's own
-// top-level names — functions and module-level values alike — into the flat,
-// module-prefixed name they are merged under. Both walkers below are the shared
-// generic ones, so a statement kind added to the language is covered here
-// automatically rather than being silently skipped.
+// Rewrites every reference to one of this module's own top-level names into the
+// flat, prefixed name it is merged under.
 func prefixCallsInStmt(stmt ast.Stmt, moduleName string, modNames map[string]bool) {
 	prefix := func(name string) string { return moduleName + "_" + name }
 
@@ -429,17 +403,21 @@ func prefixCallsInExpr(expr ast.Expr, moduleName string, modNames map[string]boo
 	prefixCallsInStmt(&ast.ExprStmt{Expr: expr}, moduleName, modNames)
 }
 
-// FlattenStructMethods extracts methods from struct definitions into top-level
-// functions with a "self" parameter of the struct type. Method bodies have bare
-// field-name references rewritten to self.fieldName.
+// Extracts methods into top-level functions taking a "self" receiver, rewriting
+// bare field references in their bodies to read through it.
 func FlattenStructMethods(program *ast.Program) {
 	for _, sd := range program.Structs {
 		if len(sd.Methods) == 0 {
 			continue
 		}
 
-		// Build set of field names for this struct
+		// Sibling method names count too: named without being called, one is a
+		// method value on the same receiver.
 		fieldNames := map[string]bool{}
+		methodNames := map[string]bool{}
+		for _, m := range sd.Methods {
+			methodNames[m.Name] = true
+		}
 		for _, f := range sd.Fields {
 			fieldNames[f.Name] = true
 		}
@@ -469,7 +447,7 @@ func FlattenStructMethods(program *ast.Program) {
 			}
 
 			for _, stmt := range flatFn.Body {
-				rewriteFieldRefsInStmt(stmt, fieldNames, localNames)
+				rewriteFieldRefsInStmt(stmt, fieldNames, methodNames, localNames)
 			}
 
 			program.Functions = append(program.Functions, flatFn)
@@ -477,150 +455,47 @@ func FlattenStructMethods(program *ast.Program) {
 	}
 }
 
-// rewriteFieldRefsInStmt walks a statement and rewrites bare identifiers that
-// match struct field names into FieldAccessExpr{Object: Ident{"self"}, Field: name}.
-func rewriteFieldRefsInStmt(stmt ast.Stmt, fieldNames, localNames map[string]bool) {
-	switch s := stmt.(type) {
-	case *ast.ExprStmt:
-		s.Expr = rewriteFieldRefsInExpr(s.Expr, fieldNames, localNames)
-	case *ast.LetStmt:
-		s.Value = rewriteFieldRefsInExpr(s.Value, fieldNames, localNames)
-		localNames[s.Name] = true
-	case *ast.AssignStmt:
-		if fieldNames[s.Name] && !localNames[s.Name] {
-			// Rewrite to field assignment: self.field = value
+// Rewrites a method body so bare field names read through the receiver: `label`
+// means `self.label`. A local of the same name shadows the field.
+func rewriteFieldRefsInStmt(stmt ast.Stmt, fieldNames, methodNames, localNames map[string]bool) {
+	stmtFn := func(st ast.Stmt) {
+		if let, ok := st.(*ast.LetStmt); ok {
+			// A local declared here shadows any field of the same name from this
+			// point on.
+			if let.Name != "" {
+				localNames[let.Name] = true
+			}
+			for _, n := range let.Names {
+				localNames[n] = true
+			}
 		}
-		s.Value = rewriteFieldRefsInExpr(s.Value, fieldNames, localNames)
-	case *ast.ReturnStmt:
-		if s.Value != nil {
-			s.Value = rewriteFieldRefsInExpr(s.Value, fieldNames, localNames)
-		}
-	case *ast.IfStmt:
-		s.Cond = rewriteFieldRefsInExpr(s.Cond, fieldNames, localNames)
-		for _, st := range s.Then {
-			rewriteFieldRefsInStmt(st, fieldNames, localNames)
-		}
-		for _, st := range s.Else {
-			rewriteFieldRefsInStmt(st, fieldNames, localNames)
-		}
-	case *ast.WhileStmt:
-		s.Cond = rewriteFieldRefsInExpr(s.Cond, fieldNames, localNames)
-		for _, st := range s.Body {
-			rewriteFieldRefsInStmt(st, fieldNames, localNames)
-		}
-	case *ast.ForStmt:
-		if s.Init != nil {
-			rewriteFieldRefsInStmt(s.Init, fieldNames, localNames)
-		}
-		if s.Cond != nil {
-			s.Cond = rewriteFieldRefsInExpr(s.Cond, fieldNames, localNames)
-		}
-		if s.Post != nil {
-			rewriteFieldRefsInStmt(s.Post, fieldNames, localNames)
-		}
-		for _, st := range s.Body {
-			rewriteFieldRefsInStmt(st, fieldNames, localNames)
-		}
-	case *ast.ForeachStmt:
-		s.Iterable = rewriteFieldRefsInExpr(s.Iterable, fieldNames, localNames)
-		for _, st := range s.Body {
-			rewriteFieldRefsInStmt(st, fieldNames, localNames)
-		}
-	case *ast.BlockStmt:
-		for _, st := range s.Stmts {
-			rewriteFieldRefsInStmt(st, fieldNames, localNames)
-		}
-	case *ast.IndexAssignStmt:
-		s.Array = rewriteFieldRefsInExpr(s.Array, fieldNames, localNames)
-		s.Index = rewriteFieldRefsInExpr(s.Index, fieldNames, localNames)
-		s.Value = rewriteFieldRefsInExpr(s.Value, fieldNames, localNames)
-	case *ast.FieldAssignStmt:
-		s.Object = rewriteFieldRefsInExpr(s.Object, fieldNames, localNames)
-		s.Value = rewriteFieldRefsInExpr(s.Value, fieldNames, localNames)
-	case *ast.CompoundAssignStmt:
-		s.Value = rewriteFieldRefsInExpr(s.Value, fieldNames, localNames)
-	case *ast.SendStmt:
-		if s.Target != nil {
-			s.Target = rewriteFieldRefsInExpr(s.Target, fieldNames, localNames)
-		}
-		s.Value = rewriteFieldRefsInExpr(s.Value, fieldNames, localNames)
 	}
-}
 
-// rewriteFieldRefsInExpr rewrites bare identifiers matching struct fields to self.field.
-func rewriteFieldRefsInExpr(expr ast.Expr, fieldNames, localNames map[string]bool) ast.Expr {
-	if expr == nil {
+	exprFn := func(expr ast.Expr) ast.Expr {
+		switch e := expr.(type) {
+		case *ast.Ident:
+			if (fieldNames[e.Name] || methodNames[e.Name]) && !localNames[e.Name] {
+				return &ast.FieldAccessExpr{Pos: e.Pos, Object: &ast.Ident{Pos: e.Pos, Name: "self"}, Field: e.Name}
+			}
+		case *ast.CallExpr:
+			// A call qualified by a field name is a method call on that field —
+			// `hub.send(...)` where hub is a field, not a module.
+			if e.Module != "" && fieldNames[e.Module] && !localNames[e.Module] {
+				e.Module = "self." + e.Module
+			}
+			// An unqualified call naming a sibling method is a call on the same
+			// receiver, so `commandGuard(id)` inside a method means
+			// `self.commandGuard(id)`.
+			if e.Module == "" && methodNames[e.Name] && !localNames[e.Name] {
+				e.Module = "self"
+			}
+		}
 		return nil
 	}
-	switch e := expr.(type) {
-	case *ast.Ident:
-		if fieldNames[e.Name] && !localNames[e.Name] {
-			return &ast.FieldAccessExpr{Object: &ast.Ident{Name: "self"}, Field: e.Name}
-		}
-		return e
-	case *ast.CallExpr:
-		// Rewrite field-qualified calls: database.query() -> self.database.query()
-		// When Module matches a struct field name, it's a method call on that field,
-		// not a module call. Prefix with "self." so checker/codegen resolve it correctly.
-		if e.Module != "" && fieldNames[e.Module] && !localNames[e.Module] {
-			e.Module = "self." + e.Module
-		}
-		for i, arg := range e.Args {
-			e.Args[i] = rewriteFieldRefsInExpr(arg, fieldNames, localNames)
-		}
-		return e
-	case *ast.BinaryExpr:
-		e.Left = rewriteFieldRefsInExpr(e.Left, fieldNames, localNames)
-		e.Right = rewriteFieldRefsInExpr(e.Right, fieldNames, localNames)
-		return e
-	case *ast.UnaryExpr:
-		e.Operand = rewriteFieldRefsInExpr(e.Operand, fieldNames, localNames)
-		return e
-	case *ast.IndexExpr:
-		e.Array = rewriteFieldRefsInExpr(e.Array, fieldNames, localNames)
-		e.Index = rewriteFieldRefsInExpr(e.Index, fieldNames, localNames)
-		return e
-	case *ast.SliceExpr:
-		e.Array = rewriteFieldRefsInExpr(e.Array, fieldNames, localNames)
-		if e.Start != nil {
-			e.Start = rewriteFieldRefsInExpr(e.Start, fieldNames, localNames)
-		}
-		if e.End != nil {
-			e.End = rewriteFieldRefsInExpr(e.End, fieldNames, localNames)
-		}
-		return e
-	case *ast.ArrayLitExpr:
-		for i, elem := range e.Elems {
-			e.Elems[i] = rewriteFieldRefsInExpr(elem, fieldNames, localNames)
-		}
-		return e
-	case *ast.StructLitExpr:
-		for i, val := range e.FieldValues {
-			e.FieldValues[i] = rewriteFieldRefsInExpr(val, fieldNames, localNames)
-		}
-		return e
-	case *ast.FieldAccessExpr:
-		e.Object = rewriteFieldRefsInExpr(e.Object, fieldNames, localNames)
-		return e
-	case *ast.SpawnExpr:
-		if e.Call != nil {
-			e.Call = rewriteFieldRefsInExpr(e.Call, fieldNames, localNames)
-		}
-		for _, stmt := range e.Body {
-			rewriteFieldRefsInStmt(stmt, fieldNames, localNames)
-		}
-		return e
-	case *ast.ReceiveExpr:
-		e.Source = rewriteFieldRefsInExpr(e.Source, fieldNames, localNames)
-		return e
-	default:
-		return e
-	}
+
+	walkStmtsWith([]ast.Stmt{stmt}, stmtFn, exprFn)
 }
 
-// walkProgramExprs visits every expression in the program, replacing any for
-// which fn returns a non-nil node. It exists so a rewrite can be expressed once
-// rather than repeated across every statement and expression kind.
 func walkProgramExprs(program *ast.Program, fn func(ast.Expr) ast.Expr) {
 	for i := range program.GlobalLets {
 		program.GlobalLets[i].Value = walkExpr(program.GlobalLets[i].Value, fn)
@@ -634,10 +509,8 @@ func walkStmts(stmts []ast.Stmt, fn func(ast.Expr) ast.Expr) {
 	walkStmtsWith(stmts, nil, fn)
 }
 
-// walkStmtsWith visits every statement and expression. stmtFn, when non-nil, is
-// called on each statement before its children are walked — statement targets
-// such as an assignment's variable name are plain strings, not expressions, so
-// a rewrite that touches them needs this hook.
+// stmtFn, when non-nil, runs on each statement before its children — assignment
+// targets are plain strings rather than expressions, so a rewrite needs it.
 func walkStmtsWith(stmts []ast.Stmt, stmtFn func(ast.Stmt), exprFn func(ast.Expr) ast.Expr) {
 	for _, stmt := range stmts {
 		walkStmtWith(stmt, stmtFn, exprFn)
@@ -766,10 +639,7 @@ func walkExpr(expr ast.Expr, fn func(ast.Expr) ast.Expr) ast.Expr {
 	return expr
 }
 
-
-// withoutShadowed returns names minus any that fn declares as a parameter or
-// local. Renaming a shadowed name would rebind a local to a module-level value,
-// which is both wrong and hard to see in the resulting error.
+// Renaming a shadowed name would rebind a local to a module-level value.
 func withoutShadowed(names map[string]bool, fn *ast.Function) map[string]bool {
 	shadowed := map[string]bool{}
 	for _, p := range fn.Params {
@@ -788,11 +658,9 @@ func withoutShadowed(names map[string]bool, fn *ast.Function) map[string]bool {
 	return visible
 }
 
-// collectDeclaredNames gathers every name a statement list introduces, at any
-// nesting depth. Block scoping is not modelled: a name declared in an inner
-// block withholds the rename for the whole function, which errs toward leaving
-// a reference alone. That surfaces as an ordinary "undefined" error rather than
-// as a silent rebinding.
+// Block scoping is not modelled: a name declared in an inner block withholds the
+// rename for the whole function, erring toward an "undefined" error over a
+// silent rebinding.
 func collectDeclaredNames(stmts []ast.Stmt, out map[string]bool) {
 	walkStmtsWith(stmts, func(st ast.Stmt) {
 		switch s := st.(type) {

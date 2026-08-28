@@ -7,14 +7,12 @@ import (
 	"github.com/ensamuel7/dex/ast"
 )
 
-// genJsonValue emits an expression producing a `DexJsonValue*` with a +1
-// reference the caller owns. Literals are built node by node; anything else is
-// converted from its static type by genJsonValueFrom.
+// Emits a DexJsonValue* the caller owns. Literals are built node by node;
+// anything else is converted from its static type.
 func (g *Generator) genJsonValue(out *strings.Builder, e ast.Expr) {
 	switch lit := e.(type) {
 	case *ast.ObjectLitExpr:
-		// Built inside a statement expression so the partially-built object has a
-		// name to hang the puts off, and so nesting composes.
+		// Built inside a statement expression so nesting composes.
 		out.WriteString("({ DexJsonValue* _jo = dex_jv_object(); ")
 		for i, k := range lit.Keys {
 			out.WriteString(fmt.Sprintf("dex_jv_put_cstr(_jo, %s, ", cQuote(k)))
@@ -35,7 +33,6 @@ func (g *Generator) genJsonValue(out *strings.Builder, e ast.Expr) {
 		return
 
 	case *ast.MapLitExpr:
-		// `{}` in a json.Value position is the empty object.
 		out.WriteString("dex_jv_object()")
 		return
 
@@ -47,9 +44,8 @@ func (g *Generator) genJsonValue(out *strings.Builder, e ast.Expr) {
 	g.genJsonValueFrom(out, e, g.typeOfExpr(e))
 }
 
-// genJsonValueFrom converts an already-typed expression into a json.Value. A
-// value that is already a json.Value is retained rather than copied, so nesting
-// one document inside another shares structure instead of duplicating it.
+// Converts a typed expression into a json.Value. An existing json.Value is
+// retained rather than copied, so nesting shares structure.
 func (g *Generator) genJsonValueFrom(out *strings.Builder, e ast.Expr, t ast.Type) {
 	switch t {
 	case ast.TypeJsonValue:
@@ -97,9 +93,8 @@ func (g *Generator) genJsonValueFrom(out *strings.Builder, e ast.Expr, t ast.Typ
 		return
 	}
 
-	// Structs, arrays and maps already have encoders. Routing them through their
-	// JSON text and re-parsing keeps one definition of how each shape serializes,
-	// rather than a second tree-building path that could disagree with encode.
+	// Routed through their JSON text so there is one definition of how each
+	// shape serializes.
 	if ast.IsStructType(t) || ast.IsArrayType(t) || ast.IsStructArrayType(t) || ast.IsMapType(t) {
 		out.WriteString("({ DexString* _jt = ")
 		g.genJsonEncodeToString(out, e, t)
@@ -107,15 +102,11 @@ func (g *Generator) genJsonValueFrom(out *strings.Builder, e ast.Expr, t ast.Typ
 		return
 	}
 
-	// The checker rejects everything else, so reaching here means a type slipped
-	// through; null keeps the output well-formed rather than emitting bad C.
+	// Unreachable: the checker rejects everything else.
 	out.WriteString("dex_jv_null()")
 }
 
-// jsonValueOwned reports whether an expression of type json.Value hands back a
-// reference the consumer must release. Indexing and calls mint a new reference;
-// a variable or struct field only lends one. Getting this wrong either leaks or
-// frees a live document, so it is kept next to the code that acts on it.
+// Indexing and calls mint a reference; a variable or field only lends one.
 func (g *Generator) jsonValueOwned(e ast.Expr) bool {
 	switch e.(type) {
 	case *ast.Ident, *ast.FieldAccessExpr:
@@ -129,8 +120,7 @@ func (g *Generator) jsonValueOwned(e ast.Expr) bool {
 	}
 }
 
-// jsonValueMethodFns maps each no-argument json.Value method to its runtime
-// function. `has` takes an argument and is handled separately.
+// `has` takes an argument and is handled separately.
 var jsonValueMethodFns = map[string]string{
 	"len":      "dex_jv_len",
 	"asInt":    "dex_jv_as_int",
@@ -147,9 +137,8 @@ var jsonValueMethodFns = map[string]string{
 	"keys":     "dex_jv_keys",
 }
 
-// genJsonValueMethodExpr emits a method call whose receiver is an arbitrary
-// expression. When the receiver owns its reference — `parsed[0].asInt()` — the
-// call is wrapped so the intermediate is released once the result is in hand.
+// When the receiver owns its reference — parsed[0].asInt() — the intermediate is
+// released once the result is in hand.
 func (g *Generator) genJsonValueMethodExpr(out *strings.Builder, recv ast.Expr, method string, args []ast.Expr, retType ast.Type) bool {
 	fn, ok := jsonValueMethodFns[method]
 	if !ok && method != "has" {
@@ -157,8 +146,7 @@ func (g *Generator) genJsonValueMethodExpr(out *strings.Builder, recv ast.Expr, 
 	}
 	emitCall := func(recvC string) {
 		if method == "has" {
-			// The runtime borrows the key, so an allocating key expression is
-			// released here rather than being left to the caller.
+			// The runtime borrows the key.
 			if g.isNewAlloc(args[0]) {
 				key := g.nextTemp()
 				res := g.nextTemp()
@@ -222,20 +210,15 @@ func cQuote(s string) string {
 	return b.String()
 }
 
-
-// genJsonValueIndex emits v[i] or v["key"]. Both runtime lookups return a new
-// reference and borrow their operands, so an operand that is itself a fresh
-// reference — the inner step of a chain like v["a"]["b"] — is bound to a
-// temporary and released once the lookup is done. Without that, every
-// intermediate in a chained path would leak.
+// Both lookups return a new reference and borrow their operands, so a fresh
+// operand — the inner step of v["a"]["b"] — is released after the lookup.
 func (g *Generator) genJsonValueIndex(out *strings.Builder, e *ast.IndexExpr) {
 	fn := "dex_jv_index"
 	idxType := g.typeOfExpr(e.Index)
 	if idxType == ast.TypeString {
 		fn = "dex_jv_get"
 	}
-	// Only a heap index — a string key — can need releasing; an int index is a
-	// plain value even when the expression producing it looks like an allocation.
+	// Only a string key can need releasing; an int index is a plain value.
 	keyOwned := ast.IsHeapType(idxType) && g.isNewAlloc(e.Index)
 	arrOwned := g.jsonValueOwned(e.Array)
 

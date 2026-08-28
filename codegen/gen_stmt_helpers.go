@@ -136,6 +136,11 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 	case *ast.Ident:
 		return false // borrowed reference
 	case *ast.FieldAccessExpr:
+		// Reading a field borrows it, but naming a method builds a fresh closure
+		// over the receiver.
+		if fa, isField := expr.(*ast.FieldAccessExpr); isField && fa.IsMethodValue {
+			return true
+		}
 		return false // borrowed from struct field
 	case *ast.IndexExpr:
 		return false // borrowed from array/map element
@@ -177,63 +182,49 @@ func alwaysExitsCodegen(stmts []ast.Stmt) bool {
 
 // --- Statement-scoped owned temporaries ---
 //
-// An expression such as `s.toUpper()` or `json.encode(v)` hands back a heap
-// value with a +1 reference. When that value is stored the storer takes over the
-// reference, but when it is merely *read* — printed, or passed to a function
-// that borrows it — nobody owns it and it leaks. These helpers hoist such a
-// value into a temporary declared just before the statement, so it stays alive
-// for the whole statement and is released at the end of it.
+// An expression like s.toUpper() returns a +1 reference. When the value is
+// stored, the storer takes it over; when it is only read — printed, or passed to
+// something that borrows — nobody owns it and it leaks. These hoist it into a
+// temporary released at the end of the statement.
 
-// beginStmtHoist starts collecting hoisted temporaries for one statement.
 func (g *Generator) beginStmtHoist() {
 	g.stmtPrelude = &strings.Builder{}
 	g.stmtTemps = nil
 }
 
-// hoistingEnabled reports whether hoisting is currently allowed. It is disabled
-// while generating contexts that are not plain statements — a struct field
-// initialiser list, for instance — where a hoisted declaration has nowhere to go.
+// Disabled where a hoisted declaration has nowhere to go.
 func (g *Generator) hoistingEnabled() bool {
 	return g.stmtPrelude != nil && g.stmtHoistOff == 0
 }
 
-// suspendHoisting turns hoisting off until the returned function is called.
 func (g *Generator) suspendHoisting() func() {
 	g.stmtHoistOff++
 	return func() { g.stmtHoistOff-- }
 }
 
-// genBorrowed emits an expression that the consumer only borrows. If the
-// expression mints a reference, it is bound to a statement-scoped temporary and
-// the temporary's name is emitted instead.
+// For a consumer that only borrows: a minted reference is bound to a
+// statement-scoped temporary instead.
 func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
 	t := g.typeOfExpr(expr)
-	// A struct is a value, but one built on the spot owns whatever heap fields
-	// it was given. Passed to something that only reads it, nobody would ever
-	// release those, so it is hoisted like any other temporary.
 	if !g.hoistingEnabled() {
 		g.genExpr(out, expr)
 		return
 	}
-	// Whether the value was produced here rather than borrowed from somewhere
-	// that still owns it. For a heap value that is isNewAlloc; for a struct it is
-	// simply "not read out of a variable", since a struct literal or a returned
-	// struct owns the heap fields it carries.
+	// Produced here rather than borrowed from somewhere that still owns it. A
+	// struct built on the spot owns its heap fields, so it is hoisted too.
 	var owned bool
 	switch {
 	case ast.IsHeapType(t):
 		owned = g.isNewAlloc(expr)
 	case ast.IsStructType(t) && ast.NeedsRelease(t):
-		owned = !isBorrowedExpr(expr)
+		owned = !g.borrowsHeapValue(expr)
 	}
 	if !owned {
 		g.genExpr(out, expr)
 		return
 	}
-	// The expression is generated into a side buffer against a fresh prelude, so
-	// that anything it hoists in turn is declared *before* this declaration
-	// rather than being spliced into the middle of it. Inner temporaries land in
-	// stmtTemps first and so are released last, after the value that uses them.
+	// Generated against a fresh prelude so anything it hoists in turn is declared
+	// before this declaration rather than spliced into the middle of it.
 	savedPrelude := g.stmtPrelude
 	g.stmtPrelude = &strings.Builder{}
 	var exprBuf strings.Builder
@@ -244,12 +235,21 @@ func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
 	tmp := g.nextTemp()
 	g.stmtPrelude.WriteString(nested)
 	g.stmtPrelude.WriteString(fmt.Sprintf("%s %s = %s; ", g.cType(t), tmp, exprBuf.String()))
+	// A struct literal copies borrowed heap fields without retaining them, and
+	// the temporary's release would drop a reference it never owned.
+	if lit, ok := expr.(*ast.StructLitExpr); ok && ast.IsStructType(t) {
+		var retains strings.Builder
+		g.emitRetainStructLitFields(&retains, "", tmp, t, lit)
+		g.stmtPrelude.WriteString(strings.ReplaceAll(strings.TrimRight(retains.String(), "\n"), "\n", " "))
+		if retains.Len() > 0 {
+			g.stmtPrelude.WriteString(" ")
+		}
+	}
 	g.stmtTemps = append(g.stmtTemps, scopeVar{name: tmp, typ: t})
 	out.WriteString(tmp)
 }
 
-// emitWithHoists writes a fully-generated statement, wrapping it in a block that
-// declares and releases any temporaries hoisted while generating it.
+// Wraps a generated statement in a block declaring and releasing its hoists.
 func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
 	if g.stmtPrelude == nil || len(g.stmtTemps) == 0 {
 		out.WriteString(prefix + stmt)
@@ -268,9 +268,8 @@ func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
 	g.stmtTemps = nil
 }
 
-// emitHoistPrelude writes the hoisted declarations ahead of a statement that
-// must not be wrapped in a block — a `let`, whose variable has to stay in scope.
-// Pair it with emitHoistReleases after the statement.
+// For a statement that must not be wrapped in a block — a `let`, whose variable
+// has to stay in scope. Pair with emitHoistReleases.
 func (g *Generator) emitHoistPrelude(out *strings.Builder, prefix string) {
 	if g.stmtPrelude == nil || g.stmtPrelude.Len() == 0 {
 		return
@@ -278,10 +277,8 @@ func (g *Generator) emitHoistPrelude(out *strings.Builder, prefix string) {
 	out.WriteString(prefix + g.stmtPrelude.String() + "\n")
 }
 
-// emitHoistReleases releases the temporaries hoisted for the current statement.
-// The prelude is deliberately left in place: a return statement emits its
-// releases while generating its body, but its declarations have to be written
-// out ahead of that body, so the caller still needs them afterwards.
+// The prelude is left in place: a return emits its releases while generating its
+// body, but its declarations are written ahead of that body.
 func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
 	for i := len(g.stmtTemps) - 1; i >= 0; i-- {
 		// emitReleaseVar rather than a bare release: a hoisted struct is freed by
@@ -291,10 +288,7 @@ func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
 	g.stmtTemps = nil
 }
 
-// structLitBorrowsHeapField reports whether a struct literal initialises any
-// heap field from a borrowed reference. Such a literal needs a retain even in a
-// function with nothing to clean up, because the borrowed value is owned by the
-// caller and released as soon as the call returns.
+// Such a literal needs a retain even in a function with nothing to clean up.
 func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit *ast.StructLitExpr) bool {
 	def := ast.GetStructDef(structType)
 	if def == nil {

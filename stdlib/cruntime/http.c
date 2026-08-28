@@ -12,7 +12,12 @@
 #include <signal.h>
 #include <curl/curl.h>
 
-typedef Dex_HttpResponse (*dex_handler_fn)(Dex_HttpRequest);
+// A route handler is a function value: code plus whatever state it carries, so a
+// handler can be a method bound to the struct holding its dependencies. The
+// environment is passed as a hidden first argument, as for every closure.
+typedef Dex_HttpResponse (*dex_handler_fn)(void*, Dex_HttpRequest);
+
+#define DEX_CALL_HANDLER(c, req) (((dex_handler_fn)(c)->fn)((c)->env, (req)))
 
 typedef struct {
     const char* method;
@@ -22,18 +27,21 @@ typedef struct {
     char param_names[16][64];     // param names without ':'
     int segment_count;            // total segments in pattern
     char segments[32][256];       // pre-split pattern segments
-    dex_handler_fn handler;
+    DexClosure* handler;
 } dex_route_entry;
 
 #define DEX_MAX_ROUTES 64
 static dex_route_entry dex_routes[DEX_MAX_ROUTES];
 static int dex_route_count = 0;
 
-void dex_route(const char* method, const char* path, dex_handler_fn handler) {
+void dex_route(const char* method, const char* path, DexClosure* handler) {
     if (dex_route_count >= DEX_MAX_ROUTES) return;
     dex_route_entry* r = &dex_routes[dex_route_count];
     r->method = method;
     r->pattern = path;
+    // The table outlives the expression that built the handler, so it takes its
+    // own reference to it.
+    dex_retain(handler);
     r->handler = handler;
     r->param_count = 0;
     r->segment_count = 0;
@@ -329,7 +337,7 @@ static void dex_http_worker_func(void* arg) {
         /* Fast path: no params, use exact string match */
         if (r->param_count == 0) {
             if (strcmp(conn->path, r->pattern) == 0) {
-                Dex_HttpResponse resp = r->handler(req);
+                Dex_HttpResponse resp = DEX_CALL_HANDLER(r->handler, req);
                 const char* status = dex_http_status_text(resp.statusCode);
                 const char* ct = "application/json";
                 if (resp.contentType && resp.contentType->data[0] != '\0') {
@@ -368,7 +376,7 @@ static void dex_http_worker_func(void* arg) {
                 dex_release(val);
             }
 
-            Dex_HttpResponse resp = r->handler(req);
+            Dex_HttpResponse resp = DEX_CALL_HANDLER(r->handler, req);
             const char* status = dex_http_status_text(resp.statusCode);
             const char* ct = "application/json";
             if (resp.contentType && resp.contentType->data[0] != '\0') {

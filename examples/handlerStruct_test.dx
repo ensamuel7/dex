@@ -1,0 +1,70 @@
+// A handler is a struct holding what it needs, and its methods are registered
+// directly as route and callback handlers. The receiver travels inside the
+// function value, so nothing has to be stashed in module state to reach it.
+//
+// This only compiles the registrations; serving is exercised by ws_test and
+// httpRequest_test.
+
+import "http"
+import "ws"
+import "json"
+
+struct ApiHandler {
+    greeting: string
+    version: int
+
+    fn hello(): string {
+        return json.encode({ message: greeting, version: version })
+    }
+
+    fn show(req: http.HttpRequest): http.HttpResponse {
+        return http.response(200, json.encode({ id: req.params.get("id"), from: greeting }), "application/json")
+    }
+
+    fn count(): int {
+        return version
+    }
+
+    fn routes(): void {
+        http.route("GET", "/hello", hello)
+        http.route("GET", "/items/:id", show)
+        http.route("GET", "/count", count)
+    }
+}
+
+struct SocketHandler {
+    label: string
+
+    fn onConnect(conn: ws.Conn, path: string): void {
+    }
+
+    fn onMessage(conn: ws.Conn, msg: string): void {
+        ws.send(conn, label)
+    }
+
+    fn onDisconnect(conn: ws.Conn): void {
+    }
+
+    fn register(): void {
+        ws.handleConnect(onConnect)
+        ws.handleMessage(onMessage)
+        ws.handleDisconnect(onDisconnect)
+    }
+}
+
+fn main(): void {
+    let api: ApiHandler = ApiHandler { greeting: "hi", version: 2 }
+    // Registered from outside the struct, as method values.
+    http.route("GET", "/outside", api.hello)
+    http.route("GET", "/outside/:id", api.show)
+    // And from inside, where a sibling method resolves through the receiver.
+    api.routes()
+
+    let sock: SocketHandler = SocketHandler { label: "sock" }
+    ws.handleMessage(sock.onMessage)
+    sock.register()
+
+    // The methods still work as ordinary calls.
+    assert(api.count() == 2)
+    assert(api.hello() == "{\"message\":\"hi\",\"version\":2}")
+}

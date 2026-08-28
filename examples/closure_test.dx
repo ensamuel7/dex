@@ -1,0 +1,53 @@
+// Function values carry the state they were built with. A plain function has
+// none; a lambda carries whatever it closed over. Both are invoked identically,
+// so a caller never has to know which it holds.
+
+
+fn apply(f: fn(int): int, x: int): int { return f(x) }
+fn call0(f: fn(): string): string { return f() }
+
+fn makeAdder(n: int): fn(int): int {
+    return fn(x: int): int { return x + n }
+}
+
+fn makeGreeter(name: string): fn(): string {
+    return fn(): string { return "hello " + name }
+}
+
+fn main(): void {
+    // capture a local
+    let base: int = 10
+    let addBase: fn(int): int = fn(x: int): int { return x + base }
+    assert(addBase(5) == 15)
+    assert(apply(addBase, 1) == 11)
+
+    // a closure returned from a function outlives the call that made it
+    let add7: fn(int): int = makeAdder(7)
+    assert(add7(1) == 8)
+    assert(add7(10) == 17)
+
+    // capturing a heap value: the string must survive its scope
+    let greet: fn(): string = makeGreeter("dex")
+    assert(greet() == "hello dex")
+    assert(call0(greet) == "hello dex")
+
+    // two closures over different values stay independent
+    let a: fn(int): int = makeAdder(1)
+    let b: fn(int): int = makeAdder(100)
+    assert(a(0) == 1)
+    assert(b(0) == 100)
+
+    // capture several variables at once
+    let x: int = 2
+    let y: int = 3
+    let sum: fn(): int = fn(): int { return x + y }
+    assert(sum() == 5)
+
+    // a plain function still works as a value
+    let f: fn(int): int = twice
+    assert(f(21) == 42)
+    assert(apply(twice, 4) == 8)
+
+}
+
+fn twice(x: int): int { return x * 2 }

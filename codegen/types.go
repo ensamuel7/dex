@@ -75,7 +75,11 @@ func (g *Generator) cType(t ast.Type) string {
 			return "DexChan*"
 		}
 		if ast.IsFuncType(t) {
-			return g.funcTypedef(t)
+			// A function value is a closure — code plus the state it carries — so
+			// every one of them has the same C type. The per-signature typedef is
+			// only used to cast the code pointer at a call site.
+			g.funcTypedef(t)
+			return "DexClosure*"
 		}
 		if ast.IsWeakType(t) {
 			return "DexWeakRef*"
@@ -547,6 +551,24 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			return t
 		}
 	case *ast.FieldAccessExpr:
+		// A method value is a closure over the receiver, not a field read.
+		if e.IsMethodValue {
+			def := ast.GetStructDef(e.StructType)
+			if def != nil {
+				flatName := def.Name + "_" + e.Field
+				if modName, ok := g.structModules[def.Name]; ok {
+					flatName = modName + "_" + flatName
+				}
+				if flat, ok := g.funcs[flatName]; ok {
+					var params []ast.Type
+					for _, p := range flat.Params[1:] {
+						params = append(params, p.Type)
+					}
+					return ast.FuncTypeOf(params, flat.ReturnType)
+				}
+			}
+			return 0
+		}
 		objType := g.typeOfExpr(e.Object)
 		// Unwrap ref type for field access
 		if ast.IsRefType(objType) {

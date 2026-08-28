@@ -914,6 +914,80 @@ let doc: json.Value = json.decode(text)
 
 ---
 
+### Function values
+
+A function can be held in a variable, passed to another function, or returned
+from one. The type is written `fn(paramTypes): returnType`:
+
+```dex
+fn twice(x: int): int { return x * 2 }
+
+fn apply(f: fn(int): int, x: int): int {
+    return f(x)
+}
+
+let f: fn(int): int = twice
+apply(twice, 4)                        // 8
+```
+
+A function value carries the state it was built with, so three things can fill
+one: a plain function, a lambda, and a method bound to its receiver.
+
+**Lambdas** are written like a function without a name, and may close over the
+variables around them:
+
+```dex
+let base: int = 10
+let addBase: fn(int): int = fn(x: int): int { return x + base }
+addBase(5)                             // 15
+```
+
+A closure keeps whatever it captured alive, so it stays valid after the scope it
+was made in has gone:
+
+```dex
+fn makeAdder(n: int): fn(int): int {
+    return fn(x: int): int { return x + n }
+}
+
+let add7: fn(int): int = makeAdder(7)
+add7(1)                                // 8
+```
+
+**Method values** — naming a method without calling it gives that method bound to
+the object it was read from. The receiver travels inside the value:
+
+```dex
+struct Counter {
+    step: int
+
+    fn bump(x: int): int { return x + step }
+}
+
+let c: Counter = Counter { step: 5 }
+let bump: fn(int): int = c.bump        // bound to c
+bump(10)                               // 15
+apply(c.bump, 1)                       // 6
+```
+
+The receiver is copied into the value, so it is unaffected by later changes to
+the variable it came from. Inside a method, a sibling method named without a
+receiver refers to one on the same object.
+
+This is what lets a handler carry its dependencies rather than reaching for
+them. A struct holds what it needs, and its methods are registered directly:
+
+```dex
+struct Api {
+    greeting: string
+
+    fn hello(): string { return greeting }
+}
+
+let api: Api = Api { greeting: "hi" }
+http.route("GET", "/hello", api.hello)
+```
+
 ## Operators
 
 ### Arithmetic (operands must be matching numeric type: `int`, `long`, or `double`)

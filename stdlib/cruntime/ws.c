@@ -286,9 +286,14 @@ static int dex_ws_frame_recv(int fd, SSL* ssl, char* buf, size_t bufsize, int* o
 /* Pending handler registration — per-thread for the same reason as the
  * subprotocol above. Generated code assigns these directly before calling
  * dex_ws_listen(), which snapshots them into the listener it creates. */
-_Thread_local void (*dex_ws_on_message)(Dex_Conn, DexString*) = NULL;
-_Thread_local void (*dex_ws_on_connect)(Dex_Conn, DexString*) = NULL;
-_Thread_local void (*dex_ws_on_disconnect)(Dex_Conn) = NULL;
+// WebSocket callbacks are function values, so a handler can be a method bound to
+// the struct that holds its dependencies rather than a bare function.
+typedef void (*dex_ws_msg_fn)(void*, Dex_Conn, DexString*);
+typedef void (*dex_ws_conn_fn)(void*, Dex_Conn);
+
+_Thread_local DexClosure* dex_ws_on_message = NULL;
+_Thread_local DexClosure* dex_ws_on_connect = NULL;
+_Thread_local DexClosure* dex_ws_on_disconnect = NULL;
 
 typedef enum {
     WS_HANDSHAKE_READ,
@@ -357,9 +362,9 @@ struct DexWsServer {
     DexNotifyPipe  notify;
     int            server_fd;
 
-    void (*on_message)(Dex_Conn, DexString*);
-    void (*on_connect)(Dex_Conn, DexString*);
-    void (*on_disconnect)(Dex_Conn);
+    DexClosure* on_message;
+    DexClosure* on_connect;
+    DexClosure* on_disconnect;
     char subprotocol[128];
 
     /* Completed message dispatches (worker → event loop) */
@@ -581,7 +586,7 @@ static void dex_ws_worker_func(void* arg) {
     if (srv->on_message) {
         DexString* msg = dex_string_from_cstr(item->message);
         item->message = NULL; /* dex_string_from_cstr already freed it */
-        srv->on_message(conn->dex_conn, msg);
+        ((dex_ws_msg_fn)srv->on_message->fn)(srv->on_message->env, conn->dex_conn, msg);
         dex_release(msg);
     }
 
@@ -626,7 +631,7 @@ static void dex_ws_ev_finish_close(DexWsConn* conn) {
 static void dex_ws_ev_close_conn(DexWsConn* conn) {
     DexWsServer* srv = conn->srv;
     if (srv->on_disconnect) {
-        srv->on_disconnect(conn->dex_conn);
+        ((dex_ws_conn_fn)srv->on_disconnect->fn)(srv->on_disconnect->env, conn->dex_conn);
     }
     dex_ev_del(srv->loop, conn->fd);
     close(conn->fd);
@@ -831,7 +836,7 @@ void dex_ws_listen(int port) {
                         /* Call on_connect callback */
                         if (srv->on_connect) {
                             DexString* path_str = dex_string_new(conn->path, strlen(conn->path));
-                            srv->on_connect(conn->dex_conn, path_str);
+                            ((dex_ws_msg_fn)srv->on_connect->fn)(srv->on_connect->env, conn->dex_conn, path_str);
                             dex_release(path_str);
                         }
                         /* Handler rejected this client via ws.close() */

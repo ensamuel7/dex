@@ -1,0 +1,107 @@
+// A method named without being called is a method value: the method bound to
+// the object it was read from, usable anywhere a function value is. The receiver
+// travels inside the value, so nothing else has to carry it.
+
+struct Counter {
+    step: int
+    label: string
+
+    fn bump(x: int): int {
+        return x + step
+    }
+
+    fn describe(): string {
+        return label
+    }
+
+    fn scaled(x: int, factor: int): int {
+        return (x + step) * factor
+    }
+}
+
+struct Accumulator {
+    total: int
+
+    fn plus(x: int): int {
+        return total + x
+    }
+}
+
+fn apply(f: fn(int): int, x: int): int {
+    return f(x)
+}
+
+fn applyTwice(f: fn(int): int, x: int): int {
+    return f(f(x))
+}
+
+fn callNoArgs(f: fn(): string): string {
+    return f()
+}
+
+// A method value returned from a function outlives the local it was bound to.
+fn bumperFor(step: int): fn(int): int {
+    let c: Counter = Counter { step: step, label: "made here" }
+    return c.bump
+}
+
+fn labelOf(step: int, label: string): fn(): string {
+    let c: Counter = Counter { step: step, label: label }
+    return c.describe
+}
+
+fn main(): void {
+    let c: Counter = Counter { step: 5, label: "five" }
+
+    // Bound to its receiver, called through a variable.
+    let bump: fn(int): int = c.bump
+    assert(bump(10) == 15)
+    assert(bump(0) == 5)
+
+    // Passed straight to something taking a function value.
+    assert(apply(c.bump, 1) == 6)
+    assert(applyTwice(c.bump, 0) == 10)
+
+    // A no-argument method, and one taking several.
+    let name: fn(): string = c.describe
+    assert(name() == "five")
+    assert(callNoArgs(c.describe) == "five")
+    let scale: fn(int, int): int = c.scaled
+    assert(scale(1, 2) == 12)
+
+    // Two receivers give two independent values.
+    let small: Counter = Counter { step: 1, label: "one" }
+    let big: Counter = Counter { step: 100, label: "hundred" }
+    let bumpSmall: fn(int): int = small.bump
+    let bumpBig: fn(int): int = big.bump
+    assert(bumpSmall(0) == 1)
+    assert(bumpBig(0) == 100)
+    assert(callNoArgs(small.describe) == "one")
+    assert(callNoArgs(big.describe) == "hundred")
+
+    // The receiver is copied into the value, so later changes do not leak in.
+    let mutable: Counter = Counter { step: 2, label: "two" }
+    let captured: fn(int): int = mutable.bump
+    mutable = Counter { step: 900, label: "nine hundred" }
+    assert(captured(0) == 2)
+
+    // A value built inside a function still works after that function returns —
+    // including one whose receiver holds a heap field.
+    let escaped: fn(int): int = bumperFor(7)
+    assert(escaped(1) == 8)
+    assert(escaped(10) == 17)
+    let escapedLabel: fn(): string = labelOf(1, "survived")
+    assert(escapedLabel() == "survived")
+
+    // Methods on different struct types share the same function type.
+    let acc: Accumulator = Accumulator { total: 40 }
+    let add: fn(int): int = acc.plus
+    assert(add(2) == 42)
+    assert(apply(acc.plus, 2) == 42)
+
+    // Reassigning a function value swaps which receiver is bound.
+    let f: fn(int): int = c.bump
+    assert(f(0) == 5)
+    f = acc.plus
+    assert(f(0) == 40)
+}

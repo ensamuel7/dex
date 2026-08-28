@@ -244,6 +244,18 @@ func (g *Generator) collectUsedVarsExpr(expr ast.Expr, used map[string]bool) {
 	case *ast.UnaryExpr:
 		g.collectUsedVarsExpr(e.Operand, used)
 	case *ast.CallExpr:
+		// A method call names its receiver in Module rather than as an operand,
+		// so `handler.start(port)` uses `handler` and must capture it.
+		if e.Module != "" {
+			head := e.Module
+			if dot := strings.Index(head, "."); dot >= 0 {
+				head = head[:dot]
+			}
+			if _, isVar := g.varTypes[head]; isVar {
+				used[head] = true
+			}
+		}
+		g.collectUsedVarsExpr(e.Recv, used)
 		for _, arg := range e.Args {
 			g.collectUsedVarsExpr(arg, used)
 		}

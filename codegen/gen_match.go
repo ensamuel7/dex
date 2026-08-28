@@ -11,10 +11,11 @@ import (
 // match(tag) { pat1 => body1, pat2, pat3 => body2, _ => default }
 // becomes:
 // ({ Type _match_N; Type _tag_N = tag;
-//    if (_tag_N == pat1) { _match_N = body1; }
-//    else if (_tag_N == pat2 || _tag_N == pat3) { _match_N = body2; }
-//    else { _match_N = default; }
-//    _match_N; })
+//
+//	if (_tag_N == pat1) { _match_N = body1; }
+//	else if (_tag_N == pat2 || _tag_N == pat3) { _match_N = body2; }
+//	else { _match_N = default; }
+//	_match_N; })
 func (g *Generator) genMatchExpr(out *strings.Builder, e *ast.MatchExpr) {
 	idx := g.matchCounter
 	g.matchCounter++

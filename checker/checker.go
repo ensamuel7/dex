@@ -29,8 +29,8 @@ type Checker struct {
 	maxErrors        int
 
 	structMethods      map[string]map[string]funcSig // structName -> methodName -> sig
-	structConstructors map[string][]ast.Type          // structName -> constructor param types
-	structModule       map[string]string              // structName -> moduleName (for cross-module structs)
+	structConstructors map[string][]ast.Type         // structName -> constructor param types
+	structModule       map[string]string             // structName -> moduleName (for cross-module structs)
 }
 
 // addError records a checker error.
@@ -113,7 +113,6 @@ func (c *Checker) errAt(pos ast.Pos, format string, args ...interface{}) error {
 	}
 	return fmt.Errorf(format, args...)
 }
-
 
 func (c *Checker) Check(program *ast.Program) []error {
 	// Populate user modules set

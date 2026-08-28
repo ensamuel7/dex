@@ -1811,7 +1811,7 @@ struct Point {
 fn main(): void {
 	let p = Point { x: 1, y: 2 }
 	let z: int = p.z
-}`, "struct 'Point' has no field 'z'")
+}`, "struct 'Point' has no field or method 'z'")
 }
 
 func TestStructFieldAssignTypeMismatch(t *testing.T) {

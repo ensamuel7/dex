@@ -321,6 +321,17 @@ func isBorrowedExpr(e ast.Expr) bool {
 	return false
 }
 
+// borrowsHeapValue is the generator-aware form of isBorrowedExpr. It exists
+// because json.Value does not follow the general rule: indexing one mints a
+// reference where indexing an array only borrows the element. Ownership
+// decisions go through here so the two predicates cannot disagree.
+func (g *Generator) borrowsHeapValue(e ast.Expr) bool {
+	if g.typeOfExpr(e) == ast.TypeJsonValue {
+		return !g.jsonValueOwned(e)
+	}
+	return isBorrowedExpr(e)
+}
+
 // emitRetainReturnedLitFields retains the heap fields of a returned struct
 // literal that were initialised from a borrowed reference. Those references are
 // owned by locals that the caller-side cleanup is about to release, so without
@@ -352,7 +363,7 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 		if !ok || !ast.NeedsRelease(ft) || !ast.IsHeapType(ft) {
 			continue
 		}
-		if isBorrowedExpr(lit.FieldValues[i]) {
+		if g.borrowsHeapValue(lit.FieldValues[i]) {
 			out.WriteString(fmt.Sprintf("%sdex_retain(%s.%s);\n", prefix, target, name))
 		}
 	}

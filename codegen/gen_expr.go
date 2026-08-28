@@ -503,7 +503,9 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		out.WriteString(e.Module) // the instance variable name
 		for _, arg := range e.Args {
 			out.WriteString(", ")
-			g.genExpr(out, arg)
+			// A method borrows its arguments just as a free function does, so an
+			// argument built on the spot is released once the statement ends.
+			g.genBorrowed(out, arg)
 		}
 		out.WriteString(")")
 		return
@@ -533,7 +535,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					g.genExpr(out, arg)
 				}
 			} else {
-				g.genExpr(out, arg)
+				// The callee borrows its argument, exactly as for a call to a
+				// function in the same file, so an argument that allocates is
+				// released once the statement finishes rather than leaking.
+				g.genBorrowed(out, arg)
 			}
 		}
 		out.WriteString(")")
@@ -1410,14 +1415,20 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 									}
 								}
 							}
-						} else {
-							// Variable or other expression: retain all heap fields
+						} else if !g.isNewAlloc(e.Args[0]) {
+							// A borrowed struct — a variable, or a field of one —
+							// is still owned by whoever it came from, so the array
+							// takes its own reference to each heap field.
 							for _, f := range def.Fields {
 								if ast.IsHeapType(f.Type) {
 									out.WriteString(fmt.Sprintf("dex_retain(_push_tmp.%s); ", f.Name))
 								}
 							}
 						}
+						// A struct the expression just produced — the result of a
+						// call, say — already owns its fields, and that ownership
+						// transfers to the array. Retaining here would leave every
+						// field one reference above zero forever.
 					}
 					out.WriteString(fmt.Sprintf("dex_array_struct_push(%s, &_push_tmp); }", e.Module))
 					return
@@ -1730,11 +1741,14 @@ func (g *Generator) genStdlibArg(out *strings.Builder, arg ast.Expr, funcDef *st
 		if strLit, ok := arg.(*ast.StringLit); ok {
 			out.WriteString(fmt.Sprintf("%q", strLit.Value))
 		} else {
-			g.genExpr(out, arg)
+			// Only the bytes are read, and the DexString wrapping them is not
+			// handed over, so an argument that allocates — a concatenated SQL
+			// statement, say — is released once the statement finishes.
+			g.genBorrowed(out, arg)
 			out.WriteString("->data")
 		}
 	} else {
-		g.genExpr(out, arg)
+		g.genBorrowed(out, arg)
 	}
 }
 
@@ -1800,37 +1814,59 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 		out.WriteString("))")
 		return
 	}
-	argIdent, ok := arg.(*ast.Ident)
-	if ok {
-		arrType := g.arrVars[argIdent.Name]
-		if ast.IsStructArrayType(arrType) {
-			// Struct array stringify: use dex_json_stringify_struct_arr for bare array output
-			elemType := ast.ElementType(arrType)
-			elemCType := g.cType(elemType)
-			def := ast.GetStructDef(elemType)
-			out.WriteString(fmt.Sprintf("dex_string_from_cstr(dex_json_stringify_struct_arr(%s, sizeof(%s), %d, ", argIdent.Name, elemCType, len(def.Fields)))
-			g.genStructFieldDescs(out, elemType, 0)
-			out.WriteString("))")
-		} else {
-			var fn string
-			switch arrType {
-			case ast.TypeArrayInt:
-				fn = "dex_json_stringify_int"
-			case ast.TypeArrayBool:
-				fn = "dex_json_stringify_bool"
-			case ast.TypeArrayString:
-				fn = "dex_json_stringify_str"
-			case ast.TypeArrayLong:
-				fn = "dex_json_stringify_long"
-			case ast.TypeArrayDouble:
-				fn = "dex_json_stringify_double"
-			case ast.TypeArrayChar:
-				fn = "dex_json_stringify_char"
-			}
-			out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(%s))", fn, argIdent.Name))
-		}
+	// Arrays. The array's type comes from the expression rather than from a
+	// variable-name lookup, so encoding the result of a call — json.encode(svc.list())
+	// — works as readily as encoding a named local.
+	arrType := argType
+	if ident, isIdent := arg.(*ast.Ident); isIdent && !ast.IsArrayType(arrType) {
+		arrType = g.arrVars[ident.Name]
 	}
-	return
+	if !ast.IsArrayType(arrType) {
+		// Not something this function knows how to encode; the checker rejects
+		// these, so emitting an empty document keeps the output valid C.
+		out.WriteString("dex_string_from_lit(\"null\")")
+		return
+	}
+
+	// The value is bound to a temporary first: it may be a call, and it must be
+	// evaluated exactly once and released if it was freshly built.
+	owned := g.isNewAlloc(arg)
+	tmp := g.nextTemp()
+	res := g.nextTemp()
+	out.WriteString(fmt.Sprintf("({ %s %s = ", g.cType(arrType), tmp))
+	g.genExpr(out, arg)
+	out.WriteString(fmt.Sprintf("; DexString* %s = ", res))
+
+	if ast.IsStructArrayType(arrType) {
+		elemType := ast.ElementType(arrType)
+		def := ast.GetStructDef(elemType)
+		out.WriteString(fmt.Sprintf("dex_string_from_cstr(dex_json_stringify_struct_arr(%s, sizeof(%s), %d, ", tmp, g.cType(elemType), len(def.Fields)))
+		g.genStructFieldDescs(out, elemType, 0)
+		out.WriteString("))")
+	} else {
+		var fn string
+		switch arrType {
+		case ast.TypeArrayInt:
+			fn = "dex_json_stringify_int"
+		case ast.TypeArrayBool:
+			fn = "dex_json_stringify_bool"
+		case ast.TypeArrayString:
+			fn = "dex_json_stringify_str"
+		case ast.TypeArrayLong:
+			fn = "dex_json_stringify_long"
+		case ast.TypeArrayDouble:
+			fn = "dex_json_stringify_double"
+		case ast.TypeArrayChar:
+			fn = "dex_json_stringify_char"
+		}
+		out.WriteString(fmt.Sprintf("dex_string_from_cstr(%s(%s))", fn, tmp))
+	}
+
+	out.WriteString("; ")
+	if owned {
+		out.WriteString(fmt.Sprintf("dex_release(%s); ", tmp))
+	}
+	out.WriteString(fmt.Sprintf("%s; })", res))
 }
 
 // jsonDecodeFromString emits a decode of JSON *text* into the call's resolved

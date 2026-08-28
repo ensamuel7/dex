@@ -400,7 +400,10 @@ func TestCodegenJsonStringify(t *testing.T) {
 		let a: int[] = [1, 2]
 		return json.encode(a)
 	}`)
-	assertContains(t, out, "dex_string_from_cstr(dex_json_stringify_int(a))")
+	// The array is bound to a temporary first, so that encoding the result of a
+	// call works the same way as encoding a named local.
+	assertContains(t, out, "dex_json_stringify_int(")
+	assertContains(t, out, "dex_string_from_cstr(")
 }
 
 func TestCodegenJsonSetArr(t *testing.T) {

@@ -208,7 +208,25 @@ func (g *Generator) suspendHoisting() func() {
 // the temporary's name is emitted instead.
 func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
 	t := g.typeOfExpr(expr)
-	if !g.hoistingEnabled() || !ast.IsHeapType(t) || !g.isNewAlloc(expr) {
+	// A struct is a value, but one built on the spot owns whatever heap fields
+	// it was given. Passed to something that only reads it, nobody would ever
+	// release those, so it is hoisted like any other temporary.
+	if !g.hoistingEnabled() {
+		g.genExpr(out, expr)
+		return
+	}
+	// Whether the value was produced here rather than borrowed from somewhere
+	// that still owns it. For a heap value that is isNewAlloc; for a struct it is
+	// simply "not read out of a variable", since a struct literal or a returned
+	// struct owns the heap fields it carries.
+	var owned bool
+	switch {
+	case ast.IsHeapType(t):
+		owned = g.isNewAlloc(expr)
+	case ast.IsStructType(t) && ast.NeedsRelease(t):
+		owned = !isBorrowedExpr(expr)
+	}
+	if !owned {
 		g.genExpr(out, expr)
 		return
 	}
@@ -241,7 +259,9 @@ func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
 	}
 	out.WriteString(prefix + "{ " + g.stmtPrelude.String() + strings.TrimRight(stmt, "\n") + " ")
 	for i := len(g.stmtTemps) - 1; i >= 0; i-- {
-		out.WriteString(fmt.Sprintf("dex_release(%s); ", g.stmtTemps[i].name))
+		var rel strings.Builder
+		g.emitReleaseVar(&rel, "", g.stmtTemps[i].name, g.stmtTemps[i].typ)
+		out.WriteString(strings.ReplaceAll(strings.TrimRight(rel.String(), "\n"), "\n", " ") + " ")
 	}
 	out.WriteString("}\n")
 	g.stmtPrelude = nil
@@ -252,19 +272,22 @@ func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
 // must not be wrapped in a block — a `let`, whose variable has to stay in scope.
 // Pair it with emitHoistReleases after the statement.
 func (g *Generator) emitHoistPrelude(out *strings.Builder, prefix string) {
-	if g.stmtPrelude == nil || len(g.stmtTemps) == 0 {
+	if g.stmtPrelude == nil || g.stmtPrelude.Len() == 0 {
 		return
 	}
 	out.WriteString(prefix + g.stmtPrelude.String() + "\n")
 }
 
-// emitHoistReleases releases the temporaries hoisted for the current statement
-// and clears the hoist state.
+// emitHoistReleases releases the temporaries hoisted for the current statement.
+// The prelude is deliberately left in place: a return statement emits its
+// releases while generating its body, but its declarations have to be written
+// out ahead of that body, so the caller still needs them afterwards.
 func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
 	for i := len(g.stmtTemps) - 1; i >= 0; i-- {
-		out.WriteString(fmt.Sprintf("%sdex_release(%s);\n", prefix, g.stmtTemps[i].name))
+		// emitReleaseVar rather than a bare release: a hoisted struct is freed by
+		// releasing each of its heap fields, not the struct itself.
+		g.emitReleaseVar(out, prefix, g.stmtTemps[i].name, g.stmtTemps[i].typ)
 	}
-	g.stmtPrelude = nil
 	g.stmtTemps = nil
 }
 
@@ -272,7 +295,7 @@ func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
 // heap field from a borrowed reference. Such a literal needs a retain even in a
 // function with nothing to clean up, because the borrowed value is owned by the
 // caller and released as soon as the call returns.
-func structLitBorrowsHeapField(structType ast.Type, lit *ast.StructLitExpr) bool {
+func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit *ast.StructLitExpr) bool {
 	def := ast.GetStructDef(structType)
 	if def == nil {
 		return false
@@ -289,7 +312,7 @@ func structLitBorrowsHeapField(structType ast.Type, lit *ast.StructLitExpr) bool
 		if !ok || !ast.IsHeapType(ft) {
 			continue
 		}
-		if isBorrowedExpr(lit.FieldValues[i]) {
+		if g.borrowsHeapValue(lit.FieldValues[i]) {
 			return true
 		}
 	}

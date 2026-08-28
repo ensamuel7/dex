@@ -238,6 +238,18 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	switch stmt.(type) {
 	case *ast.LetStmt, *ast.AssignStmt:
+	case *ast.ReturnStmt:
+		// A return hoists too, but its releases have to land before the return
+		// rather than after it, so the ReturnStmt case emits them itself.
+		prefix := strings.Repeat("    ", indent)
+		savedPrelude, savedTemps := g.stmtPrelude, g.stmtTemps
+		g.beginStmtHoist()
+		var body strings.Builder
+		g.genStmtInner(&body, stmt, indent)
+		g.emitHoistPrelude(out, prefix)
+		out.WriteString(body.String())
+		g.stmtPrelude, g.stmtTemps = savedPrelude, savedTemps
+		return
 	default:
 		g.genStmtInner(out, stmt, indent)
 		return
@@ -513,6 +525,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 	case *ast.ReturnStmt:
 		// Bare return (no value) — void function
 		if s.Value == nil {
+			g.emitHoistReleases(out, prefix)
 			g.emitDeferredCalls(out, prefix)
 			g.emitCleanupAll(out, prefix, "")
 			out.WriteString(fmt.Sprintf("%sreturn;\n", prefix))
@@ -525,27 +538,31 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			if ast.IsValueType(inner) {
 				ctyp := g.cType(retType)
 				if isNull {
-					g.emitDeferredCalls(out, prefix)
+					g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn (%s){0};\n", prefix, ctyp))
 				} else {
 					out.WriteString(fmt.Sprintf("%s%s _ret_tmp = (%s){1, ", prefix, ctyp, ctyp))
 					g.genExpr(out, s.Value)
 					out.WriteString("};\n")
-					g.emitDeferredCalls(out, prefix)
+					g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 				}
 			} else {
 				// Heap/struct optional: NULL for null, value otherwise
 				if isNull {
-					g.emitDeferredCalls(out, prefix)
+					g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn NULL;\n", prefix))
 				} else if ast.IsHeapType(inner) || ast.IsHeapType(retType) {
 					if ident, ok := s.Value.(*ast.Ident); ok {
 						out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, ident.Name))
-						g.emitDeferredCalls(out, prefix)
+						g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 						g.emitCleanupAll(out, prefix, "")
 						out.WriteString(fmt.Sprintf("%sreturn %s;\n", prefix, ident.Name))
 					} else {
@@ -553,7 +570,8 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 						out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
 						g.genExpr(out, s.Value)
 						out.WriteString(";\n")
-						g.emitDeferredCalls(out, prefix)
+						g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 						g.emitCleanupAll(out, prefix, "")
 						out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 					}
@@ -565,11 +583,13 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 					out.WriteString(fmt.Sprintf("%s*_ret_tmp = ", prefix))
 					g.genExpr(out, s.Value)
 					out.WriteString(";\n")
-					g.emitDeferredCalls(out, prefix)
+					g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 				} else {
-					g.emitDeferredCalls(out, prefix)
+					g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 					out.WriteString(fmt.Sprintf("%sreturn ", prefix))
 					g.genExpr(out, s.Value)
 					out.WriteString(";\n")
@@ -581,7 +601,8 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			// Retain the return value, clean up everything else, then return
 			if ident, ok := s.Value.(*ast.Ident); ok {
 				out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, ident.Name))
-				g.emitDeferredCalls(out, prefix)
+				g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 				g.emitCleanupAll(out, prefix, "")
 				out.WriteString(fmt.Sprintf("%sreturn %s;\n", prefix, ident.Name))
 			} else {
@@ -595,7 +616,8 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 				if isBorrowedExpr(s.Value) {
 					out.WriteString(fmt.Sprintf("%sdex_retain(_ret_tmp);\n", prefix))
 				}
-				g.emitDeferredCalls(out, prefix)
+				g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 				g.emitCleanupAll(out, prefix, "")
 				out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 			}
@@ -622,15 +644,17 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 							g.emitRetainReturnedLitFields(out, prefix, retType, lit)
 						}
 					}
-					g.emitDeferredCalls(out, prefix)
+					g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, exceptVar)
 					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 				} else {
-					g.emitDeferredCalls(out, prefix)
+					g.emitHoistReleases(out, prefix)
+			g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn;\n", prefix))
 				}
-			} else if lit, ok := s.Value.(*ast.StructLitExpr); ok && ast.IsStructType(retType) && structLitBorrowsHeapField(retType, lit) {
+			} else if lit, ok := s.Value.(*ast.StructLitExpr); ok && ast.IsStructType(retType) && g.structLitBorrowsHeapField(retType, lit) {
 				// No locals to clean up, but the literal still copied a borrowed
 				// heap reference — typically a parameter, which the caller
 				// releases once the call returns. The struct outlives that, so it
@@ -642,9 +666,19 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 				g.emitRetainReturnedLitFields(out, prefix, retType, lit)
 				out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 			} else {
-				out.WriteString(fmt.Sprintf("%sreturn ", prefix))
-				g.genExpr(out, s.Value)
-				out.WriteString(";\n")
+				// Nothing in scope to clean up, but the return expression may
+				// still have hoisted a temporary — a string literal handed to a
+				// function that only borrows it. That has to be released, which
+				// means computing the result first.
+				var retBody strings.Builder
+				g.genExpr(&retBody, s.Value)
+				if len(g.stmtTemps) > 0 {
+					out.WriteString(fmt.Sprintf("%s%s _ret_tmp = %s;\n", prefix, g.cType(retType), retBody.String()))
+					g.emitHoistReleases(out, prefix)
+					out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
+				} else {
+					out.WriteString(fmt.Sprintf("%sreturn %s;\n", prefix, retBody.String()))
+				}
 			}
 		}
 

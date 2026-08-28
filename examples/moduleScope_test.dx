@@ -1,0 +1,52 @@
+// Module-level names are per-module: two modules may each declare `total`,
+// `add` and `LIMIT` without becoming the same thing. Constants and functions are
+// also reachable through the module that declares them.
+
+import "modules/counter"
+import "modules/sub/tally"
+
+struct Row { id: int }
+
+// A local may share a module's name; the local wins inside this function.
+fn shadowing(): int {
+    let counter: Row[] = []
+    counter.push(Row { id: 1 })
+    counter.push(Row { id: 2 })
+    return counter.len()
+}
+
+fn applyTwice(f: fn(int): void, n: int): void {
+    f(n)
+    f(n)
+}
+
+fn main(): void {
+    // Each module keeps its own state.
+    counter.reset()
+    assert(counter.value() == 0)
+    assert(tally.value() == 1000)
+
+    counter.add(5)
+    assert(counter.value() == 5)
+    assert(tally.value() == 1000)
+
+    tally.add(1)
+    assert(counter.value() == 5)
+    assert(tally.value() == 1001)
+
+    // Constants are reachable through their module and do not collide.
+    assert(counter.LIMIT == 100)
+    assert(tally.LIMIT == 5)
+    assert(counter.LABEL == "counter")
+    assert(tally.LABEL == "tally")
+
+    // A function referenced as a value, not called.
+    applyTwice(counter.add, 10)
+    assert(counter.value() == 25)
+
+    // A local named after a module shadows it.
+    assert(shadowing() == 2)
+
+    counter.reset()
+    assert(counter.value() == 0)
+}

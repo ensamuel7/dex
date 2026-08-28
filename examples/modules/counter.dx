@@ -1,0 +1,19 @@
+// A module with its own state, constants, and functions. Two modules in this
+// example each declare `total` and `label`; they must stay separate.
+
+const LIMIT: int = 100
+const LABEL: string = "counter"
+
+let total: int = 0
+
+fn add(n: int): void {
+    total = total + n
+}
+
+fn value(): int {
+    return total
+}
+
+fn reset(): void {
+    total = 0
+}

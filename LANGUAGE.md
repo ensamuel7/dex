@@ -1405,6 +1405,32 @@ Single-line comments only:
 import "module_name"
 ```
 
+### User modules
+
+A `.dx` file may be imported by path relative to the importing file. The module's
+name is the file's base name, and its top-level functions, module-level values,
+and types are reached through it:
+
+```dex
+import "service/chargers"     // module `chargers`
+import "../ocpp/frame"        // module `frame`
+
+let svc: chargers.Service = chargers.newService(db)
+let text: string = frame.call(id, action, payload)
+let kind: int = frame.CALL              // a module-level const
+http.route("GET", "/items", chargers.list)   // a function as a value
+```
+
+Module names are flat, so two files with the same base name cannot both be
+imported into one program, and type names are shared across the whole program.
+Give a type or module a name that is unique project-wide.
+
+A name declared in the importing scope shadows a module of the same name, so a
+local called `chargers` is a variable, not the module.
+
+Declarations may appear in any order within a file — a `const` above the struct
+it describes, a function above the type it returns.
+
 ### fmt
 
 Print values to stdout. Accepts any type — primitives, arrays, and structs.

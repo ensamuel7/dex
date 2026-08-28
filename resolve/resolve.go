@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/lexer"
@@ -90,7 +91,57 @@ func preRegisterStructsFromFile(filePath string, visited map[string]bool, names 
 func ResolveUserModules(program *ast.Program, sourceDir string) error {
 	visited := map[string]bool{}
 	processing := map[string]bool{}
-	return resolveImports(program, sourceDir, visited, processing)
+	if err := resolveImports(program, sourceDir, visited, processing); err != nil {
+		return err
+	}
+	resolveQualifiedGlobals(program)
+	return nil
+}
+
+// resolveQualifiedGlobals rewrites `someModule.NAME` into the flat name that
+// module member was merged under — a module-level constant, or a function
+// referenced as a value rather than called. Both are prefixed on merge, so
+// without this a constant could only be read from inside its own module, and a
+// handler could only be passed to http.route through a local wrapper.
+func resolveQualifiedGlobals(program *ast.Program) {
+	globals := make(map[string]bool, len(program.GlobalLets)+len(program.Functions))
+	for _, gl := range program.GlobalLets {
+		globals[gl.Name] = true
+	}
+	for _, fn := range program.Functions {
+		globals[fn.Name] = true
+	}
+	modules := make(map[string]bool, len(program.UserModules))
+	for _, m := range program.UserModules {
+		modules[m] = true
+	}
+	if len(modules) == 0 {
+		return
+	}
+
+	// rewrite returns the replacement for one expression, or nil to keep it.
+	var rewrite func(expr ast.Expr) ast.Expr
+	rewrite = func(expr ast.Expr) ast.Expr {
+		fa, ok := expr.(*ast.FieldAccessExpr)
+		if !ok {
+			return nil
+		}
+		ident, ok := fa.Object.(*ast.Ident)
+		if !ok || !modules[ident.Name] {
+			return nil
+		}
+		flat := ident.Name + "_" + fa.Field
+		if !globals[flat] {
+			// Not a module global — an ordinary field access on a variable that
+			// happens to share a module's name.
+			return nil
+		}
+		return &ast.Ident{Pos: fa.Pos, Name: flat}
+	}
+
+	walkProgramExprs(program, func(expr ast.Expr) ast.Expr {
+		return rewrite(expr)
+	})
 }
 
 func resolveImports(program *ast.Program, sourceDir string, visited, processing map[string]bool) error {
@@ -208,22 +259,39 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	delete(processing, absPath)
 	visited[absPath] = true
 
-	// Collect this module's own function names (before prefixing)
-	ownFuncNames := map[string]bool{}
+	// Collect this module's own function and global names (before prefixing).
+	// Globals are prefixed alongside functions: they are merged into one flat
+	// namespace, so two modules each declaring `let svc` would otherwise become
+	// the same variable without anything reporting it.
+	ownNames := map[string]bool{}
 	for _, fn := range modProgram.Functions {
-		ownFuncNames[fn.Name] = true
+		ownNames[fn.Name] = true
+	}
+	for _, gl := range modProgram.GlobalLets {
+		ownNames[gl.Name] = true
 	}
 
 	// Prefix only this module's own functions
 	for i := range modProgram.Functions {
 		fn := &modProgram.Functions[i]
-		if fn.Name == "main" || !ownFuncNames[fn.Name] {
+		if fn.Name == "main" || !ownNames[fn.Name] {
 			continue
 		}
 		fn.Name = moduleName + "_" + fn.Name
+		// A parameter or local may share a name with one of this module's
+		// top-level names. Inside that function the local wins, so those names
+		// are withheld from the rename rather than being captured by it.
+		visible := withoutShadowed(ownNames, fn)
 		for _, stmt := range fn.Body {
-			prefixCallsInStmt(stmt, moduleName, ownFuncNames)
+			prefixCallsInStmt(stmt, moduleName, visible)
 		}
+	}
+	// Function bodies that were not renamed (main) still reference this module's
+	// names, and every global initialiser may too.
+	for i := range modProgram.GlobalLets {
+		gl := &modProgram.GlobalLets[i]
+		prefixCallsInExpr(gl.Value, moduleName, ownNames)
+		gl.Name = moduleName + "_" + gl.Name
 	}
 
 	// Merge functions into program
@@ -290,124 +358,75 @@ func containsImport(imports []ast.Import, path string) bool {
 
 // prefixCallsInStmt walks a statement tree and rewrites unqualified calls
 // to module-internal functions with the module prefix.
-func prefixCallsInStmt(stmt ast.Stmt, moduleName string, modFuncNames map[string]bool) {
-	switch s := stmt.(type) {
-	case *ast.ExprStmt:
-		prefixCallsInExpr(s.Expr, moduleName, modFuncNames)
-	case *ast.LetStmt:
-		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
-	case *ast.AssignStmt:
-		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
-	case *ast.ReturnStmt:
-		if s.Value != nil {
-			prefixCallsInExpr(s.Value, moduleName, modFuncNames)
+// prefixCallsInStmt rewrites every reference to one of this module's own
+// top-level names — functions and module-level values alike — into the flat,
+// module-prefixed name they are merged under. Both walkers below are the shared
+// generic ones, so a statement kind added to the language is covered here
+// automatically rather than being silently skipped.
+func prefixCallsInStmt(stmt ast.Stmt, moduleName string, modNames map[string]bool) {
+	prefix := func(name string) string { return moduleName + "_" + name }
+
+	stmtFn := func(st ast.Stmt) {
+		// Assignment targets and increment/decrement targets are bare names
+		// rather than expressions, so they are renamed here.
+		switch t := st.(type) {
+		case *ast.AssignStmt:
+			if modNames[t.Name] {
+				t.Name = prefix(t.Name)
+			}
+		case *ast.CompoundAssignStmt:
+			if modNames[t.Name] {
+				t.Name = prefix(t.Name)
+			}
+		case *ast.IncrementStmt:
+			if modNames[t.Name] {
+				t.Name = prefix(t.Name)
+			}
+		case *ast.DecrementStmt:
+			if modNames[t.Name] {
+				t.Name = prefix(t.Name)
+			}
 		}
-	case *ast.IfStmt:
-		prefixCallsInExpr(s.Cond, moduleName, modFuncNames)
-		for _, st := range s.Then {
-			prefixCallsInStmt(st, moduleName, modFuncNames)
-		}
-		for _, st := range s.Else {
-			prefixCallsInStmt(st, moduleName, modFuncNames)
-		}
-	case *ast.WhileStmt:
-		prefixCallsInExpr(s.Cond, moduleName, modFuncNames)
-		for _, st := range s.Body {
-			prefixCallsInStmt(st, moduleName, modFuncNames)
-		}
-	case *ast.ForStmt:
-		if s.Init != nil {
-			prefixCallsInStmt(s.Init, moduleName, modFuncNames)
-		}
-		if s.Cond != nil {
-			prefixCallsInExpr(s.Cond, moduleName, modFuncNames)
-		}
-		if s.Post != nil {
-			prefixCallsInStmt(s.Post, moduleName, modFuncNames)
-		}
-		for _, st := range s.Body {
-			prefixCallsInStmt(st, moduleName, modFuncNames)
-		}
-	case *ast.ForeachStmt:
-		prefixCallsInExpr(s.Iterable, moduleName, modFuncNames)
-		for _, st := range s.Body {
-			prefixCallsInStmt(st, moduleName, modFuncNames)
-		}
-	case *ast.BlockStmt:
-		for _, st := range s.Stmts {
-			prefixCallsInStmt(st, moduleName, modFuncNames)
-		}
-	case *ast.IndexAssignStmt:
-		prefixCallsInExpr(s.Array, moduleName, modFuncNames)
-		prefixCallsInExpr(s.Index, moduleName, modFuncNames)
-		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
-	case *ast.FieldAssignStmt:
-		prefixCallsInExpr(s.Object, moduleName, modFuncNames)
-		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
-	case *ast.CompoundAssignStmt:
-		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
-	case *ast.SendStmt:
-		if s.Target != nil {
-			prefixCallsInExpr(s.Target, moduleName, modFuncNames)
-		}
-		prefixCallsInExpr(s.Value, moduleName, modFuncNames)
 	}
+
+	exprFn := func(expr ast.Expr) ast.Expr {
+		switch e := expr.(type) {
+		case *ast.Ident:
+			if modNames[e.Name] {
+				e.Name = prefix(e.Name)
+			}
+		case *ast.CallExpr:
+			if e.Module == "" && modNames[e.Name] {
+				e.Name = prefix(e.Name)
+			}
+			// A method call on a module-level value carries its receiver as a
+			// name rather than an expression. A dotted chain such as
+			// self.field.method() has only its head renamed.
+			if e.Module != "" {
+				head := e.Module
+				rest := ""
+				if dot := strings.Index(head, "."); dot >= 0 {
+					rest = head[dot:]
+					head = head[:dot]
+				}
+				if modNames[head] {
+					e.Module = prefix(head) + rest
+				}
+			}
+		}
+		// Never replace the node, only rename in place, so children are walked.
+		return nil
+	}
+
+	walkStmtsWith([]ast.Stmt{stmt}, stmtFn, exprFn)
 }
 
-// prefixCallsInExpr walks an expression tree and rewrites unqualified calls
-// to module-internal functions with the module prefix.
-func prefixCallsInExpr(expr ast.Expr, moduleName string, modFuncNames map[string]bool) {
+// prefixCallsInExpr is the expression-only form, for global initialisers.
+func prefixCallsInExpr(expr ast.Expr, moduleName string, modNames map[string]bool) {
 	if expr == nil {
 		return
 	}
-	switch e := expr.(type) {
-	case *ast.CallExpr:
-		if e.Module == "" && modFuncNames[e.Name] {
-			e.Name = moduleName + "_" + e.Name
-		}
-		for _, arg := range e.Args {
-			prefixCallsInExpr(arg, moduleName, modFuncNames)
-		}
-	case *ast.Ident:
-		if modFuncNames[e.Name] {
-			e.Name = moduleName + "_" + e.Name
-		}
-	case *ast.BinaryExpr:
-		prefixCallsInExpr(e.Left, moduleName, modFuncNames)
-		prefixCallsInExpr(e.Right, moduleName, modFuncNames)
-	case *ast.UnaryExpr:
-		prefixCallsInExpr(e.Operand, moduleName, modFuncNames)
-	case *ast.IndexExpr:
-		prefixCallsInExpr(e.Array, moduleName, modFuncNames)
-		prefixCallsInExpr(e.Index, moduleName, modFuncNames)
-	case *ast.SliceExpr:
-		prefixCallsInExpr(e.Array, moduleName, modFuncNames)
-		if e.Start != nil {
-			prefixCallsInExpr(e.Start, moduleName, modFuncNames)
-		}
-		if e.End != nil {
-			prefixCallsInExpr(e.End, moduleName, modFuncNames)
-		}
-	case *ast.ArrayLitExpr:
-		for _, elem := range e.Elems {
-			prefixCallsInExpr(elem, moduleName, modFuncNames)
-		}
-	case *ast.StructLitExpr:
-		for _, val := range e.FieldValues {
-			prefixCallsInExpr(val, moduleName, modFuncNames)
-		}
-	case *ast.FieldAccessExpr:
-		prefixCallsInExpr(e.Object, moduleName, modFuncNames)
-	case *ast.SpawnExpr:
-		if e.Call != nil {
-			prefixCallsInExpr(e.Call, moduleName, modFuncNames)
-		}
-		for _, stmt := range e.Body {
-			prefixCallsInStmt(stmt, moduleName, modFuncNames)
-		}
-	case *ast.ReceiveExpr:
-		prefixCallsInExpr(e.Source, moduleName, modFuncNames)
-	}
+	prefixCallsInStmt(&ast.ExprStmt{Expr: expr}, moduleName, modNames)
 }
 
 // FlattenStructMethods extracts methods from struct definitions into top-level
@@ -597,4 +616,200 @@ func rewriteFieldRefsInExpr(expr ast.Expr, fieldNames, localNames map[string]boo
 	default:
 		return e
 	}
+}
+
+// walkProgramExprs visits every expression in the program, replacing any for
+// which fn returns a non-nil node. It exists so a rewrite can be expressed once
+// rather than repeated across every statement and expression kind.
+func walkProgramExprs(program *ast.Program, fn func(ast.Expr) ast.Expr) {
+	for i := range program.GlobalLets {
+		program.GlobalLets[i].Value = walkExpr(program.GlobalLets[i].Value, fn)
+	}
+	for i := range program.Functions {
+		walkStmts(program.Functions[i].Body, fn)
+	}
+}
+
+func walkStmts(stmts []ast.Stmt, fn func(ast.Expr) ast.Expr) {
+	walkStmtsWith(stmts, nil, fn)
+}
+
+// walkStmtsWith visits every statement and expression. stmtFn, when non-nil, is
+// called on each statement before its children are walked — statement targets
+// such as an assignment's variable name are plain strings, not expressions, so
+// a rewrite that touches them needs this hook.
+func walkStmtsWith(stmts []ast.Stmt, stmtFn func(ast.Stmt), exprFn func(ast.Expr) ast.Expr) {
+	for _, stmt := range stmts {
+		walkStmtWith(stmt, stmtFn, exprFn)
+	}
+}
+
+func walkStmt(stmt ast.Stmt, fn func(ast.Expr) ast.Expr) {
+	walkStmtWith(stmt, nil, fn)
+}
+
+func walkStmtWith(stmt ast.Stmt, stmtFn func(ast.Stmt), exprFn func(ast.Expr) ast.Expr) {
+	if stmt == nil {
+		return
+	}
+	if stmtFn != nil {
+		stmtFn(stmt)
+	}
+	fn := exprFn
+	walkStmts := func(body []ast.Stmt) { walkStmtsWith(body, stmtFn, exprFn) }
+	walkStmt := func(st ast.Stmt) { walkStmtWith(st, stmtFn, exprFn) }
+	_ = walkStmt
+	switch s := stmt.(type) {
+	case *ast.ExprStmt:
+		s.Expr = walkExpr(s.Expr, fn)
+	case *ast.LetStmt:
+		s.Value = walkExpr(s.Value, fn)
+	case *ast.AssignStmt:
+		s.Value = walkExpr(s.Value, fn)
+	case *ast.IndexAssignStmt:
+		s.Array = walkExpr(s.Array, fn)
+		s.Index = walkExpr(s.Index, fn)
+		s.Value = walkExpr(s.Value, fn)
+	case *ast.FieldAssignStmt:
+		s.Value = walkExpr(s.Value, fn)
+	case *ast.ReturnStmt:
+		s.Value = walkExpr(s.Value, fn)
+	case *ast.IfStmt:
+		s.Cond = walkExpr(s.Cond, fn)
+		walkStmts(s.Then)
+		walkStmts(s.Else)
+	case *ast.WhileStmt:
+		s.Cond = walkExpr(s.Cond, fn)
+		walkStmts(s.Body)
+	case *ast.ForStmt:
+		if s.Init != nil {
+			walkStmt(s.Init)
+		}
+		s.Cond = walkExpr(s.Cond, fn)
+		if s.Post != nil {
+			walkStmt(s.Post)
+		}
+		walkStmts(s.Body)
+	case *ast.ForeachStmt:
+		s.Iterable = walkExpr(s.Iterable, fn)
+		walkStmts(s.Body)
+	case *ast.SwitchStmt:
+		s.Tag = walkExpr(s.Tag, fn)
+		for i := range s.Cases {
+			for j := range s.Cases[i].Values {
+				s.Cases[i].Values[j] = walkExpr(s.Cases[i].Values[j], fn)
+			}
+			walkStmts(s.Cases[i].Body)
+		}
+		walkStmts(s.Default)
+	case *ast.SendStmt:
+		s.Target = walkExpr(s.Target, fn)
+		s.Value = walkExpr(s.Value, fn)
+	case *ast.ThrowStmt:
+		s.Value = walkExpr(s.Value, fn)
+	case *ast.TryCatchStmt:
+		walkStmts(s.Body)
+		walkStmts(s.CatchBody)
+		walkStmts(s.FinallyBody)
+	case *ast.DeferStmt:
+		s.Expr = walkExpr(s.Expr, fn)
+	case *ast.BlockStmt:
+		walkStmts(s.Stmts)
+	}
+}
+
+func walkExpr(expr ast.Expr, fn func(ast.Expr) ast.Expr) ast.Expr {
+	if expr == nil {
+		return nil
+	}
+	if replacement := fn(expr); replacement != nil {
+		return replacement
+	}
+	switch e := expr.(type) {
+	case *ast.CallExpr:
+		e.Recv = walkExpr(e.Recv, fn)
+		for i := range e.Args {
+			e.Args[i] = walkExpr(e.Args[i], fn)
+		}
+	case *ast.BinaryExpr:
+		e.Left = walkExpr(e.Left, fn)
+		e.Right = walkExpr(e.Right, fn)
+	case *ast.UnaryExpr:
+		e.Operand = walkExpr(e.Operand, fn)
+	case *ast.IndexExpr:
+		e.Array = walkExpr(e.Array, fn)
+		e.Index = walkExpr(e.Index, fn)
+	case *ast.SliceExpr:
+		e.Array = walkExpr(e.Array, fn)
+		e.Start = walkExpr(e.Start, fn)
+		e.End = walkExpr(e.End, fn)
+	case *ast.ArrayLitExpr:
+		for i := range e.Elems {
+			e.Elems[i] = walkExpr(e.Elems[i], fn)
+		}
+	case *ast.ObjectLitExpr:
+		for i := range e.Values {
+			e.Values[i] = walkExpr(e.Values[i], fn)
+		}
+	case *ast.StructLitExpr:
+		for i := range e.FieldValues {
+			e.FieldValues[i] = walkExpr(e.FieldValues[i], fn)
+		}
+	case *ast.FieldAccessExpr:
+		e.Object = walkExpr(e.Object, fn)
+	case *ast.SpawnExpr:
+		e.Call = walkExpr(e.Call, fn)
+		walkStmts(e.Body, fn)
+	case *ast.ReceiveExpr:
+		e.Source = walkExpr(e.Source, fn)
+	}
+	return expr
+}
+
+
+// withoutShadowed returns names minus any that fn declares as a parameter or
+// local. Renaming a shadowed name would rebind a local to a module-level value,
+// which is both wrong and hard to see in the resulting error.
+func withoutShadowed(names map[string]bool, fn *ast.Function) map[string]bool {
+	shadowed := map[string]bool{}
+	for _, p := range fn.Params {
+		shadowed[p.Name] = true
+	}
+	collectDeclaredNames(fn.Body, shadowed)
+	if len(shadowed) == 0 {
+		return names
+	}
+	visible := make(map[string]bool, len(names))
+	for name := range names {
+		if !shadowed[name] {
+			visible[name] = true
+		}
+	}
+	return visible
+}
+
+// collectDeclaredNames gathers every name a statement list introduces, at any
+// nesting depth. Block scoping is not modelled: a name declared in an inner
+// block withholds the rename for the whole function, which errs toward leaving
+// a reference alone. That surfaces as an ordinary "undefined" error rather than
+// as a silent rebinding.
+func collectDeclaredNames(stmts []ast.Stmt, out map[string]bool) {
+	walkStmtsWith(stmts, func(st ast.Stmt) {
+		switch s := st.(type) {
+		case *ast.LetStmt:
+			if s.Name != "" {
+				out[s.Name] = true
+			}
+			for _, n := range s.Names {
+				out[n] = true
+			}
+		case *ast.ForeachStmt:
+			if s.ValueVar != "" {
+				out[s.ValueVar] = true
+			}
+			if s.IndexVar != "" {
+				out[s.IndexVar] = true
+			}
+		}
+	}, func(expr ast.Expr) ast.Expr { return nil })
 }

@@ -73,6 +73,14 @@ type Generator struct {
 
 	// Statement-level temp tracking for string concat intermediates
 	pendingReleases []string // temp var names to release after current statement
+	// stmtPrelude collects declarations hoisted out of the statement being
+	// generated, and stmtTemps the temporaries they bind. Together they let an
+	// expression that mints a heap value be handed to something that only
+	// borrows it — a print, a function argument — and still be released once the
+	// statement finishes, instead of leaking.
+	stmtPrelude  *strings.Builder
+	stmtTemps    []scopeVar
+	stmtHoistOff int
 	tempCounter     int      // unique counter for temp names
 
 	// Defer tracking
@@ -80,6 +88,9 @@ type Generator struct {
 
 	// Global variable tracking
 	globalLets []ast.LetStmt       // module-level let/const declarations
+	// inlinedConsts names the globals whose value was written at their
+	// declaration, so main() does not try to assign them again.
+	inlinedConsts map[string]bool
 	globalVars map[string]ast.Type // global variable name -> type
 }
 
@@ -100,6 +111,7 @@ func New() *Generator {
 		narrowedVars:    make(map[string]string),
 		narrowedTypes:   make(map[string]ast.Type),
 		globalVars:      make(map[string]ast.Type),
+		inlinedConsts:   make(map[string]bool),
 	}
 }
 
@@ -583,6 +595,9 @@ func (g *Generator) Generate(program *ast.Program) string {
 
 	// Emit array runtime (must come before module runtimes that reference array types)
 	if g.usesArray {
+		// Signals to the json module runtime, which is emitted later, that array
+		// types exist and json.Value.keys() can be compiled in.
+		out.WriteString("#define DEX_HAVE_ARRAYS 1\n")
 		out.WriteString(ArrayRuntime)
 	}
 
@@ -633,6 +648,12 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString("} Dex_Exception;\n")
 	}
 
+	// json.Value is defined by the json module runtime, which is emitted after
+	// this point; the name has to exist first so a user struct can hold one.
+	if _, ok := g.importedModules["json"]; ok {
+		out.WriteString("typedef struct DexJsonValue DexJsonValue;\n")
+	}
+
 	// Emit struct typedefs (module-provided types first, then user-defined)
 	for _, mod := range g.importedModules {
 		for _, sd := range mod.Types {
@@ -643,7 +664,9 @@ func (g *Generator) Generate(program *ast.Program) string {
 			out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
 		}
 	}
-	for _, sd := range program.Structs {
+	// A struct holding another struct by value must be declared after it, so the
+	// definitions are ordered by that dependency rather than by source order.
+	for _, sd := range orderStructsByDependency(program.Structs) {
 		out.WriteString(fmt.Sprintf("typedef struct {\n"))
 		for _, f := range sd.Fields {
 			out.WriteString(fmt.Sprintf("    %s %s;\n", g.cType(f.Type), f.Name))
@@ -690,7 +713,17 @@ func (g *Generator) Generate(program *ast.Program) string {
 			// cannot be assigned later from main().
 			out.WriteString(fmt.Sprintf("static %s %s = PTHREAD_MUTEX_INITIALIZER;\n", ctyp, gl.Name))
 		} else if gl.IsConst && !ast.IsHeapType(gl.Type) && !ast.IsStructType(gl.Type) {
-			out.WriteString(fmt.Sprintf("static const %s %s;\n", ctyp, gl.Name))
+			// A const must carry its value here: C forbids assigning one later,
+			// which is where every other global gets initialised. Only a literal
+			// can be written at file scope, so anything more involved keeps the
+			// deferred initialisation and gives up the C-level const — Dex still
+			// enforces immutability in the checker either way.
+			if literal, ok := constInitializer(gl.Value); ok {
+				out.WriteString(fmt.Sprintf("static const %s %s = %s;\n", ctyp, gl.Name, literal))
+				g.inlinedConsts[gl.Name] = true
+			} else {
+				out.WriteString(fmt.Sprintf("static %s %s;\n", ctyp, gl.Name))
+			}
 		} else {
 			out.WriteString(fmt.Sprintf("static %s %s;\n", ctyp, gl.Name))
 		}
@@ -958,6 +991,12 @@ func (g *Generator) scanType(t ast.Type) {
 	if t == ast.TypeStringBuilder {
 		g.usesStringBuilder = true
 	}
+	// json.Value is refcounted like any other heap value, and its runtime lives
+	// in the json module, so a program that names the type must import json.
+	if t == ast.TypeJsonValue {
+		g.usesRefcount = true
+		g.usesString = true
+	}
 	if t == ast.TypeMutex {
 		g.usesConcurrency = true
 	}
@@ -1176,3 +1215,76 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 	}
 }
 
+
+
+// orderStructsByDependency returns the struct definitions ordered so that any
+// struct held by value inside another comes first. C requires the inner type to
+// be complete at the point the outer one is declared, and source order gives no
+// such guarantee across modules. A cycle is impossible by value — a struct
+// cannot contain itself — but the visiting set guards against one anyway rather
+// than recursing forever on malformed input.
+func orderStructsByDependency(structs []ast.StructDef) []ast.StructDef {
+	byName := make(map[string]ast.StructDef, len(structs))
+	for _, sd := range structs {
+		byName[sd.Name] = sd
+	}
+
+	var ordered []ast.StructDef
+	emitted := make(map[string]bool, len(structs))
+	visiting := make(map[string]bool, len(structs))
+
+	var visit func(sd ast.StructDef)
+	visit = func(sd ast.StructDef) {
+		if emitted[sd.Name] || visiting[sd.Name] {
+			return
+		}
+		visiting[sd.Name] = true
+		for _, f := range sd.Fields {
+			// Only by-value struct fields force an ordering; a pointer field
+			// (a struct array, an optional) only needs the name.
+			if !ast.IsStructType(f.Type) {
+				continue
+			}
+			if dep, ok := byName[ast.StructName(f.Type)]; ok {
+				visit(dep)
+			}
+		}
+		visiting[sd.Name] = false
+		emitted[sd.Name] = true
+		ordered = append(ordered, sd)
+	}
+
+	for _, sd := range structs {
+		visit(sd)
+	}
+	return ordered
+}
+
+
+// constInitializer renders an expression as a C file-scope constant, reporting
+// false when it is not a literal and so cannot be written there.
+func constInitializer(expr ast.Expr) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.IntLit:
+		return fmt.Sprintf("%d", e.Value), true
+	case *ast.FloatLit:
+		return fmt.Sprintf("%g", e.Value), true
+	case *ast.BoolLit:
+		if e.Value {
+			return "1", true
+		}
+		return "0", true
+	case *ast.CharLit:
+		return fmt.Sprintf("%d", int(e.Value)), true
+	case *ast.UnaryExpr:
+		if e.Op != ast.UnaryNeg {
+			return "", false
+		}
+		inner, ok := constInitializer(e.Operand)
+		if !ok {
+			return "", false
+		}
+		return "-" + inner, true
+	}
+	return "", false
+}

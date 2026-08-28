@@ -1,0 +1,159 @@
+import "json"
+
+struct Device {
+    vendor: string
+    model: string
+}
+
+struct Reading {
+    label: string
+    value: int
+}
+
+fn main(): void {
+    // --- Object literals ---
+    let device: json.Value = { vendor: "Acme", model: "MX-9" }
+    assert(json.encode(device) == "{\"vendor\":\"Acme\",\"model\":\"MX-9\"}")
+    assert(device.isObject())
+    assert(device.len() == 2)
+    assert(device["vendor"].asString() == "Acme")
+    assert(device.has("model"))
+    assert(!device.has("serial"))
+
+    // A key that is not a Dex identifier still works as a JSON key
+    let snake: json.Value = { "charger_tag": "CP-1", "connector_id": 2 }
+    assert(snake["charger_tag"].asString() == "CP-1")
+    assert(snake["connector_id"].asInt() == 2)
+
+    // --- Array literals, mixed element types ---
+    let frame: json.Value = [4, "abc123", "NotImplemented", "no such action", {}]
+    assert(json.encode(frame) == "[4,\"abc123\",\"NotImplemented\",\"no such action\",{}]")
+    assert(frame.isArray())
+    assert(frame.len() == 5)
+    assert(frame[0].asInt() == 4)
+    assert(frame[1].asString() == "abc123")
+    assert(frame[4].isObject())
+    assert(frame[4].len() == 0)
+
+    // --- Nesting: a value built earlier drops into a later literal ---
+    let call: json.Value = [2, "id-1", "BootNotification", device]
+    assert(json.encode(call) == "[2,\"id-1\",\"BootNotification\",{\"vendor\":\"Acme\",\"model\":\"MX-9\"}]")
+    assert(call[3]["vendor"].asString() == "Acme")
+
+    // Literals nest to any depth without annotation at each level
+    let deep: json.Value = { a: { b: { c: [1, 2, { d: "found" }] } } }
+    assert(deep["a"]["b"]["c"][2]["d"].asString() == "found")
+    assert(deep["a"]["b"]["c"].len() == 3)
+
+    // --- Round trip through text ---
+    let wire: string = json.encode(call)
+    let parsed: json.Value = json.decode(wire)
+    assert(parsed.len() == 4)
+    assert(parsed[0].asInt() == 2)
+    assert(parsed[2].asString() == "BootNotification")
+    assert(json.encode(parsed) == wire)
+
+    // --- Numbers keep their integer-ness across a round trip ---
+    let nums: json.Value = [1, 2.5, -3]
+    assert(json.encode(nums) == "[1,2.5,-3]")
+    let numsBack: json.Value = json.decode(json.encode(nums))
+    assert(json.encode(numsBack) == "[1,2.5,-3]")
+    assert(numsBack[1].asDouble() == 2.5)
+    assert(numsBack[2].asInt() == -3)
+
+    // --- Booleans and null ---
+    let flags: json.Value = { on: true, off: false, missing: null }
+    assert(json.encode(flags) == "{\"on\":true,\"off\":false,\"missing\":null}")
+    assert(flags["on"].asBool())
+    assert(!flags["off"].asBool())
+    assert(flags["missing"].isNull())
+    assert(flags["on"].isBool())
+
+    // --- Absent lookups are total, not fatal ---
+    assert(device["nope"].isNull())
+    assert(device["nope"].asInt() == 0)
+    assert(device["nope"].asString() == "")
+    assert(frame[99].isNull())
+    assert(frame[0 - 1].isNull())
+
+    // --- Type predicates ---
+    assert(frame[0].isNumber())
+    assert(frame[1].isString())
+    assert(!frame[1].isNumber())
+    assert(!frame.isObject())
+    assert(!device.isArray())
+
+    // --- Coercion: wire formats disagree about quoting, so both read ---
+    let mixed: json.Value = { quoted: "42", bare: 42 }
+    assert(mixed["quoted"].asInt() == 42)
+    assert(mixed["bare"].asInt() == 42)
+    assert(mixed["bare"].asString() == "42")
+    assert(mixed["quoted"].asLong() == 42)
+
+    // --- Escapes survive both directions ---
+    let esc: json.Value = { text: "a\"b\\c\nd\te" }
+    let escBack: json.Value = json.decode(json.encode(esc))
+    assert(escBack["text"].asString() == "a\"b\\c\nd\te")
+
+    // --- Malformed input decodes to null rather than crashing ---
+    let bad: json.Value = json.decode("{not json")
+    assert(bad.isNull())
+    let trailing: json.Value = json.decode("{} extra")
+    assert(trailing.isNull())
+    let empty: json.Value = json.decode("")
+    assert(empty.isNull())
+
+    // --- Struct interop, both directions ---
+    let dev: Device = json.decode(device)
+    assert(dev.vendor == "Acme")
+    assert(dev.model == "MX-9")
+
+    let fromStruct: json.Value = [3, "id-1", dev]
+    assert(json.encode(fromStruct) == "[3,\"id-1\",{\"vendor\":\"Acme\",\"model\":\"MX-9\"}]")
+
+    // A nested payload goes straight into a struct without re-serializing by hand
+    let inner: Device = json.decode(call[3])
+    assert(inner.model == "MX-9")
+
+    // --- Arrays of structs become json.Value arrays ---
+    let readings: Reading[] = [Reading { label: "a", value: 1 }, Reading { label: "b", value: 2 }]
+    let batch: json.Value = { readings: readings }
+    assert(batch["readings"].len() == 2)
+    assert(batch["readings"][1]["label"].asString() == "b")
+    assert(batch["readings"][0]["value"].asInt() == 1)
+
+    // --- Primitive arrays too ---
+    let ports: int[] = [7, 8, 9]
+    let withPorts: json.Value = { ports: ports }
+    assert(withPorts["ports"].len() == 3)
+    assert(withPorts["ports"][2].asInt() == 9)
+
+    // --- keys() enumerates an object in insertion order ---
+    let ks: string[] = device.keys()
+    assert(ks.len() == 2)
+    assert(ks[0] == "vendor")
+    assert(ks[1] == "model")
+
+    // --- A repeated key is last-wins, matching JSON parsers ---
+    let dup: json.Value = json.decode("{\"k\":1,\"k\":2}")
+    assert(dup["k"].asInt() == 2)
+    assert(dup.len() == 1)
+
+    // --- Reassignment releases the previous document ---
+    let slot: json.Value = { first: 1 }
+    slot = { second: 2 }
+    assert(slot.has("second"))
+    assert(!slot.has("first"))
+
+    // --- Values survive being passed through a function ---
+    assert(vendorOf(device) == "Acme")
+    assert(json.encode(wrap(device)) == "{\"payload\":{\"vendor\":\"Acme\",\"model\":\"MX-9\"}}")
+}
+
+fn vendorOf(v: json.Value): string {
+    return v["vendor"].asString()
+}
+
+fn wrap(v: json.Value): json.Value {
+    return { payload: v }
+}

@@ -148,6 +148,11 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 
 	// Track type info so other codegen can resolve it
 	g.varTypes[name] = gl.Type
+	// A const whose value was written at its declaration is already set, and C
+	// forbids assigning it here.
+	if g.inlinedConsts[name] {
+		return
+	}
 	if gl.Type == ast.TypeString {
 		g.strVars[name] = true
 	}
@@ -225,7 +230,31 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 	}
 }
 
+// genStmt emits one statement. Declarations and assignments are generated into a
+// side buffer first so that any temporaries hoisted while evaluating the
+// right-hand side can be declared before the statement and released after it —
+// a block would put the declared variable out of scope, so the two halves are
+// emitted around the statement rather than wrapped about it.
 func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
+	switch stmt.(type) {
+	case *ast.LetStmt, *ast.AssignStmt:
+	default:
+		g.genStmtInner(out, stmt, indent)
+		return
+	}
+
+	prefix := strings.Repeat("    ", indent)
+	savedPrelude, savedTemps := g.stmtPrelude, g.stmtTemps
+	g.beginStmtHoist()
+	var body strings.Builder
+	g.genStmtInner(&body, stmt, indent)
+	g.emitHoistPrelude(out, prefix)
+	out.WriteString(body.String())
+	g.emitHoistReleases(out, prefix)
+	g.stmtPrelude, g.stmtTemps = savedPrelude, savedTemps
+}
+
+func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int) {
 	prefix := strings.Repeat("    ", indent)
 
 	switch s := stmt.(type) {
@@ -270,6 +299,15 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		}
 		if s.Type == ast.TypeStringBuilder {
 			g.sbVars[s.Name] = true
+		}
+		// json.Value target: every literal form on the right builds a JSON
+		// document, so it is handled before the map/array literal cases below.
+		if s.Type == ast.TypeJsonValue {
+			out.WriteString(fmt.Sprintf("%sDexJsonValue* %s = ", prefix, s.Name))
+			g.genJsonValue(out, s.Value)
+			out.WriteString(";\n")
+			g.registerScopeVar(s.Name, s.Type)
+			break
 		}
 		// Special case for map literal: let m: map[K,V] = {}
 		if _, ok := s.Value.(*ast.MapLitExpr); ok {
@@ -592,6 +630,17 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 					g.emitCleanupAll(out, prefix, "")
 					out.WriteString(fmt.Sprintf("%sreturn;\n", prefix))
 				}
+			} else if lit, ok := s.Value.(*ast.StructLitExpr); ok && ast.IsStructType(retType) && structLitBorrowsHeapField(retType, lit) {
+				// No locals to clean up, but the literal still copied a borrowed
+				// heap reference — typically a parameter, which the caller
+				// releases once the call returns. The struct outlives that, so it
+				// has to take its own reference.
+				ctyp := g.cType(retType)
+				out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
+				g.genExpr(out, s.Value)
+				out.WriteString(";\n")
+				g.emitRetainReturnedLitFields(out, prefix, retType, lit)
+				out.WriteString(fmt.Sprintf("%sreturn _ret_tmp;\n", prefix))
 			} else {
 				out.WriteString(fmt.Sprintf("%sreturn ", prefix))
 				g.genExpr(out, s.Value)
@@ -600,11 +649,13 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		}
 
 	case *ast.ExprStmt:
-		// Fire-and-forget spawn: suppress unused value warning by casting to void
+		// Fire-and-forget spawn: nobody keeps the task handle, so the caller's
+		// reference to its result channel is dropped here. The worker holds its
+		// own reference, so the channel stays alive as long as the task needs it.
 		if _, ok := s.Expr.(*ast.SpawnExpr); ok {
-			out.WriteString(prefix + "(void)")
+			out.WriteString(prefix + "dex_release(")
 			g.genExpr(out, s.Expr)
-			out.WriteString(";\n")
+			out.WriteString(");\n")
 			break
 		}
 		// Check if this is a call that returns a heap type we need to release
@@ -612,15 +663,20 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 			callRetType := g.typeOfExpr(call)
 			if ast.IsHeapType(callRetType) {
 				// Result is discarded, but may be a new allocation — release it
-				out.WriteString(fmt.Sprintf("%sdex_release(", prefix))
-				g.genExpr(out, s.Expr)
-				out.WriteString(");\n")
+				g.beginStmtHoist()
+				var body strings.Builder
+				body.WriteString("dex_release(")
+				g.genExpr(&body, s.Expr)
+				body.WriteString(");\n")
+				g.emitWithHoists(out, prefix, body.String())
 				break
 			}
 		}
-		out.WriteString(prefix)
-		g.genExpr(out, s.Expr)
-		out.WriteString(";\n")
+		g.beginStmtHoist()
+		var exprBody strings.Builder
+		g.genExpr(&exprBody, s.Expr)
+		exprBody.WriteString(";\n")
+		g.emitWithHoists(out, prefix, exprBody.String())
 
 	case *ast.AssignStmt:
 		varType := g.varTypes[s.Name]
@@ -900,14 +956,19 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	case *ast.IndexAssignStmt:
 		arrType := g.typeOfExpr(s.Array)
 		if ast.IsMapType(arrType) {
+			// The map retains what it stores, so key and value are borrowed here
+			// and any allocating operand is released after the statement.
 			suffix := g.mapSuffix(arrType)
-			out.WriteString(fmt.Sprintf("%sdex_map_%s_set(", prefix, suffix))
-			g.genExpr(out, s.Array)
-			out.WriteString(", ")
-			g.genExpr(out, s.Index)
-			out.WriteString(", ")
-			g.genExpr(out, s.Value)
-			out.WriteString(");\n")
+			g.beginStmtHoist()
+			var body strings.Builder
+			body.WriteString(fmt.Sprintf("dex_map_%s_set(", suffix))
+			g.genExpr(&body, s.Array)
+			body.WriteString(", ")
+			g.genBorrowed(&body, s.Index)
+			body.WriteString(", ")
+			g.genBorrowed(&body, s.Value)
+			body.WriteString(");\n")
+			g.emitWithHoists(out, prefix, body.String())
 			break
 		}
 		if ast.IsStructArrayType(arrType) {

@@ -380,6 +380,9 @@ func MapValueType(t Type) Type {
 type MapLitExpr struct {
 	Pos     Pos
 	MapType Type // set by checker from declared type context
+	// AsJsonValue is set by the checker when `{}` appears where a json.Value is
+	// expected, making it an empty JSON object rather than an empty map.
+	AsJsonValue bool
 }
 
 func (e *MapLitExpr) exprNode() {}

@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 )
@@ -40,7 +41,7 @@ func isValidFieldType(t ast.Type) bool {
 		return ast.IsStructType(inner) || ast.IsValueType(inner)
 	}
 	switch t {
-	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar, ast.TypeMutex:
+	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar, ast.TypeMutex, ast.TypeJsonValue:
 		return true
 	default:
 		return ast.IsStructType(t) || ast.IsEnumType(t) || ast.IsMapType(t) || ast.IsArrayType(t)
@@ -470,6 +471,8 @@ func typeName(t ast.Type) string {
 		return "char[]"
 	case ast.TypeStringBuilder:
 		return "StringBuilder"
+	case ast.TypeJsonValue:
+		return "json.Value"
 	case ast.TypeMutex:
 		return "mutex"
 	default:
@@ -539,4 +542,170 @@ func alwaysExits(stmts []ast.Stmt) bool {
 		return last.Else != nil && alwaysExits(last.Then) && alwaysExits(last.Else)
 	}
 	return false
+}
+
+// isJsonEncodable reports whether a value of type t can appear inside a
+// json.Value literal. Everything with a JSON representation qualifies; channels,
+// functions, mutexes and the like do not.
+func isJsonEncodable(t ast.Type) bool {
+	switch t {
+	case ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeBool,
+		ast.TypeString, ast.TypeChar, ast.TypeJsonValue:
+		return true
+	case ast.TypeNull:
+		// JSON has a null, so a null literal is a legitimate value here even
+		// though it needs an optional type everywhere else in the language.
+		return true
+	}
+	if ast.IsStructType(t) || ast.IsArrayType(t) || ast.IsStructArrayType(t) {
+		return true
+	}
+	if ast.IsMapType(t) {
+		return ast.MapKeyType(t) == ast.TypeString
+	}
+	return false
+}
+
+// markJsonValue records that a literal is being built as part of a json.Value,
+// recursing so that nested literals are marked too. This is what lets
+// `[4, id, {}]` treat its `{}` as an empty JSON object rather than a map, and
+// what allows the outer array's elements to have differing types.
+//
+// Only literal nodes need marking: any other expression already has a type, and
+// the runtime converts it at the point of construction.
+func (c *Checker) markJsonValue(e ast.Expr) error {
+	switch lit := e.(type) {
+	case *ast.ArrayLitExpr:
+		if lit.AsJsonValue {
+			return nil
+		}
+		lit.AsJsonValue = true
+		for _, elem := range lit.Elems {
+			if err := c.markJsonValue(elem); err != nil {
+				return err
+			}
+		}
+	case *ast.MapLitExpr:
+		lit.AsJsonValue = true
+	case *ast.ObjectLitExpr:
+		for _, v := range lit.Values {
+			if err := c.markJsonValue(v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// jsonValueMethods is the full method surface of json.Value. Accessors are
+// spelled asX rather than x because int, string, bool, long and double are
+// keywords and could not follow a dot.
+var jsonValueMethods = map[string]ast.Type{
+	"len":      ast.TypeInt,
+	"asInt":    ast.TypeInt,
+	"asLong":   ast.TypeLong,
+	"asDouble": ast.TypeDouble,
+	"asString": ast.TypeString,
+	"asBool":   ast.TypeBool,
+	"isNull":   ast.TypeBool,
+	"isBool":   ast.TypeBool,
+	"isNumber": ast.TypeBool,
+	"isString": ast.TypeBool,
+	"isArray":  ast.TypeBool,
+	"isObject": ast.TypeBool,
+	"keys":     ast.TypeArrayString,
+}
+
+// checkJsonValueMethod type-checks a method call on a json.Value.
+func (c *Checker) checkJsonValueMethod(method string, args []ast.Expr, pos ast.Pos) (ast.Type, error) {
+	if method == "has" {
+		if len(args) != 1 {
+			return 0, c.errAt(pos, "json.Value.has() takes exactly 1 argument, got %d", len(args))
+		}
+		argType, err := c.checkExpr(args[0])
+		if err != nil {
+			return 0, err
+		}
+		if argType != ast.TypeString {
+			return 0, c.errAt(pos, "json.Value.has() argument must be string, got %s", typeName(argType))
+		}
+		return ast.TypeBool, nil
+	}
+	ret, ok := jsonValueMethods[method]
+	if !ok {
+		return 0, c.errAt(pos, "json.Value has no method '%s'", method)
+	}
+	if len(args) != 0 {
+		return 0, c.errAt(pos, "json.Value.%s() takes no arguments, got %d", method, len(args))
+	}
+	return ret, nil
+}
+
+// applyTargetType gives a literal that carries no type of its own the type it is
+// being assigned to. `{}` is an empty map or an empty JSON object depending on
+// the target, and `[]` needs its element type from somewhere; without this they
+// can only appear on the right of an annotated `let`.
+func (c *Checker) applyTargetType(expr ast.Expr, target ast.Type) error {
+	// Calls whose return type comes from context — db.col reading a column,
+	// json.decode choosing a shape — take it from the field just as they would
+	// from a `let` annotation.
+	if call, ok := expr.(*ast.CallExpr); ok {
+		if call.Module == "db" && call.Name == "col" {
+			call.ResolvedType = target
+			return nil
+		}
+		if call.Module == "json" && call.Name == "decode" {
+			call.ResolvedType = target
+			return nil
+		}
+	}
+	switch lit := expr.(type) {
+	case *ast.MapLitExpr:
+		if target == ast.TypeJsonValue {
+			return c.markJsonValue(lit)
+		}
+		if ast.IsMapType(target) {
+			lit.MapType = target
+		}
+	case *ast.ArrayLitExpr:
+		if target == ast.TypeJsonValue {
+			return c.markJsonValue(lit)
+		}
+		if ast.IsArrayType(target) || ast.IsStructArrayType(target) {
+			lit.ElemType = ast.ElementType(target)
+		}
+	case *ast.ObjectLitExpr:
+		return c.markJsonValue(lit)
+	}
+	return nil
+}
+
+// cReservedWords are C keywords and runtime-reserved prefixes that a Dex
+// identifier cannot currently use. Dex compiles to C and emits user identifiers
+// verbatim, so a collision produces a C syntax error pointing at generated code
+// the author never wrote. Catching it here reports the real problem instead.
+var cReservedWords = map[string]bool{
+	"auto": true, "break": true, "case": true, "char": true, "const": true,
+	"continue": true, "default": true, "do": true, "double": true, "else": true,
+	"enum": true, "extern": true, "float": true, "for": true, "goto": true,
+	"if": true, "inline": true, "int": true, "long": true, "register": true,
+	"restrict": true, "return": true, "short": true, "signed": true,
+	"sizeof": true, "static": true, "struct": true, "switch": true,
+	"typedef": true, "union": true, "unsigned": true, "void": true,
+	"volatile": true, "while": true, "bool": true, "complex": true,
+	"imaginary": true, "asm": true, "typeof": true,
+	// Names the generated program defines for itself.
+	"main": true, "printf": true, "malloc": true, "free": true, "realloc": true,
+	"calloc": true, "strlen": true, "strcmp": true, "memcpy": true, "NULL": true,
+}
+
+// checkIdentifierName rejects a declared name that would collide with C.
+func (c *Checker) checkIdentifierName(name string, kind string, pos ast.Pos) error {
+	if strings.HasPrefix(name, "dex_") || strings.HasPrefix(name, "Dex_") {
+		return c.errAt(pos, "%s name '%s' is reserved: names beginning with 'dex_' or 'Dex_' belong to the runtime", kind, name)
+	}
+	if cReservedWords[name] {
+		return c.errAt(pos, "%s name '%s' is reserved and cannot be used as an identifier", kind, name)
+	}
+	return nil
 }

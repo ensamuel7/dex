@@ -18,10 +18,27 @@ var tmplHTML string
 
 // TemplateData holds all data passed to the HTML template.
 type TemplateData struct {
-	Modules  []ModuleData
-	DbModule ModuleData
-	Keywords []KeywordData
-	Types    []KeywordData
+	Modules   []ModuleData
+	DbModule  ModuleData
+	Keywords  []KeywordData
+	Types     []KeywordData
+	ValueType TypeDoc
+}
+
+// TypeDoc documents a library type that carries methods rather than being a
+// bag of module functions — json.Value is the first of these.
+type TypeDoc struct {
+	Name    string
+	Summary string
+	Methods []MethodData
+}
+
+// MethodData is one method on a documented type.
+type MethodData struct {
+	Name   string
+	Params string
+	Return string
+	Doc    string
 }
 
 // ModuleData represents a stdlib module.
@@ -255,6 +272,8 @@ func Generate(projectRoot string) (string, error) {
 		})
 	}
 
+	data.ValueType = jsonValueDoc()
+
 	// Parse and execute the template
 	tmpl, err := template.New("docs").Parse(tmplHTML)
 	if err != nil {
@@ -267,4 +286,35 @@ func Generate(projectRoot string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+
+// jsonValueDoc describes json.Value and its methods. It is written out here
+// rather than derived from the stdlib registry because json.Value is a language
+// type with methods, not a set of module functions.
+func jsonValueDoc() TypeDoc {
+	return TypeDoc{
+		Name: "json.Value",
+		Summary: "A JSON document: null, a boolean, a number, a string, an array, or an object. " +
+			"Write one with ordinary literal syntax — an object literal { key: value } is always a json.Value, " +
+			"and an array literal becomes one when the target says so, which is what lets its elements differ in type. " +
+			"Index with an int to read an array position or a string to read an object key; both give back a json.Value, " +
+			"so a path is walked one step at a time. A missing key or out-of-range index yields null rather than failing.",
+		Methods: []MethodData{
+			{"asInt", "", "int", "Value as an int."},
+			{"asLong", "", "long", "Value as a long."},
+			{"asDouble", "", "double", "Value as a double."},
+			{"asString", "", "string", "String contents; any other value as its JSON text."},
+			{"asBool", "", "bool", "Value as a bool."},
+			{"isNull", "", "bool", "Is it null, or absent?"},
+			{"isBool", "", "bool", "Is it a boolean?"},
+			{"isNumber", "", "bool", "Is it a number?"},
+			{"isString", "", "bool", "Is it a string?"},
+			{"isArray", "", "bool", "Is it an array?"},
+			{"isObject", "", "bool", "Is it an object?"},
+			{"len", "", "int", "Element count for an array or object, character count for a string."},
+			{"has", "key: string", "bool", "Does this object have that key?"},
+			{"keys", "", "string[]", "This object\u0027s keys, in insertion order."},
+		},
+	}
 }

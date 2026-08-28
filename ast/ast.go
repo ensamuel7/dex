@@ -25,6 +25,9 @@ const (
 	TypeArrayChar
 	TypeStringBuilder
 	TypeMutex
+	// TypeJsonValue is the json module's dynamic JSON document type, written
+	// `json.Value` in source. It is a heap value like string and arrays.
+	TypeJsonValue
 )
 
 // TypeInferred is used during parsing when a let statement has no explicit type annotation.
@@ -149,7 +152,7 @@ func StructName(t Type) string {
 }
 
 func IsHeapType(t Type) bool {
-	return t == TypeString || t == TypeStringBuilder || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t)
+	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t)
 }
 
 func NeedsRelease(t Type) bool {
@@ -525,12 +528,30 @@ type CallExpr struct {
 	IsMethodCall  bool     // set by checker: instance.method() call
 	IsConstructor bool     // set by checker: StructName(args) constructor call
 	StructType    Type     // set by checker: the struct type for method/constructor calls
+	// Recv is the receiver of a method call whose receiver is an arbitrary
+	// expression rather than a plain variable name, as in parsed[0].asInt().
+	// When it is nil the receiver, if any, is named by Module.
+	Recv Expr
 }
 
 type ArrayLitExpr struct {
 	Pos      Pos
 	ElemType Type
 	Elems    []Expr
+	// AsJsonValue is set by the checker when the literal is being built as a
+	// json.Value rather than a typed array, which is what allows the elements to
+	// have differing types.
+	AsJsonValue bool
+}
+
+// ObjectLitExpr is a JSON object literal: { name: "Dex", version: 1 }. Keys are
+// bare identifiers or string literals. It always has type json.Value — the
+// language has no other object literal — so it needs no type annotation to be
+// understood, including when nested inside another literal.
+type ObjectLitExpr struct {
+	Pos    Pos
+	Keys   []string
+	Values []Expr
 }
 
 type IndexExpr struct {
@@ -569,6 +590,7 @@ func (e *BinaryExpr) exprNode()      {}
 func (e *UnaryExpr) exprNode()       {}
 func (e *CallExpr) exprNode()        {}
 func (e *ArrayLitExpr) exprNode()    {}
+func (e *ObjectLitExpr) exprNode()   {}
 func (e *IndexExpr) exprNode()       {}
 func (e *SliceExpr) exprNode()       {}
 func (e *StructLitExpr) exprNode()   {}

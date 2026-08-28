@@ -1,0 +1,64 @@
+import "json"
+
+struct Point { x: int
+    y: int }
+struct Shape { name: string
+    origin: Point
+    sides: int[] }
+
+fn main(): void {
+    let s: Shape = Shape { name: "square", origin: Point { x: 1, y: 2 }, sides: [4, 4, 4, 4] }
+    let text: string = json.encode(s)
+    assert(text == "{\"name\":\"square\",\"origin\":{\"x\":1,\"y\":2},\"sides\":[4,4,4,4]}")
+    let back: Shape = json.decode(text)
+    assert(back.origin.y == 2)
+
+    let config: json.Value = { name: "dex", version: 3, stable: true }
+    let mixed: json.Value = [1, "two", true, null, {}]
+    assert(mixed.len() == 5)
+
+    let record: json.Value = { "first-name": "Ada", "born": 1815 }
+    assert(record["first-name"].asString() == "Ada")
+
+    let origin: json.Value = { x: 0, y: 0 }
+    let scene: json.Value = { origin: origin, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }
+    assert(scene["points"][1]["x"].asInt() == 3)
+
+    let p: Point = Point { x: 1, y: 2 }
+    let ids: int[] = [7, 8, 9]
+    let payload: json.Value = { point: p, ids: ids }
+    assert(json.encode(payload) == "{\"point\":{\"x\":1,\"y\":2},\"ids\":[7,8,9]}")
+
+    let doc: json.Value = json.decode(json.encode(scene))
+    assert(doc["points"][0]["x"].asInt() == 1)
+    assert(doc["absent"].isNull())
+    assert(doc["absent"].asInt() == 0)
+    assert(doc["absent"].asString() == "")
+
+    let v: json.Value = { quoted: "42", bare: 42 }
+    assert(v["quoted"].asInt() == 42)
+    assert(v["bare"].asString() == "42")
+
+    let envelope: json.Value = { body: { x: 5, y: 6 } }
+    let body: Point = json.decode(envelope["body"])
+    assert(body.x == 5)
+
+    let bad: json.Value = json.decode("nope")
+    assert(bad.isNull())
+
+    let scores: int[] = [10, 20, 30]
+    let obj: string = json.encode({
+        message: "Hello from Dex!",
+        count: scores.len(),
+        scores: scores,
+        success: true
+    })
+    assert(obj == "{\"message\":\"Hello from Dex!\",\"count\":3,\"scores\":[10,20,30],\"success\":true}")
+
+    let headers: string = json.encode({
+        "Authorization": "Bearer token",
+        "Accept": "application/json"
+    })
+    assert(headers == "{\"Authorization\":\"Bearer token\",\"Accept\":\"application/json\"}")
+
+}

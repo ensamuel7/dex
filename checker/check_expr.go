@@ -175,9 +175,48 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 
 		return 0, c.errAt(e.Pos, "unknown unary operator")
 
+	case *ast.ObjectLitExpr:
+		// An object literal is always a json.Value: it is the only object literal
+		// the language has, so it needs no annotation even when nested.
+		for i, v := range e.Values {
+			vt, err := c.checkExpr(v)
+			if err != nil {
+				return 0, err
+			}
+			if !isJsonEncodable(vt) {
+				return 0, c.errAt(e.Pos, "value for key '%s' is %s, which has no JSON representation", e.Keys[i], typeName(vt))
+			}
+			if err := c.markJsonValue(v); err != nil {
+				return 0, err
+			}
+		}
+		return ast.TypeJsonValue, nil
+
 	case *ast.ArrayLitExpr:
+		if e.AsJsonValue {
+			// Built as a JSON array, so the elements are free to differ in type.
+			for _, elem := range e.Elems {
+				et, err := c.checkExpr(elem)
+				if err != nil {
+					return 0, err
+				}
+				if !isJsonEncodable(et) {
+					return 0, c.errAt(e.Pos, "array element is %s, which has no JSON representation", typeName(et))
+				}
+				if err := c.markJsonValue(elem); err != nil {
+					return 0, err
+				}
+			}
+			return ast.TypeJsonValue, nil
+		}
 		if len(e.Elems) == 0 {
-			// Empty array literal — type must be inferred from context (LetStmt handles this)
+			// A target type may already have been supplied, as for map literals.
+			if e.ElemType != 0 || ast.IsStructType(e.ElemType) {
+				if ast.IsStructType(e.ElemType) {
+					return ast.StructArrayTypeOf(e.ElemType), nil
+				}
+				return ast.ArrayTypeOf(e.ElemType), nil
+			}
 			return 0, c.errAt(e.Pos, "cannot infer type of empty array literal")
 		}
 		firstType, err := c.checkExpr(e.Elems[0])
@@ -190,7 +229,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return 0, err
 			}
 			if t != firstType {
-				return 0, c.errAt(e.Pos, "array elements must be the same type: expected %s, got %s at index %d", typeName(firstType), typeName(t), i)
+				return 0, c.errAt(e.Pos, "array elements must be the same type: expected %s, got %s at index %d (annotate the target as json.Value for a mixed array)", typeName(firstType), typeName(t), i)
 			}
 		}
 		e.ElemType = firstType
@@ -200,6 +239,18 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		arrType, err := c.checkExpr(e.Array)
 		if err != nil {
 			return 0, err
+		}
+		if arrType == ast.TypeJsonValue {
+			// v[0] indexes an array, v["k"] a key. Both yield a json.Value, so a
+			// path can be walked without stopping to say what shape it is.
+			idxType, err := c.checkExpr(e.Index)
+			if err != nil {
+				return 0, err
+			}
+			if idxType != ast.TypeInt && idxType != ast.TypeString {
+				return 0, c.errAt(e.Pos, "json.Value index must be int or string, got %s", typeName(idxType))
+			}
+			return ast.TypeJsonValue, nil
 		}
 		if ast.IsMapType(arrType) {
 			idxType, err := c.checkExpr(e.Index)
@@ -266,6 +317,11 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			found := false
 			for _, f := range def.Fields {
 				if f.Name == fn {
+					// A literal with no type of its own takes the field's type,
+					// the same way a `let` with an annotation supplies one.
+					if err := c.applyTargetType(e.FieldValues[i], f.Type); err != nil {
+						return 0, err
+					}
 					valType, err := c.checkExpr(e.FieldValues[i])
 					if err != nil {
 						return 0, err
@@ -476,7 +532,15 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		return ast.FuncTypeOf(paramTypes, e.ReturnType), nil
 
 	case *ast.MapLitExpr:
-		// Empty map literal — type must be inferred from context (LetStmt handles this)
+		if e.AsJsonValue {
+			// `{}` where a json.Value is expected is the empty JSON object.
+			return ast.TypeJsonValue, nil
+		}
+		// A target type may already have been supplied — by a let annotation, or
+		// by the field this literal initialises.
+		if ast.IsMapType(e.MapType) {
+			return e.MapType, nil
+		}
 		return 0, c.errAt(e.Pos, "cannot infer type of empty map literal")
 
 	case *ast.ReceiveExpr:
@@ -493,6 +557,30 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		return 0, c.errAt(e.Pos, "receive() requires a channel or task handle, got %s", typeName(srcType))
 
 	case *ast.CallExpr:
+		// Method call on an arbitrary receiver expression, e.g. parsed[0].asInt().
+		// Only types whose methods do not depend on a variable name can be
+		// reached this way; the rest still go through the named-receiver path.
+		if e.Recv != nil {
+			recvType, err := c.checkExpr(e.Recv)
+			if err != nil {
+				return 0, err
+			}
+			if ast.IsRefType(recvType) {
+				recvType = ast.RefInnerType(recvType)
+			}
+			if recvType == ast.TypeJsonValue {
+				ret, err := c.checkJsonValueMethod(e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				// Codegen needs the result type to declare the temp it releases
+				// the receiver through.
+				e.ResolvedType = ret
+				return ret, nil
+			}
+			return 0, c.errAt(e.Pos, "cannot call method '%s' on a %s expression; assign it to a variable first", e.Name, typeName(recvType))
+		}
+
 		// Qualified call: module.func()
 		if e.Module != "" {
 			// Check if module is actually a variable (array method call)
@@ -511,6 +599,16 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if err != nil {
 					return 0, err
 				}
+				return retType, nil
+			}
+
+			// Check if module is a json.Value variable
+			if isVar && varType == ast.TypeJsonValue {
+				retType, err := c.checkJsonValueMethod(e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				e.ResolvedType = retType
 				return retType, nil
 			}
 
@@ -591,6 +689,15 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if err != nil {
 					return 0, err
 				}
+				return retType, nil
+			}
+			// json.Value method call on dotted field (e.g. msg.payload.asInt())
+			if isVar && varType == ast.TypeJsonValue {
+				retType, err := c.checkJsonValueMethod(e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				e.ResolvedType = retType
 				return retType, nil
 			}
 			// String method call on dotted field (e.g. req.path.len())
@@ -698,6 +805,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if !ok {
 				return 0, c.errAt(e.Pos, "module '%s' is not imported", e.Module)
 			}
+			c.warnIfDeprecated(e.Module, e.Name, e.Pos)
 
 			// Special case: fmt.print/fmt.println — accepts any primitive type
 			if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
@@ -721,17 +829,29 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return ast.TypeVoid, nil
 			}
 
-			// Special case: json.encode(array or struct) -> string
+			// Special case: json.encode(value) -> string
 			if e.Module == "json" && e.Name == "encode" {
 				if len(e.Args) != 1 {
 					return 0, c.errAt(e.Pos, "json.encode() takes exactly 1 argument, got %d", len(e.Args))
+				}
+				// A literal passed straight to encode is JSON construction —
+				// json.encode([2, id, action, payload]) needs no annotation to
+				// say so, because there is nothing else it could mean.
+				switch e.Args[0].(type) {
+				case *ast.ObjectLitExpr, *ast.MapLitExpr, *ast.ArrayLitExpr:
+					if err := c.markJsonValue(e.Args[0]); err != nil {
+						return 0, err
+					}
 				}
 				argType, err := c.checkExpr(e.Args[0])
 				if err != nil {
 					return 0, err
 				}
+				if argType == ast.TypeJsonValue {
+					return ast.TypeString, nil
+				}
 				if !ast.IsArrayType(argType) && !ast.IsStructType(argType) && !ast.IsMapType(argType) {
-					return 0, c.errAt(e.Pos, "json.encode() argument must be an array, struct, or map type, got %s", typeName(argType))
+					return 0, c.errAt(e.Pos, "json.encode() argument must be a json.Value, array, struct, or map, got %s", typeName(argType))
 				}
 				if ast.IsMapType(argType) && ast.MapKeyType(argType) != ast.TypeString {
 					return 0, c.errAt(e.Pos, "json.encode() map key type must be string for JSON serialization, got %s", typeName(ast.MapKeyType(argType)))
@@ -748,18 +868,24 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if err != nil {
 					return 0, err
 				}
-				if argType != ast.TypeString {
-					return 0, c.errAt(e.Pos, "json.decode() argument must be string, got %s", typeName(argType))
+				// Decoding accepts wire text or an already-parsed value, so a
+				// nested payload can go straight into a struct without being
+				// re-serialized by hand.
+				if argType != ast.TypeString && argType != ast.TypeJsonValue {
+					return 0, c.errAt(e.Pos, "json.decode() argument must be a string or json.Value, got %s", typeName(argType))
 				}
-				// The target may be a struct or a struct array, each either plain
-				// (lenient: a bad payload decodes to zero values) or optional
-				// (checked: a bad payload yields null).
+				// The target may be a json.Value, a struct, or a struct array;
+				// the latter two either plain (lenient: a bad payload decodes to
+				// zero values) or optional (checked: a bad payload yields null).
 				target := e.ResolvedType
 				if ast.IsOptionalType(target) {
 					target = ast.OptionalInnerType(target)
 				}
+				if target == ast.TypeJsonValue {
+					return e.ResolvedType, nil
+				}
 				if e.ResolvedType == 0 || !(ast.IsStructType(target) || ast.IsStructArrayType(target)) {
-					return 0, c.errAt(e.Pos, "json.decode() requires an explicit struct or struct array type annotation (e.g., let x: MyStruct = json.decode(...))")
+					return 0, c.errAt(e.Pos, "json.decode() requires an explicit type annotation (e.g., let x: MyStruct = json.decode(...) or let v: json.Value = json.decode(...))")
 				}
 				return e.ResolvedType, nil
 			}

@@ -728,7 +728,7 @@ static char* dex_arr_encode_struct(void* elem, int num_fields, DexStructFieldDes
     int wrote = 0;
     for (int f = 0; f < num_fields; f++) {
         if (fields[f].kind == 7) continue; // no codec — omit rather than emit garbage
-        if (wrote) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (wrote) { buf[pos++] = ','; }
         wrote = 1;
         if ((size_t)pos + 256 > cap) {
             cap *= 2;
@@ -739,20 +739,20 @@ static char* dex_arr_encode_struct(void* elem, int num_fields, DexStructFieldDes
         int n = 0;
         switch (fields[f].kind) {
         case 0: // int
-            n = snprintf(buf + pos, cap - pos, "\"%s\": %d", fields[f].name, *(int*)((char*)elem + fields[f].offset));
+            n = snprintf(buf + pos, cap - pos, "\"%s\":%d", fields[f].name, *(int*)((char*)elem + fields[f].offset));
             break;
         case 1: // bool
-            n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false");
+            n = snprintf(buf + pos, cap - pos, "\"%s\":%s", fields[f].name, (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false");
             break;
         case 2: // string
             { DexString* s = *(DexString**)((char*)elem + fields[f].offset);
-              n = snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"", fields[f].name, s ? s->data : ""); }
+              n = snprintf(buf + pos, cap - pos, "\"%s\":\"%s\"", fields[f].name, s ? s->data : ""); }
             break;
         case 3: // long
-            n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)elem + fields[f].offset));
+            n = snprintf(buf + pos, cap - pos, "\"%s\":%ld", fields[f].name, *(long*)((char*)elem + fields[f].offset));
             break;
         case 4: // double
-            n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)elem + fields[f].offset));
+            n = snprintf(buf + pos, cap - pos, "\"%s\":%g", fields[f].name, *(double*)((char*)elem + fields[f].offset));
             break;
         case 6: // array — codegen-supplied codec
             { const char* asub = fields[f].enc_arr ? fields[f].enc_arr((char*)elem + fields[f].offset) : NULL;
@@ -764,7 +764,7 @@ static char* dex_arr_encode_struct(void* elem, int num_fields, DexStructFieldDes
                   if (!t) { buf[pos] = '\0'; free((void*)asub); return buf; }
                   buf = t;
               }
-              n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, asubs);
+              n = snprintf(buf + pos, cap - pos, "\"%s\":%s", fields[f].name, asubs);
               free((void*)asub); }
             break;
         case 5: // nested struct
@@ -777,7 +777,7 @@ static char* dex_arr_encode_struct(void* elem, int num_fields, DexStructFieldDes
                   if (!t) { buf[pos] = '\0'; free(sub); return buf; }
                   buf = t;
               }
-              n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, subs);
+              n = snprintf(buf + pos, cap - pos, "\"%s\":%s", fields[f].name, subs);
               free(sub); }
             break;
         }
@@ -801,7 +801,7 @@ const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArraySt
     int pos = 0;
     buf[pos++] = '[';
     for (int i = 0; i < arr->len; i++) {
-        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (i > 0) { buf[pos++] = ','; }
         void* elem = (char*)arr->data + (size_t)i * elem_size;
         char* obj_str = dex_arr_encode_struct(elem, num_fields, fields);
         const char* objs = obj_str ? obj_str : "{}";
@@ -826,10 +826,10 @@ const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArraySt
     size_t need = olen + klen + alen + 16;
     char* result = (char*)malloc(need);
     if (olen == 2) {
-        snprintf(result, need, "{\"%s\": %s}", key, buf);
+        snprintf(result, need, "{\"%s\":%s}", key, buf);
     } else {
         memcpy(result, obj, olen - 1);
-        snprintf(result + olen - 1, need - (olen - 1), ", \"%s\": %s}", key, buf);
+        snprintf(result + olen - 1, need - (olen - 1), ", \"%s\":%s}", key, buf);
     }
     free(buf);
     return result;
@@ -842,7 +842,7 @@ const char* dex_json_stringify_struct_arr(DexArrayStruct* arr, size_t elem_size,
     int pos = 0;
     buf[pos++] = '[';
     for (int i = 0; i < arr->len; i++) {
-        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (i > 0) { buf[pos++] = ','; }
         void* elem = (char*)arr->data + (size_t)i * elem_size;
         char* obj_str = dex_arr_encode_struct(elem, num_fields, fields);
         const char* objs = obj_str ? obj_str : "{}";
@@ -870,7 +870,7 @@ const char* dex_json_stringify_int(DexArrayInt* a) {
     int pos = 0;
     buf[pos++] = '[';
     for (int i = 0; i < a->len; i++) {
-        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (i > 0) { buf[pos++] = ','; }
         int n = snprintf(buf + pos, cap - pos, "%d", a->data[i]);
         pos += n;
         if ((size_t)pos + 32 > cap) {
@@ -889,7 +889,7 @@ const char* dex_json_stringify_bool(DexArrayBool* a) {
     int pos = 0;
     buf[pos++] = '[';
     for (int i = 0; i < a->len; i++) {
-        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (i > 0) { buf[pos++] = ','; }
         const char* v = a->data[i] ? "true" : "false";
         int n = snprintf(buf + pos, cap - pos, "%s", v);
         pos += n;
@@ -909,7 +909,7 @@ const char* dex_json_stringify_str(DexArrayString* a) {
     int pos = 0;
     buf[pos++] = '[';
     for (int i = 0; i < a->len; i++) {
-        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (i > 0) { buf[pos++] = ','; }
         int n = snprintf(buf + pos, cap - pos, "\"%s\"", a->data[i]->data);
         pos += n;
         if ((size_t)pos + 64 > cap) {
@@ -928,7 +928,7 @@ const char* dex_json_stringify_long(DexArrayLong* a) {
     int pos = 0;
     buf[pos++] = '[';
     for (int i = 0; i < a->len; i++) {
-        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (i > 0) { buf[pos++] = ','; }
         int n = snprintf(buf + pos, cap - pos, "%ld", a->data[i]);
         pos += n;
         if ((size_t)pos + 32 > cap) {
@@ -947,7 +947,7 @@ const char* dex_json_stringify_double(DexArrayDouble* a) {
     int pos = 0;
     buf[pos++] = '[';
     for (int i = 0; i < a->len; i++) {
-        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (i > 0) { buf[pos++] = ','; }
         int n = snprintf(buf + pos, cap - pos, "%g", a->data[i]);
         pos += n;
         if ((size_t)pos + 64 > cap) {
@@ -1051,7 +1051,7 @@ const char* dex_json_stringify_char(DexArrayChar* a) {
     int pos = 0;
     buf[pos++] = '[';
     for (int i = 0; i < a->len; i++) {
-        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (i > 0) { buf[pos++] = ','; }
         int n = snprintf(buf + pos, cap - pos, "%d", (int)a->data[i]);
         pos += n;
         if ((size_t)pos + 32 > cap) {

@@ -24,6 +24,8 @@ type Checker struct {
 	userModules      map[string]bool
 	loopDepth        int
 	errors           []error
+	warnings         []error
+	warnedDeprecated map[string]bool
 	maxErrors        int
 
 	structMethods      map[string]map[string]funcSig // structName -> methodName -> sig
@@ -36,6 +38,58 @@ func (c *Checker) addError(err error) {
 	c.errors = append(c.errors, err)
 }
 
+// addWarning records a non-fatal diagnostic. Warnings never block compilation;
+// they are surfaced by the CLI and as editor diagnostics.
+func (c *Checker) addWarning(err error) {
+	c.warnings = append(c.warnings, err)
+}
+
+// Warnings returns the non-fatal diagnostics gathered during checking.
+func (c *Checker) Warnings() []error {
+	return c.warnings
+}
+
+// deprecatedJSONFuncs maps each superseded json function to the json.Value form
+// that replaces it. The whole set exists only for source compatibility: reading
+// and building JSON is now json.encode, json.decode and the json.Value type.
+var deprecatedJSONFuncs = map[string]string{
+	"new":          "an object literal, e.g. let v: json.Value = {}",
+	"set":          "an object literal, e.g. let v: json.Value = { key: value }",
+	"setObj":       "an object literal — a nested json.Value needs no special call",
+	"setArray":     "an object literal — an array field is just { key: arr }",
+	"get":          "indexing, e.g. v[\"key\"].asString()",
+	"getInt":       "indexing, e.g. v[\"key\"].asInt()",
+	"getBool":      "indexing, e.g. v[\"key\"].asBool()",
+	"getDouble":    "indexing, e.g. v[\"key\"].asDouble()",
+	"getLong":      "indexing, e.g. v[\"key\"].asLong()",
+	"arrayNew":     "an array literal, e.g. let v: json.Value = []",
+	"arrayLen":     "v.len()",
+	"arrayGet":     "indexing, e.g. v[0].asString()",
+	"arrayGetRaw":  "indexing — v[0] is already a json.Value",
+	"arrayPush":    "an array literal, e.g. let v: json.Value = [a, b, c]",
+	"arrayPushObj": "an array literal — a nested json.Value needs no special call",
+}
+
+// warnIfDeprecated reports one warning per superseded json function per
+// compilation. Repeating it at every call site would bury the advice in noise.
+func (c *Checker) warnIfDeprecated(module, name string, pos ast.Pos) {
+	if module != "json" {
+		return
+	}
+	replacement, ok := deprecatedJSONFuncs[name]
+	if !ok {
+		return
+	}
+	if c.warnedDeprecated == nil {
+		c.warnedDeprecated = make(map[string]bool)
+	}
+	if c.warnedDeprecated[name] {
+		return
+	}
+	c.warnedDeprecated[name] = true
+	c.addWarning(c.errAt(pos, "json.%s is deprecated: use %s", name, replacement))
+}
+
 func New() *Checker {
 	return &Checker{
 		funcs:              make(map[string]funcSig),
@@ -45,6 +99,7 @@ func New() *Checker {
 		structConstructors: make(map[string][]ast.Type),
 		structModule:       make(map[string]string),
 		maxErrors:          20,
+		warnedDeprecated:   make(map[string]bool),
 	}
 }
 

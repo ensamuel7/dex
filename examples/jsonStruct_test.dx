@@ -105,11 +105,11 @@ fn main(): void {
         Item { label: "b", geo: Geo { lat: 3.5, lng: 4.5 } }
     ]
     let arrJson: string = json.encode(items)
-    assert(arrJson == "[{\"label\": \"a\", \"geo\": {\"lat\": 1.5, \"lng\": 2.5}}, {\"label\": \"b\", \"geo\": {\"lat\": 3.5, \"lng\": 4.5}}]")
+    assert(arrJson == "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]")
 
     let wrapped: string = json.new()
     wrapped = json.setArray(wrapped, "items", items)
-    assert(json.get(wrapped, "items") == "[{\"label\": \"a\", \"geo\": {\"lat\": 1.5, \"lng\": 2.5}}, {\"label\": \"b\", \"geo\": {\"lat\": 3.5, \"lng\": 4.5}}]")
+    assert(json.get(wrapped, "items") == "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]")
 
     //Checked decode — an optional target rejects bad input instead of zeroing it
     let okDec: Person? = json.decode("{\"name\":\"Ivy\",\"age\":31,\"active\":true}")
@@ -162,7 +162,7 @@ fn main(): void {
     assert(lenient.age == 0)
 
     //Decoding a JSON array into a struct array, elements nested included
-    let arrRaw: string = "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}}, {\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]"
+    let arrRaw: string = "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]"
     let decodedItems: Item[] = json.decode(arrRaw)
     let itemCount: int = decodedItems.len()
     assert(itemCount == 2)
@@ -174,7 +174,7 @@ fn main(): void {
     assert(it1.geo.lng == 4.5)
 
     //Round-trips back through encode (which spaces after colons)
-    assert(json.encode(decodedItems) == "[{\"label\": \"a\", \"geo\": {\"lat\": 1.5, \"lng\": 2.5}}, {\"label\": \"b\", \"geo\": {\"lat\": 3.5, \"lng\": 4.5}}]")
+    assert(json.encode(decodedItems) == "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]")
 
     let emptyItems: Item[] = json.decode("[]")
     let emptyCount: int = emptyItems.len()
@@ -197,13 +197,13 @@ fn main(): void {
     assert(truncArr == null)
 
     //Array struct fields — primitive, string, and struct element types
-    let ids: int[] = [7, 8]
+    let ids: int[] = [7,8]
     let ns: string[] = ["a", "b"]
-    let ports: Connector[] = [Connector{id: 1, kind: "AC"}, Connector{id: 2, kind: "DC"}]
+    let ports: Connector[] = [Connector{id: 1, kind: "AC"},Connector{id: 2, kind: "DC"}]
     let ch: Charger = Charger { tag: "CP", connectors: ids, names: ns, ports: ports }
 
     let chJson: string = json.encode(ch)
-    assert(chJson == "{\"tag\": \"CP\", \"connectors\": [7, 8], \"names\": [\"a\", \"b\"], \"ports\": [{\"id\": 1, \"kind\": \"AC\"}, {\"id\": 2, \"kind\": \"DC\"}]}")
+    assert(chJson == "{\"tag\":\"CP\",\"connectors\":[7,8],\"names\":[\"a\",\"b\"],\"ports\":[{\"id\":1,\"kind\":\"AC\"},{\"id\":2,\"kind\":\"DC\"}]}")
 
     let chBack: Charger = json.decode(chJson)
     assert(chBack.tag == "CP")

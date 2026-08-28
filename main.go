@@ -421,7 +421,9 @@ func build(filename string) (string, error) {
 
 	// Type check
 	ch := checker.New()
-	if checkErrs := ch.Check(program); len(checkErrs) > 0 {
+	checkErrs := ch.Check(program)
+	printWarnings(ch.Warnings())
+	if len(checkErrs) > 0 {
 		return "", checkErrs[0]
 	}
 
@@ -441,7 +443,11 @@ func build(filename string) (string, error) {
 	if err := os.WriteFile(cFile, []byte(cCode), 0644); err != nil {
 		return "", fmt.Errorf("failed to write C file: %v", err)
 	}
-	defer os.Remove(cFile)
+	// DEX_KEEP_C leaves the generated C in build/ so compiler changes can be
+	// inspected without reproducing the failure by hand.
+	if os.Getenv("DEX_KEEP_C") == "" {
+		defer os.Remove(cFile)
+	}
 
 	// Compile with gcc/cc
 	binaryPath := filepath.Join(buildDir, baseName)
@@ -517,7 +523,9 @@ func generateC(filename string) (string, error) {
 	}
 
 	ch := checker.New()
-	if checkErrs := ch.Check(program); len(checkErrs) > 0 {
+	checkErrs := ch.Check(program)
+	printWarnings(ch.Warnings())
+	if len(checkErrs) > 0 {
 		return "", checkErrs[0]
 	}
 
@@ -722,3 +730,11 @@ func check(filename string) {
 	}
 }
 
+
+// printWarnings reports non-fatal checker diagnostics. They never stop a build —
+// deprecated calls keep working — but they say what to move to.
+func printWarnings(warnings []error) {
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", w)
+	}
+}

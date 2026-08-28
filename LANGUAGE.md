@@ -105,6 +105,10 @@ let b: int = 2
 | `string` | String                             | `"hello"`, `"world"`  |
 | `void`   | No return value (functions only)   | —                     |
 
+Two further heap types come from the standard library and are written with their
+module prefix: `StringBuilder` (see the StringBuilder section) and `json.Value`,
+a dynamic JSON document (see the `json` module).
+
 ### Array types
 
 Append `[]` to a primitive type to make an array type.
@@ -905,7 +909,7 @@ let result: int = add(5, 10)
 
 ```dex
 fmt.println(42)
-json.new()
+let doc: json.Value = json.decode(text)
 ```
 
 ---
@@ -1539,7 +1543,7 @@ The `contentType` field is set automatically for client responses (from the serv
 **Headers:**
 
 Headers can be provided in two formats:
-- **JSON object** (most intuitive): build with `json.new()` / `json.set()` — auto-detected when the string starts with `{`
+- **JSON object** (most intuitive): build with a `json.Value` object literal — auto-detected when the string starts with `{`
 - **Header builder**: build with `http.header()` — produces newline-separated `Key: Value` pairs
 
 | Function    | Signature                                              | Description                     |
@@ -1570,19 +1574,20 @@ fn main(): void {
   fmt.println(resp.contentType)
 
   // Parse JSON response
-  let name: string = json.get(resp.body, "name")
-  let count: int = json.getInt(resp.body, "count")
-  let active: bool = json.getBool(resp.body, "active")
+  let doc: json.Value = json.decode(resp.body)
+  let name: string = doc["name"].asString()
+  let count: int = doc["count"].asInt()
+  let active: bool = doc["active"].asBool()
 
   // POST with JSON body
-  let body: string = json.new()
-  body = json.set(body, "name", "Alice")
+  let body: string = json.encode({ name: "Alice" })
   let r2: HttpResponse = http.post("https://api.example.com", body)
 
   // GET with headers (JSON approach)
-  let headers: string = json.new()
-  headers = json.set(headers, "Authorization", "Bearer token")
-  headers = json.set(headers, "Accept", "application/json")
+  let headers: string = json.encode({
+      "Authorization": "Bearer token",
+      "Accept": "application/json"
+  })
   let r3: HttpResponse = http.get("https://api.example.com/data", headers)
 
   // POST with headers (header builder approach)
@@ -1603,189 +1608,192 @@ fn main(): void {
 
 ### json
 
-Build JSON objects from strings.
+Encode and decode JSON. The module has two functions — `json.encode` and
+`json.decode` — and one type, `json.Value`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `encode` | `encode(value: json.Value \| struct \| T[] \| map[string, V]): string` | Serialize a value to JSON text |
+| `decode` | `decode(json: string \| json.Value): T` | Parse JSON into `json.Value`, a struct, or a struct array |
+
+#### Structs
+
+A struct encodes to a JSON object and decodes back, recursing through nested
+struct fields and array fields to any depth:
 
 ```dex
-import "json"
+struct Point {
+    x: int
+    y: int
+}
 
-let obj: string = json.new()
-obj = json.set(obj, "name", "Dex")
-obj = json.set(obj, "version", 1)
-obj = json.set(obj, "stable", true)
-obj = json.set(obj, "bignum", 1000000)
-obj = json.set(obj, "pi", 3.14)
-// obj is now: {"name":"Dex","version":1,"stable":true,"bignum":1000000,"pi":3.14}
-```
-
-| Function     | Signature                                                                       | Description                    |
-|--------------|---------------------------------------------------------------------------------|--------------------------------|
-| `new`        | `new(): string`                                                                 | Create empty `{}`              |
-| `set`        | `set(obj: string, key: string, value: string\|int\|bool\|long\|double): string` | Set a value (type auto-detected) |
-| `setArray`   | `setArray(obj: string, key: string, arr: T[]): string`                          | Set an array value             |
-| `setObj`     | `setObj(obj: string, key: string, value: string): string`                       | Set a key to a raw JSON object/array value (not quoted) |
-| `encode`     | `encode(value: T[]\|struct\|map[string, V]): string`                           | Convert an array, struct, or map to JSON string |
-| `decode`     | `decode(json: string): T` (T = struct, struct array, or either optional)        | Convert a JSON string into a typed struct |
-| `get`        | `get(json: string, key: string): string`                                        | Get a value by key — strings unquoted, objects/arrays as raw JSON |
-| `getInt`     | `getInt(json: string, key: string): int`                                        | Get an integer value by key    |
-| `getBool`    | `getBool(json: string, key: string): bool`                                      | Get a boolean value by key     |
-| `getDouble`  | `getDouble(json: string, key: string): double`                                  | Get a double value by key      |
-| `getLong`    | `getLong(json: string, key: string): long`                                      | Get a long integer value by key |
-| `arrayNew`     | `arrayNew(): string`                                                          | Create empty JSON array `[]`   |
-| `arrayLen`     | `arrayLen(json: string): int`                                                 | Get length of a JSON array     |
-| `arrayGet`     | `arrayGet(json: string, index: int): string`                                  | Get element at index (strings unquoted) |
-| `arrayGetRaw`  | `arrayGetRaw(json: string, index: int): string`                               | Get raw element at index (strings keep quotes) |
-| `arrayPush`    | `arrayPush(arr: string, value: string\|int\|bool\|long\|double): string`      | Append a primitive value to a JSON array |
-| `arrayPushObj` | `arrayPushObj(arr: string, obj: string): string`                              | Append a JSON object/array to a JSON array |
-
-`set` accepts any primitive type as the value — the compiler dispatches to the correct implementation based on the argument type. `setArray` and `encode` work with any array type (`int[]`, `long[]`, `double[]`, `bool[]`, `string[]`). `encode` also accepts struct types, serializing all fields to a JSON object. `decode` converts a JSON string back into a typed struct — the target type must be specified via type annotation (e.g., `let p: Person = json.decode(str)`). Both `encode` and `decode` recurse into nested struct fields to any depth, and handle array fields (primitive or struct element types). `setObj` inserts raw JSON without quoting, which is essential for nesting objects. The `get*` functions return the default zero value (empty string, 0, false, 0.0) if the key is not found.
-
-**Reading nested objects** — the `get*` functions match **top-level keys only**. A string value comes back unquoted; an object or array value comes back as raw JSON, which you feed straight back into `get` to descend one level at a time:
-
-```dex
-let msg: string = "{\"device\":{\"model\":\"MX-9\",\"vendor\":\"Acme\"},\"reason\":\"PowerUp\"}"
-
-let device: string = json.get(msg, "device")     // {"model":"MX-9","vendor":"Acme"}
-let model: string  = json.get(device, "model")   // MX-9
-let reason: string = json.get(msg, "reason")     // PowerUp
-
-json.get(msg, "model")                           // "" — nested keys are not searched
-```
-
-Because lookup stops at the current level, a key nested deeper can never shadow the one you asked for, and a *value* that happens to read like your key is never mistaken for it.
-
-**JSON Arrays** — for working with JSON arrays as strings (useful for wire protocols that frame each message as a JSON array):
-
-```dex
-// Build a JSON array
-let arr: string = json.arrayNew()
-arr = json.arrayPush(arr, 2)
-arr = json.arrayPush(arr, "abc123")
-arr = json.arrayPush(arr, "BootNotification")
-let payload: string = json.new()
-payload = json.set(payload, "vendor", "Dex")
-arr = json.arrayPushObj(arr, payload)
-// arr is now: [2, "abc123", "BootNotification", {"vendor": "Dex"}]
-
-// Parse a JSON array
-let msgType: string = json.arrayGet(arr, 0)    // "2"
-let msgId: string = json.arrayGet(arr, 1)      // "abc123"
-let action: string = json.arrayGet(arr, 2)     // "BootNotification"
-let body: string = json.arrayGet(arr, 3)       // {"vendor": "Dex"}
-let len: int = json.arrayLen(arr)              // 4
-```
-
-**JSON Objects:**
-
-```dex
-let nums: int[] = [1, 2, 3]
-let obj: string = json.new()
-obj = json.setArray(obj, "numbers", nums)
-// obj is now: {"numbers": [1, 2, 3]}
-
-let s: string = json.encode(nums)
-// s is now: [1, 2, 3]
-```
-
-**Struct serialization** — `json.encode` converts a struct to a JSON object string, and `json.decode` parses a JSON string back into a typed struct:
-
-```dex
-struct Person {
+struct Shape {
     name: string
-    age: int
-    active: bool
+    origin: Point
+    sides: int[]
 }
 
-let p: Person = Person { name: "Alice", age: 30, active: true }
-let jsonStr: string = json.encode(p)
-// jsonStr is now: {"name": "Alice", "age": 30, "active": true}
+let s: Shape = Shape { name: "square", origin: Point { x: 1, y: 2 }, sides: [4, 4, 4, 4] }
+let text: string = json.encode(s)
+// {"name":"square","origin":{"x":1,"y":2},"sides":[4,4,4,4]}
 
-let p2: Person = json.decode(jsonStr)
-// p2.name == "Alice", p2.age == 30, p2.active == true
+let back: Shape = json.decode(text)
+// back.origin.y == 2
 ```
 
-Both directions recurse through nested struct fields, to any depth:
+Field names are the JSON keys. A key absent from the input leaves that field at
+its zero value, and an absent array field yields an empty array rather than a
+null one.
+
+#### Checked decoding
+
+Annotating the target as optional (`T?`) makes `json.decode` report failure
+instead of silently producing zero values. This is what you want at a trust
+boundary such as an HTTP request body:
 
 ```dex
-struct Geo { lat: double
-    lng: double
+let p: Point? = json.decode(req.body)
+if (p == null) {
+    return http.response(400, json.encode(Error { message: "invalid JSON body" }), "application/json")
 }
-struct Address { city: string
-    geo: Geo
-}
-struct Employee { name: string
-    addr: Address
-}
-
-let e: Employee = Employee { name: "Zoe", addr: Address { city: "Lagos", geo: Geo { lat: 6.5, lng: 3.4 } } }
-let s: string = json.encode(e)
-// {"name": "Zoe", "addr": {"city": "Lagos", "geo": {"lat": 6.5, "lng": 3.4}}}
-
-let back: Employee = json.decode(s)
-// back.addr.geo.lat == 6.5
 ```
 
-Nested structs inside struct arrays are serialized the same way by `json.encode`
-and `json.setArray`. If a nested object is missing from the JSON, the corresponding
-sub-struct is left zeroed rather than failing.
+`T?` yields `null` when the input is not well-formed JSON, is not a JSON object,
+or has a key whose type does not fit the corresponding field. A key that is
+absent, or explicitly `null`, is not an error. A plain `T` target keeps the
+lenient behaviour, decoding whatever it can and zeroing the rest.
 
-**Checked decoding** — annotating the target as optional (`T?`) makes `json.decode`
-report failure instead of silently producing zero values. This is what you want at
-a trust boundary such as an HTTP request body:
+A JSON array of objects decodes into a struct array, with the same distinction:
 
 ```dex
-let c: Charger? = json.decode(req.body)
-if (c != null) {
-    return http.response(201, json.encode(c), "application/json")
+let items: Point[] = json.decode(raw)      // lenient — a non-array gives an empty array
+let checked: Point[]? = json.decode(raw)   // null unless raw is an array of valid Points
+```
+
+For the checked form, a single bad element rejects the whole array.
+
+#### json.Value
+
+`json.Value` is a JSON document: null, a boolean, a number, a string, an array,
+or an object. Reach for it when the shape is not a fixed struct — a wire
+protocol that frames messages as arrays, a payload whose type you learn by
+reading a field, a value you want to pass through untouched.
+
+Write one with ordinary literal syntax. An object literal `{ key: value }` is
+always a `json.Value`, and an array literal becomes one when the target says so,
+which is what lets its elements have different types:
+
+```dex
+let config: json.Value = { name: "dex", version: 3, stable: true }
+let mixed: json.Value = [1, "two", true, null, {}]
+```
+
+Keys may be bare identifiers or string literals, so keys that are not valid Dex
+identifiers still work:
+
+```dex
+let record: json.Value = { "first-name": "Ada", "born": 1815 }
+```
+
+Literals nest to any depth, and a value built earlier drops straight into a
+later one:
+
+```dex
+let origin: json.Value = { x: 0, y: 0 }
+let scene: json.Value = { origin: origin, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }
+```
+
+Structs, arrays and maps convert automatically when used inside a literal:
+
+```dex
+let p: Point = Point { x: 1, y: 2 }
+let ids: int[] = [7, 8, 9]
+let payload: json.Value = { point: p, ids: ids }
+// {"point":{"x":1,"y":2},"ids":[7,8,9]}
+```
+
+#### Reading a json.Value
+
+Index with an int to read an array position, or with a string to read an object
+key. Both give back a `json.Value`, so a path is walked one step at a time:
+
+```dex
+let doc: json.Value = json.decode(text)
+let name: string = doc["name"].asString()
+let first: json.Value = doc["points"][0]
+let x: int = doc["points"][0]["x"].asInt()
+```
+
+A missing key or an out-of-range index yields a null value rather than failing,
+so reading down a path that does not exist gives a zero value instead of a
+crash:
+
+```dex
+doc["absent"].isNull()      // true
+doc["absent"].asInt()       // 0
+doc["absent"].asString()    // ""
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `.asInt()` | `int` | Value as an int |
+| `.asLong()` | `long` | Value as a long |
+| `.asDouble()` | `double` | Value as a double |
+| `.asString()` | `string` | String contents; any other value as its JSON text |
+| `.asBool()` | `bool` | Value as a bool |
+| `.isNull()` | `bool` | Is it null (or absent)? |
+| `.isBool()` | `bool` | Is it a boolean? |
+| `.isNumber()` | `bool` | Is it a number? |
+| `.isString()` | `bool` | Is it a string? |
+| `.isArray()` | `bool` | Is it an array? |
+| `.isObject()` | `bool` | Is it an object? |
+| `.len()` | `int` | Element count for an array or object, character count for a string |
+| `.has(key: string)` | `bool` | Does this object have that key? |
+| `.keys()` | `string[]` | This object's keys, in insertion order |
+
+The accessors coerce rather than insisting on an exact match, because wire
+formats routinely disagree about whether a number is quoted:
+
+```dex
+let v: json.Value = { quoted: "42", bare: 42 }
+v["quoted"].asInt()      // 42
+v["bare"].asString()     // "42"
+```
+
+Use the `is*` predicates when the distinction matters.
+
+#### Moving between json.Value and structs
+
+`json.decode` accepts a `json.Value` as well as text, so a nested payload goes
+straight into a struct without being re-serialized by hand:
+
+```dex
+let envelope: json.Value = json.decode(raw)
+let body: Point = json.decode(envelope["body"])
+```
+
+Malformed input decodes to a null value rather than failing the program, so
+`isNull()` is the check for "this was not JSON":
+
+```dex
+let doc: json.Value = json.decode(untrusted)
+if (doc.isNull()) {
+    return
 }
-return http.response(400, "{\"error\":\"invalid JSON body\"}", "application/json")
 ```
 
-`T?` returns `null` when the input is not well-formed JSON, is not a JSON object,
-or has a key whose type does not fit the corresponding field. A key that is absent,
-or explicitly `null`, is not an error — that field keeps its zero value, matching
-Go's `encoding/json`. A plain `T` target keeps the lenient behaviour, decoding
-whatever it can and zeroing the rest.
+#### Deprecated functions
 
-**Decoding arrays** — a JSON array of objects decodes into a struct array, with the
-same lenient/checked distinction:
+The following are superseded by `json.Value` and warn when used. They still
+work, so existing code keeps compiling, but new code should not use them.
 
-```dex
-let items: Item[] = json.decode(raw)      // lenient — non-arrays give an empty array
-let checked: Item[]? = json.decode(raw)   // null unless raw is an array of valid Items
-```
-
-Elements are decoded with full nesting support, so an element may itself contain
-nested structs. For the checked form, a single bad element rejects the whole array.
-
-**Array fields** — struct fields that are arrays are encoded and decoded as JSON
-arrays, for both primitive element types and struct element types:
-
-```dex
-struct Charger { tag: string
-    connectors: int[]
-    ports: Connector[]
-}
-
-json.encode(c)
-// {"tag": "CP", "connectors": [7, 8], "ports": [{"id": 1, "kind": "AC"}]}
-```
-
-A key that is absent from the JSON yields an empty array rather than a null one.
-Note this differs from a struct literal, where an omitted array field is `null`
-per the zero-value table above.
-
-**Nested JSON objects** — use `json.setObj` to embed one JSON object inside another without quoting:
-
-```dex
-let inner: string = json.new()
-inner = json.set(inner, "status", "Accepted")
-inner = json.set(inner, "expiryDate", "2025-12-31T23:59:59Z")
-
-let resp: string = json.new()
-resp = json.set(resp, "action", "Authorize")
-resp = json.setObj(resp, "idTagInfo", inner)
-// resp is now: {"action":"Authorize","idTagInfo":{"status":"Accepted","expiryDate":"2025-12-31T23:59:59Z"}}
-```
+| Deprecated | Use instead |
+|------------|-------------|
+| `json.new()`, `json.set`, `json.setObj`, `json.setArray` | An object literal: `{ key: value }` |
+| `json.arrayNew()`, `json.arrayPush`, `json.arrayPushObj` | An array literal: `[a, b, c]` |
+| `json.get`, `json.getInt`, `json.getBool`, `json.getDouble`, `json.getLong` | Indexing: `v["key"].asInt()` |
+| `json.arrayGet`, `json.arrayGetRaw` | Indexing: `v[0]` |
+| `json.arrayLen` | `v.len()` |
 
 ### db
 
@@ -2210,11 +2218,12 @@ fn handle_hello(): string {
   let scores: int[] = [10, 20, 30]
   scores.push(40)
 
-  let obj: string = json.new()
-  obj = json.set(obj, "message", "Hello from Dex!")
-  obj = json.set(obj, "count", scores.len())
-  obj = json.setArray(obj, "scores", scores)
-  obj = json.set(obj, "success", true)
+  let obj: string = json.encode({
+      message: "Hello from Dex!",
+      count: scores.len(),
+      scores: scores,
+      success: true
+  })
   return obj
 }
 

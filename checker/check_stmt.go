@@ -9,6 +9,16 @@ import (
 func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 	switch s := stmt.(type) {
 	case *ast.LetStmt:
+		if s.Name != "" {
+			if err := c.checkIdentifierName(s.Name, "variable", s.Pos); err != nil {
+				return err
+			}
+		}
+		for _, n := range s.Names {
+			if err := c.checkIdentifierName(n, "variable", s.Pos); err != nil {
+				return err
+			}
+		}
 		// Expand multi-declaration into individual let statements
 		if len(s.Names) > 0 {
 			for _, name := range s.Names {
@@ -75,8 +85,17 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			return c.errAt(s.Pos, "%s", err)
 		}
 
+		// A json.Value target turns any literal on the right into JSON
+		// construction, all the way down, so `{}` is an empty object and a mixed
+		// array is legal.
+		if s.Type == ast.TypeJsonValue {
+			if err := c.markJsonValue(s.Value); err != nil {
+				return err
+			}
+		}
+
 		// Handle empty map literal: infer key/value types from declared type
-		if mapLit, ok := s.Value.(*ast.MapLitExpr); ok {
+		if mapLit, ok := s.Value.(*ast.MapLitExpr); ok && !mapLit.AsJsonValue {
 			if !ast.IsMapType(s.Type) {
 				return c.errAt(s.Pos, "cannot assign empty map literal to non-map type %s", typeName(s.Type))
 			}
@@ -147,6 +166,11 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 				return c.errAt(s.Pos, "return statement must have a value in non-void function")
 			}
 			return nil
+		}
+		// A literal being returned takes the function's return type, just as one
+		// being assigned takes the variable's.
+		if err := c.applyTargetType(s.Value, returnType); err != nil {
+			return err
 		}
 		// Check if returning a #[noEscape] or #[region] variable
 		if ident, ok := s.Value.(*ast.Ident); ok {

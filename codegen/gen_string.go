@@ -583,6 +583,10 @@ func (g *Generator) genZeroValue(out *strings.Builder, typ ast.Type) {
 		out.WriteString("dex_string_from_lit(\"\")")
 	case ast.TypeMutex:
 		out.WriteString("PTHREAD_MUTEX_INITIALIZER")
+	case ast.TypeJsonValue:
+		// A zero json.Value is the JSON null, so reading an unset field behaves
+		// the same as reading an absent key.
+		out.WriteString("dex_jv_null()")
 	default:
 		if ast.IsStructType(typ) {
 			def := ast.GetStructDef(typ)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,6 +91,9 @@ type Server struct {
 	writer       io.Writer
 	logger       *log.Logger
 	importedURIs map[string][]string // main document URI -> list of imported file URIs we published diagnostics for
+	// respond, when set, receives responses instead of the wire. Tests use it to
+	// observe a handler's result without standing up a transport.
+	respond func(id *json.RawMessage, result interface{})
 }
 
 // Run starts the LSP server on stdin/stdout.
@@ -155,6 +159,10 @@ func (s *Server) readMessage(reader *bufio.Reader) (*jsonrpcMessage, error) {
 }
 
 func (s *Server) sendResponse(id *json.RawMessage, result interface{}) {
+	if s.respond != nil {
+		s.respond(id, result)
+		return
+	}
 	resp := struct {
 		JSONRPC string           `json:"jsonrpc"`
 		ID      *json.RawMessage `json:"id"`
@@ -231,8 +239,8 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 func (s *Server) handleInitialize(msg *jsonrpcMessage) {
 	result := map[string]interface{}{
 		"capabilities": map[string]interface{}{
-			"textDocumentSync":  1, // Full document sync
-			"hoverProvider":     true,
+			"textDocumentSync":   1, // Full document sync
+			"hoverProvider":      true,
 			"definitionProvider": true,
 			"completionProvider": map[string]interface{}{
 				"triggerCharacters": []string{"."},
@@ -354,6 +362,107 @@ func (s *Server) handleCompletion(msg *jsonrpcMessage) {
 
 // --- Go to Definition ---
 
+// definitionSite is one candidate definition: a file and a 1-based position.
+type definitionSite struct {
+	file string
+	line int
+	col  int
+	len  int
+}
+
+// moduleFiles maps each module name reachable from filePath to the .dx file that
+// defines it. Imports are followed transitively, because a module's own imports
+// are equally jumpable from code that uses them.
+func moduleFiles(filePath string, text string) map[string]string {
+	out := map[string]string{}
+	visited := map[string]bool{}
+
+	var walk func(path string, src string)
+	walk = func(path string, src string) {
+		abs, err := filepath.Abs(path)
+		if err != nil || visited[abs] {
+			return
+		}
+		visited[abs] = true
+
+		if src == "" {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return
+			}
+			src = string(data)
+		}
+		lex := lexer.New(src)
+		tokens, err := lex.Tokenize()
+		if err != nil {
+			return
+		}
+		dir := filepath.Dir(abs)
+		for _, imp := range resolve.ExtractImportPaths(tokens) {
+			if stdlib.Lookup(imp) != nil {
+				continue
+			}
+			target := filepath.Join(dir, imp+".dx")
+			name := filepath.Base(imp)
+			if _, seen := out[name]; !seen {
+				out[name] = target
+			}
+			walk(target, "")
+		}
+	}
+
+	walk(filePath, text)
+	return out
+}
+
+// findDefinitionIn scans one source file for a top-level definition of name:
+// a function, struct, enum, interface, or module-level let/const. skipPos, when
+// set, is a position to ignore so the cursor does not resolve to itself.
+func findDefinitionIn(path string, src string, name string, skipLine, skipCol int) *definitionSite {
+	if src == "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		src = string(data)
+	}
+	lex := lexer.New(src)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return nil
+	}
+	for i := 0; i < len(tokens)-1; i++ {
+		t, next := tokens[i], tokens[i+1]
+		if next.Kind != token.TokenIdent || next.Value != name {
+			continue
+		}
+		isDef := t.Kind == token.TokenFn || t.Kind == token.TokenFunction ||
+			t.Kind == token.TokenStruct || t.Kind == token.TokenEnum ||
+			t.Kind == token.TokenInterface ||
+			t.Kind == token.TokenLet || t.Kind == token.TokenConst
+		if !isDef {
+			continue
+		}
+		if next.Line == skipLine && next.Col == skipCol {
+			continue
+		}
+		return &definitionSite{file: path, line: next.Line, col: next.Col, len: len(next.Value)}
+	}
+	return nil
+}
+
+// qualifierAt returns the module qualifier immediately before the token at
+// index i, as in the `chargerService` of `chargerService.init`.
+func qualifierAt(tokens []token.Token, i int) string {
+	if i < 2 {
+		return ""
+	}
+	if tokens[i-1].Kind != token.TokenDot || tokens[i-2].Kind != token.TokenIdent {
+		return ""
+	}
+	return tokens[i-2].Value
+}
+
 func (s *Server) handleDefinition(msg *jsonrpcMessage) {
 	var params struct {
 		TextDocument struct {
@@ -368,6 +477,7 @@ func (s *Server) handleDefinition(msg *jsonrpcMessage) {
 		s.sendResponse(msg.ID, nil)
 		return
 	}
+	filePath := uriToPath(params.TextDocument.URI)
 
 	lex := lexer.New(text)
 	tokens, err := lex.Tokenize()
@@ -376,48 +486,75 @@ func (s *Server) handleDefinition(msg *jsonrpcMessage) {
 		return
 	}
 
-	tok := tokenAtPosition(tokens, params.Position)
-	if tok == nil || tok.Kind != token.TokenIdent {
+	idx := tokenIndexAtPosition(tokens, params.Position)
+	if idx < 0 || tokens[idx].Kind != token.TokenIdent {
 		s.sendResponse(msg.ID, nil)
 		return
 	}
-
+	tok := tokens[idx]
 	name := tok.Value
+	modules := moduleFiles(filePath, text)
 
-	// Search for definition in tokens: fn/function <name>, struct <name>, let/const <name>
-	for i := 0; i < len(tokens)-1; i++ {
-		t := tokens[i]
-		next := tokens[i+1]
-
-		if next.Kind != token.TokenIdent || next.Value != name {
-			continue
+	// The cursor sits on the module name itself — jump to the top of its file.
+	if target, isModule := modules[name]; isModule && qualifierAt(tokens, idx) == "" {
+		if _, err := os.Stat(target); err == nil {
+			s.sendDefinition(msg.ID, &definitionSite{file: target, line: 1, col: 1, len: 1})
+			return
 		}
+	}
 
-		isDef := t.Kind == token.TokenFn || t.Kind == token.TokenFunction ||
-			t.Kind == token.TokenStruct ||
-			t.Kind == token.TokenLet || t.Kind == token.TokenConst
-
-		if !isDef {
-			continue
+	// A qualified reference resolves inside the qualifying module's file, which
+	// is the case that previously failed: chargerService.init lives in another
+	// file, and only the open document was ever searched.
+	if qual := qualifierAt(tokens, idx); qual != "" {
+		if target, isModule := modules[qual]; isModule {
+			if site := findDefinitionIn(target, "", name, 0, 0); site != nil {
+				s.sendDefinition(msg.ID, site)
+				return
+			}
 		}
+	}
 
-		// Don't jump to self (cursor is already on the definition)
-		if next.Line == tok.Line && next.Col == tok.Col {
-			continue
-		}
-
-		s.sendResponse(msg.ID, map[string]interface{}{
-			"uri": params.TextDocument.URI,
-			"range": Range{
-				Start: Position{Line: next.Line - 1, Character: next.Col - 1},
-				End:   Position{Line: next.Line - 1, Character: next.Col - 1 + len(next.Value)},
-			},
-		})
+	// Unqualified: the current file first, then every reachable module. A type
+	// or function imported from another module is just as jumpable as a local one.
+	if site := findDefinitionIn(filePath, text, name, tok.Line, tok.Col); site != nil {
+		s.sendDefinition(msg.ID, site)
 		return
+	}
+	for _, target := range sortedValues(modules) {
+		if site := findDefinitionIn(target, "", name, 0, 0); site != nil {
+			s.sendDefinition(msg.ID, site)
+			return
+		}
 	}
 
 	// No definition found (e.g. stdlib types — no source location)
 	s.sendResponse(msg.ID, nil)
+}
+
+// sortedValues returns a module map's file paths in a stable order, so a name
+// defined in two modules always resolves to the same one.
+func sortedValues(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, m[k])
+	}
+	return out
+}
+
+func (s *Server) sendDefinition(id *json.RawMessage, site *definitionSite) {
+	s.sendResponse(id, map[string]interface{}{
+		"uri": pathToURI(site.file),
+		"range": Range{
+			Start: Position{Line: site.line - 1, Character: site.col - 1},
+			End:   Position{Line: site.line - 1, Character: site.col - 1 + site.len},
+		},
+	})
 }
 
 // --- Diagnostics ---
@@ -520,7 +657,20 @@ func (s *Server) diagnose(uri string, text string) {
 
 	// Type check
 	ch := checker.New()
-	if checkErrs := ch.Check(program); len(checkErrs) > 0 {
+	checkErrs := ch.Check(program)
+
+	// Warnings are advisory — deprecated calls still compile — so they are
+	// reported at severity 2 and do not suppress the error pass below.
+	for _, w := range ch.Warnings() {
+		result := makeDiagnosticForFileWithSource(w.Error(), filePath, text)
+		if result.file != "" {
+			continue
+		}
+		result.diag.Severity = 2
+		diagnostics = append(diagnostics, result.diag)
+	}
+
+	if len(checkErrs) > 0 {
 		for _, e := range checkErrs {
 			result := makeDiagnosticForFileWithSource(e.Error(), filePath, text)
 			if result.file != "" {
@@ -568,11 +718,11 @@ func (s *Server) publishCrossFileDiags(mainURI string, crossFileDiags map[string
 
 // crossFileDiagResult holds the parsed error info for cross-file diagnostic routing.
 type crossFileDiagResult struct {
-	diag      Diagnostic
-	file      string // non-empty if error belongs to a different file
-	line1     int    // 1-based line from error (for cross-file use)
-	col1      int    // 1-based col from error (for cross-file use)
-	message   string // cleaned message without location prefix
+	diag    Diagnostic
+	file    string // non-empty if error belongs to a different file
+	line1   int    // 1-based line from error (for cross-file use)
+	col1    int    // 1-based col from error (for cross-file use)
+	message string // cleaned message without location prefix
 }
 
 func makeDiagnosticForFileWithSource(errMsg, currentFile, sourceText string) crossFileDiagResult {
@@ -644,6 +794,25 @@ func (s *Server) publishDiagnostics(uri string, diagnostics []Diagnostic) {
 }
 
 // --- Helpers ---
+
+// tokenIndexAtPosition returns the index of the token under an LSP position, or
+// -1. Go-to-definition needs the index rather than the token so it can look at
+// the tokens before it to find a module qualifier.
+func tokenIndexAtPosition(tokens []token.Token, pos Position) int {
+	for i := range tokens {
+		t := &tokens[i]
+		if t.Kind == token.TokenEOF {
+			continue
+		}
+		tLine := t.Line - 1
+		tCol := t.Col - 1
+		tokenLen := utf8.RuneCountInString(t.Value)
+		if tLine == pos.Line && tCol <= pos.Character && tCol+tokenLen > pos.Character {
+			return i
+		}
+	}
+	return -1
+}
 
 func tokenAtPosition(tokens []token.Token, pos Position) *token.Token {
 	// LSP positions are 0-based, tokens are 1-based

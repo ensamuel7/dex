@@ -488,7 +488,7 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
     int wrote = 0;
     for (int f = 0; f < num_fields; f++) {
         if (fields[f].kind == 7) continue; // no codec — omit rather than emit garbage
-        if (wrote) { buf[pos++] = ','; buf[pos++] = ' '; }
+        if (wrote) { buf[pos++] = ','; }
         wrote = 1;
         if ((size_t)pos + 256 > cap) {
             cap *= 2;
@@ -499,10 +499,10 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
         int n = 0;
         switch (fields[f].kind) {
         case 0: // int
-            n = snprintf(buf + pos, cap - pos, "\"%s\": %d", fields[f].name, *(int*)((char*)data + fields[f].offset));
+            n = snprintf(buf + pos, cap - pos, "\"%s\":%d", fields[f].name, *(int*)((char*)data + fields[f].offset));
             break;
         case 1: // bool
-            n = snprintf(buf + pos, cap - pos, "\"%s\": %s", fields[f].name, (*(_Bool*)((char*)data + fields[f].offset)) ? "true" : "false");
+            n = snprintf(buf + pos, cap - pos, "\"%s\":%s", fields[f].name, (*(_Bool*)((char*)data + fields[f].offset)) ? "true" : "false");
             break;
         case 2: // string
             { DexString* s = *(DexString**)((char*)data + fields[f].offset);
@@ -520,17 +520,16 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
               pos += dex_json_escape(buf + pos, fields[f].name);
               buf[pos++] = '"';
               buf[pos++] = ':';
-              buf[pos++] = ' ';
               buf[pos++] = '"';
               pos += dex_json_escape(buf + pos, sdata);
               buf[pos++] = '"';
               n = 0; }
             break;
         case 3: // long
-            n = snprintf(buf + pos, cap - pos, "\"%s\": %ld", fields[f].name, *(long*)((char*)data + fields[f].offset));
+            n = snprintf(buf + pos, cap - pos, "\"%s\":%ld", fields[f].name, *(long*)((char*)data + fields[f].offset));
             break;
         case 4: // double
-            n = snprintf(buf + pos, cap - pos, "\"%s\": %g", fields[f].name, *(double*)((char*)data + fields[f].offset));
+            n = snprintf(buf + pos, cap - pos, "\"%s\":%g", fields[f].name, *(double*)((char*)data + fields[f].offset));
             break;
         case 6: // array — encoded by a codegen-supplied codec
             { const char* sub = fields[f].enc_arr ? fields[f].enc_arr((char*)data + fields[f].offset) : NULL;
@@ -548,7 +547,6 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
               pos += dex_json_escape(buf + pos, fields[f].name);
               buf[pos++] = '"';
               buf[pos++] = ':';
-              buf[pos++] = ' ';
               memcpy(buf + pos, subs, sublen);
               pos += (int)sublen;
               free((void*)sub);
@@ -570,7 +568,6 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
               pos += dex_json_escape(buf + pos, fields[f].name);
               buf[pos++] = '"';
               buf[pos++] = ':';
-              buf[pos++] = ' ';
               memcpy(buf + pos, sub, sublen);
               pos += (int)sublen;
               free((void*)sub);

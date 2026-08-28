@@ -1,0 +1,131 @@
+// Dependency-holding service structs: a struct carries what it needs, is built
+// once, and its methods reach their collaborators through fields rather than
+// through module-level state passed around by hand.
+
+struct Registry {
+    mu: mutex
+    byId: map[int, int]
+    idByFd: map[int, int]
+
+    fn attach(id: int, fd: int): void {
+        mu.lock()
+        if (byId.has(id)) {
+            idByFd.remove(byId.get(id))
+        }
+        byId.set(id, fd)
+        idByFd.set(fd, id)
+        mu.unlock()
+    }
+
+    fn detach(fd: int): void {
+        mu.lock()
+        if (idByFd.has(fd)) {
+            byId.remove(idByFd.get(fd))
+            idByFd.remove(fd)
+        }
+        mu.unlock()
+    }
+
+    fn fdFor(id: int): int {
+        mu.lock()
+        let fd: int = -1
+        if (byId.has(id)) {
+            fd = byId.get(id)
+        }
+        mu.unlock()
+        return fd
+    }
+
+    fn idFor(fd: int): int {
+        mu.lock()
+        let id: int = -1
+        if (idByFd.has(fd)) {
+            id = idByFd.get(fd)
+        }
+        mu.unlock()
+        return id
+    }
+
+    fn count(): int {
+        mu.lock()
+        let n: int = byId.len()
+        mu.unlock()
+        return n
+    }
+}
+
+// A service holds its dependencies and reaches them through fields.
+struct Service {
+    label: string
+    reg: Registry
+
+    fn connect(id: int, fd: int): void {
+        reg.attach(id, fd)
+    }
+
+    fn disconnect(fd: int): void {
+        reg.detach(fd)
+    }
+
+    fn socketFor(id: int): int {
+        return reg.fdFor(id)
+    }
+
+    fn ownerOf(fd: int): int {
+        return reg.idFor(fd)
+    }
+
+    fn online(): int {
+        return reg.count()
+    }
+}
+
+fn newRegistry(): Registry {
+    return Registry { mu: mutex, byId: {}, idByFd: {} }
+}
+
+fn newService(label: string): Service {
+    return Service { label: label, reg: newRegistry() }
+}
+
+fn main(): void {
+    // Empty map literals take their type from the field they initialise.
+    let svc: Service = newService("chargers")
+    assert(svc.label == "chargers")
+    assert(svc.online() == 0)
+
+    svc.connect(7, 42)
+    svc.connect(8, 43)
+    assert(svc.online() == 2)
+    assert(svc.socketFor(7) == 42)
+    assert(svc.ownerOf(43) == 8)
+
+    // An unknown id or socket reports absence rather than a stale answer.
+    assert(svc.socketFor(99) == -1)
+    assert(svc.ownerOf(99) == -1)
+
+    // A reconnect replaces the old socket without leaving the reverse entry stale.
+    svc.connect(7, 44)
+    assert(svc.socketFor(7) == 44)
+    assert(svc.ownerOf(44) == 7)
+    assert(svc.ownerOf(42) == -1)
+    assert(svc.online() == 2)
+
+    svc.disconnect(44)
+    assert(svc.online() == 1)
+    assert(svc.socketFor(7) == -1)
+
+    // Two services built from the same constructor keep separate state.
+    let a: Service = newService("a")
+    let b: Service = newService("b")
+    a.connect(1, 100)
+    assert(a.online() == 1)
+    assert(b.online() == 0)
+    assert(b.socketFor(1) == -1)
+
+    // A struct literal may also be written out in place, nesting struct and map fields.
+    let direct: Service = Service { label: "direct", reg: Registry { mu: mutex, byId: {}, idByFd: {} } }
+    direct.connect(5, 55)
+    assert(direct.socketFor(5) == 55)
+    assert(direct.label == "direct")
+}

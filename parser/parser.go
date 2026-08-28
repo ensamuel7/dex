@@ -91,9 +91,12 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 		p.match(token.TokenSemicolon) // optional trailing semicolon
 	}
 
-	// Parse struct, enum, and interface definitions (with optional annotations and access modifiers)
-	for p.isStructDefAhead() || p.isEnumDefAhead() || p.isInterfaceDefAhead() {
-		if p.isInterfaceDefAhead() {
+	// Parse the rest of the file. Declarations may appear in any order — a
+	// module-level const above the struct it describes reads better than one
+	// forced below it, and nothing about the grammar requires the separation.
+	for !p.atEnd() {
+		switch {
+		case p.isInterfaceDefAhead():
 			ifaceDef, err := p.parseInterfaceDef()
 			if err != nil {
 				p.recordError(err)
@@ -101,7 +104,8 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 				continue
 			}
 			program.Interfaces = append(program.Interfaces, *ifaceDef)
-		} else if p.isEnumDefAhead() {
+
+		case p.isEnumDefAhead():
 			ed, err := p.parseEnumDef()
 			if err != nil {
 				p.recordError(err)
@@ -109,7 +113,8 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 				continue
 			}
 			program.Enums = append(program.Enums, *ed)
-		} else {
+
+		case p.isStructDefAhead():
 			annotations := p.collectAnnotations()
 			sd, err := p.parseStructDef()
 			if err != nil {
@@ -119,41 +124,38 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 			}
 			_ = annotations // struct-level annotations reserved for future use
 			program.Structs = append(program.Structs, *sd)
-		}
-	}
 
-	// Parse module-level let/const declarations
-	for p.isGlobalLetAhead() {
-		annotations := p.collectAnnotations()
-		var stmt ast.Stmt
-		var err error
-		if p.check(token.TokenLet) {
-			stmt, err = p.parseLetStmt()
-		} else {
-			stmt, err = p.parseConstStmt()
-		}
-		if err != nil {
-			p.recordError(err)
-			p.synchronize()
-			continue
-		}
-		if letStmt, ok := stmt.(*ast.LetStmt); ok {
-			letStmt.Annotations = annotations
-			program.GlobalLets = append(program.GlobalLets, *letStmt)
-		}
-		p.match(token.TokenSemicolon)
-	}
+		case p.isGlobalLetAhead():
+			annotations := p.collectAnnotations()
+			var stmt ast.Stmt
+			var err error
+			if p.check(token.TokenLet) {
+				stmt, err = p.parseLetStmt()
+			} else {
+				stmt, err = p.parseConstStmt()
+			}
+			if err != nil {
+				p.recordError(err)
+				p.synchronize()
+				continue
+			}
+			if letStmt, ok := stmt.(*ast.LetStmt); ok {
+				letStmt.Annotations = annotations
+				program.GlobalLets = append(program.GlobalLets, *letStmt)
+			}
+			p.match(token.TokenSemicolon)
 
-	for !p.atEnd() {
-		annotations := p.collectAnnotations()
-		fn, err := p.parseFunction()
-		if err != nil {
-			p.recordError(err)
-			p.synchronize()
-			continue
+		default:
+			annotations := p.collectAnnotations()
+			fn, err := p.parseFunction()
+			if err != nil {
+				p.recordError(err)
+				p.synchronize()
+				continue
+			}
+			fn.Annotations = annotations
+			program.Functions = append(program.Functions, *fn)
 		}
-		fn.Annotations = annotations
-		program.Functions = append(program.Functions, *fn)
 	}
 
 	return program, p.errors
@@ -708,7 +710,14 @@ func (p *Parser) parseType() (ast.Type, error) {
 		} else if p.pos+2 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenDot && p.tokens[p.pos+2].Kind == token.TokenIdent {
 			// Module-qualified type: module.TypeName (e.g. http.HttpRequest, ws.Conn)
 			qualifiedName := p.tokens[p.pos+2].Value
-			if p.structNames[qualifiedName] {
+			// json.Value is a built-in heap type rather than a module struct, so
+			// it is resolved here rather than through the struct registry.
+			if name == "json" && qualifiedName == "Value" {
+				p.advance()
+				p.advance()
+				p.advance()
+				base = ast.TypeJsonValue
+			} else if p.structNames[qualifiedName] {
 				p.advance() // consume module name
 				p.advance() // consume '.'
 				p.advance() // consume type name

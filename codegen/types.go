@@ -36,6 +36,8 @@ func (g *Generator) cType(t ast.Type) string {
 		return "DexArrayChar*"
 	case ast.TypeStringBuilder:
 		return "DexStringBuilder*"
+	case ast.TypeJsonValue:
+		return "DexJsonValue*"
 	case ast.TypeMutex:
 		return "pthread_mutex_t"
 	case ast.TypeVoid:
@@ -368,6 +370,11 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			return ast.FuncTypeOf(paramTypes, fn.ReturnType)
 		}
 	case *ast.CallExpr:
+		// A method call on a receiver expression carries its result type from the
+		// checker; nothing else here can recover it.
+		if e.Recv != nil && e.ResolvedType != 0 {
+			return e.ResolvedType
+		}
 		// Map method calls
 		if e.Module != "" {
 			if mapType, ok := g.mapVars[e.Module]; ok {
@@ -509,6 +516,11 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 	case *ast.UnaryExpr:
 		return g.typeOfExpr(e.Operand)
 	case *ast.IndexExpr:
+		// Indexing a json.Value yields another json.Value at any depth, so this
+		// is checked before the name-keyed array and map registries.
+		if g.typeOfExpr(e.Array) == ast.TypeJsonValue {
+			return ast.TypeJsonValue
+		}
 		if ident, ok := e.Array.(*ast.Ident); ok {
 			if mapType, ok := g.mapVars[ident.Name]; ok {
 				return ast.MapValueType(mapType)
@@ -517,6 +529,13 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 				return ast.ElementType(arrType)
 			}
 		}
+	case *ast.ObjectLitExpr:
+		return ast.TypeJsonValue
+	case *ast.ArrayLitExpr:
+		if e.AsJsonValue {
+			return ast.TypeJsonValue
+		}
+		return ast.ArrayTypeOf(e.ElemType)
 	case *ast.SliceExpr:
 		if ident, ok := e.Array.(*ast.Ident); ok {
 			if arrType, ok := g.arrVars[ident.Name]; ok {
@@ -562,6 +581,9 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 	case *ast.EnumAccessExpr:
 		return e.EnumType
 	case *ast.MapLitExpr:
+		if e.AsJsonValue {
+			return ast.TypeJsonValue
+		}
 		return e.MapType
 	case *ast.StringInterpExpr:
 		return ast.TypeString
@@ -817,8 +839,12 @@ func (g *Generator) emitArrayFieldCodecs(out *strings.Builder, program *ast.Prog
 		out.WriteString("    for (int _i = 0; _i < _n; _i++) {\n")
 		out.WriteString("        const char* _el = dex_json_array_get(_json, _i);\n")
 		if t == ast.TypeArrayString {
-			// dex_string_from_cstr takes ownership of _el, so it must not be freed here.
-			out.WriteString(fmt.Sprintf("        dex_array_%s_push(_a, dex_string_from_cstr(_el));\n", spec.suffix))
+			// dex_string_from_cstr takes ownership of _el, so _el must not be
+			// freed here. The string it returns is +1 and push retains it again,
+			// so this codec drops its own reference once the element is stored.
+			out.WriteString("        DexString* _es = dex_string_from_cstr(_el);\n")
+			out.WriteString(fmt.Sprintf("        dex_array_%s_push(_a, _es);\n", spec.suffix))
+			out.WriteString("        dex_release(_es);\n")
 		} else {
 			out.WriteString(fmt.Sprintf("        dex_array_%s_push(_a, %s);\n", spec.suffix, spec.parse))
 			out.WriteString("        free((void*)_el);\n")

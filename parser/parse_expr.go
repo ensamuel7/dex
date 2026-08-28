@@ -141,10 +141,33 @@ func (p *Parser) parsePostfix(base ast.Expr, pos ast.Pos) (ast.Expr, error) {
 			continue
 		}
 		if p.check(token.TokenDot) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenIdent {
-			// Stop before a method call — that needs a receiver expression the
-			// CallExpr node cannot carry.
+			// A method call on an arbitrary expression, as in parsed[0].asInt():
+			// the receiver travels on CallExpr.Recv.
 			if p.pos+2 < len(p.tokens) && p.tokens[p.pos+2].Kind == token.TokenLParen {
-				return base, nil
+				p.advance() // consume '.'
+				name, err := p.expectIdent()
+				if err != nil {
+					return nil, err
+				}
+				p.advance() // consume '('
+				var args []ast.Expr
+				if !p.check(token.TokenRParen) {
+					for {
+						arg, err := p.parseExpr(0)
+						if err != nil {
+							return nil, err
+						}
+						args = append(args, arg)
+						if !p.match(token.TokenComma) {
+							break
+						}
+					}
+				}
+				if err := p.expect(token.TokenRParen); err != nil {
+					return nil, err
+				}
+				base = &ast.CallExpr{Pos: pos, Name: name, Args: args, Recv: base}
+				continue
 			}
 			p.advance() // consume '.'
 			field, err := p.expectIdent()
@@ -216,13 +239,14 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		return &ast.MutexLit{Pos: pos}, nil
 
 	case token.TokenLBrace:
-		// Empty map literal: {}
+		// Empty literal: {}. Whether this is an empty map or an empty JSON object
+		// depends on the expected type, which only the checker knows.
 		if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenRBrace {
 			p.advance() // consume '{'
 			p.advance() // consume '}'
 			return &ast.MapLitExpr{Pos: pos}, nil
 		}
-		return nil, p.errorf("unexpected '{'")
+		return p.parseObjectLit()
 
 	case token.TokenLBracket:
 		// Array literal: [expr, expr, ...]
@@ -744,4 +768,55 @@ func (p *Parser) parseLambdaExpr() (ast.Expr, error) {
 	}
 
 	return &ast.LambdaExpr{Pos: pos, Params: params, ReturnType: retType, Body: body}, nil
+}
+
+
+// parseObjectLit parses a JSON object literal: { name: "Dex", "wire-key": 1 }.
+// Keys may be bare identifiers, string literals, or keywords that happen to read
+// like field names — `type` and `status` are ordinary keys on the wire even
+// where they are reserved words in Dex.
+func (p *Parser) parseObjectLit() (ast.Expr, error) {
+	pos := p.nodePos()
+	if err := p.expect(token.TokenLBrace); err != nil {
+		return nil, err
+	}
+	var keys []string
+	var values []ast.Expr
+	seen := map[string]bool{}
+	for !p.check(token.TokenRBrace) && !p.atEnd() {
+		tok := p.current()
+		var key string
+		switch {
+		case tok.Kind == token.TokenString:
+			key = tok.Value
+		case tok.Kind == token.TokenIdent || tok.Value != "":
+			// Any single-token spelling is accepted as a key. JSON keys are not
+			// Dex identifiers, so refusing reserved words here would block
+			// perfectly ordinary payloads.
+			key = tok.Value
+		default:
+			return nil, p.errorf("expected object key, got '%s'", tok.Value)
+		}
+		p.advance()
+		if seen[key] {
+			return nil, p.errorf("duplicate key '%s' in object literal", key)
+		}
+		seen[key] = true
+		if err := p.expect(token.TokenColon); err != nil {
+			return nil, p.errorf("expected ':' after object key '%s'", key)
+		}
+		value, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+		values = append(values, value)
+		if !p.match(token.TokenComma) {
+			break
+		}
+	}
+	if err := p.expect(token.TokenRBrace); err != nil {
+		return nil, p.errorf("expected '}' to close object literal")
+	}
+	return &ast.ObjectLitExpr{Pos: pos, Keys: keys, Values: values}, nil
 }

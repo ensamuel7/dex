@@ -126,6 +126,12 @@ func (g *Generator) exprToString(expr ast.Expr) string {
 // isNewAlloc returns true if the expression produces a +1 ref (new allocation).
 // Variable references are borrowed (not +1).
 func (g *Generator) isNewAlloc(expr ast.Expr) bool {
+	// json.Value has its own ownership rules: indexing a document mints a
+	// reference where indexing an array only borrows one, and its literals build
+	// a fresh document.
+	if g.typeOfExpr(expr) == ast.TypeJsonValue {
+		return g.jsonValueOwned(expr)
+	}
 	switch expr.(type) {
 	case *ast.Ident:
 		return false // borrowed reference
@@ -147,6 +153,8 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 		return true // interpolation produces +1
 	case *ast.MatchExpr:
 		return true // match produces a new value
+	case *ast.ArrayLitExpr, *ast.MapLitExpr, *ast.ObjectLitExpr:
+		return true // a literal container is freshly allocated (+1)
 	default:
 		return false // conservative: assume borrowed to avoid premature free
 	}
@@ -163,6 +171,127 @@ func alwaysExitsCodegen(stmts []ast.Stmt) bool {
 		return true
 	case *ast.IfStmt:
 		return last.Else != nil && alwaysExitsCodegen(last.Then) && alwaysExitsCodegen(last.Else)
+	}
+	return false
+}
+
+// --- Statement-scoped owned temporaries ---
+//
+// An expression such as `s.toUpper()` or `json.encode(v)` hands back a heap
+// value with a +1 reference. When that value is stored the storer takes over the
+// reference, but when it is merely *read* — printed, or passed to a function
+// that borrows it — nobody owns it and it leaks. These helpers hoist such a
+// value into a temporary declared just before the statement, so it stays alive
+// for the whole statement and is released at the end of it.
+
+// beginStmtHoist starts collecting hoisted temporaries for one statement.
+func (g *Generator) beginStmtHoist() {
+	g.stmtPrelude = &strings.Builder{}
+	g.stmtTemps = nil
+}
+
+// hoistingEnabled reports whether hoisting is currently allowed. It is disabled
+// while generating contexts that are not plain statements — a struct field
+// initialiser list, for instance — where a hoisted declaration has nowhere to go.
+func (g *Generator) hoistingEnabled() bool {
+	return g.stmtPrelude != nil && g.stmtHoistOff == 0
+}
+
+// suspendHoisting turns hoisting off until the returned function is called.
+func (g *Generator) suspendHoisting() func() {
+	g.stmtHoistOff++
+	return func() { g.stmtHoistOff-- }
+}
+
+// genBorrowed emits an expression that the consumer only borrows. If the
+// expression mints a reference, it is bound to a statement-scoped temporary and
+// the temporary's name is emitted instead.
+func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
+	t := g.typeOfExpr(expr)
+	if !g.hoistingEnabled() || !ast.IsHeapType(t) || !g.isNewAlloc(expr) {
+		g.genExpr(out, expr)
+		return
+	}
+	// The expression is generated into a side buffer against a fresh prelude, so
+	// that anything it hoists in turn is declared *before* this declaration
+	// rather than being spliced into the middle of it. Inner temporaries land in
+	// stmtTemps first and so are released last, after the value that uses them.
+	savedPrelude := g.stmtPrelude
+	g.stmtPrelude = &strings.Builder{}
+	var exprBuf strings.Builder
+	g.genExpr(&exprBuf, expr)
+	nested := g.stmtPrelude.String()
+	g.stmtPrelude = savedPrelude
+
+	tmp := g.nextTemp()
+	g.stmtPrelude.WriteString(nested)
+	g.stmtPrelude.WriteString(fmt.Sprintf("%s %s = %s; ", g.cType(t), tmp, exprBuf.String()))
+	g.stmtTemps = append(g.stmtTemps, scopeVar{name: tmp, typ: t})
+	out.WriteString(tmp)
+}
+
+// emitWithHoists writes a fully-generated statement, wrapping it in a block that
+// declares and releases any temporaries hoisted while generating it.
+func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
+	if g.stmtPrelude == nil || len(g.stmtTemps) == 0 {
+		out.WriteString(prefix + stmt)
+		g.stmtPrelude = nil
+		g.stmtTemps = nil
+		return
+	}
+	out.WriteString(prefix + "{ " + g.stmtPrelude.String() + strings.TrimRight(stmt, "\n") + " ")
+	for i := len(g.stmtTemps) - 1; i >= 0; i-- {
+		out.WriteString(fmt.Sprintf("dex_release(%s); ", g.stmtTemps[i].name))
+	}
+	out.WriteString("}\n")
+	g.stmtPrelude = nil
+	g.stmtTemps = nil
+}
+
+// emitHoistPrelude writes the hoisted declarations ahead of a statement that
+// must not be wrapped in a block — a `let`, whose variable has to stay in scope.
+// Pair it with emitHoistReleases after the statement.
+func (g *Generator) emitHoistPrelude(out *strings.Builder, prefix string) {
+	if g.stmtPrelude == nil || len(g.stmtTemps) == 0 {
+		return
+	}
+	out.WriteString(prefix + g.stmtPrelude.String() + "\n")
+}
+
+// emitHoistReleases releases the temporaries hoisted for the current statement
+// and clears the hoist state.
+func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
+	for i := len(g.stmtTemps) - 1; i >= 0; i-- {
+		out.WriteString(fmt.Sprintf("%sdex_release(%s);\n", prefix, g.stmtTemps[i].name))
+	}
+	g.stmtPrelude = nil
+	g.stmtTemps = nil
+}
+
+// structLitBorrowsHeapField reports whether a struct literal initialises any
+// heap field from a borrowed reference. Such a literal needs a retain even in a
+// function with nothing to clean up, because the borrowed value is owned by the
+// caller and released as soon as the call returns.
+func structLitBorrowsHeapField(structType ast.Type, lit *ast.StructLitExpr) bool {
+	def := ast.GetStructDef(structType)
+	if def == nil {
+		return false
+	}
+	fieldTypes := make(map[string]ast.Type, len(def.Fields))
+	for _, f := range def.Fields {
+		fieldTypes[f.Name] = f.Type
+	}
+	for i, name := range lit.FieldNames {
+		if i >= len(lit.FieldValues) {
+			break
+		}
+		ft, ok := fieldTypes[name]
+		if !ok || !ast.IsHeapType(ft) {
+			continue
+		}
+		if isBorrowedExpr(lit.FieldValues[i]) {
+			return true
+		}
 	}
 	return false
 }

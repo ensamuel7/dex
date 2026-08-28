@@ -68,6 +68,14 @@ static inline void dex_release(void* ptr) {
 
 #endif
 
+// dex_retained retains a pointer and hands it back, so a borrowed value can be
+// stored into a field inside an initialiser expression where a statement would
+// not fit.
+static inline void* dex_retained(void* ptr) {
+    dex_retain(ptr);
+    return ptr;
+}
+
 static inline void dex_owned_free(void* ptr) {
     if (!ptr) return;
     DexObjHeader* obj = (DexObjHeader*)ptr;

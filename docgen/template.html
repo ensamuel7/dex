@@ -1233,6 +1233,12 @@ import "json"</code></pre>
 <div class="func-card"><div class="sig"><span class="module">{{.Module}}</span>.{{.Name}}(<span class="ptype">{{.Params}}</span>) <span class="ret">-&gt; {{.Return}}</span></div>{{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}</div>
 {{end}}
 {{end}}
+
+<h4>{{.ValueType.Name}}</h4>
+<p>{{.ValueType.Summary}}</p>
+{{range .ValueType.Methods}}
+<div class="func-card"><div class="sig"><span class="module">v</span>.{{.Name}}(<span class="ptype">{{.Params}}</span>) <span class="ret">-&gt; {{.Return}}</span></div>{{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}</div>
+{{end}}
 </section>
 
 <!-- Database -->

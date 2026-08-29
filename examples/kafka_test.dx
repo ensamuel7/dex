@@ -1,0 +1,49 @@
+// Skips when librdkafka is missing or no broker is listening.
+//   brew install librdkafka
+//   docker run -d -p 9092:9092 apache/kafka:3.8.0
+
+import "fmt"
+import "str"
+import "kafka"
+
+fn main(): void {
+    if (!kafka.available()) {
+        fmt.println("built without librdkafka — skipped")
+    } else {
+        // A producer exists whether or not a broker does, since librdkafka
+        // connects lazily — so ask the cluster before assuming there is one.
+        let p: int = kafka.producer("127.0.0.1:9092")
+        if (p == -1 || !kafka.ready(p, 3000)) {
+            fmt.println("no kafka broker — skipped")
+        } else {
+            let c: int = kafka.consumer("127.0.0.1:9092", "dex-test-group")
+            assert(c != -1)
+            assert(kafka.subscribe(c, "dex.test"))
+
+            // Joining a group and being assigned partitions takes a few round
+            // trips, and a message produced before that lands behind the group's
+            // starting offset. So poll first to get assigned, then produce.
+            for (let warmup: int = 0; warmup < 10; warmup++) {
+                kafka.poll(c, 300)
+            }
+
+            assert(kafka.produce(p, "dex.test", "charger-1", "{\"event\":\"boot\"}"))
+            // Everything queued has left by the time flush returns.
+            assert(kafka.flush(p, 10000) == 0)
+            kafka.close(p)
+
+            let payload: string = ""
+            for (let i: int = 0; i < 40; i++) {
+                if (payload.isEmpty()) {
+                    payload = kafka.poll(c, 500)
+                }
+            }
+            assert(!payload.isEmpty())
+            assert(kafka.lastTopic(c) == "dex.test")
+            assert(kafka.lastKey(c) == "charger-1")
+            assert(kafka.commit(c))
+            kafka.close(c)
+            fmt.println("kafka ok: " + payload)
+        }
+    }
+}

@@ -658,56 +658,64 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		}
 	}
 
-	// String method calls: s.len(), s.contains(), etc.
+	// String method calls: s.len(), s.contains(), etc. The receiver is a plain
+	// variable, or a field holding a string — cmd.action.isEmpty() — in which case
+	// it is rendered as the C that reads that field.
 	if e.Module != "" {
-		if g.strVars[e.Module] {
+		recv := e.Module
+		isString := g.strVars[e.Module]
+		if !isString && strings.Contains(e.Module, ".") && g.resolveFieldChainType(e.Module) == ast.TypeString {
+			isString = true
+			recv = g.fieldChainC(e.Module)
+		}
+		if isString {
 			g.usesStringMethods = true
 			switch e.Name {
 			case "len":
-				out.WriteString(fmt.Sprintf("dex_str_len(%s)", e.Module))
+				out.WriteString(fmt.Sprintf("dex_str_len(%s)", recv))
 				return
 			case "contains":
-				g.genStrMethodWithArgs(out, "dex_str_contains", e.Module, e.Args[:1])
+				g.genStrMethodWithArgs(out, "dex_str_contains", recv, e.Args[:1])
 				return
 			case "startsWith":
-				g.genStrMethodWithArgs(out, "dex_str_startsWith", e.Module, e.Args[:1])
+				g.genStrMethodWithArgs(out, "dex_str_startsWith", recv, e.Args[:1])
 				return
 			case "endsWith":
-				g.genStrMethodWithArgs(out, "dex_str_endsWith", e.Module, e.Args[:1])
+				g.genStrMethodWithArgs(out, "dex_str_endsWith", recv, e.Args[:1])
 				return
 			case "indexOf":
-				g.genStrMethodWithArgs(out, "dex_str_indexOf", e.Module, e.Args[:1])
+				g.genStrMethodWithArgs(out, "dex_str_indexOf", recv, e.Args[:1])
 				return
 			case "toLower":
-				out.WriteString(fmt.Sprintf("dex_str_toLower(%s)", e.Module))
+				out.WriteString(fmt.Sprintf("dex_str_toLower(%s)", recv))
 				return
 			case "toUpper":
-				out.WriteString(fmt.Sprintf("dex_str_toUpper(%s)", e.Module))
+				out.WriteString(fmt.Sprintf("dex_str_toUpper(%s)", recv))
 				return
 			case "trim":
-				out.WriteString(fmt.Sprintf("dex_str_trim(%s)", e.Module))
+				out.WriteString(fmt.Sprintf("dex_str_trim(%s)", recv))
 				return
 			case "split":
-				g.genStrMethodWithArgs(out, "dex_str_split", e.Module, e.Args[:1])
+				g.genStrMethodWithArgs(out, "dex_str_split", recv, e.Args[:1])
 				return
 			case "substring":
-				out.WriteString(fmt.Sprintf("dex_str_substring(%s, ", e.Module))
+				out.WriteString(fmt.Sprintf("dex_str_substring(%s, ", recv))
 				g.genExpr(out, e.Args[0])
 				out.WriteString(", ")
 				g.genExpr(out, e.Args[1])
 				out.WriteString(")")
 				return
 			case "replace":
-				g.genStrMethodWithArgs(out, "dex_str_replace", e.Module, e.Args[:2])
+				g.genStrMethodWithArgs(out, "dex_str_replace", recv, e.Args[:2])
 				return
 			case "charAt":
-				out.WriteString(fmt.Sprintf("dex_str_charAt(%s, ", e.Module))
+				out.WriteString(fmt.Sprintf("dex_str_charAt(%s, ", recv))
 				g.genExpr(out, e.Args[0])
 				out.WriteString(")")
 				return
 			case "isAlphanumeric", "isAlpha", "isDigit", "isNumeric", "isWhitespace", "isEmpty",
 				"containsUppercase", "containsLowercase", "containsDigit":
-				out.WriteString(fmt.Sprintf("dex_str_%s(%s)", e.Name, e.Module))
+				out.WriteString(fmt.Sprintf("dex_str_%s(%s)", e.Name, recv))
 				return
 			}
 		}

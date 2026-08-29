@@ -2,12 +2,39 @@ package stdlib
 
 import (
 	_ "embed"
+	"os/exec"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 )
 
+//go:embed cruntime/ws_handshake.h
+var wsHandshakeRuntime string
+
 //go:embed cruntime/ws.c
-var wsRuntime string
+var wsServerRuntime string
+
+// The handshake unit is prepended rather than #included: the runtime is pasted
+// into the generated C, which is compiled with no include path back to here.
+var wsRuntime = wsHandshakeRuntime + wsServerRuntime
+
+// wss:// needs OpenSSL on the link line, not just its headers on the include
+// path. When pkg-config cannot find it, TLS is switched off explicitly so a
+// stray include path from another module cannot half-enable it.
+func detectSslFlags() []string {
+	out, err := exec.Command("pkg-config", "--cflags", "openssl").Output()
+	if err != nil {
+		return []string{"-DDEX_SSL_DISABLED"}
+	}
+	flags := []string{"-DDEX_HAS_SSL"}
+	flags = append(flags, strings.Fields(strings.TrimSpace(string(out)))...)
+	if libs, err := exec.Command("pkg-config", "--libs", "openssl").Output(); err == nil {
+		flags = append(flags, strings.Fields(strings.TrimSpace(string(libs)))...)
+	} else {
+		flags = append(flags, "-lssl", "-lcrypto")
+	}
+	return flags
+}
 
 func init() {
 	Register(&Module{
@@ -88,7 +115,7 @@ func init() {
 				},
 			},
 		},
-		CFlags:   []string{"-pthread"},
+		CFlags:   append([]string{"-pthread"}, detectSslFlags()...),
 		CRuntime: wsRuntime,
 	})
 }

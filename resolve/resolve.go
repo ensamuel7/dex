@@ -479,9 +479,17 @@ func rewriteFieldRefsInStmt(stmt ast.Stmt, fieldNames, methodNames, localNames m
 			}
 		case *ast.CallExpr:
 			// A call qualified by a field name is a method call on that field —
-			// `hub.send(...)` where hub is a field, not a module.
-			if e.Module != "" && fieldNames[e.Module] && !localNames[e.Module] {
-				e.Module = "self." + e.Module
+			// `hub.send(...)` where hub is a field, not a module. Only the first
+			// segment can be a field: `cmd.action.isEmpty()` reads through the same
+			// receiver as `cmd` does.
+			if e.Module != "" {
+				head := e.Module
+				if dot := strings.Index(head, "."); dot >= 0 {
+					head = head[:dot]
+				}
+				if fieldNames[head] && !localNames[head] {
+					e.Module = "self." + e.Module
+				}
 			}
 			// An unqualified call naming a sibling method is a call on the same
 			// receiver, so `commandGuard(id)` inside a method means

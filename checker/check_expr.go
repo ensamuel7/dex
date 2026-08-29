@@ -657,26 +657,44 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return retType, nil
 			}
 
-			// Resolve dotted field access: self.database -> look up field type
-			// This handles struct methods that call methods on struct-typed fields.
+			// Resolve dotted field access: self.database -> look up field type.
+			// Each segment after the first names a field of the type before it, so
+			// a chain of any depth resolves the same way.
 			if !isVar && strings.Contains(e.Module, ".") {
-				parts := strings.SplitN(e.Module, ".", 2)
-				baseType, baseOk := c.resolve(parts[0])
-				// Unwrap ref type for dotted path resolution
-				if baseOk && ast.IsRefType(baseType) {
-					baseType = ast.RefInnerType(baseType)
-				}
-				if baseOk && ast.IsStructType(baseType) {
-					structDef := ast.GetStructDef(baseType)
-					if structDef != nil {
-						for _, field := range structDef.Fields {
-							if field.Name == parts[1] {
-								varType = field.Type
-								isVar = true
-								break
-							}
+				parts := strings.Split(e.Module, ".")
+				current, baseOk := c.resolve(parts[0])
+				for _, fieldName := range parts[1:] {
+					if !baseOk {
+						break
+					}
+					if ast.IsRefType(current) {
+						current = ast.RefInnerType(current)
+					}
+					if !ast.IsStructType(current) {
+						baseOk = false
+						break
+					}
+					structDef := ast.GetStructDef(current)
+					if structDef == nil {
+						baseOk = false
+						break
+					}
+					found := false
+					for _, field := range structDef.Fields {
+						if field.Name == fieldName {
+							current = field.Type
+							found = true
+							break
 						}
 					}
+					if !found {
+						baseOk = false
+						break
+					}
+				}
+				if baseOk {
+					varType = current
+					isVar = true
 				}
 			}
 

@@ -449,14 +449,27 @@ func build(filename string) (string, error) {
 		defer os.Remove(cFile)
 	}
 
-	// Compile with gcc/cc
+	// Compile with gcc/cc.
+	//
+	// GNU ld resolves a library against what came before it on the command line,
+	// so -l flags have to sit after the source file or every symbol they provide
+	// reads as undefined. macOS's linker does not care; Linux does.
 	binaryPath := filepath.Join(buildDir, baseName)
 	compiler := "cc"
-	args := append([]string{"-o", binaryPath}, gen.CompilerFlags()...)
+	var cflags, libflags []string
+	for _, f := range gen.CompilerFlags() {
+		if strings.HasPrefix(f, "-l") || strings.HasPrefix(f, "-L") || strings.HasPrefix(f, "-Wl,") {
+			libflags = append(libflags, f)
+		} else {
+			cflags = append(cflags, f)
+		}
+	}
+	args := append([]string{"-o", binaryPath}, cflags...)
 	if os.Getenv("DEX_SANITIZE") == "1" {
 		args = append(args, "-fsanitize=address", "-fno-omit-frame-pointer", "-g")
 	}
 	args = append(args, cFile)
+	args = append(args, libflags...)
 	cmd := exec.Command(compiler, args...)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

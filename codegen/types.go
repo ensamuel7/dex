@@ -429,7 +429,24 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 				return ast.TypeVoid
 			}
 		}
-		// String method calls
+		// String method calls reached through a field chain, e.g. cmd.action.isEmpty()
+		if e.Module != "" && !g.strVars[e.Module] && strings.Contains(e.Module, ".") &&
+			g.resolveFieldChainType(e.Module) == ast.TypeString {
+			switch e.Name {
+			case "len", "indexOf":
+				return ast.TypeInt
+			case "charAt":
+				return ast.TypeChar
+			case "split":
+				return ast.ArrayTypeOf(ast.TypeString)
+			case "contains", "startsWith", "endsWith", "isAlphanumeric", "isAlpha",
+				"isDigit", "isNumeric", "isWhitespace", "isEmpty",
+				"containsUppercase", "containsLowercase", "containsDigit":
+				return ast.TypeBool
+			case "toLower", "toUpper", "trim", "substring", "replace":
+				return ast.TypeString
+			}
+		}
 		// Array method calls, on a variable or a struct field chain
 		if e.Module != "" {
 			arrType, isArr := g.arrVars[e.Module]

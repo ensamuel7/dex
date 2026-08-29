@@ -27,6 +27,22 @@ struct Outer {
   name: string
 }
 
+struct Labelled {
+  tag: string
+  outer: Outer
+
+  fn describe(): string {
+    if (tag.isEmpty()) {
+      return "untagged"
+    }
+    return tag.toUpper() + "/" + outer.middle.inner.label.trim()
+  }
+
+  fn tagged(): bool {
+    return !tag.isEmpty()
+  }
+}
+
 struct Bag {
   nums: int[]
   words: string[]
@@ -78,4 +94,20 @@ fn main(): void {
   // Array methods must type correctly inside string concatenation
   let msg: string = "count=" + b.nums.len()
   assert(msg == "count=3")
+
+  // String methods on a struct field, and through a chain of them
+  assert(o.name.isEmpty() == false)
+  assert(o.name.toUpper() == "OUTER")
+  assert(o.name.len() == 5)
+  assert(o.middle.inner.label.len() == 4)
+  assert(o.middle.inner.label.contains("ee"))
+  assert(o.middle.inner.label.replace("d", "b") == "beep")
+
+  // The same, reached through the receiver inside a method
+  let l: Labelled = Labelled { tag: "cp1", outer: o }
+  assert(l.describe() == "CP1/deep")
+  assert(l.tagged())
+  let blank: Labelled = Labelled { tag: "", outer: o }
+  assert(blank.describe() == "untagged")
+  assert(blank.tagged() == false)
 }

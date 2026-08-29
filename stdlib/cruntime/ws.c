@@ -12,15 +12,21 @@
 #include <signal.h>
 
 // --- SSL support (optional, requires OpenSSL) ---
+//
+// The header being reachable is not enough — the library has to be on the link
+// line too, and another module's include path can make <openssl/ssl.h> visible
+// without it. So the build decides: DEX_HAS_SSL means found and linked,
+// DEX_SSL_DISABLED means do not use it whatever the header search turns up.
 
-#ifdef __has_include
-  #if __has_include(<openssl/ssl.h>)
+#ifndef DEX_SSL_DISABLED
+  #ifdef __has_include
+    #if __has_include(<openssl/ssl.h>)
+      #define DEX_SSL_AVAILABLE 1
+    #endif
+  #endif
+  #ifdef DEX_HAS_SSL
     #define DEX_SSL_AVAILABLE 1
   #endif
-#endif
-
-#ifdef DEX_HAS_SSL
-  #define DEX_SSL_AVAILABLE 1
 #endif
 
 #ifdef DEX_SSL_AVAILABLE
@@ -80,82 +86,6 @@ static int dex_ws_read_exact(int fd, SSL* ssl, void* buf, size_t len) {
 }
 
 // --- Minimal SHA-1 implementation (RFC 3174) ---
-
-static void dex_sha1(const unsigned char* msg, size_t len, unsigned char digest[20]) {
-    uint32_t h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
-    size_t new_len = len + 1;
-    while (new_len % 64 != 56) new_len++;
-    unsigned char* padded = (unsigned char*)calloc(new_len + 8, 1);
-    if (!padded) return;
-    memcpy(padded, msg, len);
-    padded[len] = 0x80;
-    uint64_t bits = (uint64_t)len * 8;
-    for (int i = 0; i < 8; i++) padded[new_len + 7 - i] = (unsigned char)(bits >> (i * 8));
-
-    for (size_t offset = 0; offset < new_len + 8; offset += 64) {
-        uint32_t w[80];
-        for (int i = 0; i < 16; i++) {
-            w[i] = ((uint32_t)padded[offset + i*4] << 24) |
-                   ((uint32_t)padded[offset + i*4+1] << 16) |
-                   ((uint32_t)padded[offset + i*4+2] << 8) |
-                   ((uint32_t)padded[offset + i*4+3]);
-        }
-        for (int i = 16; i < 80; i++) {
-            uint32_t t = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16];
-            w[i] = (t << 1) | (t >> 31);
-        }
-        uint32_t a = h0, b = h1, c = h2, d = h3, e = h4;
-        for (int i = 0; i < 80; i++) {
-            uint32_t f, k;
-            if (i < 20)      { f = (b & c) | ((~b) & d); k = 0x5A827999; }
-            else if (i < 40) { f = b ^ c ^ d;            k = 0x6ED9EBA1; }
-            else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
-            else              { f = b ^ c ^ d;            k = 0xCA62C1D6; }
-            uint32_t temp = ((a << 5) | (a >> 27)) + f + e + k + w[i];
-            e = d; d = c; c = (b << 30) | (b >> 2); b = a; a = temp;
-        }
-        h0 += a; h1 += b; h2 += c; h3 += d; h4 += e;
-    }
-    free(padded);
-    uint32_t h[5] = {h0, h1, h2, h3, h4};
-    for (int i = 0; i < 5; i++) {
-        digest[i*4]   = (unsigned char)(h[i] >> 24);
-        digest[i*4+1] = (unsigned char)(h[i] >> 16);
-        digest[i*4+2] = (unsigned char)(h[i] >> 8);
-        digest[i*4+3] = (unsigned char)(h[i]);
-    }
-}
-
-// --- Base64 encode ---
-
-static const char dex_b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static void dex_base64_encode(const unsigned char* in, size_t len, char* out) {
-    size_t i, j;
-    for (i = 0, j = 0; i < len; i += 3) {
-        uint32_t v = (uint32_t)in[i] << 16;
-        if (i + 1 < len) v |= (uint32_t)in[i+1] << 8;
-        if (i + 2 < len) v |= (uint32_t)in[i+2];
-        out[j++] = dex_b64_table[(v >> 18) & 0x3F];
-        out[j++] = dex_b64_table[(v >> 12) & 0x3F];
-        out[j++] = (i + 1 < len) ? dex_b64_table[(v >> 6) & 0x3F] : '=';
-        out[j++] = (i + 2 < len) ? dex_b64_table[v & 0x3F] : '=';
-    }
-    out[j] = '\0';
-}
-
-// --- WebSocket protocol ---
-
-static const char* DEX_WS_MAGIC = "258EAFA5-E914-47DA-95CA-5AB5DC11D697";
-
-static void dex_ws_accept_key(const char* client_key, char* out_accept, size_t out_size) {
-    char combined[256];
-    snprintf(combined, sizeof(combined), "%s%s", client_key, DEX_WS_MAGIC);
-    unsigned char digest[20];
-    dex_sha1((unsigned char*)combined, strlen(combined), digest);
-    dex_base64_encode(digest, 20, out_accept);
-    (void)out_size;
-}
 
 // --- Subprotocol config ---
 
@@ -919,14 +849,16 @@ void dex_ws_listen(int port) {
                     /* Build handshake response */
                     char response[512];
                     int rlen;
-                    if (srv->subprotocol[0] != '\0') {
+                    char negotiated[128];
+                    if (dex_ws_client_offers(conn->read_buf, srv->subprotocol,
+                                             negotiated, sizeof(negotiated))) {
                         rlen = snprintf(response, sizeof(response),
                             "HTTP/1.1 101 Switching Protocols\r\n"
                             "Upgrade: websocket\r\n"
                             "Connection: Upgrade\r\n"
                             "Sec-WebSocket-Accept: %s\r\n"
                             "Sec-WebSocket-Protocol: %s\r\n"
-                            "\r\n", accept_key, srv->subprotocol);
+                            "\r\n", accept_key, negotiated);
                     } else {
                         rlen = snprintf(response, sizeof(response),
                             "HTTP/1.1 101 Switching Protocols\r\n"
@@ -1125,7 +1057,7 @@ Dex_Conn dex_ws_connect(const char* url) {
     // Read response
     char resp[4096];
     int rn = dex_ws_read(fd, ssl_ptr, resp, sizeof(resp) - 1);
-    if (rn <= 0 || !strstr(resp, "101")) {
+    if (rn <= 0) {
 #ifdef DEX_SSL_AVAILABLE
         if (ssl_ptr) { SSL_shutdown(ssl_ptr); SSL_free(ssl_ptr); }
 #endif
@@ -1133,6 +1065,16 @@ Dex_Conn dex_ws_connect(const char* url) {
         return conn;
     }
     resp[rn] = '\0';
+
+    /* A server that cannot echo the key derived from ours is not speaking
+     * WebSocket, so the connection is refused rather than used blind. */
+    if (!dex_ws_response_valid(resp, ws_key)) {
+#ifdef DEX_SSL_AVAILABLE
+        if (ssl_ptr) { SSL_shutdown(ssl_ptr); SSL_free(ssl_ptr); }
+#endif
+        close(fd);
+        return conn;
+    }
 
     conn.fd = fd;
     conn.isServer = 0;

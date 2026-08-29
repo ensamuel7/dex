@@ -1,0 +1,60 @@
+// Skips when no Redis is listening, so the suite runs on a machine without one.
+//   docker run -d -p 6379:6379 redis:7-alpine
+
+import "fmt"
+import "redis"
+
+fn main(): void {
+    let r: int = redis.connect("127.0.0.1", 6379, "")
+    if (r == -1) {
+        fmt.println("redis not running — skipped")
+    } else {
+        assert(redis.ping(r))
+
+        redis.del(r, "dex:test:key")
+        assert(redis.get(r, "dex:test:key") == "")
+        assert(redis.set(r, "dex:test:key", "value"))
+        assert(redis.get(r, "dex:test:key") == "value")
+        assert(redis.exists(r, "dex:test:key"))
+        assert(redis.del(r, "dex:test:key") == 1)
+        assert(!redis.exists(r, "dex:test:key"))
+
+        // A key that expires reports the time it has left.
+        assert(redis.setex(r, "dex:test:ttl", "soon", 60))
+        assert(redis.ttl(r, "dex:test:ttl") > 0)
+        assert(redis.ttl(r, "dex:test:missing") == -2)
+
+        redis.del(r, "dex:test:count")
+        assert(redis.incr(r, "dex:test:count") == 1)
+        assert(redis.incr(r, "dex:test:count") == 2)
+
+        redis.del(r, "dex:test:hash")
+        assert(redis.hset(r, "dex:test:hash", "instance", "node-a"))
+        assert(redis.hget(r, "dex:test:hash", "instance") == "node-a")
+        assert(redis.hget(r, "dex:test:hash", "absent") == "")
+        let fields: string[] = redis.hkeys(r, "dex:test:hash")
+        assert(fields.len() == 1)
+        assert(redis.hdel(r, "dex:test:hash", "instance") == 1)
+
+        redis.del(r, "dex:test:set")
+        assert(redis.sadd(r, "dex:test:set", "one") == 1)
+        assert(redis.sadd(r, "dex:test:set", "two") == 1)
+        assert(redis.sismember(r, "dex:test:set", "one"))
+        assert(!redis.sismember(r, "dex:test:set", "three"))
+        let members: string[] = redis.smembers(r, "dex:test:set")
+        assert(members.len() == 2)
+        assert(redis.srem(r, "dex:test:set", "one") == 1)
+
+        // Anything not wrapped, spelled as its arguments.
+        redis.del(r, "dex:test:z")
+        let zadd: string[] = ["ZADD", "dex:test:z", "1", "member"]
+        assert(redis.command(r, zadd) == "1")
+        redis.del(r, "dex:test:z")
+
+        // Nothing is subscribed, so nobody receives it.
+        assert(redis.publish(r, "dex:test:channel", "hello") == 0)
+
+        redis.close(r)
+        fmt.println("redis ok")
+    }
+}

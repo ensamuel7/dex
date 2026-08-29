@@ -206,7 +206,9 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		if e.Module != "" {
 			switch e.Name {
 			case "len", "contains", "startsWith", "endsWith", "indexOf",
-				"toLower", "toUpper", "trim", "split", "substring", "replace", "charAt":
+				"toLower", "toUpper", "trim", "split", "substring", "replace", "charAt",
+				"isEmpty", "isAlphanumeric", "isAlpha", "isDigit", "isNumeric", "isWhitespace",
+				"containsUppercase", "containsLowercase", "containsDigit":
 				g.usesStringMethods = true
 			}
 		}

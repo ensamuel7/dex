@@ -2146,6 +2146,130 @@ The `connect` function supports both `ws://` (plain) and `wss://` (TLS). TLS is 
 
 The WebSocket implementation supports text frames, automatic ping/pong handling, and proper client-side frame masking per RFC 6455.
 
+### redis
+
+A Redis client. Speaks RESP over plain sockets, so it needs no library installed
+to build or run.
+
+```dex
+import "redis"
+
+let r: int = redis.connect("127.0.0.1", 6379, "")   // "" = no password
+if (r != -1) {
+    redis.setex(r, "charger:CP-42", "node-a", 30)
+    let owner: string = redis.get(r, "charger:CP-42")   // "" when absent
+    redis.close(r)
+}
+```
+
+Each handle owns a pool of eight sockets: a Redis connection carries one request
+at a time, so threads sharing a handle take a socket each rather than reading one
+another's replies. A dropped socket is redialled on its next use.
+
+| Function | Signature | Description |
+|---|---|---|
+| `connect` | `connect(host: string, port: int, password: string): int` | Open a pool. Returns a handle, or `-1` |
+| `close` | `close(conn: int): void` | Close every socket the handle holds |
+| `ping` | `ping(conn: int): bool` | True when the server answers |
+| `set` | `set(conn: int, key: string, value: string): bool` | Set a key |
+| `setex` | `setex(conn: int, key: string, value: string, seconds: int): bool` | Set a key that expires |
+| `get` | `get(conn: int, key: string): string` | Read a key; missing reads as `""` |
+| `exists` | `exists(conn: int, key: string): bool` | Is the key present |
+| `del` | `del(conn: int, key: string): long` | Delete, returning how many went |
+| `expire` | `expire(conn: int, key: string, seconds: int): bool` | Give a key a time to live |
+| `ttl` | `ttl(conn: int, key: string): long` | Seconds left; `-1` never, `-2` gone |
+| `incr` | `incr(conn: int, key: string): long` | Increment and return the new value |
+| `keys` | `keys(conn: int, pattern: string): string[]` | Keys matching a glob |
+| `hset` / `hget` / `hdel` | `(conn: int, key: string, field: string, ...)` | One field of a hash |
+| `hkeys` | `hkeys(conn: int, key: string): string[]` | A hash's field names |
+| `hgetall` | `hgetall(conn: int, key: string): string[]` | Flat: field, value, field, value |
+| `sadd` / `srem` | `(conn: int, key: string, member: string): long` | Set membership |
+| `sismember` | `sismember(conn: int, key: string, member: string): bool` | Is the member there |
+| `smembers` | `smembers(conn: int, key: string): string[]` | Every member |
+| `publish` | `publish(conn: int, channel: string, message: string): long` | Publish, returning receivers |
+| `subscribe` | `subscribe(conn: int, channel: string): bool` | Subscribe on a socket of its own |
+| `nextMessage` | `nextMessage(conn: int): string` | Block for the next message |
+| `lastChannel` | `lastChannel(conn: int): string` | Which channel it came in on |
+| `command` | `command(conn: int, args: string[]): string` | Any command, as its arguments |
+
+Subscribing takes a connection out of request/reply for good, so it gets a socket
+of its own and messages are pulled rather than pushed:
+
+```dex
+spawn {
+    redis.subscribe(sub, "ocpp:instance:node-a")
+    while (true) {
+        let msg: string = redis.nextMessage(sub)
+        if (msg.isEmpty()) {
+            break          // the subscriber connection dropped
+        }
+        handle(msg)
+    }
+}
+```
+
+Anything without a wrapper is spelled as its arguments:
+
+```dex
+let args: string[] = ["ZADD", "leaderboard", "42", "charger-1"]
+redis.command(r, args)
+```
+
+### kafka
+
+A Kafka client, wrapping librdkafka. Unlike Redis, the protocol is too large to
+speak by hand — consumer groups and partition leadership are most of it — so this
+module needs the library at build time:
+
+```sh
+brew install librdkafka        # macOS
+apt install librdkafka-dev     # Debian/Ubuntu
+```
+
+`dex build` finds it with `pkg-config`. Without it the module still compiles and
+every call fails with a message saying so, so a program that only mentions Kafka
+on a path it never takes still builds and runs.
+
+```dex
+import "kafka"
+
+let p: int = kafka.producer("localhost:9092")
+kafka.produce(p, "ocpp.meter-values", "CP-42", payload)   // key picks the partition
+kafka.flush(p, 5000)
+kafka.close(p)
+```
+
+```dex
+let c: int = kafka.consumer("localhost:9092", "persister")
+kafka.subscribe(c, "ocpp.meter-values")
+while (true) {
+    let msg: string = kafka.poll(c, 1000)     // "" when nothing arrived
+    if (!msg.isEmpty()) {
+        store(kafka.lastKey(c), msg)
+        kafka.commit(c)                        // committed after handling, not before
+    }
+}
+```
+
+| Function | Signature | Description |
+|---|---|---|
+| `available` | `available(): bool` | Did this build find librdkafka |
+| `producer` | `producer(brokers: string): int` | Open a producer; `-1` on failure |
+| `produce` | `produce(producer: int, topic: string, key: string, value: string): bool` | Queue a message |
+| `flush` | `flush(producer: int, timeoutMs: int): int` | Wait for delivery; returns what is still queued |
+| `consumer` | `consumer(brokers: string, groupId: string): int` | Open a consumer in a group |
+| `subscribe` | `subscribe(consumer: int, topic: string): bool` | Add a topic |
+| `poll` | `poll(consumer: int, timeoutMs: int): string` | Wait for one message |
+| `lastTopic` | `lastTopic(consumer: int): string` | Topic of the last message |
+| `lastKey` | `lastKey(consumer: int): string` | Key of the last message |
+| `commit` | `commit(consumer: int): bool` | Commit polled offsets |
+| `close` | `close(handle: int): void` | Flush or leave the group, then close |
+
+Messages sharing a key land on the same partition and keep their order, which is
+why a stable identity — a charger tag, a user id — makes a good key. Auto-commit
+is off: a consumer commits once a message is safely handled, so a crash replays
+it rather than losing it.
+
 ### crypto
 
 Cryptographic utility functions.

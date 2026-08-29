@@ -407,28 +407,50 @@ func (g *Generator) resolveFieldChainType(chain string) ast.Type {
 		}
 		return ast.TypeVoid
 	}
-	parts := strings.SplitN(chain, ".", 2)
-	baseType, ok := g.varTypes[parts[0]]
+	parts := strings.Split(chain, ".")
+	current, ok := g.varTypes[parts[0]]
 	if !ok {
 		return ast.TypeVoid
 	}
-	// Unwrap ref type
-	if ast.IsRefType(baseType) {
-		baseType = ast.RefInnerType(baseType)
-	}
-	if !ast.IsStructType(baseType) {
-		return ast.TypeVoid
-	}
-	def := ast.GetStructDef(baseType)
-	if def == nil {
-		return ast.TypeVoid
-	}
-	for _, f := range def.Fields {
-		if f.Name == parts[1] {
-			return f.Type
+	// Every segment after the first names a field of the type before it, so a
+	// chain of any depth resolves the way one of length two always did.
+	for _, field := range parts[1:] {
+		if ast.IsRefType(current) {
+			current = ast.RefInnerType(current)
 		}
+		if !ast.IsStructType(current) {
+			return ast.TypeVoid
+		}
+		def := ast.GetStructDef(current)
+		if def == nil {
+			return ast.TypeVoid
+		}
+		next := ast.TypeVoid
+		for _, f := range def.Fields {
+			if f.Name == field {
+				next = f.Type
+				break
+			}
+		}
+		if next == ast.TypeVoid {
+			return ast.TypeVoid
+		}
+		current = next
 	}
-	return ast.TypeVoid
+	return current
+}
+
+// fieldChainC renders a dotted receiver — "cmd.action" — as the C that reads it,
+// so a method call on a field emits the same access an expression would.
+func (g *Generator) fieldChainC(chain string) string {
+	parts := strings.Split(chain, ".")
+	var expr ast.Expr = &ast.Ident{Name: parts[0]}
+	for _, field := range parts[1:] {
+		expr = &ast.FieldAccessExpr{Object: expr, Field: field}
+	}
+	var out strings.Builder
+	g.genExpr(&out, expr)
+	return out.String()
 }
 
 // genStringData generates the raw C string (->data) for use in strcmp etc.

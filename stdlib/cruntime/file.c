@@ -3,7 +3,53 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <curl/curl.h>
+
+static int dex_file_name_cmp(const void* a, const void* b) {
+    return strcmp(*(const char* const*)a, *(const char* const*)b);
+}
+
+// The entries of a directory, sorted, excluding "." and "..".
+//
+// Sorted because readdir order is whatever the filesystem feels like, and a
+// caller walking migrations in name order cannot depend on that. An unreadable
+// directory returns empty rather than failing: the caller can tell the
+// difference from an empty one only if it cares, and most do not.
+DexArrayString* dex_file_list(const char* path) {
+    DexArrayString* out = dex_array_string_new();
+    DIR* d = opendir(path);
+    if (!d) return out;
+
+    char** names = NULL;
+    int count = 0, cap = 0;
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (count == cap) {
+            cap = cap ? cap * 2 : 16;
+            char** grown = (char**)realloc(names, sizeof(char*) * cap);
+            if (!grown) break;
+            names = grown;
+        }
+        names[count] = strdup(e->d_name);
+        if (!names[count]) break;
+        count++;
+    }
+    closedir(d);
+
+    if (names) {
+        qsort(names, count, sizeof(char*), dex_file_name_cmp);
+        for (int i = 0; i < count; i++) {
+            DexString* s = dex_string_new(names[i], strlen(names[i]));
+            dex_array_string_push(out, s);
+            dex_release(s);
+            free(names[i]);
+        }
+        free(names);
+    }
+    return out;
+}
 
 const char* dex_file_read(const char* path) {
     FILE* f = fopen(path, "rb");

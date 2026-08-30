@@ -490,6 +490,16 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			}
 		}
 		if isMap {
+			// The emission below spells the receiver straight into the C, so a
+			// field of a by-reference parameter needs its accessor corrected:
+			// `c.args` on a `&Clause` is `c->args`. Done here rather than at
+			// the top of the function because the type lookup above keys off
+			// the source spelling, and rewriting it earlier loses the variable.
+			if resolved := g.resolveFieldChainC(e.Module); resolved != e.Module {
+				clone := *e
+				clone.Module = resolved
+				e = &clone
+			}
 			suffix := g.mapSuffix(mapType)
 			// The map retains whatever it stores and only borrows lookup keys, so
 			// every argument here is passed borrowed: an allocating key or value
@@ -545,6 +555,16 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			}
 		}
 		if ok {
+			// The emission below spells the receiver straight into the C, so a
+			// field of a by-reference parameter needs its accessor corrected:
+			// `c.args` on a `&Clause` is `c->args`. Done here rather than at
+			// the top of the function because the type lookup above keys off
+			// the source spelling, and rewriting it earlier loses the variable.
+			if resolved := g.resolveFieldChainC(e.Module); resolved != e.Module {
+				clone := *e
+				clone.Module = resolved
+				e = &clone
+			}
 			if ast.IsStructArrayType(arrType) {
 				// Struct array methods
 				elemType := ast.ElementType(arrType)
@@ -725,8 +745,11 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	if e.Module != "" {
 		funcDef, ok := stdlib.LookupFunc(e.Module, e.Name)
 		if ok && funcDef.CName != "" {
-			// Check if function returns string — needs wrapping
-			if funcDef.ReturnType == ast.TypeString {
+			// Check if function returns string — needs wrapping.
+			// A RawString function has already built a DexString with the right
+			// length, so wrapping it would strlen away the bytes it exists to
+			// preserve.
+			if funcDef.ReturnType == ast.TypeString && !funcDef.RawReturn {
 				out.WriteString("dex_string_from_cstr(")
 				out.WriteString(funcDef.CName)
 				out.WriteString("(")
@@ -910,6 +933,13 @@ func (g *Generator) genStrMethodWithArgs(out *strings.Builder, cFunc, receiver s
 // bridging DexString* to const char* when the stdlib expects it.
 func (g *Generator) genStdlibArg(out *strings.Builder, arg ast.Expr, funcDef *stdlib.FuncDef, idx int) {
 	argType := g.typeOfExpr(arg)
+	if argType == ast.TypeString && funcDef.IsRawParam(idx) {
+		// Handed over whole, so the callee can read ->len. Borrowed, because the
+		// callee only reads it: an argument that allocates is released once the
+		// statement finishes, exactly as in the const char* case below.
+		g.genBorrowed(out, arg)
+		return
+	}
 	if argType == ast.TypeString {
 		// Stdlib functions with CName expect const char*
 		if strLit, ok := arg.(*ast.StringLit); ok {

@@ -464,7 +464,16 @@ func build(filename string) (string, error) {
 			cflags = append(cflags, f)
 		}
 	}
-	args := append([]string{"-o", binaryPath}, cflags...)
+	// A stdlib function whose C signature disagrees with how it is registered —
+	// a DexString* declared where the generated call passes char*, because
+	// RawParams was left off — produced nothing worse than a warning, compiled,
+	// and then corrupted the heap when the callee read a length out of a raw
+	// buffer. That has cost real debugging time, so the mismatch is fatal here
+	// rather than advisory.
+	args := append([]string{"-o", binaryPath,
+		"-Werror=incompatible-pointer-types",
+		"-Werror=implicit-function-declaration",
+	}, cflags...)
 	if os.Getenv("DEX_SANITIZE") == "1" {
 		args = append(args, "-fsanitize=address", "-fno-omit-frame-pointer", "-g")
 	}

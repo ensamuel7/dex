@@ -598,19 +598,89 @@ static int dex_ws_flush_writes(DexWsConn* conn) {
     return 0;
 }
 
-/* Listening fds, recorded so the signal handler can close every server, not
- * just the most recently started one. */
+/* Running servers, recorded so a shutdown reaches every one of them and not
+ * just the most recently started. */
 #define DEX_WS_MAX_SERVERS 32
-static volatile int dex_ws_server_fds[DEX_WS_MAX_SERVERS];
-static volatile int dex_ws_server_fd_count = 0;
+static DexWsServer* volatile dex_ws_servers[DEX_WS_MAX_SERVERS];
+static volatile sig_atomic_t dex_ws_server_count = 0;
+
+/* How long a drain may take before the process gives up and exits anyway. Kept
+ * under a container runtime's usual grace period, so the decision to stop is
+ * this program's rather than a SIGKILL's. */
+#define DEX_WS_DRAIN_SECONDS 8
+
+static volatile sig_atomic_t dex_ws_draining = 0;
+static volatile sig_atomic_t dex_ws_undrained = 0;
+
+static void dex_ws_hard_exit(int sig) {
+    (void)sig;
+    _exit(0);
+}
+
+/* Closing the listeners and calling _exit — which is what this used to do —
+ * drops every connection without a close frame and without running the
+ * disconnect handler. For a charging network that is the expensive part: the
+ * handler is what clears the charger's presence claim, and a claim that outlives
+ * its process keeps drawing commands towards a socket that is gone until it
+ * expires.
+ *
+ * So the signal handler does nothing but raise a flag and poke each event loop,
+ * both of which are safe from a handler. The loops do the work: close the
+ * listener, write a close frame to every connection, and take each one through
+ * the same teardown a dropped connection takes — which runs the handler. */
+void dex_ws_request_drain(void) {
+    if (dex_ws_draining) return;
+    dex_ws_draining = 1;
+
+    /* A drain that stalls still has to end. alarm() and write() are both
+     * async-signal-safe; this is the backstop for the loops below. */
+    signal(SIGALRM, dex_ws_hard_exit);
+    alarm(DEX_WS_DRAIN_SECONDS);
+
+    int n = dex_ws_server_count;
+    dex_ws_undrained = n;
+    for (int i = 0; i < n && i < DEX_WS_MAX_SERVERS; i++) {
+        DexWsServer* srv = dex_ws_servers[i];
+        if (srv) dex_notify_pipe_signal(&srv->notify);
+    }
+    /* No servers to drain: nothing will call _exit later, so do it here. */
+    if (n == 0) _exit(0);
+}
 
 static void dex_ws_shutdown_handler(int sig) {
     (void)sig;
-    int n = dex_ws_server_fd_count;
-    for (int i = 0; i < n && i < DEX_WS_MAX_SERVERS; i++) {
-        if (dex_ws_server_fds[i] >= 0) close(dex_ws_server_fds[i]);
+    dex_ws_request_drain();
+}
+
+/* Runs on the event loop thread, so it may take locks and call back into Dex. */
+static void dex_ws_drain_server(DexWsServer* srv) {
+    /* Stop accepting before tearing down, so nothing new arrives mid-drain. */
+    if (srv->server_fd >= 0) {
+        dex_ev_del(srv->loop, srv->server_fd);
+        close(srv->server_fd);
+        srv->server_fd = -1;
     }
-    _exit(0);
+
+    int closed = 0;
+    for (int j = 0; j <= srv->max_fd; j++) {
+        DexWsConn* wc = dex_ws_conn_table[j];
+        /* Steady-state connections only. One being dispatched belongs to a
+         * worker thread just now, and freeing it here would pull it out from
+         * under that thread; it goes when the process does, a moment later.
+         * dex_ws_conn_free clears its table slot, so this walk stays valid. */
+        if (wc && wc->srv == srv && wc->state == WS_READING_FRAME) {
+            dex_ws_ev_finish_close(wc);
+            closed++;
+        }
+    }
+    fprintf(stderr, "ws: drained %d connection(s)\n", closed);
+    fflush(stderr);
+
+    /* main is blocked in the HTTP listener and has no reason of its own to
+     * return, so the last loop out ends the process. */
+    if (__sync_sub_and_fetch(&dex_ws_undrained, 1) <= 0) {
+        _exit(0);
+    }
 }
 
 void dex_ws_listen(int port) {
@@ -655,9 +725,12 @@ void dex_ws_listen(int port) {
     pthread_mutex_init(&srv->completed_mutex, NULL);
     dex_notify_pipe_init(&srv->notify);
 
-    if (dex_ws_server_fd_count < DEX_WS_MAX_SERVERS) {
-        dex_ws_server_fds[dex_ws_server_fd_count++] = server_fd;
+    if (dex_ws_server_count < DEX_WS_MAX_SERVERS) {
+        dex_ws_servers[dex_ws_server_count++] = srv;
     }
+    /* Whichever listener starts last owns SIGTERM; this lets the HTTP one hand
+     * the signal back here rather than exiting on top of live connections. */
+    dex_shutdown_drain_hook = dex_ws_request_drain;
 
     dex_ev_add(srv->loop, server_fd, DEX_EV_READ, NULL);
     dex_ev_add(srv->loop, srv->notify.read_fd, DEX_EV_READ, (void*)(intptr_t)-2);
@@ -694,6 +767,11 @@ void dex_ws_listen(int port) {
             /* Notify pipe: drain and process completed dispatches */
             if (ev->user_data == (void*)(intptr_t)-2) {
                 dex_notify_pipe_drain(&srv->notify);
+
+                if (dex_ws_draining) {
+                    dex_ws_drain_server(srv);
+                    return;
+                }
 
                 pthread_mutex_lock(&srv->completed_mutex);
                 DexWsConn* completed = srv->completed_head;

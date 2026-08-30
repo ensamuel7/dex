@@ -257,29 +257,35 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return ast.TypeVoid, true, nil
 	}
 
-	// Special case: http.response(statusCode, body, contentType) -> HttpResponse
-	if e.Module == "http" && e.Name == "response" {
+	// Special case: http.response(statusCode, body, contentType) and
+	// http.responseWith(statusCode, body, contentType, headers) -> HttpResponse.
+	// Identical but for the trailing headers argument.
+	if e.Module == "http" && (e.Name == "response" || e.Name == "responseWith") {
 		httpRespType, ok := ast.LookupStructType("HttpResponse")
 		if !ok {
 			return 0, true, c.errAt(e.Pos, "HttpResponse type not registered (internal error)")
 		}
-		if len(e.Args) != 3 {
-			return 0, true, c.errAt(e.Pos, "http.response() takes exactly 3 arguments, got %d", len(e.Args))
+		want := 3
+		if e.Name == "responseWith" {
+			want = 4
+		}
+		if len(e.Args) != want {
+			return 0, true, c.errAt(e.Pos, "http.%s() takes exactly %d arguments, got %d", e.Name, want, len(e.Args))
 		}
 		arg0Type, err := c.checkExpr(e.Args[0])
 		if err != nil {
 			return 0, true, err
 		}
 		if arg0Type != ast.TypeInt {
-			return 0, true, c.errAt(e.Pos, "http.response() argument 1 must be int, got %s", typeName(arg0Type))
+			return 0, true, c.errAt(e.Pos, "http.%s() argument 1 must be int, got %s", e.Name, typeName(arg0Type))
 		}
-		for i := 1; i < 3; i++ {
+		for i := 1; i < want; i++ {
 			argType, err := c.checkExpr(e.Args[i])
 			if err != nil {
 				return 0, true, err
 			}
 			if argType != ast.TypeString {
-				return 0, true, c.errAt(e.Pos, "http.response() argument %d must be string, got %s", i+1, typeName(argType))
+				return 0, true, c.errAt(e.Pos, "http.%s() argument %d must be string, got %s", e.Name, i+1, typeName(argType))
 			}
 		}
 		e.ResolvedType = httpRespType

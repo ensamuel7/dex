@@ -113,6 +113,20 @@ func init() {
 				CName:      "dex_db_close",
 				Doc:        "Close a database connection.",
 			},
+			"queryParams": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeString, ast.TypeArrayString},
+				ParamNames: []string{"conn", "sql", "values"},
+				ReturnType: ast.TypeInt,
+				CName:      "dex_db_query_params",
+				Doc:        "Execute a query with bound parameters ($1, $2, ...) and return a result handle. Postgres only.",
+			},
+			"execParams": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeString, ast.TypeArrayString},
+				ParamNames: []string{"conn", "sql", "values"},
+				ReturnType: ast.TypeInt,
+				CName:      "dex_db_exec_params",
+				Doc:        "Execute a statement with bound parameters ($1, $2, ...). Returns affected rows. Postgres only.",
+			},
 			"prepare": {
 				Params:     []ast.Type{ast.TypeInt, ast.TypeString},
 				ParamNames: []string{"conn", "sql"},

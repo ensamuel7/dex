@@ -29,7 +29,13 @@
 typedef struct {
     PGconn* connections[DEX_DB_POOL_SIZE];
     int in_use[DEX_DB_POOL_SIZE];    // 0 = free, 1 = acquired
+    // Bumped whenever an entry's socket is replaced, so anything cached against
+    // a connection — a server-side prepared statement — knows it is stale.
+    unsigned int generation[DEX_DB_POOL_SIZE];
     int size;                         // actual number of connections
+    // Kept so a dead entry can be rebuilt from scratch when PQreset cannot
+    // revive it.
+    char dsn[1024];
     pthread_mutex_t lock;
     pthread_cond_t available;
 } DexDbPool;
@@ -84,9 +90,12 @@ typedef struct {
     int conn_slot; // which connection this stmt belongs to
     sqlite3_stmt* sqlite_stmt;
 #ifdef DEX_HAS_POSTGRES
-    PGconn* pg_conn;
+    // Which pool connections carry this statement, and at which generation. 0
+    // means "not prepared there"; a generation mismatch means the socket was
+    // replaced underneath it and it has to be prepared again.
+    unsigned int prepared_gen[DEX_DB_POOL_SIZE];
     char* pg_sql;
-    char pg_stmt_name[32];
+    char pg_stmt_name[48];
     int pg_param_count;
     int pg_param_cap;
     char** pg_param_values;
@@ -104,6 +113,115 @@ static DexDbConn dex_db_conns[DEX_DB_MAX_CONNS];
 static DexDbResult dex_db_results[DEX_DB_MAX_RESULTS];
 static DexDbStmt dex_db_stmts[DEX_DB_MAX_STMTS];
 static pthread_mutex_t dex_db_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#ifdef DEX_HAS_POSTGRES
+// Names are never reused, even after a statement slot is recycled: a stale
+// prepared statement left on a connection must not collide with a new one.
+static unsigned int dex_db_stmt_seq = 0;
+
+// Bring one pool entry back to a usable state. The caller holds the entry
+// (in_use is set) but must NOT hold the pool lock: reconnecting blocks, and
+// every other thread would block behind it.
+// How many connections a pool opens. Sixteen per process is generous on one
+// host and ruinous across a dozen: Postgres spends max_connections across every
+// client at once, so a fleet needs this turned down or a pooler in front.
+static int dex_db_pool_size(void) {
+    const char* env = getenv("DB_POOL_SIZE");
+    if (!env || !*env) return DEX_DB_POOL_SIZE;
+    int n = atoi(env);
+    if (n < 1) n = 1;
+    if (n > DEX_DB_POOL_SIZE) n = DEX_DB_POOL_SIZE;
+    return n;
+}
+
+static int dex_db_pg_revive(DexDbPool* pool, int entry) {
+    PGconn* pg = pool->connections[entry];
+    if (pg && PQstatus(pg) == CONNECTION_OK) {
+        return 1;
+    }
+
+    // PQreset reuses the parameters the connection was opened with and keeps
+    // the same PGconn, so it is the cheap path back.
+    if (pg) {
+        PQreset(pg);
+        if (PQstatus(pg) == CONNECTION_OK) {
+            pool->generation[entry]++;
+            return 1;
+        }
+        PQfinish(pg);
+        pool->connections[entry] = NULL;
+    }
+
+    pg = PQconnectdb(pool->dsn);
+    if (PQstatus(pg) != CONNECTION_OK) {
+        fprintf(stderr, "db: reconnect failed: %s", PQerrorMessage(pg));
+        PQfinish(pg);
+        pool->connections[entry] = NULL;
+        return 0;
+    }
+    pool->connections[entry] = pg;
+    pool->generation[entry]++;
+    return 1;
+}
+
+// Returns a pool index whose connection has just been checked, or -1 when the
+// database cannot be reached at all. Blocks while every entry is busy.
+static int dex_db_pool_acquire(DexDbPool* pool) {
+    pthread_mutex_lock(&pool->lock);
+    int entry = -1;
+    while (entry < 0) {
+        for (int i = 0; i < pool->size; i++) {
+            if (!pool->in_use[i]) {
+                pool->in_use[i] = 1;
+                entry = i;
+                break;
+            }
+        }
+        if (entry < 0) {
+            pthread_cond_wait(&pool->available, &pool->lock);
+        }
+    }
+    pthread_mutex_unlock(&pool->lock);
+
+    if (!dex_db_pg_revive(pool, entry)) {
+        pthread_mutex_lock(&pool->lock);
+        pool->in_use[entry] = 0;
+        pthread_cond_signal(&pool->available);
+        pthread_mutex_unlock(&pool->lock);
+        return -1;
+    }
+    return entry;
+}
+
+// Waits for one particular entry rather than whichever comes free. finalize()
+// needs to visit every connection that carries a statement, which acquiring
+// "any" entry cannot guarantee — it can hand back the same one every time.
+static int dex_db_pool_acquire_entry(DexDbPool* pool, int entry) {
+    if (entry < 0 || entry >= pool->size) return 0;
+    pthread_mutex_lock(&pool->lock);
+    while (pool->in_use[entry]) {
+        pthread_cond_wait(&pool->available, &pool->lock);
+    }
+    pool->in_use[entry] = 1;
+    pthread_mutex_unlock(&pool->lock);
+    return 1;
+}
+
+static void dex_db_pool_release(DexDbPool* pool, int entry) {
+    if (entry < 0) return;
+    pthread_mutex_lock(&pool->lock);
+    pool->in_use[entry] = 0;
+    pthread_cond_signal(&pool->available);
+    pthread_mutex_unlock(&pool->lock);
+}
+
+// Distinguishes a statement Postgres rejected — which leaves the connection
+// perfectly usable — from a connection that died under it. Only the second is
+// worth retrying.
+static int dex_db_pg_broken(PGconn* pg) {
+    return pg == NULL || PQstatus(pg) != CONNECTION_OK;
+}
+#endif
 
 #ifdef DEX_HAS_MYSQL
 // --- MySQL DSN parser ---
@@ -199,8 +317,10 @@ int dex_db_open(const char* driver, const char* dsn) {
         memset(pool, 0, sizeof(DexDbPool));
         pthread_mutex_init(&pool->lock, NULL);
         pthread_cond_init(&pool->available, NULL);
-        // Open DEX_DB_POOL_SIZE connections to the same DSN
-        for (int i = 0; i < DEX_DB_POOL_SIZE; i++) {
+        strncpy(pool->dsn, dsn, sizeof(pool->dsn) - 1);
+        pool->dsn[sizeof(pool->dsn) - 1] = '\0';
+        int want = dex_db_pool_size();
+        for (int i = 0; i < want; i++) {
             PGconn* pg = PQconnectdb(dsn);
             if (PQstatus(pg) != CONNECTION_OK) {
                 PQfinish(pg);
@@ -217,8 +337,10 @@ int dex_db_open(const char* driver, const char* dsn) {
             }
             pool->connections[i] = pg;
             pool->in_use[i] = 0;
+            // Generations count from 1 so that 0 can mean "never prepared here".
+            pool->generation[i] = 1;
         }
-        pool->size = DEX_DB_POOL_SIZE;
+        pool->size = want;
         pthread_mutex_lock(&dex_db_mutex);
         dex_db_conns[slot].driver = DEX_DB_DRIVER_POSTGRES;
         pthread_mutex_unlock(&dex_db_mutex);
@@ -311,46 +433,33 @@ int dex_db_exec(int conn, const char* sql) {
 
 #ifdef DEX_HAS_POSTGRES
     } else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
-        // Acquire a free connection from the pool
         DexDbPool* pool = &c->pg_pool;
-        pthread_mutex_lock(&pool->lock);
-        int entry = -1;
-        while (entry < 0) {
-            for (int i = 0; i < pool->size; i++) {
-                if (!pool->in_use[i]) {
-                    pool->in_use[i] = 1;
-                    entry = i;
-                    break;
-                }
-            }
-            if (entry < 0) {
-                pthread_cond_wait(&pool->available, &pool->lock);
-            }
-        }
-        pthread_mutex_unlock(&pool->lock);
+        int entry = dex_db_pool_acquire(pool);
+        if (entry < 0) return -1;
 
-        PGresult* res = PQexec(pool->connections[entry], sql);
-        ExecStatusType status = PQresultStatus(res);
-        if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+        // Two attempts: a connection checked out a moment ago can still die
+        // before the statement lands on it, which is exactly what a database
+        // restart looks like from here. A statement Postgres rejects on a
+        // healthy connection is not retried — it would only fail again.
+        int n = -1;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            PGresult* res = PQexec(pool->connections[entry], sql);
+            ExecStatusType status = PQresultStatus(res);
+            if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {
+                char* affected = PQcmdTuples(res);
+                n = (affected && affected[0] != '\0') ? atoi(affected) : 0;
+                PQclear(res);
+                break;
+            }
+            int broken = dex_db_pg_broken(pool->connections[entry]);
+            if (!broken) {
+                fprintf(stderr, "db.exec error: %s", PQerrorMessage(pool->connections[entry]));
+            }
             PQclear(res);
-            // Release pool entry
-            pthread_mutex_lock(&pool->lock);
-            pool->in_use[entry] = 0;
-            pthread_cond_signal(&pool->available);
-            pthread_mutex_unlock(&pool->lock);
-            return -1;
+            if (!broken || attempt == 1) break;
+            if (!dex_db_pg_revive(pool, entry)) break;
         }
-        char* affected = PQcmdTuples(res);
-        int n = 0;
-        if (affected && affected[0] != '\0') {
-            n = atoi(affected);
-        }
-        PQclear(res);
-        // Release pool entry
-        pthread_mutex_lock(&pool->lock);
-        pool->in_use[entry] = 0;
-        pthread_cond_signal(&pool->available);
-        pthread_mutex_unlock(&pool->lock);
+        dex_db_pool_release(pool, entry);
         return n;
 #endif
 
@@ -425,44 +534,48 @@ int dex_db_query(int conn, const char* sql) {
 
 #ifdef DEX_HAS_POSTGRES
     } else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
-        // Acquire a free connection from the pool
         DexDbPool* pool = &c->pg_pool;
-        pthread_mutex_lock(&pool->lock);
-        int entry = -1;
-        while (entry < 0) {
-            for (int i = 0; i < pool->size; i++) {
-                if (!pool->in_use[i]) {
-                    pool->in_use[i] = 1;
-                    entry = i;
-                    break;
-                }
-            }
-            if (entry < 0) {
-                pthread_cond_wait(&pool->available, &pool->lock);
-            }
-        }
-        pthread_mutex_unlock(&pool->lock);
-
-        PGresult* res = PQexec(pool->connections[entry], sql);
-        if (PQresultStatus(res) != PGRES_TUPLES_OK) {
-            PQclear(res);
-            // Release pool entry
-            pthread_mutex_lock(&pool->lock);
-            pool->in_use[entry] = 0;
-            pthread_cond_signal(&pool->available);
-            pthread_mutex_unlock(&pool->lock);
+        int entry = dex_db_pool_acquire(pool);
+        if (entry < 0) {
             pthread_mutex_lock(&dex_db_mutex);
             memset(&dex_db_results[slot], 0, sizeof(DexDbResult));
             pthread_mutex_unlock(&dex_db_mutex);
             return -1;
         }
+
+        PGresult* res = NULL;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            res = PQexec(pool->connections[entry], sql);
+            if (PQresultStatus(res) == PGRES_TUPLES_OK) break;
+            int broken = dex_db_pg_broken(pool->connections[entry]);
+            if (!broken) {
+                fprintf(stderr, "db.query error: %s", PQerrorMessage(pool->connections[entry]));
+            }
+            PQclear(res);
+            res = NULL;
+            if (!broken || attempt == 1) break;
+            if (!dex_db_pg_revive(pool, entry)) break;
+        }
+
+        // A PGresult owns its rows outright, so the connection goes back now
+        // rather than at db.free(). A caller who forgets to free leaks one
+        // result slot instead of permanently costing the pool a connection.
+        dex_db_pool_release(pool, entry);
+
+        if (!res) {
+            pthread_mutex_lock(&dex_db_mutex);
+            memset(&dex_db_results[slot], 0, sizeof(DexDbResult));
+            pthread_mutex_unlock(&dex_db_mutex);
+            return -1;
+        }
+
         pthread_mutex_lock(&dex_db_mutex);
         dex_db_results[slot].driver = DEX_DB_DRIVER_POSTGRES;
         dex_db_results[slot].pg_result = res;
         dex_db_results[slot].pg_row = -1;
         dex_db_results[slot].pg_nrows = PQntuples(res);
-        dex_db_results[slot].pool_entry = entry;
-        dex_db_results[slot].pool_conn = conn;
+        dex_db_results[slot].pool_entry = -1;
+        dex_db_results[slot].pool_conn = -1;
         pthread_mutex_unlock(&dex_db_mutex);
         return slot;
 #endif
@@ -837,17 +950,8 @@ void dex_db_free(int rows) {
     }
 #ifdef DEX_HAS_POSTGRES
     else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
+        // The connection went back at query time; only the rows are left.
         if (r->pg_result) PQclear(r->pg_result);
-        // Release pool entry back to the pool
-        int pc = r->pool_conn;
-        int pe = r->pool_entry;
-        if (pc >= 0 && pc < DEX_DB_MAX_CONNS) {
-            DexDbPool* pool = &dex_db_conns[pc].pg_pool;
-            pthread_mutex_lock(&pool->lock);
-            pool->in_use[pe] = 0;
-            pthread_cond_signal(&pool->available);
-            pthread_mutex_unlock(&pool->lock);
-        }
     }
 #endif
 #ifdef DEX_HAS_MYSQL
@@ -937,23 +1041,44 @@ int dex_db_prepare(int conn, const char* sql) {
 
 #ifdef DEX_HAS_POSTGRES
     } else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
-        // PostgreSQL prepared statements — use first pool connection
-        PGconn* pg = c->pg_pool.connections[0];
+        // The statement is not tied to one connection: it is prepared on
+        // whichever pool entry ends up running it, and again after that entry
+        // reconnects. Preparing once here is what turns a bad statement into an
+        // error from prepare() rather than from the first step().
+        DexDbPool* pool = &c->pg_pool;
+        int entry = dex_db_pool_acquire(pool);
+        if (entry < 0) {
+            pthread_mutex_lock(&dex_db_mutex);
+            memset(&dex_db_stmts[slot], 0, sizeof(DexDbStmt));
+            pthread_mutex_unlock(&dex_db_mutex);
+            return -1;
+        }
+
+        pthread_mutex_lock(&dex_db_mutex);
+        unsigned int seq = ++dex_db_stmt_seq;
+        pthread_mutex_unlock(&dex_db_mutex);
         snprintf(dex_db_stmts[slot].pg_stmt_name, sizeof(dex_db_stmts[slot].pg_stmt_name),
-                 "dex_ps_%d", slot);
-        PGresult* res = PQprepare(pg, dex_db_stmts[slot].pg_stmt_name, sql, 0, NULL);
+                 "dex_ps_%u", seq);
+
+        PGresult* res = PQprepare(pool->connections[entry], dex_db_stmts[slot].pg_stmt_name, sql, 0, NULL);
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+            fprintf(stderr, "db.prepare error: %s", PQerrorMessage(pool->connections[entry]));
             PQclear(res);
+            dex_db_pool_release(pool, entry);
             pthread_mutex_lock(&dex_db_mutex);
             memset(&dex_db_stmts[slot], 0, sizeof(DexDbStmt));
             pthread_mutex_unlock(&dex_db_mutex);
             return -1;
         }
         PQclear(res);
+        unsigned int prepared_at = pool->generation[entry];
+        dex_db_pool_release(pool, entry);
+
         pthread_mutex_lock(&dex_db_mutex);
         dex_db_stmts[slot].driver = DEX_DB_DRIVER_POSTGRES;
         dex_db_stmts[slot].conn_slot = conn;
-        dex_db_stmts[slot].pg_conn = pg;
+        memset(dex_db_stmts[slot].prepared_gen, 0, sizeof(dex_db_stmts[slot].prepared_gen));
+        dex_db_stmts[slot].prepared_gen[entry] = prepared_at;
         dex_db_stmts[slot].pg_sql = strdup(sql);
         dex_db_stmts[slot].pg_param_count = 0;
         dex_db_stmts[slot].pg_param_cap = 8;
@@ -1094,25 +1219,64 @@ _Bool dex_db_step(int stmt_id) {
         return rc == SQLITE_ROW;
 #ifdef DEX_HAS_POSTGRES
     } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
-        // First call after bind: execute the prepared statement
+        // First call after bind: execute the prepared statement. The connection
+        // is borrowed for the duration — libpq allows one thread per PGconn,
+        // and this used to run on connections[0] no matter who else held it.
         if (!s->pg_result) {
-            s->pg_result = PQexecPrepared(s->pg_conn, s->pg_stmt_name,
-                s->pg_param_count, (const char* const*)s->pg_param_values,
-                s->pg_param_lengths, NULL, 0);
-            ExecStatusType st = PQresultStatus(s->pg_result);
-            if (st == PGRES_TUPLES_OK) {
-                s->pg_num_rows = PQntuples(s->pg_result);
-                s->pg_current_row = 0;
-            } else if (st == PGRES_COMMAND_OK) {
+            if (s->conn_slot < 0 || s->conn_slot >= DEX_DB_MAX_CONNS) return 0;
+            DexDbPool* pool = &dex_db_conns[s->conn_slot].pg_pool;
+            int entry = dex_db_pool_acquire(pool);
+            if (entry < 0) return 0;
+
+            for (int attempt = 0; attempt < 2; attempt++) {
+                PGconn* pg = pool->connections[entry];
+
+                // This connection has either never carried the statement or has
+                // reconnected since it did, and a reconnect takes the server's
+                // copy with it.
+                if (s->prepared_gen[entry] != pool->generation[entry]) {
+                    PGresult* pr = PQprepare(pg, s->pg_stmt_name, s->pg_sql, 0, NULL);
+                    if (PQresultStatus(pr) != PGRES_COMMAND_OK) {
+                        int broken = dex_db_pg_broken(pg);
+                        if (!broken) {
+                            fprintf(stderr, "db.step prepare error: %s", PQerrorMessage(pg));
+                        }
+                        PQclear(pr);
+                        if (!broken || attempt == 1) break;
+                        if (!dex_db_pg_revive(pool, entry)) break;
+                        continue;
+                    }
+                    PQclear(pr);
+                    s->prepared_gen[entry] = pool->generation[entry];
+                }
+
+                s->pg_result = PQexecPrepared(pg, s->pg_stmt_name,
+                    s->pg_param_count, (const char* const*)s->pg_param_values,
+                    s->pg_param_lengths, NULL, 0);
+                ExecStatusType st = PQresultStatus(s->pg_result);
+                if (st == PGRES_TUPLES_OK || st == PGRES_COMMAND_OK) break;
+
+                int broken = dex_db_pg_broken(pg);
+                if (!broken) {
+                    fprintf(stderr, "db.step error: %s", PQerrorMessage(pg));
+                }
+                PQclear(s->pg_result);
+                s->pg_result = NULL;
+                if (!broken || attempt == 1) break;
+                if (!dex_db_pg_revive(pool, entry)) break;
+            }
+
+            // As in query(), the rows outlive the connection they came from.
+            dex_db_pool_release(pool, entry);
+
+            if (!s->pg_result) return 0;
+            if (PQresultStatus(s->pg_result) == PGRES_COMMAND_OK) {
                 s->pg_num_rows = 0;
                 s->pg_current_row = 0;
                 return 0;
-            } else {
-                fprintf(stderr, "db.step error: %s\n", PQerrorMessage(s->pg_conn));
-                PQclear(s->pg_result);
-                s->pg_result = NULL;
-                return 0;
             }
+            s->pg_num_rows = PQntuples(s->pg_result);
+            s->pg_current_row = 0;
         }
         if (s->pg_current_row < s->pg_num_rows) {
             s->pg_current_row++;
@@ -1167,12 +1331,28 @@ void dex_db_finalize(int stmt_id) {
         for (int i = 0; i < s->pg_param_count; i++) free(s->pg_param_values[i]);
         free(s->pg_param_values);
         free(s->pg_param_lengths);
+        // Deallocate on every connection that still carries it. Statement
+        // names are never reused, so anything missed here is only wasted memory
+        // on the server until that connection is recycled.
+        if (s->conn_slot >= 0 && s->conn_slot < DEX_DB_MAX_CONNS) {
+            DexDbPool* pool = &dex_db_conns[s->conn_slot].pg_pool;
+            char dealloc[96];
+            snprintf(dealloc, sizeof(dealloc), "DEALLOCATE %s", s->pg_stmt_name);
+            for (int i = 0; i < pool->size; i++) {
+                if (s->prepared_gen[i] == 0) continue;
+                if (!dex_db_pool_acquire_entry(pool, i)) continue;
+                // Still the same socket it was prepared on, and still up: a
+                // reconnect already took the server's copy with it.
+                if (s->prepared_gen[i] == pool->generation[i] &&
+                    !dex_db_pg_broken(pool->connections[i])) {
+                    PGresult* res = PQexec(pool->connections[i], dealloc);
+                    if (res) PQclear(res);
+                }
+                s->prepared_gen[i] = 0;
+                dex_db_pool_release(pool, i);
+            }
+        }
         if (s->pg_sql) free(s->pg_sql);
-        // Deallocate the prepared statement on the server
-        char dealloc[64];
-        snprintf(dealloc, sizeof(dealloc), "DEALLOCATE %s", s->pg_stmt_name);
-        PGresult* res = PQexec(s->pg_conn, dealloc);
-        if (res) PQclear(res);
     }
 #endif
 #ifdef DEX_HAS_MYSQL
@@ -1183,4 +1363,175 @@ void dex_db_finalize(int stmt_id) {
     pthread_mutex_lock(&dex_db_mutex);
     memset(s, 0, sizeof(DexDbStmt));
     pthread_mutex_unlock(&dex_db_mutex);
+}
+
+// ==========================================================================
+// Bound parameters
+//
+// dex_db_query_params / dex_db_exec_params send the statement and its values
+// to Postgres separately, through PQexecParams. The server never parses the
+// values as SQL, so a quote, a semicolon or a comment marker inside one is
+// data and cannot become syntax. This is the difference between escaping —
+// which is a correctness argument you have to keep winning — and binding,
+// which removes the question.
+//
+// Placeholders are Postgres's own $1, $2, ... numbered from one.
+//
+// Values arrive as text and paramTypes is NULL, so the server infers each
+// parameter's type from where it appears: `WHERE id = $1` against a bigint
+// column parses $1 as a bigint. That is why a string[] is enough of a call
+// shape despite the language having no heterogeneous array — the caller
+// stringifies with str.fromLong and friends, and the server does the rest.
+//
+// SQL NULL is deliberately NOT expressible as a parameter. Whether a value is
+// null is a structural decision the caller already knows — it changes the
+// statement, not just its data — so the caller writes the NULL keyword into
+// the SQL. An in-band sentinel string would collide with real data for no gain.
+//
+// Postgres only. SQLite and MySQL spell placeholders differently, and silently
+// accepting a statement written for one dialect on another is how a query that
+// looks bound stops being bound.
+// ==========================================================================
+
+#ifdef DEX_HAS_POSTGRES
+// Borrows the argument array; the returned vector points into the DexStrings
+// and must not outlive the call.
+static const char** dex_db_param_vector(DexArrayString* args, int* count) {
+    int n = args ? args->len : 0;
+    *count = n;
+    if (n == 0) return NULL;
+    const char** values = (const char**)malloc(sizeof(char*) * n);
+    if (!values) { *count = 0; return NULL; }
+    for (int i = 0; i < n; i++) {
+        DexString* v = args->data[i];
+        values[i] = v ? v->data : "";
+    }
+    return values;
+}
+#endif
+
+int dex_db_query_params(int conn, const char* sql, DexArrayString* args) {
+    if (conn < 0 || conn >= DEX_DB_MAX_CONNS) return -1;
+    DexDbConn* c = &dex_db_conns[conn];
+
+#ifdef DEX_HAS_POSTGRES
+    if (c->driver != DEX_DB_DRIVER_POSTGRES) {
+        fprintf(stderr, "db.queryParams: bound parameters require the postgres driver\n");
+        return -1;
+    }
+
+    pthread_mutex_lock(&dex_db_mutex);
+    int slot = -1;
+    for (int i = 0; i < DEX_DB_MAX_RESULTS; i++) {
+        if (dex_db_results[i].driver == DEX_DB_DRIVER_NONE) {
+            slot = i;
+            dex_db_results[i].driver = -1; // reserve slot
+            break;
+        }
+    }
+    pthread_mutex_unlock(&dex_db_mutex);
+    if (slot < 0) return -1;
+
+    int nparams = 0;
+    const char** values = dex_db_param_vector(args, &nparams);
+
+    DexDbPool* pool = &c->pg_pool;
+    int entry = dex_db_pool_acquire(pool);
+    if (entry < 0) {
+        free((void*)values);
+        pthread_mutex_lock(&dex_db_mutex);
+        memset(&dex_db_results[slot], 0, sizeof(DexDbResult));
+        pthread_mutex_unlock(&dex_db_mutex);
+        return -1;
+    }
+
+    // Same two-attempt rule as dex_db_query: a connection can die between
+    // checkout and use, but a statement Postgres rejects is not retried.
+    PGresult* res = NULL;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        res = PQexecParams(pool->connections[entry], sql, nparams,
+                           NULL, values, NULL, NULL, 0);
+        if (PQresultStatus(res) == PGRES_TUPLES_OK) break;
+        int broken = dex_db_pg_broken(pool->connections[entry]);
+        if (!broken) {
+            fprintf(stderr, "db.queryParams error: %s", PQerrorMessage(pool->connections[entry]));
+        }
+        PQclear(res);
+        res = NULL;
+        if (!broken || attempt == 1) break;
+        if (!dex_db_pg_revive(pool, entry)) break;
+    }
+
+    // A PGresult owns its rows outright, so the connection goes back now.
+    dex_db_pool_release(pool, entry);
+    free((void*)values);
+
+    if (!res) {
+        pthread_mutex_lock(&dex_db_mutex);
+        memset(&dex_db_results[slot], 0, sizeof(DexDbResult));
+        pthread_mutex_unlock(&dex_db_mutex);
+        return -1;
+    }
+
+    pthread_mutex_lock(&dex_db_mutex);
+    dex_db_results[slot].driver = DEX_DB_DRIVER_POSTGRES;
+    dex_db_results[slot].pg_result = res;
+    dex_db_results[slot].pg_row = -1;
+    dex_db_results[slot].pg_nrows = PQntuples(res);
+    dex_db_results[slot].pool_entry = -1;
+    dex_db_results[slot].pool_conn = -1;
+    pthread_mutex_unlock(&dex_db_mutex);
+    return slot;
+#else
+    (void)sql; (void)args; (void)c;
+    fprintf(stderr, "db.queryParams: this build has no postgres support\n");
+    return -1;
+#endif
+}
+
+int dex_db_exec_params(int conn, const char* sql, DexArrayString* args) {
+    if (conn < 0 || conn >= DEX_DB_MAX_CONNS) return -1;
+    DexDbConn* c = &dex_db_conns[conn];
+
+#ifdef DEX_HAS_POSTGRES
+    if (c->driver != DEX_DB_DRIVER_POSTGRES) {
+        fprintf(stderr, "db.execParams: bound parameters require the postgres driver\n");
+        return -1;
+    }
+
+    int nparams = 0;
+    const char** values = dex_db_param_vector(args, &nparams);
+
+    DexDbPool* pool = &c->pg_pool;
+    int entry = dex_db_pool_acquire(pool);
+    if (entry < 0) { free((void*)values); return -1; }
+
+    int n = -1;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        PGresult* res = PQexecParams(pool->connections[entry], sql, nparams,
+                                     NULL, values, NULL, NULL, 0);
+        ExecStatusType status = PQresultStatus(res);
+        if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {
+            char* affected = PQcmdTuples(res);
+            n = (affected && affected[0] != '\0') ? atoi(affected) : 0;
+            PQclear(res);
+            break;
+        }
+        int broken = dex_db_pg_broken(pool->connections[entry]);
+        if (!broken) {
+            fprintf(stderr, "db.execParams error: %s", PQerrorMessage(pool->connections[entry]));
+        }
+        PQclear(res);
+        if (!broken || attempt == 1) break;
+        if (!dex_db_pg_revive(pool, entry)) break;
+    }
+
+    dex_db_pool_release(pool, entry);
+    free((void*)values);
+    return n;
+#else
+    (void)sql; (void)args; (void)c;
+    fprintf(stderr, "db.execParams: this build has no postgres support\n");
+    return -1;
+#endif
 }

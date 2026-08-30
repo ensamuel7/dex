@@ -1,0 +1,66 @@
+// JSON string escaping, in both directions.
+//
+// Struct arrays are encoded by dex_arr_encode_struct in codegen/cruntime/arrays.c,
+// which is a separate path from single-struct encoding — it used to write string
+// fields raw, producing invalid JSON for anything containing a quote. Escaping is
+// the kind of thing that regresses silently, because nothing validates its own
+// output, so it is pinned here.
+//
+// String literals are used directly inside the struct literals on purpose: an
+// array literal holding a struct that stores a *variable* string has a separate,
+// pre-existing ownership bug, and this file is about escaping.
+
+import "json"
+
+struct EscRow {
+    id: int
+    text: string
+}
+
+fn main(): void {
+    // A quote must become \" and not end the string early.
+    let quoted: EscRow[] = [ EscRow { id: 1, text: "say \"hi\"" } ]
+    assert(json.encode(quoted) == "[{\"id\":1,\"text\":\"say \\\"hi\\\"\"}]")
+
+    // A backslash must double.
+    let slashed: EscRow[] = [ EscRow { id: 2, text: "a\\b" } ]
+    assert(json.encode(slashed) == "[{\"id\":2,\"text\":\"a\\\\b\"}]")
+
+    // Newline and tab take their shorthand forms, not a literal break.
+    let newline: EscRow[] = [ EscRow { id: 3, text: "a\nb" } ]
+    assert(json.encode(newline) == "[{\"id\":3,\"text\":\"a\\nb\"}]")
+
+    let tabbed: EscRow[] = [ EscRow { id: 4, text: "a\tb" } ]
+    assert(json.encode(tabbed) == "[{\"id\":4,\"text\":\"a\\tb\"}]")
+
+    // Non-ASCII is valid UTF-8 already and passes through untouched.
+    let accented: EscRow[] = [ EscRow { id: 5, text: "Simülatör" } ]
+    assert(json.encode(accented) == "[{\"id\":5,\"text\":\"Simülatör\"}]")
+
+    // An empty string is a pair of quotes, not a null.
+    let blank: EscRow[] = [ EscRow { id: 6, text: "" } ]
+    assert(json.encode(blank) == "[{\"id\":6,\"text\":\"\"}]")
+
+    // A JSON document as a field value — the case that first showed the bug,
+    // since every quote inside it needs escaping.
+    let payload: EscRow[] = [ EscRow { id: 7, text: "{\"a\": \"b\"}" } ]
+    assert(json.encode(payload) == "[{\"id\":7,\"text\":\"{\\\"a\\\": \\\"b\\\"}\"}]")
+
+    // Embedding in a json.Value must yield the array, not null. Before the fix
+    // the invalid text failed to re-parse and the whole field became null.
+    let doc: json.Value = { items: payload }
+    assert(json.encode(doc) == "{\"items\":[{\"id\":7,\"text\":\"{\\\"a\\\": \\\"b\\\"}\"}]}")
+
+    // Round trip: decode must undo exactly what encode did.
+    let back: EscRow[] = json.decode("[{\"id\":8,\"text\":\"q\\\"s\\\\b\\nl\\tt\"}]")
+    assert(back.len() == 1)
+    let row: EscRow = back[0]
+    assert(row.text == "q\"s\\b\nl\tt")
+    assert(json.encode(back) == "[{\"id\":8,\"text\":\"q\\\"s\\\\b\\nl\\tt\"}]")
+
+    // A control character below 0x20 with no shorthand becomes \u00XX. It cannot
+    // be written as a Dex literal, so it arrives by decoding one.
+    let ctrl: EscRow[] = json.decode("[{\"id\":9,\"text\":\"x\\u0001y\"}]")
+    assert(ctrl.len() == 1)
+    assert(json.encode(ctrl) == "[{\"id\":9,\"text\":\"x\\u0001y\"}]")
+}

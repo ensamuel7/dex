@@ -263,7 +263,10 @@ func TestHttpRequestStructFields(t *testing.T) {
 		t.Fatal("HttpRequest struct not found in http module")
 	}
 
-	expectedFields := []string{"method", "path", "body", "query", "params"}
+	// Order matters as much as membership: the C runtime fills this struct
+	// field by field, so a field inserted anywhere but the end would silently
+	// shift the ones after it. New fields go last.
+	expectedFields := []string{"method", "path", "body", "query", "params", "headers"}
 	if len(httpReq.Fields) != len(expectedFields) {
 		t.Fatalf("HttpRequest field count = %d, want %d", len(httpReq.Fields), len(expectedFields))
 	}
@@ -444,7 +447,10 @@ func TestModuleDocStrings(t *testing.T) {
 	}
 }
 
-func TestHttpResponseStructUnchanged(t *testing.T) {
+// The first three fields are load-bearing: http.response() emits a positional C
+// initializer over them, so their names and order may not move. Anything added
+// must be appended, where the initializer leaves it zero-valued.
+func TestHttpResponseStructFieldOrder(t *testing.T) {
 	mod := Lookup("http")
 	if mod == nil {
 		t.Fatal("http module not found")
@@ -461,8 +467,7 @@ func TestHttpResponseStructUnchanged(t *testing.T) {
 		t.Fatal("HttpResponse struct not found in http module")
 	}
 
-	// HttpResponse should still have exactly 3 fields
-	expectedFields := []string{"statusCode", "body", "contentType"}
+	expectedFields := []string{"statusCode", "body", "contentType", "headers"}
 	if len(httpResp.Fields) != len(expectedFields) {
 		t.Fatalf("HttpResponse field count = %d, want %d", len(httpResp.Fields), len(expectedFields))
 	}
@@ -470,5 +475,10 @@ func TestHttpResponseStructUnchanged(t *testing.T) {
 		if httpResp.Fields[i].Name != name {
 			t.Errorf("HttpResponse.Fields[%d].Name = %q, want %q", i, httpResp.Fields[i].Name, name)
 		}
+	}
+	// http.response() supplies only the first three; headers must therefore be
+	// safe to leave unset, which means it has to stay last.
+	if httpResp.Fields[len(expectedFields)-1].Name != "headers" {
+		t.Errorf("headers must be the final field so http.response() can omit it")
 	}
 }

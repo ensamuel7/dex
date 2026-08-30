@@ -1,0 +1,36 @@
+// Reading a request header and setting a response header.
+//
+// Needs a live server, so this is not a _test.dx — the suite must run without
+// binding a port.
+
+import "http"
+import "json"
+import "fmt"
+
+fn whoami(req: http.HttpRequest): http.HttpResponse {
+    // Keys are lower-cased on the way in, so there is one spelling to look up
+    // no matter how the client capitalised it.
+    let auth: string = req.headers.get("authorization")
+    let agent: string = req.headers.get("user-agent")
+
+    let body: string = json.encode({ authorization: auth, userAgent: agent, count: req.headers.len() })
+
+    // Two Set-Cookie lines prove a key may repeat — a map could not express it.
+    let headers: string = http.header("", "X-Dex", "hello")
+    headers = http.header(headers, "Set-Cookie", "a=1; Path=/")
+    headers = http.header(headers, "Set-Cookie", "b=2; Path=/")
+    headers = http.header(headers, "Access-Control-Allow-Origin", "*")
+
+    return http.responseWith(200, body, "application/json", headers)
+}
+
+fn plain(req: http.HttpRequest): http.HttpResponse {
+    return http.response(200, "{\"ok\":true}", "application/json")
+}
+
+fn main(): void {
+    http.route("GET", "/whoami", whoami)
+    http.route("GET", "/plain", plain)
+    fmt.println("listening on 8407")
+    http.listen(8407)
+}

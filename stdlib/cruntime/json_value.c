@@ -399,89 +399,16 @@ static void dex_jv_skip_ws(DexJvParser* ps) {
 }
 
 static DexString* dex_jv_parse_string(DexJvParser* ps) {
-    if (*ps->p != '"') { ps->failed = 1; return dex_string_empty(); }
-    ps->p++;
-    size_t cap = 32, n = 0;
-    char* buf = (char*)malloc(cap);
-    if (!buf) { ps->failed = 1; return dex_string_empty(); }
-    while (*ps->p && *ps->p != '"') {
-        // Worst case one input escape expands to four UTF-8 bytes.
-        if (n + 5 > cap) {
-            cap *= 2;
-            char* nb = (char*)realloc(buf, cap);
-            if (!nb) { free(buf); ps->failed = 1; return dex_string_empty(); }
-            buf = nb;
-        }
-        if (*ps->p == '\\') {
-            ps->p++;
-            switch (*ps->p) {
-            case 'n': buf[n++] = '\n'; ps->p++; break;
-            case 't': buf[n++] = '\t'; ps->p++; break;
-            case 'r': buf[n++] = '\r'; ps->p++; break;
-            case 'b': buf[n++] = '\b'; ps->p++; break;
-            case 'f': buf[n++] = '\f'; ps->p++; break;
-            case '/': buf[n++] = '/';  ps->p++; break;
-            case '"': buf[n++] = '"';  ps->p++; break;
-            case '\\': buf[n++] = '\\'; ps->p++; break;
-            case 'u': {
-                unsigned int cp = 0;
-                int d = 0;
-                ps->p++;
-                for (; d < 4 && ps->p[d]; d++) {
-                    char c = ps->p[d];
-                    int hv;
-                    if (c >= '0' && c <= '9') hv = c - '0';
-                    else if (c >= 'a' && c <= 'f') hv = c - 'a' + 10;
-                    else if (c >= 'A' && c <= 'F') hv = c - 'A' + 10;
-                    else break;
-                    cp = (cp << 4) | (unsigned)hv;
-                }
-                if (d < 4) { free(buf); ps->failed = 1; return dex_string_empty(); }
-                ps->p += 4;
-                // A high surrogate is only meaningful paired with its low half;
-                // combine them so astral characters survive the round trip.
-                if (cp >= 0xD800 && cp <= 0xDBFF && ps->p[0] == '\\' && ps->p[1] == 'u') {
-                    unsigned int lo = 0;
-                    int ld = 0;
-                    for (; ld < 4 && ps->p[2 + ld]; ld++) {
-                        char c = ps->p[2 + ld];
-                        int hv;
-                        if (c >= '0' && c <= '9') hv = c - '0';
-                        else if (c >= 'a' && c <= 'f') hv = c - 'a' + 10;
-                        else if (c >= 'A' && c <= 'F') hv = c - 'A' + 10;
-                        else break;
-                        lo = (lo << 4) | (unsigned)hv;
-                    }
-                    if (ld == 4 && lo >= 0xDC00 && lo <= 0xDFFF) {
-                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                        ps->p += 6;
-                    }
-                }
-                if (cp < 0x80) {
-                    buf[n++] = (char)cp;
-                } else if (cp < 0x800) {
-                    buf[n++] = (char)(0xC0 | (cp >> 6));
-                    buf[n++] = (char)(0x80 | (cp & 0x3F));
-                } else if (cp < 0x10000) {
-                    buf[n++] = (char)(0xE0 | (cp >> 12));
-                    buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                    buf[n++] = (char)(0x80 | (cp & 0x3F));
-                } else {
-                    buf[n++] = (char)(0xF0 | (cp >> 18));
-                    buf[n++] = (char)(0x80 | ((cp >> 12) & 0x3F));
-                    buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                    buf[n++] = (char)(0x80 | (cp & 0x3F));
-                }
-                break;
-            }
-            default: free(buf); ps->failed = 1; return dex_string_empty();
-            }
-            continue;
-        }
-        buf[n++] = *ps->p++;
+    // The decoding itself lives in core runtime, shared with the json module's
+    // dex_json_get — one implementation, so the two cannot drift apart.
+    const char* cursor = ps->p;
+    char* buf = NULL;
+    size_t n = 0;
+    if (!dex_json_unescape_string(&cursor, &buf, &n)) {
+        ps->failed = 1;
+        return dex_string_empty();
     }
-    if (*ps->p != '"') { free(buf); ps->failed = 1; return dex_string_empty(); }
-    ps->p++;
+    ps->p = cursor;
     DexString* s = dex_string_new(buf, n);
     free(buf);
     return s;

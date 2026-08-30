@@ -1,0 +1,64 @@
+// Base64, digests, and binary-safe file I/O.
+//
+// The point of every assert here is that bytes survive. DexString is
+// length-prefixed, but the ordinary stdlib boundary passes ->data alone and
+// truncates at the first NUL — which is invisible for text and fatal for a
+// JPEG. These functions are marked RawParams/RawReturn so they see the length.
+
+import "crypto"
+import "file"
+
+fn main(): void {
+    // --- base64, including bytes 0x00 and 0xFF ---
+    // "AAECA/8A" decodes to 00 01 02 03 FF 00 — a NUL at both ends of the run.
+    let binary: string = crypto.base64Decode("AAECA/8A")
+    assert(binary.len() == 6)
+    assert(crypto.base64Encode(binary) == "AAECA/8A")
+
+    // Text, and a multi-byte UTF-8 string.
+    assert(crypto.base64Encode("hello world") == "aGVsbG8gd29ybGQ=")
+    assert(crypto.base64Decode("aGVsbG8gd29ybGQ=") == "hello world")
+    let utf8: string = "Simülatör æøå"
+    assert(crypto.base64Decode(crypto.base64Encode(utf8)) == utf8)
+
+    // Empty in, empty out.
+    assert(crypto.base64Encode("") == "")
+    assert(crypto.base64Decode("") == "")
+
+    // --- SHA-256, against the published vector for the empty string ---
+    let emptyDigest: string = crypto.sha256Hex("")
+    if (!emptyDigest.isEmpty()) {
+        // Empty only when the build has no OpenSSL, which is a legitimate
+        // configuration — the module says so on stderr rather than failing.
+        assert(emptyDigest == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        assert(crypto.sha256Hex("abc") ==
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+
+        // --- HMAC-SHA-256, RFC 4231 test case 2 ---
+        assert(crypto.hmacSha256Hex("Jefe", "what do ya want for nothing?") ==
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    }
+
+    // --- a file containing a NUL survives the round trip ---
+    assert(file.mkdirp("/tmp/dex_crypto_test"))
+    let path: string = "/tmp/dex_crypto_test/blob.bin"
+    assert(file.writeBytes(path, binary))
+    assert(file.size(path) == 6)
+
+    let back: string = file.readBytes(path)
+    assert(back.len() == 6)
+    assert(crypto.base64Encode(back) == "AAECA/8A")
+
+    // Hashing the file and hashing the bytes must agree, or one of the two
+    // paths is losing something.
+    if (!emptyDigest.isEmpty()) {
+        assert(file.sha256Hex(path) == crypto.sha256Hex(back))
+    }
+
+    // Appending is binary-safe too.
+    assert(file.appendBytes(path, binary))
+    assert(file.size(path) == 12)
+
+    assert(file.remove(path))
+    assert(file.size(path) == -1)
+}

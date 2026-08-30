@@ -1548,8 +1548,9 @@ http.listen(8080)
 | Function   | Signature                                                      | Description                        |
 |------------|----------------------------------------------------------------|------------------------------------|
 | `route`    | `route(method: string, path: string, handler): void`           | Register a route handler. Path supports `:param` segments for dynamic routes (e.g. `"/users/:id"`). |
-| `listen`   | `listen(port: int, workers?: int): void`                       | Start the server on a port. Optional `workers` forks multiple processes via `SO_REUSEPORT` (0 = auto-detect CPU cores). |
+| `listen`   | `listen(port: int, workers?: int): void`                       | Start the server on a port. Optional `workers` forks multiple processes sharing it via `SO_REUSEPORT` (0 = auto-detect CPU cores). With a single worker the port is **not** shared, so starting a second instance fails with `Address already in use` rather than silently binding alongside the first. |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
+| `responseWith` | `responseWith(statusCode: int, body: string, contentType: string, headers: string): HttpResponse` | The same, carrying extra response headers |
 
 Handler functions can take **0 parameters** (backward-compatible) or **1 parameter** of type `http.HttpRequest`. They must return a non-void type (typically `HttpResponse` or `string`).
 
@@ -1562,6 +1563,7 @@ struct HttpRequest {
   body: string                // request body (empty string if none)
   query: string               // raw query string after '?' (empty if none)
   params: map[string,string]  // route parameters from :param segments
+  headers: map[string,string] // request headers, keys lower-cased
 }
 ```
 
@@ -1586,6 +1588,46 @@ fn handleGetComment(req: http.HttpRequest): http.HttpResponse {
 ```
 
 Routes without `:param` segments continue to use fast exact matching.
+
+**Request headers:**
+
+`req.headers` is a map of the request's headers. **Keys are lower-cased**, because
+HTTP header names are case-insensitive and a handler should not have to guess how
+the client capitalised them — read `"authorization"`, never `"Authorization"`.
+
+```dex
+fn handler(req: http.HttpRequest): http.HttpResponse {
+  let token: string = req.headers.get("authorization")
+  if (token.isEmpty()) {
+    return http.response(401, "{\"error\":\"no token\"}", "application/json")
+  }
+  return http.response(200, "{}", "application/json")
+}
+```
+
+A header the client did not send reads as the empty string, like any absent map
+key.
+
+**Response headers:**
+
+`http.response` sends only `Content-Type`. To send more, use `responseWith` with
+a headers block built by `http.header()` — the same builder the client functions
+take:
+
+```dex
+fn handler(req: http.HttpRequest): http.HttpResponse {
+  let h: string = http.header("", "Set-Cookie", "session=abc; HttpOnly; Path=/")
+  h = http.header(h, "Set-Cookie", "theme=dark; Path=/")
+  h = http.header(h, "Access-Control-Allow-Origin", "*")
+  return http.responseWith(200, "{}", "application/json", h)
+}
+```
+
+The block is newline-separated `Key: Value` pairs, and **a key may appear more
+than once** — which is what `Set-Cookie` requires and what a map could not have
+expressed. `Content-Type`, `Content-Length` and `Connection` are set by the
+server; anything else is yours. A line without a colon is skipped rather than
+emitted, so a malformed entry cannot corrupt the response framing.
 
 **Examples:**
 
@@ -1619,6 +1661,7 @@ struct HttpResponse {
   statusCode: int
   body: string
   contentType: string
+  headers: string             // extra response headers, newline-separated
 }
 ```
 
@@ -1744,6 +1787,23 @@ let back: Shape = json.decode(text)
 Field names are the JSON keys. A key absent from the input leaves that field at
 its zero value, and an absent array field yields an empty array rather than a
 null one.
+
+String values are escaped on the way out and unescaped on the way back, so a
+field may hold anything — a quote, a backslash, a newline, a tab, a control
+character, or another JSON document — and survive the round trip byte for byte:
+
+```dex
+let row: Row = Row { text: "{\"a\": \"b\"}" }
+let text: string = json.encode(row)
+// {"text":"{\"a\": \"b\"}"}
+let back: Row = json.decode(text)
+// back.text == "{\"a\": \"b\"}"
+```
+
+Escaping follows RFC 8259: `"` and `\` are escaped, the five shorthand controls
+are spelled out, anything else below `0x20` becomes `\u00XX`, and valid UTF-8
+above that passes through unchanged. `\uXXXX` on input is decoded, surrogate
+pairs included.
 
 #### Checked decoding
 
@@ -1926,6 +1986,63 @@ db.close(conn)
 | `col`    | `col(rows: int, index: int): int\|string\|double\|bool` | Read a column value (type from context) |
 | `free`   | `free(rows: int): void`                       | Free a result set                        |
 | `close`  | `close(conn: int): void`                      | Close a connection                       |
+
+#### Bound parameters
+
+`query` and `exec` take a finished string, so any value going into one has to be
+escaped by hand — an argument you have to keep winning, on every call site,
+forever. `queryParams` and `execParams` send the statement and its values to the
+server separately instead. The server parses the SQL once and treats every
+parameter as data, so a quote, a semicolon or a comment marker inside a value
+cannot become syntax.
+
+```dex
+let args: string[] = ["O'Brien; DROP TABLE people; --", "44"]
+db.execParams(conn, "INSERT INTO people (name, age) VALUES ($1, $2)", args)
+
+let older: string[] = ["40"]
+let rows: int = db.queryParams(conn, "SELECT name FROM people WHERE age > $1", older)
+while (db.next(rows)) {
+    let name: string = db.col(rows, 0)
+}
+db.free(rows)
+```
+
+| Function      | Signature                                                        | Description                              |
+|---------------|------------------------------------------------------------------|------------------------------------------|
+| `queryParams` | `queryParams(conn: int, sql: string, values: string[]): int`     | Query with bound parameters; returns a result handle |
+| `execParams`  | `execParams(conn: int, sql: string, values: string[]): int`      | Statement with bound parameters; returns affected rows |
+
+Placeholders are Postgres's own `$1`, `$2`, … numbered from one, and the array
+is positional: `values[0]` is `$1`.
+
+`queryParams` returns an ordinary result handle, so `next`, `col` and `free`
+work exactly as they do after `query` — including for `RETURNING`.
+
+Parameters are sent as text with no declared types, and the server infers each
+one from where it appears: `WHERE id = $1` against a `bigint` column reads `$1`
+as a bigint. That is why `string[]` is enough despite the language having no
+heterogeneous array — stringify with `str.fromInt`, `str.fromLong` and friends,
+and let the server do the rest.
+
+SQL `NULL` is deliberately not expressible as a parameter value. Whether a value
+is null is a structural fact the caller already knows, and it changes the
+statement rather than just its data, so write the keyword into the SQL:
+
+```dex
+// not a parameter — a different statement
+let sql: string = "UPDATE people SET manager_id = NULL WHERE id = $1"
+```
+
+Both functions are **PostgreSQL only**. SQLite and MySQL spell placeholders
+differently, and silently accepting a statement written for one dialect on
+another is how a query that looks bound stops being bound; against those drivers
+these return `-1` and say so on stderr.
+
+> The older `prepare` / `bindInt` / `bindStr` / `step` family predates this and
+> is not equivalent: there is no way to read a column from a stepped statement,
+> because `col` indexes result handles and `step` produces none. Use
+> `queryParams` and `execParams`.
 
 `col` returns the type declared in the assignment — the compiler dispatches to the correct column reader:
 
@@ -2281,9 +2398,88 @@ let id: string = crypto.uuid()
 // e.g. "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
 ```
 
-| Function | Signature         | Description                          |
-|----------|-------------------|--------------------------------------|
-| `uuid`   | `uuid(): string`  | Generate a random UUID v4 string     |
+| Function | Signature | Description |
+|---|---|---|
+| `uuid` | `uuid(): string` | A random UUID v4 |
+| `base64Encode` | `base64Encode(data: string): string` | Base64-encode. Binary-safe |
+| `base64Decode` | `base64Decode(encoded: string): string` | Decode base64. Binary-safe |
+| `sha256Hex` | `sha256Hex(data: string): string` | SHA-256, lowercase hex |
+| `hmacSha256Hex` | `hmacSha256Hex(key: string, message: string): string` | HMAC-SHA-256, lowercase hex |
+
+#### Binary safety
+
+A `string` is length-prefixed rather than NUL-terminated, so it can hold
+arbitrary bytes — a decoded JPEG, a raw digest. These four functions are
+declared to receive and return the string whole rather than as a C pointer, so
+the bytes after a NUL survive:
+
+```dex
+let bytes: string = crypto.base64Decode("AAECA/8A")   // 00 01 02 03 FF 00
+bytes.len()                                            // 6, not 0
+crypto.base64Encode(bytes)                             // back to "AAECA/8A"
+```
+
+Most stdlib functions are not like this: they take the text up to the first NUL,
+which is right for text and wrong for bytes. Where it matters, the table says
+"binary-safe".
+
+#### OpenSSL
+
+`sha256Hex` and `hmacSha256Hex` need OpenSSL, found with `pkg-config` the same
+way `wss://` finds it. Without it the module still builds and every call to
+those two returns an empty string after saying so on stderr — so a program that
+only mentions a digest on a path it never takes still runs.
+
+```dex
+crypto.sha256Hex("")
+// e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+### file
+
+Read and write files. `read`/`write`/`append` work in text and stop at the first
+NUL byte; the `*Bytes` pair is binary-safe and is what an upload wants.
+
+```dex
+import "file"
+
+let text: string = file.read("notes.txt")
+file.write("notes.txt", "hello")
+
+file.mkdirp("uploads/2026/08")
+file.writeBytes("uploads/2026/08/photo.jpg", crypto.base64Decode(encoded))
+file.size("uploads/2026/08/photo.jpg")
+```
+
+| Function | Signature | Description |
+|---|---|---|
+| `read` | `read(path: string): string` | Whole file as text. Stops at a NUL |
+| `write` | `write(path: string, content: string): bool` | Overwrite with text |
+| `append` | `append(path: string, content: string): bool` | Append text |
+| `readBytes` | `readBytes(path: string): string` | Whole file. Binary-safe |
+| `writeBytes` | `writeBytes(path: string, content: string): bool` | Overwrite. Binary-safe |
+| `appendBytes` | `appendBytes(path: string, content: string): bool` | Append. Binary-safe |
+| `size` | `size(path: string): int` | Bytes, or `-1` if unreadable |
+| `exists` | `exists(path: string): bool` | Is there a file there |
+| `remove` | `remove(path: string): bool` | Delete it |
+| `rename` | `rename(oldPath: string, newPath: string): bool` | Rename |
+| `move` | `move(src: string, dst: string): bool` | Move |
+| `mkdirp` | `mkdirp(path: string): bool` | Create a directory and its parents |
+| `sha256Hex` | `sha256Hex(path: string): string` | SHA-256 of the contents, streamed. Needs OpenSSL |
+| `putUrl` | `putUrl(path: string, url: string, headers: string): int` | PUT the file's bytes to a URL; returns the HTTP status |
+
+`putUrl` sends the bytes straight from disk to the socket without their ever
+becoming a `string`, which is what makes uploading an arbitrary binary — to S3,
+say — possible. `headers` is the newline-separated `Key: Value` block the
+`http` client functions take, and `sha256Hex` gives the payload hash that
+AWS SigV4 asks for:
+
+```dex
+let digest: string = file.sha256Hex(path)
+let headers: string = http.header("", "x-amz-content-sha256", digest)
+headers = http.header(headers, "Authorization", signature)
+let status: int = file.putUrl(path, url, headers)
+```
 
 ### io
 

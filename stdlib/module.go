@@ -8,6 +8,35 @@ type FuncDef struct {
 	ReturnType ast.Type
 	CName      string // C function to call ("" = special handling in codegen)
 	Doc        string // one-line description shown in editor
+
+	// RawParams lists the parameter indices passed as DexString* rather than
+	// const char*, and RawReturn says the C function already built the DexString
+	// it returns.
+	//
+	// They exist because DexString is length-prefixed but the ordinary stdlib
+	// boundary hands over `->data` alone, so every byte after the first NUL is
+	// lost. That is invisible for text and fatal for a JPEG. A function handling
+	// arbitrary bytes — reading a file, base64, a digest — marks the byte-valued
+	// parameters and reads `->len` instead of calling strlen.
+	//
+	// It is per-parameter on purpose: a path is text and stays const char*, while
+	// the content beside it is bytes. Marking a whole function would hand the
+	// callee a DexString* where it expects a path.
+	//
+	// The generated C is a single translation unit, so a stdlib runtime marked
+	// this way can use dex_string_new and the rest of the DexString API directly.
+	RawParams []int
+	RawReturn bool
+}
+
+// IsRawParam reports whether argument idx is handed over as a DexString*.
+func (f FuncDef) IsRawParam(idx int) bool {
+	for _, i := range f.RawParams {
+		if i == idx {
+			return true
+		}
+	}
+	return false
 }
 
 type Module struct {

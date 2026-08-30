@@ -3,46 +3,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Compute the length of a JSON-escaped version of str (without quotes).
+// Escaping lives in core runtime (strings.c) so this module and the struct-array
+// encoder in arrays.c share one implementation. These two remain as the names the
+// rest of this file already uses.
 static size_t dex_json_escaped_len(const char* str) {
-    size_t len = 0;
-    for (const char* p = str; *p; p++) {
-        switch (*p) {
-        case '"': case '\\': case '/': len += 2; break;
-        case '\b': case '\f': case '\n': case '\r': case '\t': len += 2; break;
-        default:
-            if ((unsigned char)*p < 0x20) {
-                len += 6; // \uXXXX
-            } else {
-                len += 1;
-            }
-        }
-    }
-    return len;
+    return dex_json_escape_len(str);
 }
 
-// Write JSON-escaped version of str into dst (without quotes). Returns chars written.
 static size_t dex_json_escape(char* dst, const char* str) {
-    size_t pos = 0;
-    for (const char* p = str; *p; p++) {
-        switch (*p) {
-        case '"':  dst[pos++] = '\\'; dst[pos++] = '"'; break;
-        case '\\': dst[pos++] = '\\'; dst[pos++] = '\\'; break;
-        case '/':  dst[pos++] = '\\'; dst[pos++] = '/'; break;
-        case '\b': dst[pos++] = '\\'; dst[pos++] = 'b'; break;
-        case '\f': dst[pos++] = '\\'; dst[pos++] = 'f'; break;
-        case '\n': dst[pos++] = '\\'; dst[pos++] = 'n'; break;
-        case '\r': dst[pos++] = '\\'; dst[pos++] = 'r'; break;
-        case '\t': dst[pos++] = '\\'; dst[pos++] = 't'; break;
-        default:
-            if ((unsigned char)*p < 0x20) {
-                pos += snprintf(dst + pos, 7, "\\u%04x", (unsigned char)*p);
-            } else {
-                dst[pos++] = *p;
-            }
-        }
-    }
-    return pos;
+    return dex_json_escape_write(dst, str);
 }
 
 const char* dex_json_new(void) {
@@ -212,15 +181,14 @@ const char* dex_json_get(const char* json, const char* key) {
     const char* val = dex_json_find_value(json, key);
     if (!val) return strdup("");
     if (*val == '"') {
-        val++;
-        const char* end = strchr(val, '"');
-        if (!end) return strdup("");
-        size_t len = (size_t)(end - val);
-        char* result = (char*)malloc(len + 1);
-        if (!result) return strdup("");
-        memcpy(result, val, len);
-        result[len] = '\0';
-        return result;
+        // Unescaped here, via the shared decoder. This used to find the closing
+        // quote with strchr and copy the bytes verbatim, which cut the value in
+        // half at the first \" and left every other escape as literal text.
+        const char* cursor = val;
+        char* decoded = NULL;
+        size_t declen = 0;
+        if (!dex_json_unescape_string(&cursor, &decoded, &declen)) return strdup("");
+        return decoded;
     }
     // Non-string value — return it raw. Objects and arrays are scanned with
     // brace matching so a nested structure comes back whole rather than being

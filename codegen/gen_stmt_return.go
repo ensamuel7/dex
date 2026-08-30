@@ -15,6 +15,14 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 		g.emitHoistReleases(out, prefix)
 		g.emitDeferredCalls(out, prefix)
 		g.emitCleanupAll(out, prefix, "")
+		// main() is void in Dex and int in C, so an early `return` inside it
+		// has to carry an exit status even though the source gave none. A bare
+		// `return;` there is a C error, which turned an ordinary early exit —
+		// "could not connect, say so and stop" — into a build failure.
+		if g.currentFn != nil && g.currentFn.Name == "main" {
+			out.WriteString(fmt.Sprintf("%sreturn 0;\n", prefix))
+			return
+		}
 		out.WriteString(fmt.Sprintf("%sreturn;\n", prefix))
 		return
 	}

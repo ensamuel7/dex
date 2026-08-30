@@ -216,6 +216,14 @@ static int dex_notify_pipe_init(DexNotifyPipe* np) {
     return 0;
 }
 
+/* Set by the WebSocket listener when one is running.
+ *
+ * The HTTP and WebSocket servers each install a SIGTERM handler, and whichever
+ * starts last owns the signal — so the one that gets it has to be able to shut
+ * the other down. A hook here rather than a direct call because either module
+ * may be compiled in without the other. */
+static void (*dex_shutdown_drain_hook)(void) = NULL;
+
 static void dex_notify_pipe_signal(DexNotifyPipe* np) {
     char c = 1;
     (void)write(np->write_fd, &c, 1);

@@ -717,78 +717,100 @@ typedef struct DexStructFieldDesc {
 #endif
 
 // Encodes one struct instance as a JSON object from field descriptors, recursing
-// into nested struct fields (kind 5). Mirrors dex_json_encode_struct in the json
-// module runtime, which is emitted after this file and so cannot be called here.
+// into nested struct fields (kind 5).
+//
+// Two rules here, both learned the hard way:
+//
+// String values and keys are escaped, via the shared escaper in strings.c. This
+// used to write them raw, which produced invalid JSON for any string containing
+// a quote — and silently, since nothing validates its own output.
+//
+// And every field is rendered before the buffer is sized, never after. snprintf
+// reports the length it *would* have written, so the old "write, then add the
+// return value to pos" walked pos past the end of the allocation on any field
+// longer than the headroom, and the next write was out of bounds.
 static char* dex_arr_encode_struct(void* elem, int num_fields, DexStructFieldDesc* fields) {
     size_t cap = 256;
     char* buf = (char*)malloc(cap);
     if (!buf) return NULL;
-    int pos = 0;
+    size_t pos = 0;
     buf[pos++] = '{';
     int wrote = 0;
+
     for (int f = 0; f < num_fields; f++) {
         if (fields[f].kind == 7) continue; // no codec — omit rather than emit garbage
-        if (wrote) { buf[pos++] = ','; }
-        wrote = 1;
-        if ((size_t)pos + 256 > cap) {
-            cap *= 2;
-            char* t = (char*)realloc(buf, cap);
-            if (!t) { buf[pos] = '\0'; return buf; }
-            buf = t;
-        }
-        int n = 0;
+
+        char numbuf[64];
+        const char* vraw = NULL;   // rendered value, copied verbatim
+        char* vowned = NULL;       // same, but ours to free
+        int is_string = 0;         // needs quoting and escaping
+        const char* sdata = "";
+
         switch (fields[f].kind) {
         case 0: // int
-            n = snprintf(buf + pos, cap - pos, "\"%s\":%d", fields[f].name, *(int*)((char*)elem + fields[f].offset));
+            snprintf(numbuf, sizeof(numbuf), "%d", *(int*)((char*)elem + fields[f].offset));
+            vraw = numbuf;
             break;
         case 1: // bool
-            n = snprintf(buf + pos, cap - pos, "\"%s\":%s", fields[f].name, (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false");
+            vraw = (*(_Bool*)((char*)elem + fields[f].offset)) ? "true" : "false";
             break;
         case 2: // string
-            { DexString* s = *(DexString**)((char*)elem + fields[f].offset);
-              n = snprintf(buf + pos, cap - pos, "\"%s\":\"%s\"", fields[f].name, s ? s->data : ""); }
+            { DexString* sv = *(DexString**)((char*)elem + fields[f].offset);
+              is_string = 1;
+              sdata = sv ? sv->data : ""; }
             break;
         case 3: // long
-            n = snprintf(buf + pos, cap - pos, "\"%s\":%ld", fields[f].name, *(long*)((char*)elem + fields[f].offset));
+            snprintf(numbuf, sizeof(numbuf), "%ld", *(long*)((char*)elem + fields[f].offset));
+            vraw = numbuf;
             break;
         case 4: // double
-            n = snprintf(buf + pos, cap - pos, "\"%s\":%g", fields[f].name, *(double*)((char*)elem + fields[f].offset));
-            break;
-        case 6: // array — codegen-supplied codec
-            { const char* asub = fields[f].enc_arr ? fields[f].enc_arr((char*)elem + fields[f].offset) : NULL;
-              const char* asubs = asub ? asub : "[]";
-              size_t need = strlen(fields[f].name) + strlen(asubs) + 8;
-              while ((size_t)pos + need > cap) {
-                  cap *= 2;
-                  char* t = (char*)realloc(buf, cap);
-                  if (!t) { buf[pos] = '\0'; free((void*)asub); return buf; }
-                  buf = t;
-              }
-              n = snprintf(buf + pos, cap - pos, "\"%s\":%s", fields[f].name, asubs);
-              free((void*)asub); }
+            snprintf(numbuf, sizeof(numbuf), "%g", *(double*)((char*)elem + fields[f].offset));
+            vraw = numbuf;
             break;
         case 5: // nested struct
-            { char* sub = dex_arr_encode_struct((char*)elem + fields[f].offset, fields[f].num_sub, fields[f].sub);
-              const char* subs = sub ? sub : "{}";
-              size_t need = strlen(fields[f].name) + strlen(subs) + 8;
-              while ((size_t)pos + need > cap) {
-                  cap *= 2;
-                  char* t = (char*)realloc(buf, cap);
-                  if (!t) { buf[pos] = '\0'; free(sub); return buf; }
-                  buf = t;
-              }
-              n = snprintf(buf + pos, cap - pos, "\"%s\":%s", fields[f].name, subs);
-              free(sub); }
+            vowned = dex_arr_encode_struct((char*)elem + fields[f].offset,
+                                           fields[f].num_sub, fields[f].sub);
+            vraw = vowned ? vowned : "{}";
             break;
+        case 6: // array — codegen-supplied codec
+            vowned = (char*)(fields[f].enc_arr
+                             ? fields[f].enc_arr((char*)elem + fields[f].offset) : NULL);
+            vraw = vowned ? vowned : "[]";
+            break;
+        default:
+            continue;
         }
-        pos += n;
-        if ((size_t)pos + 256 > cap) {
-            cap *= 2;
-            char* t = (char*)realloc(buf, cap);
-            if (!t) { buf[pos] = '\0'; return buf; }
+
+        size_t klen = dex_json_escape_len(fields[f].name);
+        size_t vlen = is_string ? dex_json_escape_len(sdata) : strlen(vraw);
+        // ,"key":"value" plus the closing brace and NUL, with room to spare.
+        size_t need = klen + vlen + 16;
+        while (pos + need > cap) {
+            size_t ncap = cap * 2;
+            while (pos + need > ncap) ncap *= 2;
+            char* t = (char*)realloc(buf, ncap);
+            if (!t) { free(vowned); buf[pos] = '\0'; return buf; }
             buf = t;
+            cap = ncap;
         }
+
+        if (wrote) buf[pos++] = ',';
+        wrote = 1;
+        buf[pos++] = '"';
+        pos += dex_json_escape_write(buf + pos, fields[f].name);
+        buf[pos++] = '"';
+        buf[pos++] = ':';
+        if (is_string) {
+            buf[pos++] = '"';
+            pos += dex_json_escape_write(buf + pos, sdata);
+            buf[pos++] = '"';
+        } else {
+            memcpy(buf + pos, vraw, vlen);
+            pos += vlen;
+        }
+        free(vowned);
     }
+
     buf[pos++] = '}';
     buf[pos] = '\0';
     return buf;

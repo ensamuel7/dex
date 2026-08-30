@@ -118,6 +118,13 @@ func init() {
 				CName:      "",
 				Doc:        "Create an HttpResponse with the given status code, body, and content type.",
 			},
+			"responseWith": {
+				Params:     nil,
+				ParamNames: []string{"statusCode", "body", "contentType", "headers"},
+				ReturnType: ast.TypeVoid, // actual return type resolved by checker
+				CName:      "",
+				Doc:        "Create an HttpResponse carrying extra headers, newline-separated \"Key: Value\" pairs as built by http.header(). Use for Set-Cookie (which may repeat) and the Access-Control-* family.",
+			},
 		},
 		Types: []ast.StructDef{
 			{
@@ -127,6 +134,7 @@ func init() {
 					{Name: "statusCode", Type: ast.TypeInt, Doc: "HTTP status code (e.g. 200, 404, 500)."},
 					{Name: "body", Type: ast.TypeString, Doc: "Response body content as a string."},
 					{Name: "contentType", Type: ast.TypeString, Doc: "Content-Type header from the response (e.g. \"application/json\"). Optional in struct literals — defaults to \"application/json\" on the server."},
+					{Name: "headers", Type: ast.TypeString, Doc: "Extra response headers, newline-separated \"Key: Value\" pairs as built by http.header(). Empty for none. A key may repeat, which is what Set-Cookie needs."},
 				},
 			},
 			{
@@ -138,6 +146,7 @@ func init() {
 					{Name: "body", Type: ast.TypeString, Doc: "Request body (empty string if none)."},
 					{Name: "query", Type: ast.TypeString, Doc: "Raw query string after '?' (empty if none)."},
 					{Name: "params", Type: ast.MapTypeOf(ast.TypeString, ast.TypeString), Doc: "Route parameters extracted from :param segments (e.g. \"/users/:id\" → params.get(\"id\"))."},
+					{Name: "headers", Type: ast.MapTypeOf(ast.TypeString, ast.TypeString), Doc: "Request headers. Keys are lower-cased, because HTTP header names are case-insensitive — read \"authorization\", not \"Authorization\"."},
 				},
 			},
 		},

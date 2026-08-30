@@ -30,12 +30,20 @@ typedef struct {
     DexClosure* handler;
 } dex_route_entry;
 
-#define DEX_MAX_ROUTES 64
+#define DEX_MAX_ROUTES 256
 static dex_route_entry dex_routes[DEX_MAX_ROUTES];
 static int dex_route_count = 0;
 
 void dex_route(const char* method, const char* path, DexClosure* handler) {
-    if (dex_route_count >= DEX_MAX_ROUTES) return;
+    /* Dropping a route silently is worse than the limit itself: the route
+     * simply answers 404 with nothing anywhere to say why. */
+    if (dex_route_count >= DEX_MAX_ROUTES) {
+        fprintf(stderr,
+            "[http] route table full (%d): dropped %s %s. "
+            "Raise DEX_MAX_ROUTES in stdlib/cruntime/http.c.\n",
+            DEX_MAX_ROUTES, method, path);
+        return;
+    }
     dex_route_entry* r = &dex_routes[dex_route_count];
     r->method = method;
     r->pattern = path;
@@ -142,6 +150,7 @@ typedef struct DexHttpConn {
     char          query[2048];
     int           content_length;
     int           headers_end;     /* offset of body start in read_buf */
+    int           header_start;    /* offset of the first header line */
     int           keep_alive;
 
     /* Write buffer (response) */
@@ -177,6 +186,7 @@ static DexHttpConn* dex_http_conn_new(int fd) {
     conn->read_len = 0;
     conn->content_length = -1;
     conn->headers_end = -1;
+    conn->header_start = -1;
     conn->keep_alive = 1;
     if (fd >= 0 && fd < DEX_HTTP_MAX_FD) {
         dex_http_conn_table[fd] = conn;
@@ -201,6 +211,7 @@ static void dex_http_conn_reset(DexHttpConn* conn) {
     conn->content_length = -1;
     conn->headers_end = -1;
     conn->keep_alive = 1;
+    conn->header_start = -1;
     conn->method[0] = '\0';
     conn->path[0] = '\0';
     conn->query[0] = '\0';
@@ -240,6 +251,12 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
         *qmark = '\0';
     }
 
+    /* Where the header lines start: just past the request line. */
+    {
+        const char* eol = strstr(conn->read_buf, "\r\n");
+        conn->header_start = eol ? (int)(eol - conn->read_buf) + 2 : -1;
+    }
+
     /* Check keep-alive */
     conn->keep_alive = (strstr(conn->read_buf, "HTTP/1.1") != NULL);
     if (strstr(conn->read_buf, "Connection: close")) conn->keep_alive = 0;
@@ -257,22 +274,102 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
     return 1;
 }
 
+/* Fill a map with this request's headers, keys lower-cased.
+ *
+ * HTTP header names are case-insensitive, and a caller should not have to guess
+ * whether the client sent "Authorization" or "authorization". Lower-casing on
+ * the way in means there is one spelling to look up.
+ *
+ * Values are trimmed of leading spaces and of the trailing CR. A header line
+ * with no colon is skipped rather than guessed at. */
+static void dex_http_fill_headers(DexHttpConn* conn, DexMap_str_str* headers) {
+    if (conn->header_start < 0 || conn->headers_end <= conn->header_start) return;
+
+    const char* p = conn->read_buf + conn->header_start;
+    const char* limit = conn->read_buf + conn->headers_end;
+
+    while (p < limit) {
+        const char* eol = p;
+        while (eol < limit && *eol != '\n') eol++;
+        int line_len = (int)(eol - p);
+        if (line_len > 0 && p[line_len - 1] == '\r') line_len--;
+        if (line_len <= 0) break;   /* blank line ends the header block */
+
+        const char* colon = (const char*)memchr(p, ':', (size_t)line_len);
+        if (colon) {
+            int name_len = (int)(colon - p);
+            const char* vp = colon + 1;
+            int value_len = line_len - name_len - 1;
+            while (value_len > 0 && (*vp == ' ' || *vp == '\t')) { vp++; value_len--; }
+
+            if (name_len > 0 && name_len < 256) {
+                char name[256];
+                for (int i = 0; i < name_len; i++) {
+                    char c = p[i];
+                    name[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+                }
+                name[name_len] = '\0';
+
+                DexString* key = dex_string_new(name, (size_t)name_len);
+                DexString* val = dex_string_new(vp, (size_t)(value_len > 0 ? value_len : 0));
+                dex_map_str_str_set(headers, key, val);
+                dex_release(key);
+                dex_release(val);
+            }
+        }
+        p = (eol < limit) ? eol + 1 : limit;
+    }
+}
+
 /* Build the write buffer for a response */
-static void dex_http_build_response_len(DexHttpConn* conn, const char* status,
-                                     const char* body, int body_len, const char* content_type) {
-    int needed = 512 + body_len;
+/* `extra` is a newline-separated block of "Key: Value" pairs, as built by
+ * http.header(). Each line is re-emitted CRLF-terminated, so a key may appear
+ * more than once — which is exactly what Set-Cookie needs and what a map could
+ * not have expressed. NULL or empty means none. */
+static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
+                                     const char* body, int body_len, const char* content_type,
+                                     const char* extra) {
+    int extra_len = (extra && *extra) ? (int)strlen(extra) : 0;
+    int needed = 512 + body_len + extra_len * 2 + 8;
     conn->write_buf = (char*)malloc(needed);
     if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
+
     int hlen = snprintf(conn->write_buf, needed,
         "HTTP/1.1 %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %d\r\n"
-        "Connection: %s\r\n"
-        "\r\n",
+        "Connection: %s\r\n",
         status, content_type, body_len, conn->keep_alive ? "keep-alive" : "close");
+
+    if (extra_len > 0) {
+        const char* p = extra;
+        while (*p) {
+            const char* eol = strchr(p, '\n');
+            int len = eol ? (int)(eol - p) : (int)strlen(p);
+            if (len > 0 && p[len - 1] == '\r') len--;
+            /* A blank or colon-less line is not a header; skip it rather than
+             * emit something that would corrupt the response framing. */
+            if (len > 0 && memchr(p, ':', (size_t)len) && hlen + len + 4 < needed) {
+                memcpy(conn->write_buf + hlen, p, (size_t)len);
+                hlen += len;
+                conn->write_buf[hlen++] = '\r';
+                conn->write_buf[hlen++] = '\n';
+            }
+            if (!eol) break;
+            p = eol + 1;
+        }
+    }
+
+    conn->write_buf[hlen++] = '\r';
+    conn->write_buf[hlen++] = '\n';
     memcpy(conn->write_buf + hlen, body, body_len);
     conn->write_len = hlen + body_len;
     conn->write_pos = 0;
+}
+
+static inline void dex_http_build_response_len(DexHttpConn* conn, const char* status,
+                                     const char* body, int body_len, const char* content_type) {
+    dex_http_build_response_full(conn, status, body, body_len, content_type, NULL);
 }
 
 static inline void dex_http_build_response(DexHttpConn* conn, const char* status,
@@ -303,6 +400,8 @@ static void dex_http_worker_func(void* arg) {
         : dex_string_new("", 0);
     req.query = dex_string_new(conn->query, strlen(conn->query));
     req.params = dex_map_str_str_new();
+    req.headers = dex_map_str_str_new();
+    dex_http_fill_headers(conn, req.headers);
 
     /* Split incoming path into segments for matching */
     char path_copy[2048];
@@ -343,8 +442,10 @@ static void dex_http_worker_func(void* arg) {
                 if (resp.contentType && resp.contentType->data[0] != '\0') {
                     ct = resp.contentType->data;
                 }
-                dex_http_build_response_len(conn, status, resp.body->data, (int)resp.body->len, ct);
+                const char* extra = resp.headers ? resp.headers->data : NULL;
+                dex_http_build_response_full(conn, status, resp.body->data, (int)resp.body->len, ct, extra);
                 if (resp.contentType) dex_release(resp.contentType);
+                if (resp.headers) dex_release(resp.headers);
                 dex_release(resp.body);
                 matched = 1;
                 break;
@@ -382,8 +483,10 @@ static void dex_http_worker_func(void* arg) {
             if (resp.contentType && resp.contentType->data[0] != '\0') {
                 ct = resp.contentType->data;
             }
-            dex_http_build_response_len(conn, status, resp.body->data, (int)resp.body->len, ct);
+            const char* extra = resp.headers ? resp.headers->data : NULL;
+            dex_http_build_response_full(conn, status, resp.body->data, (int)resp.body->len, ct, extra);
             if (resp.contentType) dex_release(resp.contentType);
+            if (resp.headers) dex_release(resp.headers);
             dex_release(resp.body);
             matched = 1;
             break;
@@ -396,6 +499,7 @@ static void dex_http_worker_func(void* arg) {
     dex_release(req.body);
     dex_release(req.query);
     dex_release(req.params);
+    dex_release(req.headers);
 
     if (!matched) {
         dex_http_build_response(conn, "404 Not Found",
@@ -414,9 +518,22 @@ static void dex_http_worker_func(void* arg) {
 
 static volatile int dex_server_fd = -1;
 
+/* Set only by the forked multi-worker model — see the note in dex_listen(). */
+static int dex_http_share_port = 0;
+
 static void dex_shutdown_handler(int sig) {
     (void)sig;
     if (dex_server_fd >= 0) close(dex_server_fd);
+    /* This handler may have displaced the WebSocket listener's — they install
+     * one each and the last to start wins. Exiting here would drop every
+     * charger without a close frame and without its disconnect handler running,
+     * so the drain runs first and ends the process when it is done. An HTTP
+     * request in flight is abandoned either way; they are short, and a charger's
+     * connection is not. */
+    if (dex_shutdown_drain_hook) {
+        dex_shutdown_drain_hook();
+        return;
+    }
     _exit(0);
 }
 
@@ -432,7 +549,15 @@ void dex_listen(int port) {
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 #ifdef SO_REUSEPORT
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    /* Only the forked worker model needs several processes on one port. Setting
+     * this unconditionally means a second single-worker instance binds silently
+     * alongside the first — including alongside one that is wedged or exiting —
+     * and the kernel then load-balances between them, so a share of requests
+     * vanish into a process that will never answer. Without it, the second
+     * instance fails loudly with EADDRINUSE, which is the truth. */
+    if (dex_http_share_port) {
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    }
 #endif
 
     struct sockaddr_in addr;
@@ -622,6 +747,9 @@ void dex_listen_multi(int port, int num_workers) {
     if (num_workers > DEX_MAX_WORKERS) num_workers = DEX_MAX_WORKERS;
 
     signal(SIGPIPE, SIG_IGN);
+
+    /* Every worker binds the same port, which is what SO_REUSEPORT is for. */
+    dex_http_share_port = 1;
 
     /* Fork worker processes */
     dex_worker_count = num_workers - 1;

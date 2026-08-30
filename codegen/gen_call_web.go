@@ -28,15 +28,22 @@ func (g *Generator) genWebCall(out *strings.Builder, e *ast.CallExpr) bool {
 		return true
 	}
 
-	// http.response(statusCode, body, contentType) -> HttpResponse struct literal
-	// Retain borrowed string refs (body, contentType) for ownership transfer to worker thread.
-	if e.Module == "http" && e.Name == "response" {
+	// http.response(statusCode, body, contentType) and
+	// http.responseWith(..., headers) -> HttpResponse struct literal.
+	// Retain borrowed string refs for ownership transfer to the worker thread.
+	// response() leaves the trailing headers field zero-initialised, which the
+	// runtime reads as "no extra headers".
+	if e.Module == "http" && (e.Name == "response" || e.Name == "responseWith") {
 		out.WriteString("(Dex_HttpResponse){")
 		g.genExpr(out, e.Args[0])
 		out.WriteString(", ")
 		g.genOwnedStringArg(out, e.Args[1])
 		out.WriteString(", ")
 		g.genOwnedStringArg(out, e.Args[2])
+		if e.Name == "responseWith" {
+			out.WriteString(", ")
+			g.genOwnedStringArg(out, e.Args[3])
+		}
 		out.WriteString("}")
 		return true
 	}

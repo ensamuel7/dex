@@ -35,7 +35,12 @@ static unsigned int dex_hash_int(int key) {
 // KEY_COPY(k): expression to copy/retain a key for storage
 // VAL_COPY(v): expression to copy/retain a value for storage
 
-#define DEX_MAP_DEFINE(KEY_TYPE, VAL_TYPE, SUFFIX, HASH_KEY, KEY_EQ, KEY_RETAIN, KEY_RELEASE, VAL_RETAIN, VAL_RELEASE, KEY_COPY, VAL_COPY) \
+/* What a lookup answers when the key is absent. Scalars are zero; a string is
+ * an empty string, never NULL, so `.isEmpty()` on the result is always safe. */
+#define DEX_MISSING_ZERO(T) ((T)0)
+#define DEX_MISSING_STR(T) dex_string_new("", 0)
+
+#define DEX_MAP_DEFINE(KEY_TYPE, VAL_TYPE, SUFFIX, HASH_KEY, KEY_EQ, KEY_RETAIN, KEY_RELEASE, VAL_RETAIN, VAL_RELEASE, KEY_COPY, VAL_COPY, VAL_MISSING) \
 \
 typedef struct { \
     KEY_TYPE key; \
@@ -124,9 +129,11 @@ static VAL_TYPE dex_map_##SUFFIX##_get(DexMap_##SUFFIX* m, KEY_TYPE key) { \
         } \
         h = (h + 1) & (unsigned int)mask; \
     } \
-    VAL_TYPE zero; \
-    memset(&zero, 0, sizeof(zero)); \
-    return zero; \
+    /* A key that is not there. Zeroing works for a number but not for a \
+     * pointer: a string map would hand back NULL, and every caller in the \
+     * language spells the check `m.get(k).isEmpty()`, which dereferences it. \
+     * Each instantiation says what its own absence looks like instead. */ \
+    return VAL_MISSING; \
 } \
 \
 static _Bool dex_map_##SUFFIX##_has(DexMap_##SUFFIX* m, KEY_TYPE key) { \
@@ -224,20 +231,20 @@ static VAL_ARRAY_TYPE* dex_map_##SUFFIX##_values(DexMap_##SUFFIX* m) { \
 }
 
 // Instantiate string-keyed maps
-DEX_MAP_DEFINE(DexString*, int, str_int, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL)
-DEX_MAP_DEFINE(DexString*, _Bool, str_bool, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL)
-DEX_MAP_DEFINE(DexString*, DexString*, str_str, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_COPY_STR, DEX_COPY_STR)
-DEX_MAP_DEFINE(DexString*, long, str_long, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL)
-DEX_MAP_DEFINE(DexString*, double, str_double, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL)
-DEX_MAP_DEFINE(DexString*, unsigned char, str_char, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL)
+DEX_MAP_DEFINE(DexString*, int, str_int, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL, DEX_MISSING_ZERO(int))
+DEX_MAP_DEFINE(DexString*, _Bool, str_bool, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL, DEX_MISSING_ZERO(_Bool))
+DEX_MAP_DEFINE(DexString*, DexString*, str_str, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_COPY_STR, DEX_COPY_STR, DEX_MISSING_STR(DexString*))
+DEX_MAP_DEFINE(DexString*, long, str_long, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL, DEX_MISSING_ZERO(long))
+DEX_MAP_DEFINE(DexString*, double, str_double, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL, DEX_MISSING_ZERO(double))
+DEX_MAP_DEFINE(DexString*, unsigned char, str_char, DEX_HASH_STR_KEY, DEX_STR_KEY_EQ, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_NOOP, DEX_NOOP, DEX_COPY_STR, DEX_COPY_VAL, DEX_MISSING_ZERO(unsigned char))
 
 // Instantiate int-keyed maps
-DEX_MAP_DEFINE(int, int, int_int, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL)
-DEX_MAP_DEFINE(int, _Bool, int_bool, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL)
-DEX_MAP_DEFINE(int, DexString*, int_str, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_COPY_VAL, DEX_COPY_STR)
-DEX_MAP_DEFINE(int, long, int_long, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL)
-DEX_MAP_DEFINE(int, double, int_double, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL)
-DEX_MAP_DEFINE(int, unsigned char, int_char, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL)
+DEX_MAP_DEFINE(int, int, int_int, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL, DEX_MISSING_ZERO(int))
+DEX_MAP_DEFINE(int, _Bool, int_bool, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL, DEX_MISSING_ZERO(_Bool))
+DEX_MAP_DEFINE(int, DexString*, int_str, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_RETAIN_STR, DEX_RELEASE_STR, DEX_COPY_VAL, DEX_COPY_STR, DEX_MISSING_STR(DexString*))
+DEX_MAP_DEFINE(int, long, int_long, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL, DEX_MISSING_ZERO(long))
+DEX_MAP_DEFINE(int, double, int_double, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL, DEX_MISSING_ZERO(double))
+DEX_MAP_DEFINE(int, unsigned char, int_char, DEX_HASH_INT_KEY, DEX_INT_KEY_EQ, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_NOOP, DEX_COPY_VAL, DEX_COPY_VAL, DEX_MISSING_ZERO(unsigned char))
 
 // Keys functions for string-keyed maps
 DEX_MAP_KEYS_DEFINE(DexString*, DexArrayString, str_int, dex_array_string_push, dex_array_string_new)

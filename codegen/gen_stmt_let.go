@@ -255,6 +255,16 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 	// A struct literal copies borrowed heap fields without owning them.
 	if lit, ok := s.Value.(*ast.StructLitExpr); ok && ast.IsStructType(s.Type) {
 		g.emitRetainStructLitFields(out, prefix, s.Name, s.Type, lit)
+	} else if !ast.HasAnnotation(s.Annotations, ast.AnnotOwned) && g.borrowsHeapValue(s.Value) {
+		// Binding from somewhere this scope does not own — an array element, a
+		// field, another variable. The string branch above has always retained
+		// in this case; arrays and structs reached this branch instead and were
+		// released at scope exit without ever having been retained.
+		if ast.IsHeapType(s.Type) {
+			out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, s.Name))
+		} else if ast.IsStructType(s.Type) {
+			g.emitRetainBorrowedStructFields(out, prefix, s.Name, s.Type)
+		}
 	}
 	g.registerScopeVar(s.Name, s.Type)
 	// Emit debug cycle tracking if annotated

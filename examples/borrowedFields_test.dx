@@ -1,0 +1,119 @@
+import "str"
+
+// A `let` bound from somewhere the scope does not own.
+//
+// Regression: the generic branch of genLet released a binding's heap fields at
+// scope exit without ever retaining them. Only the string branch retained, and
+// only a struct *literal* had its borrowed fields retained — so an array or a
+// struct copied out of an array element, a field, or another variable was
+// released once per scope against memory its real owner still held.
+//
+// The symptom never pointed here. Refcounts went negative and the allocator
+// tripped on some later, unrelated allocation — `malloc_consolidate():
+// unaligned fastbin chunk detected` — or the next loop iteration read freed
+// memory and hung. Which of the two you got depended on allocation order.
+//
+// Everything below allocates hard after the borrow so a missing retain surfaces
+// inside this test rather than in whatever runs next.
+
+struct Rule {
+    id: long
+    name: string
+    siteIds: long[]
+}
+
+struct Nested {
+    tag: string
+    rule: Rule
+}
+
+fn sites(a: long, b: long): long[] {
+    let out: long[] = []
+    out.push(a)
+    out.push(b)
+    return out
+}
+
+fn rules(): Rule[] {
+    let out: Rule[] = []
+    out.push(Rule { id: 1, name: "one", siteIds: sites(10, 11) })
+    out.push(Rule { id: 2, name: "two", siteIds: sites(20, 21) })
+    return out
+}
+
+// Allocation pressure, so a corrupted heap fails here and not three tests later.
+fn churn(times: int): void {
+    let junk: string[] = []
+    let i: int = 0
+    while (i < times) {
+        junk.push("filler filler filler filler " + str.fromInt(i))
+        i = i + 1
+    }
+}
+
+fn main(): void {
+    // 1. Bind a struct out of an array and read its array field, twice round.
+    //    This is the one that hung: the first iteration freed siteIds, the
+    //    second read it.
+    let rs: Rule[] = rules()
+    let seen: int = 0
+    let i: int = 0
+    while (i < rs.len()) {
+        let rule: Rule = rs[i]
+        let ids: long[] = rule.siteIds
+        assert(ids.len() == 2)
+        seen = seen + ids.len()
+        i = i + 1
+    }
+    assert(seen == 4)
+    churn(500)
+
+    // 2. The owner is still intact afterwards. If the loop had freed the
+    //    elements' arrays, these would read from freed memory.
+    let first: Rule = rs[0]
+    let firstIds: long[] = first.siteIds
+    assert(firstIds.len() == 2)
+    assert(firstIds[0] == 10)
+    assert(first.name == "one")
+    churn(500)
+
+    // 3. Aliasing the field into a second struct, which then outlives the
+    //    binding it came from.
+    let copies: Rule[] = []
+    let j: int = 0
+    while (j < rs.len()) {
+        let rule: Rule = rs[j]
+        copies.push(Rule { id: rule.id, name: rule.name, siteIds: rule.siteIds })
+        j = j + 1
+    }
+    churn(500)
+    let copied: Rule = copies[1]
+    let copiedIds: long[] = copied.siteIds
+    assert(copiedIds.len() == 2)
+    assert(copiedIds[1] == 21)
+    assert(copied.name == "two")
+
+    // 4. A bare heap binding from a field, with no struct in the middle.
+    let bare: long[] = first.siteIds
+    assert(bare.len() == 2)
+    churn(500)
+    assert(bare[1] == 11)
+
+    // 5. A struct field of struct type: the retain has to recurse the way the
+    //    release does, or the inner struct's fields are unbalanced.
+    let boxes: Nested[] = []
+    boxes.push(Nested { tag: "boxed", rule: rs[0] })
+    let box: Nested = boxes[0]
+    let inner: Rule = box.rule
+    let innerIds: long[] = inner.siteIds
+    assert(innerIds.len() == 2)
+    churn(500)
+    assert(box.tag == "boxed")
+    assert(inner.id == 1)
+
+    // 6. Binding from another variable, the plainest borrow of all.
+    let alias: Rule[] = rs
+    assert(alias.len() == 2)
+    churn(500)
+    assert(rs.len() == 2)
+}

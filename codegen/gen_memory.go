@@ -190,6 +190,48 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 	}
 }
 
+// emitRetainBorrowedStructFields retains the reference-counted fields of a
+// struct that was *copied* out of somewhere it does not own — an array element,
+// a field of another struct, another variable.
+//
+// The copy duplicates those field pointers without taking a reference, and
+// emitReleaseVar releases every one of them at scope exit. Without the matching
+// retain the scope frees memory whose real owner is still using it. The symptom
+// is not a crash at the copy: it is a hang or a corrupted allocator on the
+// *next* allocation, pointing at a line that has nothing to do with it.
+//
+//	let rule: Rule = rules[i]     // copies siteIds, takes no reference
+//	let n: long[] = rule.siteIds  // aliases it again
+//	                              // scope exit released both. Twice, from one.
+//
+// The mirror of emitRetainStructLitFields, for copies rather than literals, and
+// it recurses the same way emitReleaseVar does so a nested struct field is not
+// left unbalanced.
+func (g *Generator) emitRetainBorrowedStructFields(out *strings.Builder, prefix, target string, structType ast.Type) {
+	def := ast.GetStructDef(structType)
+	if def == nil {
+		return
+	}
+	for _, f := range def.Fields {
+		if !ast.NeedsRelease(f.Type) {
+			continue
+		}
+		field := target + "." + f.Name
+		switch {
+		case ast.IsOptionalType(f.Type):
+			// Only the heap-backed optionals are released, so only those are
+			// retained. dex_retain is NULL-safe, which is what absent looks like.
+			if ast.IsHeapType(ast.OptionalInnerType(f.Type)) {
+				out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, field))
+			}
+		case ast.IsHeapType(f.Type):
+			out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, field))
+		case ast.IsStructType(f.Type):
+			g.emitRetainBorrowedStructFields(out, prefix, field, f.Type)
+		}
+	}
+}
+
 // hasHeapVarsInScope checks if there are any heap vars tracked in any scope
 func (g *Generator) hasHeapVarsInScope() bool {
 	for _, scope := range g.scopeStack {

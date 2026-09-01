@@ -16,7 +16,9 @@ var wsServerRuntime string
 
 // The handshake unit is prepended rather than #included: the runtime is pasted
 // into the generated C, which is compiled with no include path back to here.
-var wsRuntime = wsHandshakeRuntime + wsServerRuntime
+// base64.h goes in front of it for the same reason — the handshake needs the
+// encoder, and so does the smtp module, so neither carries its own copy.
+var wsRuntime = base64Runtime + wsHandshakeRuntime + wsServerRuntime
 
 // wss:// needs OpenSSL on the link line, not just its headers on the include
 // path. When pkg-config cannot find it, TLS is switched off explicitly so a

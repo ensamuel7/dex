@@ -2387,6 +2387,53 @@ why a stable identity — a charger tag, a user id — makes a good key. Auto-co
 is off: a consumer commits once a message is safely handled, so a crash replays
 it rather than losing it.
 
+### smtp
+
+Sends one email over SMTP. Like Redis this speaks the protocol directly rather
+than linking a client library, so nothing needs installing to build it — but TLS
+comes from OpenSSL, found the same way `wss://` finds it.
+
+```dex
+import "smtp"
+
+let sent: bool = smtp.send(
+    "mail.example.com", 587,          // 465 for TLS from the first byte
+    "no-reply@example.com", password,
+    "Example <no-reply@example.com>",
+    "someone@elsewhere.test",
+    "Reset your password",
+    "Open this link within the hour:\nhttps://app.example/r/abc\n")
+```
+
+| Function | Signature | Description |
+|---|---|---|
+| `send` | `send(host: string, port: int, username: string, password: string, from: string, to: string, subject: string, body: string): bool` | Send one plain-text message and wait to be told it was accepted |
+
+The port picks the encryption: **465** is TLS from the first byte, anything else
+opens in the clear and upgrades with `STARTTLS` before authenticating. With a
+username set and neither on offer the call fails rather than sending the password
+in the clear; pass `""` for the username to skip authentication entirely, which
+is what a relay that trusts this host by address wants.
+
+`from` and `to` may carry a display name — `Example <no-reply@example.com>` —
+and the bare address inside the angle brackets is what the envelope gets. The
+headers written for you are `From`, `To`, `Subject`, `Date`, `Message-ID`,
+`MIME-Version` and `Content-Type: text/plain; charset=UTF-8`; a subject that is
+not ASCII is encoded per RFC 2047, and a body line beginning with `.` is stuffed
+so it arrives whole.
+
+**True means a mail server took responsibility for the message**, not that a
+socket opened: it returns only once the server has answered the terminating dot.
+Every refusal along the way — a rejected recipient, a wrong password, a message
+over the size limit — returns false and writes the reply code to stderr. Sockets
+carry a 30-second timeout in each direction so a silent host cannot pin the
+thread that called.
+
+Certificates are not verified, which matches the `ws` module and is what makes
+this work against the mail host of a shared-hosting account, where the
+certificate is usually the provider's rather than yours. One that does not verify
+is reported on stderr rather than refused.
+
 ### crypto
 
 Cryptographic utility functions.

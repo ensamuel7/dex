@@ -1,6 +1,18 @@
 package stdlib
 
-import "github.com/ensamuel7/dex/ast"
+import (
+	_ "embed"
+
+	"github.com/ensamuel7/dex/ast"
+)
+
+// Base64, shared by the module runtimes that need it — the ws handshake and
+// SMTP's AUTH. It lives here rather than beside either of them because it
+// belongs to neither: both prepend it to their own runtime, and the guard
+// inside it makes the second paste a no-op. See cruntime/base64.h.
+//
+//go:embed cruntime/base64.h
+var base64Runtime string
 
 type FuncDef struct {
 	Params     []ast.Type

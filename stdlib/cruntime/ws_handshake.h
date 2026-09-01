@@ -60,22 +60,15 @@ static void dex_sha1(const unsigned char* msg, size_t len, unsigned char digest[
 }
 
 // --- Base64 encode ---
+//
+// Lives in base64.h, which ws.go prepends to this unit — the smtp module needs
+// the same encoder and neither should carry its own. Compiled on its own (the
+// handshake test builds this header with -I cruntime) the guard is still unset,
+// and the #include below picks it up instead.
 
-static const char dex_b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static void dex_base64_encode(const unsigned char* in, size_t len, char* out) {
-    size_t i, j;
-    for (i = 0, j = 0; i < len; i += 3) {
-        uint32_t v = (uint32_t)in[i] << 16;
-        if (i + 1 < len) v |= (uint32_t)in[i+1] << 8;
-        if (i + 2 < len) v |= (uint32_t)in[i+2];
-        out[j++] = dex_b64_table[(v >> 18) & 0x3F];
-        out[j++] = dex_b64_table[(v >> 12) & 0x3F];
-        out[j++] = (i + 1 < len) ? dex_b64_table[(v >> 6) & 0x3F] : '=';
-        out[j++] = (i + 2 < len) ? dex_b64_table[v & 0x3F] : '=';
-    }
-    out[j] = '\0';
-}
+#ifndef DEX_BASE64_H
+#include "base64.h"
+#endif
 
 // --- WebSocket protocol ---
 

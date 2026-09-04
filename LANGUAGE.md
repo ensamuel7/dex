@@ -2450,8 +2450,48 @@ let id: string = crypto.uuid()
 | `uuid` | `uuid(): string` | A random UUID v4 |
 | `base64Encode` | `base64Encode(data: string): string` | Base64-encode. Binary-safe |
 | `base64Decode` | `base64Decode(encoded: string): string` | Decode base64. Binary-safe |
+| `base64UrlDecode` | `base64UrlDecode(encoded: string): string` | Decode base64url — the `-`/`_` alphabet, padding optional. Binary-safe |
 | `sha256Hex` | `sha256Hex(data: string): string` | SHA-256, lowercase hex |
 | `hmacSha256Hex` | `hmacSha256Hex(key: string, message: string): string` | HMAC-SHA-256, lowercase hex |
+| `verifyRs256` | `verifyRs256(message: string, signature: string, modulus: string, exponent: string): bool` | Verify an RS256 signature against an RSA public key given as its two numbers |
+
+#### Verifying what somebody else signed
+
+`hmacSha256Hex` covers a secret both sides already hold — a webhook from a
+payment provider. It cannot cover a token from an identity provider, which is
+signed with a private key you will never have and verified against a public one
+published as a JWK: a modulus and an exponent, base64url, with no PEM anywhere in
+the document.
+
+`verifyRs256` takes the key in exactly that shape, so checking a Google or Apple
+ID token is decode, decode, verify:
+
+```dex
+// jwt is "header.payload.signature"; `key` is one entry from the provider's JWKS
+let parts: string[] = jwt.split(".")
+// The signature covers the first two segments joined, as they arrived — not
+// the decoded claims, so nothing here re-encodes anything. (`signed` is a
+// reserved word, hence the longer name.)
+let signingInput: string = parts[0] + "." + parts[1]
+let signature: string = crypto.base64UrlDecode(parts[2])
+
+let modulus: string = crypto.base64UrlDecode(key["n"].asString())
+let exponent: string = crypto.base64UrlDecode(key["e"].asString())
+
+if (crypto.verifyRs256(signingInput, signature, modulus, exponent)) {
+    // The signature holds. The claims inside still have to be checked —
+    // `aud`, `iss` and `exp` are not signature questions.
+}
+```
+
+Use `base64UrlDecode` and not `base64Decode` on any of those three. The ordinary
+decoder skips characters outside its alphabet, which is right for a PEM body
+with newlines in it and silently wrong here: `-` and `_` would be dropped rather
+than decoded, and the bytes would come back short instead of refused.
+
+A false is a false for every reason — a bad signature, a malformed key, a build
+without OpenSSL. There is deliberately no way to tell them apart from the return
+value, because none of them is a reason to admit the caller.
 
 #### Binary safety
 

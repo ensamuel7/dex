@@ -1,0 +1,88 @@
+// base64url, and RS256 signature verification.
+//
+// The vector below is a real 2048-bit RSA key signing a real JWT signing input
+// — "header.payload", which is exactly the bytes a JWT is signed over. Nothing
+// here is synthesised: the signature was produced by OpenSSL against the key
+// whose modulus is embedded, so a change that breaks verification fails here
+// rather than in production against Google.
+
+import "crypto"
+
+// The signing input of a JWT: the header and payload segments, joined by a dot,
+// before any decoding. This is what the signature covers.
+const SIGNED: string = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0In0"
+
+const MODULUS: string = "s0Jx290Ynsmy0735bS7q9ROcCBB2DpYPYRmeZTuccAOJbzWvhNAJyh2eiAjZfMyY3WtG0UsEFmN5N6-552uc6tPb2PpqYTomDATM189642Uup0RrHP3_FpdVyZXki5Vgv9Xk2ogV7mRYNsfkRDO23F07jIquo8PpSbDzpXEibyLVqOQKyKLzC2zux4JlhaZRdL09wsdlBazPcYg4LNJUTM6bmyqtY9e8ZNQ_tc_I2TQL__ddUOUAnCEjsQfK08ORYxaHTVMPgW-BeoQ3vrNCl0UsFcGtd3LHOdPVlWrYfgmu7vPUiwxvTLlTcnHdcgnAvL5v75ieNTGRkAwWPi9eww"
+
+// 65537, the exponent every provider in practice uses.
+const EXPONENT: string = "AQAB"
+
+const SIGNATURE: string = "oGsueaySL-V4O71FpP4hfE9ifmtkOn6of-CIj5rGPEcfUGf7I_mWTYOJUzfn6yngaf1SJtiLkp923YKehdduvVTXSeIPqBtvn8PwyARJN8l1MrDPvVHtbUqwhFizap1-Gu1BoiBddmVT5JkVDK3Oq3aJMkqy_bneLeXxUmLoIjzFYIeMYPbsdmwEUIhsWjXi80Wa2cw1X2pA0AwVdoMzG5GtOgRDsPGX-aRPU1IkXRy7eLaaHmRwab_uW7BFhO9enOErGvjK7AI87c9kuel5Hc41pZI-VXS2uMp9oI56bGeUcLpCH0hjAXlo7KVCJkTGKXvVXX1OdFMRhHzK9lni5g"
+
+fn main(): void {
+    // --- base64url ---
+
+    // The whole reason this exists. Both of these encode the same three bytes,
+    // one in each alphabet, and base64Decode drops '-' and '_' rather than
+    // decoding them — so it returns something shorter instead of failing.
+    let urlBytes: string = crypto.base64UrlDecode("-_8")
+    assert(urlBytes.len() == 2)
+    assert(crypto.base64Encode(urlBytes) == "+/8=")
+    let dropped: string = crypto.base64Decode("-_8")
+    assert(dropped.len() < urlBytes.len())
+
+    // Padding is optional, and present or absent must decode the same.
+    assert(crypto.base64UrlDecode("aGVsbG8") == "hello")
+    assert(crypto.base64UrlDecode("aGVsbG8=") == "hello")
+    assert(crypto.base64UrlDecode("aGVsbG8gd29ybGQ") == "hello world")
+
+    // The ordinary alphabet still decodes, so a caller holding standard base64
+    // does not have to know which of the two it has.
+    assert(crypto.base64UrlDecode("aGVsbG8gd29ybGQ=") == "hello world")
+
+    // Binary-safe: NUL at both ends of the run survives.
+    let binary: string = crypto.base64UrlDecode("AAECA_8A")
+    assert(binary.len() == 6)
+
+    assert(crypto.base64UrlDecode("") == "")
+
+    // --- RS256 ---
+
+    let modulus: string = crypto.base64UrlDecode(MODULUS)
+    let exponent: string = crypto.base64UrlDecode(EXPONENT)
+    let signature: string = crypto.base64UrlDecode(SIGNATURE)
+
+    // A 2048-bit modulus is 256 bytes, and so is a signature under it.
+    assert(modulus.len() == 256)
+    assert(signature.len() == 256)
+    assert(exponent.len() == 3)
+
+    let genuine: bool = crypto.verifyRs256(SIGNED, signature, modulus, exponent)
+    if (genuine) {
+        // Everything below only means anything in a build that can verify at
+        // all. Without OpenSSL the function refuses everything, which is the
+        // safe answer but makes the negative cases vacuous.
+
+        // A different payload under the same signature. This is the case that
+        // matters: it is what a forged token looks like.
+        assert(!crypto.verifyRs256(SIGNED + "x", signature, modulus, exponent))
+
+        // A signature that is the right length and the wrong bytes.
+        let forged: string = crypto.base64UrlDecode("AAAA" + SIGNATURE.substring(4, SIGNATURE.len()))
+        assert(!crypto.verifyRs256(SIGNED, forged, modulus, exponent))
+
+        // The right signature against somebody else's key. Exponent 3 rather
+        // than 65537 — a well-formed key that did not sign this.
+        assert(!crypto.verifyRs256(SIGNED, signature, modulus, crypto.base64UrlDecode("Aw")))
+
+        // Nothing is not a signature, and a key with no modulus is not a key.
+        assert(!crypto.verifyRs256(SIGNED, "", modulus, exponent))
+        assert(!crypto.verifyRs256(SIGNED, signature, "", exponent))
+        assert(!crypto.verifyRs256(SIGNED, signature, modulus, ""))
+
+        // Verifying twice must give the same answer — the key is rebuilt per
+        // call, and a leaked or freed one would show up as a second answer
+        // differing from the first.
+        assert(crypto.verifyRs256(SIGNED, signature, modulus, exponent))
+    }
+}

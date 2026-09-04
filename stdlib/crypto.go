@@ -14,7 +14,12 @@ var cryptoRuntimeBase string
 //go:embed cruntime/crypto_digest.c
 var cryptoDigestRuntime string
 
-var cryptoRuntime = cryptoRuntimeBase + cryptoDigestRuntime
+//go:embed cruntime/crypto_verify.c
+var cryptoVerifyRuntime string
+
+// Order matters: the verifier reuses the base64 alphabet table the digest file
+// defines, and these are concatenated into one translation unit.
+var cryptoRuntime = cryptoRuntimeBase + cryptoDigestRuntime + cryptoVerifyRuntime
 
 // SHA-256 and HMAC come from OpenSSL, which the ws module already links for
 // wss://. Detected the same way, so a build either has both or neither rather
@@ -61,6 +66,25 @@ func init() {
 				RawParams:  []int{0},
 				RawReturn:  true,
 				Doc:        "Decode base64. Binary-safe: the result may contain NUL bytes.",
+			},
+			"base64UrlDecode": {
+				Params:     []ast.Type{ast.TypeString},
+				ParamNames: []string{"encoded"},
+				ReturnType: ast.TypeString,
+				CName:      "dex_crypto_base64url_decode",
+				RawParams:  []int{0},
+				RawReturn:  true,
+				Doc:        "Decode base64url (RFC 4648 §5) — the '-' and '_' alphabet JWTs are written in, with padding optional. Binary-safe. base64Decode skips those two characters instead of decoding them, so a token decoded with it comes back the wrong length.",
+			},
+			"verifyRs256": {
+				Params: []ast.Type{ast.TypeString, ast.TypeString, ast.TypeString, ast.TypeString},
+				// The public key arrives as its two numbers rather than as a
+				// PEM, because a JWKS document has no PEM in it.
+				ParamNames: []string{"message", "signature", "modulus", "exponent"},
+				ReturnType: ast.TypeBool,
+				CName:      "dex_crypto_verify_rs256",
+				RawParams:  []int{0, 1, 2, 3},
+				Doc:        "Verify an RS256 signature — RSASSA-PKCS1-v1_5 over SHA-256 — against an RSA public key given as its raw modulus and exponent, which is what a JWK's 'n' and 'e' are once base64UrlDecode has run over them. What checking a Google or Apple ID token needs. False on any failure, including a build without OpenSSL. Needs OpenSSL.",
 			},
 			"sha256Hex": {
 				Params:     []ast.Type{ast.TypeString},

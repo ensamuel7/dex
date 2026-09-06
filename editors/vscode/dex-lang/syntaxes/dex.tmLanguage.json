@@ -3,21 +3,51 @@
   "name": "Dex",
   "scopeName": "source.dex",
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#strings" },
-    { "include": "#characters" },
-    { "include": "#numbers" },
-    { "include": "#struct-definition" },
-    { "include": "#function-definition" },
-    { "include": "#import-statement" },
-    { "include": "#keywords" },
-    { "include": "#types" },
-    { "include": "#constants" },
-    { "include": "#builtins" },
-    { "include": "#module-call" },
-    { "include": "#function-call" },
-    { "include": "#operators" },
-    { "include": "#punctuation" }
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#characters"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#struct-definition"
+    },
+    {
+      "include": "#function-definition"
+    },
+    {
+      "include": "#import-statement"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#module-call"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
   ],
   "repository": {
     "comments": {
@@ -49,7 +79,9 @@
           "name": "string.quoted.single.dex",
           "match": "'(\\\\[\"\\\\nt0']|[^'\\\\])'",
           "captures": {
-            "0": { "name": "string.quoted.single.dex" }
+            "0": {
+              "name": "string.quoted.single.dex"
+            }
           }
         }
       ]
@@ -71,8 +103,12 @@
         {
           "match": "\\b(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
           "captures": {
-            "1": { "name": "keyword.other.struct.dex" },
-            "2": { "name": "entity.name.type.struct.dex" }
+            "1": {
+              "name": "keyword.other.struct.dex"
+            },
+            "2": {
+              "name": "entity.name.type.struct.dex"
+            }
           }
         }
       ]
@@ -82,8 +118,12 @@
         {
           "match": "\\b(fn|function)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
           "captures": {
-            "1": { "name": "keyword.other.fn.dex" },
-            "2": { "name": "entity.name.function.dex" }
+            "1": {
+              "name": "keyword.other.fn.dex"
+            },
+            "2": {
+              "name": "entity.name.function.dex"
+            }
           }
         }
       ]
@@ -93,8 +133,12 @@
         {
           "match": "\\b(import)\\s+(\"[^\"]*\")",
           "captures": {
-            "1": { "name": "keyword.control.import.dex" },
-            "2": { "name": "string.quoted.double.dex" }
+            "1": {
+              "name": "keyword.control.import.dex"
+            },
+            "2": {
+              "name": "string.quoted.double.dex"
+            }
           }
         }
       ]
@@ -103,7 +147,7 @@
       "patterns": [
         {
           "name": "keyword.control.dex",
-          "match": "\\b(if|else|while|for|foreach|as|return|break|continue)\\b"
+          "match": "\\b(if|else|while|for|foreach|as|return|break|continue|switch|case|default|match|defer|try|catch|finally|throw)\\b"
         },
         {
           "name": "keyword.other.fn.dex",
@@ -119,7 +163,7 @@
         },
         {
           "name": "keyword.other.struct.dex",
-          "match": "\\bstruct\\b"
+          "match": "\\b(struct|enum|interface)\\b"
         },
         {
           "name": "keyword.other.access.dex",
@@ -139,7 +183,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.dex",
-          "match": "\\b(int|long|double|char|bool|string|void)\\b"
+          "match": "\\b(int|long|double|char|bool|string|void|map|mutex)\\b"
         },
         {
           "name": "support.type.channel.dex",
@@ -156,7 +200,7 @@
       "patterns": [
         {
           "name": "constant.language.boolean.dex",
-          "match": "\\b(true|false)\\b"
+          "match": "\\b(true|false|null)\\b"
         }
       ]
     },
@@ -173,8 +217,12 @@
         {
           "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
           "captures": {
-            "1": { "name": "entity.name.namespace.dex" },
-            "2": { "name": "entity.name.function.dex" }
+            "1": {
+              "name": "entity.name.namespace.dex"
+            },
+            "2": {
+              "name": "entity.name.function.dex"
+            }
           }
         }
       ]
@@ -184,7 +232,9 @@
         {
           "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
           "captures": {
-            "1": { "name": "entity.name.function.call.dex" }
+            "1": {
+              "name": "entity.name.function.call.dex"
+            }
           }
         }
       ]

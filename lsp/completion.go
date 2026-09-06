@@ -79,6 +79,7 @@ func (s *Server) completionsAt(text string, pos Position, uri string) []Completi
 		{"chan", "Channel type for concurrency"},
 		{"null", "Null value"},
 		{"mutex", "Mutual exclusion lock"},
+		{"weak", "Weak reference, not counted for ownership"},
 	} {
 		items = append(items, CompletionItem{
 			Label:  kw.label,

@@ -491,10 +491,67 @@ static void dex_smtp_date(char* out, size_t out_size) {
 
 // --- The message ---
 
+// One part's worth of body, CRLF-normalised and dot-stuffed, appended at `p`.
+// Returns where the next write goes. Split out because multipart/alternative
+// needs this twice and the transparency rule is not worth writing twice.
+static char* dex_smtp_append_body(char* p, const char* body) {
+    size_t body_len = strlen(body);
+    int at_line_start = 1;
+    for (size_t i = 0; i < body_len; i++) {
+        char c = body[i];
+        if (c == '\r') {
+            if (i + 1 < body_len && body[i + 1] == '\n') i++;
+            *p++ = '\r'; *p++ = '\n';
+            at_line_start = 1;
+            continue;
+        }
+        if (c == '\n') {
+            *p++ = '\r'; *p++ = '\n';
+            at_line_start = 1;
+            continue;
+        }
+        // Transparency, RFC 5321 4.5.2: a line the sender wrote as "." must
+        // reach the server as ".." or it ends the message where it stands.
+        if (at_line_start && c == '.') *p++ = '.';
+        *p++ = c;
+        at_line_start = 0;
+    }
+    if (!at_line_start) { *p++ = '\r'; *p++ = '\n'; }
+    return p;
+}
+
+// The html part, base64'd in 76-character lines. Encoded rather than sent as
+// it is because a template is written with long lines and RFC 5321 caps a line
+// at 998 octets: a server is entitled to reject or fold anything longer, and a
+// folded tag is a broken email. base64 also puts the part out of reach of the
+// dot-stuffing rule, its alphabet having no ".".
+static char* dex_smtp_append_base64(char* p, const char* text) {
+    size_t len = strlen(text);
+    if (len == 0) return p;
+    size_t encoded_len = ((len + 2) / 3) * 4;
+    char* encoded = (char*)malloc(encoded_len + 1);
+    if (!encoded) return p;
+    dex_base64_encode((const unsigned char*)text, len, encoded);
+    for (size_t i = 0; i < encoded_len; i += 76) {
+        size_t take = encoded_len - i < 76 ? encoded_len - i : 76;
+        memcpy(p, encoded + i, take);
+        p += take;
+        *p++ = '\r'; *p++ = '\n';
+    }
+    free(encoded);
+    return p;
+}
+
 // Headers, a blank line, the dot-stuffed body and the terminating ".".
 // Returned malloc'd; the caller frees it on every path.
+//
+// With `html` non-empty the message becomes multipart/alternative: the same
+// content twice, plain text first. Order is the standard's and it matters —
+// a client shows the last part it understands, so text first and html second
+// means a reader that can render it sees the designed version and one that
+// cannot still gets something written for it rather than a page of tags.
 static char* dex_smtp_build_message(const char* from, const char* to, const char* subject,
-                                    const char* body, const char* domain) {
+                                    const char* body, const char* html, const char* domain) {
     char date[64];
     dex_smtp_date(date, sizeof(date));
 
@@ -514,47 +571,63 @@ static char* dex_smtp_build_message(const char* from, const char* to, const char
     }
 
     size_t body_len = strlen(body);
+    size_t html_len = html ? strlen(html) : 0;
     // Worst case each body byte becomes two: a leading '.' is doubled, an LF
-    // becomes CRLF. Plus the headers and the terminator.
-    size_t cap = body_len * 2 + strlen(from) + strlen(to) + strlen(subject_header) + 512;
+    // becomes CRLF. The html part grows by a third through base64, plus two
+    // bytes per 76-character line. Plus the headers, the boundaries and the
+    // terminator.
+    size_t b64_len = ((html_len + 2) / 3) * 4;
+    size_t cap = body_len * 2 + b64_len + (b64_len / 76 + 1) * 2 +
+                 strlen(from) + strlen(to) + strlen(subject_header) + 1024;
     char* out = (char*)malloc(cap);
     if (!out) { free(subject_header); return NULL; }
 
-    int header_len = snprintf(out, cap,
-        "From: %s\r\n"
-        "To: %s\r\n"
-        "Subject: %s\r\n"
-        "Date: %s\r\n"
-        "Message-ID: <%s>\r\n"
-        "MIME-Version: 1.0\r\n"
-        "Content-Type: text/plain; charset=UTF-8\r\n"
-        "\r\n",
-        from, to, subject_header, date, message_id);
+    // Distinct per message, and built from the same clock and pid the
+    // Message-ID is, so it cannot collide with a boundary in a message this
+    // process sent a moment earlier.
+    char boundary[128];
+    snprintf(boundary, sizeof(boundary), "=_dex_%llx_%x_%x",
+             (unsigned long long)time(NULL), (unsigned)getpid(), (unsigned)rand());
+
+    int header_len;
+    if (html_len == 0) {
+        header_len = snprintf(out, cap,
+            "From: %s\r\n"
+            "To: %s\r\n"
+            "Subject: %s\r\n"
+            "Date: %s\r\n"
+            "Message-ID: <%s>\r\n"
+            "MIME-Version: 1.0\r\n"
+            "Content-Type: text/plain; charset=UTF-8\r\n"
+            "\r\n",
+            from, to, subject_header, date, message_id);
+    } else {
+        header_len = snprintf(out, cap,
+            "From: %s\r\n"
+            "To: %s\r\n"
+            "Subject: %s\r\n"
+            "Date: %s\r\n"
+            "Message-ID: <%s>\r\n"
+            "MIME-Version: 1.0\r\n"
+            "Content-Type: multipart/alternative; boundary=\"%s\"\r\n"
+            "\r\n"
+            "--%s\r\n"
+            "Content-Type: text/plain; charset=UTF-8\r\n"
+            "\r\n",
+            from, to, subject_header, date, message_id, boundary, boundary);
+    }
     free(subject_header);
     if (header_len < 0 || (size_t)header_len >= cap) { free(out); return NULL; }
 
-    char* p = out + header_len;
-    int at_line_start = 1;
-    for (size_t i = 0; i < body_len; i++) {
-        char c = body[i];
-        if (c == '\r') {
-            if (i + 1 < body_len && body[i + 1] == '\n') i++;
-            *p++ = '\r'; *p++ = '\n';
-            at_line_start = 1;
-            continue;
-        }
-        if (c == '\n') {
-            *p++ = '\r'; *p++ = '\n';
-            at_line_start = 1;
-            continue;
-        }
-        // Transparency, RFC 5321 §4.5.2: a line the sender wrote as "." must
-        // reach the server as ".." or it ends the message where it stands.
-        if (at_line_start && c == '.') *p++ = '.';
-        *p++ = c;
-        at_line_start = 0;
+    char* p = dex_smtp_append_body(out + header_len, body);
+    if (html_len > 0) {
+        p += sprintf(p, "--%s\r\n"
+                        "Content-Type: text/html; charset=UTF-8\r\n"
+                        "Content-Transfer-Encoding: base64\r\n"
+                        "\r\n", boundary);
+        p = dex_smtp_append_base64(p, html);
+        p += sprintf(p, "--%s--\r\n", boundary);
     }
-    if (!at_line_start) { *p++ = '\r'; *p++ = '\n'; }
     *p++ = '.'; *p++ = '\r'; *p++ = '\n';
     *p = '\0';
     return out;
@@ -562,10 +635,10 @@ static char* dex_smtp_build_message(const char* from, const char* to, const char
 
 // --- The conversation ---
 
-_Bool dex_smtp_send(const char* host, int port,
+_Bool dex_smtp_send_html(const char* host, int port,
                     const char* username, const char* password,
                     const char* from, const char* to,
-                    const char* subject, const char* body) {
+                    const char* subject, const char* body, const char* html) {
     if (!host || !*host) {
         fprintf(stderr, "[smtp] no host given\n");
         return 0;
@@ -576,6 +649,7 @@ _Bool dex_smtp_send(const char* host, int port,
     if (!to) to = "";
     if (!subject) subject = "";
     if (!body) body = "";
+    if (!html) html = "";
     if (port <= 0) port = 587;
 
     char from_addr[320], to_addr[320];
@@ -746,7 +820,7 @@ _Bool dex_smtp_send(const char* host, int port,
         goto done;
     }
 
-    message = dex_smtp_build_message(from_header, to_header, subject_header, body, domain);
+    message = dex_smtp_build_message(from_header, to_header, subject_header, body, html, domain);
     if (!message) {
         fprintf(stderr, "[smtp] out of memory building the message\n");
         goto done;
@@ -775,4 +849,14 @@ done:
         dex_smtp_close(&s);
     }
     return ok;
+}
+
+// The plain-text send, unchanged for every caller that had one. Kept as its own
+// entry point rather than folded into the one above with a null: a program that
+// only ever sends text should not have to say so.
+_Bool dex_smtp_send(const char* host, int port,
+                    const char* username, const char* password,
+                    const char* from, const char* to,
+                    const char* subject, const char* body) {
+    return dex_smtp_send_html(host, port, username, password, from, to, subject, body, "");
 }

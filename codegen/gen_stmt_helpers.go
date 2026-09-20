@@ -165,6 +165,43 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 	}
 }
 
+// genArrayLitElem fills one slot of an array literal, and is the only place
+// that decides who owns the element.
+//
+// It emits a push rather than writing `arr->data[i]` directly, which is what
+// the three array-literal sites used to do. That shape was wrong twice over:
+//
+//   Ownership. The array's destructor releases every slot, so an element the
+//   literal only borrowed — a variable, a struct field, an index — was
+//   released once by the array and again by whoever actually owned it.
+//   `let argv: string[] = ["find", dir]` freed the caller's `dir`, and the
+//   damage surfaced as a SIGBUS in unrelated code several calls later.
+//
+//   Capacity. A fresh array has room for eight, and a literal with more
+//   elements than that wrote past the allocation.
+//
+// push grows the array and retains what it is handed, so an expression that
+// minted a reference has to give it back afterwards. isNewAlloc is the single
+// source of truth for which expressions those are.
+func (g *Generator) genArrayLitElem(out *strings.Builder, arrVar string, arrType ast.Type, elem ast.Expr) {
+	pushFn := g.arrayPushFunc(arrType)
+	if arrType != ast.TypeArrayString {
+		// Every other element type is a value: nothing to own, nothing to free.
+		out.WriteString(fmt.Sprintf("%s(%s, ", pushFn, arrVar))
+		g.genExpr(out, elem)
+		out.WriteString(");")
+		return
+	}
+	tmp := g.nextTemp()
+	out.WriteString(fmt.Sprintf("{ DexString* %s = ", tmp))
+	g.genExpr(out, elem)
+	out.WriteString(fmt.Sprintf("; %s(%s, %s);", pushFn, arrVar, tmp))
+	if g.isNewAlloc(elem) {
+		out.WriteString(fmt.Sprintf(" dex_release(%s);", tmp))
+	}
+	out.WriteString(" }")
+}
+
 // alwaysExitsCodegen mirrors the checker's alwaysExits: does this statement list
 // unconditionally leave the enclosing block?
 func alwaysExitsCodegen(stmts []ast.Stmt) bool {

@@ -1,0 +1,83 @@
+// An array literal owns what it holds, and borrows nothing.
+//
+// Every case here crashed or corrupted the heap before the fix: a literal
+// wrote its elements straight into `arr->data[i]`, which took no reference to
+// a borrowed element and wrote past the eight-slot initial capacity.
+
+struct Outcome {
+    ok: bool
+    output: string
+}
+
+// The shape that found it: a caller's string put into an array literal, the
+// array passed down, and both released. The array's destructor freed the
+// caller's string, and the damage surfaced much later somewhere unrelated.
+fn join(argv: string[]): string {
+    let out = StringBuilder()
+    let i: int = 0
+    while (i < argv.len()) {
+        let arg: string = argv[i]
+        if (i > 0) {
+            out.append(" ")
+        }
+        out.append(arg)
+        i = i + 1
+    }
+    return out.toString()
+}
+
+fn build(dir: string): Outcome {
+    let argv: string[] = ["find", dir, "-mindepth", "1"]
+    let line: string = join(argv)
+    return Outcome { ok: true, output: line }
+}
+
+fn main(): void {
+    // Borrowed elements, over and over: a use-after-free shows up as the
+    // string coming back wrong rather than as an immediate crash, so this
+    // runs enough times for a freed allocation to be reused.
+    let i: int = 0
+    while (i < 50) {
+        let dir: string = "/tmp/scratch"
+        let result: Outcome = build(dir)
+        assert(result.ok)
+        assert(result.output == "find /tmp/scratch -mindepth 1")
+        // The borrowed string is still the caller's, and still intact.
+        assert(dir == "/tmp/scratch")
+        i = i + 1
+    }
+
+    // Longer than the initial capacity of eight.
+    let many: string[] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
+    assert(many.len() == 12)
+    assert(many[11] == "l")
+    let numbers: int[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    assert(numbers.len() == 12)
+    assert(numbers[11] == 12)
+
+    // A literal mixing owned and borrowed elements.
+    let name: string = "dex"
+    let greeting: string = "hello " + name
+    let parts: string[] = [name, greeting, "literal", name]
+    assert(parts.len() == 4)
+    assert(parts[0] == "dex")
+    assert(parts[1] == "hello dex")
+    assert(parts[3] == "dex")
+    assert(name == "dex")
+    assert(greeting == "hello dex")
+
+    // A slot owns its reference: overwriting one releases what was there and
+    // takes a reference to what replaces it.
+    let names: string[] = ["one", "two"]
+    let other: string = "three"
+    names[0] = other
+    assert(names[0] == "three")
+    assert(other == "three")
+    names[1] = "four"
+    assert(names[1] == "four")
+
+    // In expression position rather than bound to a name.
+    let direct: string = join(["x", name, "z"])
+    assert(direct == "x dex z")
+    assert(name == "dex")
+}

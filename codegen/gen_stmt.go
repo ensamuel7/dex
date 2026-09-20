@@ -354,13 +354,40 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			out.WriteString(", ")
 			g.genExpr(out, s.Array)
 			out.WriteString("->len);\n")
-			out.WriteString(prefix)
-			g.genExpr(out, s.Array)
-			out.WriteString("->data[")
-			g.genExpr(out, s.Index)
-			out.WriteString("] = ")
-			g.genExpr(out, s.Value)
-			out.WriteString(";\n")
+
+			// A string array's slot owns its reference, the same way a struct
+			// field does. Overwriting one therefore has to release what was
+			// there and take a reference to what replaces it — a borrowed
+			// value is still owned by somebody else, and an owned temporary
+			// already carries the only reference there is.
+			//
+			// Written without either, `names[0] = other` leaked the old
+			// string and freed `other` when the array was released.
+			if ast.IsHeapType(ast.ElementType(arrType)) {
+				tmpVal := g.nextTemp()
+				tmpSlot := g.nextTemp()
+				out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(ast.ElementType(arrType)), tmpVal))
+				g.genExpr(out, s.Value)
+				out.WriteString(";\n")
+				if !g.isNewAlloc(s.Value) {
+					out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, tmpVal))
+				}
+				out.WriteString(fmt.Sprintf("%s%s* %s = &", prefix, g.cType(ast.ElementType(arrType)), tmpSlot))
+				g.genExpr(out, s.Array)
+				out.WriteString("->data[")
+				g.genExpr(out, s.Index)
+				out.WriteString("];\n")
+				out.WriteString(fmt.Sprintf("%sdex_release(*%s);\n", prefix, tmpSlot))
+				out.WriteString(fmt.Sprintf("%s*%s = %s;\n", prefix, tmpSlot, tmpVal))
+			} else {
+				out.WriteString(prefix)
+				g.genExpr(out, s.Array)
+				out.WriteString("->data[")
+				g.genExpr(out, s.Index)
+				out.WriteString("] = ")
+				g.genExpr(out, s.Value)
+				out.WriteString(";\n")
+			}
 		}
 
 	case *ast.FieldAssignStmt:

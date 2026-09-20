@@ -94,6 +94,14 @@ or a use-after-free, so change them deliberately:
   scope. A struct literal that stores a *borrowed* value must therefore retain it
   (`emitRetainStructLitFields`), including when the literal is returned from a
   function with no locals of its own.
+- **A container owns its elements.** `dex_array_string_push` retains what it is
+  given and the array's destructor releases every slot, so an array literal
+  built from a borrowed expression must let push take that reference and an
+  owned temporary must be released after the push. All three array-literal
+  sites go through `genArrayLitElem` for this; writing `arr->data[i]` directly
+  is what made `["find", dir]` free the caller's `dir`, and it also wrote past
+  the eight-slot initial capacity. Assigning into a slot (`names[0] = other`)
+  is the same rule: release the old, retain a borrowed new one.
 - `json.Value` has its own ownership rules — indexing a document mints a reference
   where indexing an array only borrows one. See `jsonValueOwned` in `gen_jsonvalue.go`.
 - A method value is a fresh closure even though it reads like a field access, so

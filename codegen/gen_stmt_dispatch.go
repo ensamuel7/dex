@@ -218,13 +218,10 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 			} else {
 				cNewFn := g.arrayNewFunc(gl.Type)
 				out.WriteString(fmt.Sprintf("%s%s = %s();\n", prefix, name, cNewFn))
-				for i, elem := range arrLit.Elems {
-					out.WriteString(fmt.Sprintf("%s%s->data[%d] = ", prefix, name, i))
-					g.genExpr(out, elem)
-					out.WriteString(";\n")
-				}
-				if len(arrLit.Elems) > 0 {
-					out.WriteString(fmt.Sprintf("%s%s->len = %d;\n", prefix, name, len(arrLit.Elems)))
+				for _, elem := range arrLit.Elems {
+					out.WriteString(prefix)
+					g.genArrayLitElem(out, name, gl.Type, elem)
+					out.WriteString("\n")
 				}
 			}
 		} else {

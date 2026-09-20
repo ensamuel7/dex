@@ -239,9 +239,55 @@ func TestCodegenLetDouble(t *testing.T) {
 func TestCodegenLetArrayInt(t *testing.T) {
 	out := generate(t, "fn main(): int { let a: int[] = [1, 2] return a[0] }")
 	assertContains(t, out, "DexArrayInt* a = dex_array_int_new();")
-	assertContains(t, out, "a->data[0] = 1;")
-	assertContains(t, out, "a->data[1] = 2;")
-	assertContains(t, out, "a->len = 2;")
+	assertContains(t, out, "dex_array_int_push(a, 1);")
+	assertContains(t, out, "dex_array_int_push(a, 2);")
+}
+
+// A literal longer than an array's initial capacity of eight. Written slot by
+// slot into `->data[i]`, as this used to be, the ninth element wrote past the
+// allocation; push grows it.
+func TestCodegenLetArrayBeyondInitialCapacity(t *testing.T) {
+	out := generate(t, "fn main(): int { let a: int[] = [1,2,3,4,5,6,7,8,9,10] return a[9] }")
+	assertContains(t, out, "dex_array_int_push(a, 10);")
+	assertNotContains(t, out, "a->data[9] =")
+}
+
+// An array literal that borrows a variable must retain it: the array releases
+// every slot when it dies, and the variable is still owned by its scope.
+// `["find", dir]` freed the caller's `dir` before this was fixed.
+func TestCodegenArrayLitRetainsBorrowedString(t *testing.T) {
+	out := generate(t, `fn main(): void {
+		let dir: string = "/tmp/x"
+		let argv: string[] = ["find", dir]
+	}`)
+	// push retains, so a borrowed element is pushed and *not* released...
+	assertContains(t, out, "dex_array_string_push(argv,")
+	// ...while a literal minted its own reference and hands it back.
+	assertContains(t, out, "dex_string_from_lit(\"find\")")
+	assertNotContains(t, out, "argv->data[1] = dir;")
+}
+
+// The same array literal in expression position — passed straight to a call
+// rather than bound to a name — takes the identical path.
+func TestCodegenArrayLitExprReleasesOwnedElements(t *testing.T) {
+	out := generate(t, `fn take(items: string[]): int { return items.len() }
+fn main(): void {
+	let n: int = take(["a", "b"])
+}`)
+	assertContains(t, out, "dex_array_string_push(")
+	assertContains(t, out, "dex_release(")
+}
+
+// A string array's slot owns its reference. Overwriting one releases what was
+// there and takes a reference to what replaces it.
+func TestCodegenStringIndexAssignOwnership(t *testing.T) {
+	out := generate(t, `fn main(): void {
+		let names: string[] = ["a", "b"]
+		let other: string = "c"
+		names[0] = other
+	}`)
+	assertContains(t, out, "dex_retain(")
+	assertContains(t, out, "dex_release(*")
 }
 
 // --- Control flow ---
@@ -816,8 +862,8 @@ func TestCodegenTypeInferenceArray(t *testing.T) {
 		let a = [1, 2, 3]
 	}`)
 	assertContains(t, out, "DexArrayInt* a = dex_array_int_new();")
-	assertContains(t, out, "a->data[0] = 1;")
-	assertContains(t, out, "a->len = 3;")
+	assertContains(t, out, "dex_array_int_push(a, 1);")
+	assertContains(t, out, "dex_array_int_push(a, 3);")
 }
 
 // --- Runtime safety checks ---

@@ -101,23 +101,10 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 		}
 		cNewFn := g.arrayNewFunc(s.Type)
 		out.WriteString(fmt.Sprintf("%s%s %s = %s();\n", prefix, g.cType(s.Type), s.Name, cNewFn))
-		if len(arrLit.Elems) > 0 {
-			// Inline initialize data
-			for i, elem := range arrLit.Elems {
-				if s.Type == ast.TypeArrayString {
-					// For string arrays, we need to retain the string element
-					out.WriteString(fmt.Sprintf("%s%s->data[%d] = ", prefix, s.Name, i))
-					g.genExpr(out, elem)
-					out.WriteString(";\n")
-					// String literals from genExpr produce +1 refs via dex_string_from_lit
-					// so no extra retain needed
-				} else {
-					out.WriteString(fmt.Sprintf("%s%s->data[%d] = ", prefix, s.Name, i))
-					g.genExpr(out, elem)
-					out.WriteString(";\n")
-				}
-			}
-			out.WriteString(fmt.Sprintf("%s%s->len = %d;\n", prefix, s.Name, len(arrLit.Elems)))
+		for _, elem := range arrLit.Elems {
+			out.WriteString(prefix)
+			g.genArrayLitElem(out, s.Name, s.Type, elem)
+			out.WriteString("\n")
 		}
 		g.registerScopeVar(s.Name, s.Type)
 		return

@@ -490,11 +490,9 @@ func (g *Generator) genArrayLitExpr(out *strings.Builder, e *ast.ArrayLitExpr) {
 
 	tmp := g.nextTemp()
 	out.WriteString(fmt.Sprintf("({ %s %s = %s(); ", g.cType(arrType), tmp, g.arrayNewFunc(arrType)))
-	pushFn := g.arrayPushFunc(arrType)
 	for _, elem := range e.Elems {
-		out.WriteString(fmt.Sprintf("%s(%s, ", pushFn, tmp))
-		g.genExpr(out, elem)
-		out.WriteString("); ")
+		g.genArrayLitElem(out, tmp, arrType, elem)
+		out.WriteString(" ")
 	}
 	out.WriteString(fmt.Sprintf("%s; })", tmp))
 }

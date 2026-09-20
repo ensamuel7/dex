@@ -93,7 +93,10 @@ or a use-after-free, so change them deliberately:
 - A struct **owns** its heap fields: they are released when the struct goes out of
   scope. A struct literal that stores a *borrowed* value must therefore retain it
   (`emitRetainStructLitFields`), including when the literal is returned from a
-  function with no locals of its own.
+  function with no locals of its own. **This recurses.** A nested struct field is
+  a value, not a heap type, but the release pass descends into it — so the retain
+  pass has to as well, or `Result { output: entry }` returns freed strings while
+  `entry` looked perfectly alive at the call site.
 - **A container owns its elements.** `dex_array_string_push` retains what it is
   given and the array's destructor releases every slot, so an array literal
   built from a borrowed expression must let push take that reference and an

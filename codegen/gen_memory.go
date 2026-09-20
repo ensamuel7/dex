@@ -181,11 +181,27 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 			break
 		}
 		ft, ok := fieldTypes[name]
-		if !ok || !ast.NeedsRelease(ft) || !ast.IsHeapType(ft) {
+		if !ok || !ast.NeedsRelease(ft) {
 			continue
 		}
-		if g.borrowsHeapValue(lit.FieldValues[i]) {
+		if !g.borrowsHeapValue(lit.FieldValues[i]) {
+			// A fresh temporary already carries the only reference there is;
+			// ownership simply moves into the literal.
+			continue
+		}
+		switch {
+		case ast.IsHeapType(ft):
 			out.WriteString(fmt.Sprintf("%sdex_retain(%s.%s);\n", prefix, target, name))
+		case ast.IsStructType(ft):
+			// A nested struct is a value, not a heap type, so it is not
+			// retained — but its own heap fields are, because emitReleaseVar
+			// recurses into it and releases them.
+			//
+			// `Result { output: entry }` copied entry's string pointers and
+			// took no reference to them, and the scope then released `entry`.
+			// The returned Result carried freed strings: a filename came back
+			// empty and the allocator was corrupt some calls later.
+			g.emitRetainBorrowedStructFields(out, prefix, target+"."+name, ft)
 		}
 	}
 }

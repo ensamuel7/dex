@@ -1,0 +1,70 @@
+// A struct literal that stores another struct stores that struct's heap
+// fields too, and must take a reference to each of them.
+//
+// A nested struct field is a value rather than a heap type, so the retain pass
+// used to skip it — while the release pass recursed into it and freed its
+// strings at scope exit. The literal was returned carrying freed pointers: a
+// name came back empty and the allocator was corrupt some calls later.
+
+struct Entry {
+    found: bool
+    id: string
+    label: string
+}
+
+struct Result {
+    ok: bool
+    output: Entry
+    message: string
+}
+
+fn makeEntry(id: string, label: string): Entry {
+    return Entry { found: true, id: id, label: label }
+}
+
+// `entry` is a local, so the literal below only borrows its strings and the
+// scope is about to release them.
+fn wrap(name: string): Result {
+    let stem: string = name + "-merged"
+    let entry: Entry = makeEntry("an-id", stem)
+    return Result { ok: true, output: entry, message: "" }
+}
+
+// Two levels down, to check the recursion rather than one hand-written case.
+struct Envelope {
+    result: Result
+    note: string
+}
+
+fn envelope(name: string): Envelope {
+    let inner: Result = wrap(name)
+    return Envelope { result: inner, note: "wrapped" }
+}
+
+fn main(): void {
+    let i: int = 0
+    while (i < 50) {
+        let r: Result = wrap("report")
+        assert(r.ok)
+        assert(r.output.found)
+        assert(r.output.id == "an-id")
+        assert(r.output.label == "report-merged")
+        i = i + 1
+    }
+
+    let j: int = 0
+    while (j < 50) {
+        let e: Envelope = envelope("invoice")
+        assert(e.note == "wrapped")
+        assert(e.result.ok)
+        assert(e.result.output.label == "invoice-merged")
+        assert(e.result.output.id == "an-id")
+        j = j + 1
+    }
+
+    // A nested struct built inline rather than borrowed: ownership moves into
+    // the literal and nothing extra is taken.
+    let direct: Result = Result { ok: true, output: makeEntry("x", "y"), message: "fresh" }
+    assert(direct.output.label == "y")
+    assert(direct.message == "fresh")
+}

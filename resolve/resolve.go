@@ -16,12 +16,52 @@ import (
 // ExtractImportPaths scans raw tokens for import declarations and returns their paths.
 func ExtractImportPaths(tokens []token.Token) []string {
 	var paths []string
-	for i := 0; i < len(tokens)-1; i++ {
-		if tokens[i].Kind == token.TokenImport && tokens[i+1].Kind == token.TokenString {
-			paths = append(paths, tokens[i+1].Value)
-		}
+	for _, ref := range ExtractImports(tokens) {
+		paths = append(paths, ref.Path)
 	}
 	return paths
+}
+
+// ImportRef is an import's path together with the module name it asked to be
+// known by, when it gave one.
+type ImportRef struct {
+	Path  string
+	Alias string
+}
+
+// ExtractImports scans raw tokens for import declarations, keeping any alias.
+// A module's own imports are read from tokens rather than from a parsed program,
+// which is why dropping the alias here used to make `import "x" as "y"` work in
+// the main file and nowhere else.
+func ExtractImports(tokens []token.Token) []ImportRef {
+	var refs []ImportRef
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Kind != token.TokenImport || tokens[i+1].Kind != token.TokenString {
+			continue
+		}
+		ref := ImportRef{Path: tokens[i+1].Value}
+		if i+3 < len(tokens) && tokens[i+2].Kind == token.TokenAs && tokens[i+3].Kind == token.TokenString {
+			ref.Alias = tokens[i+3].Value
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+// own records which file a merged global came from. Two modules may share a
+// name — `model/charging` and `service/charging` both merge under `charging_`
+// — and that is only a problem when both define the same thing. Catching it
+// here names the two files and the symbol; letting it through named neither,
+// because it surfaced as a redefinition in the generated C.
+func own(owners map[string]string, flatName, absPath, moduleName string) error {
+	if prev, taken := owners[flatName]; taken && prev != absPath {
+		bare := strings.TrimPrefix(flatName, moduleName+"_")
+		return fmt.Errorf("module '%s' is provided by two files and both define '%s':\n  %s\n  %s\n"+
+			"a module's name is its file's base name, so give one of them another: "+
+			"import \"...\" as \"<name>\"", moduleName, bare, prev, absPath)
+	}
+	owners[flatName] = absPath
+	return nil
 }
 
 // Registers struct and enum declarations from user modules globally so the main
@@ -86,7 +126,8 @@ func preRegisterStructsFromFile(filePath string, visited map[string]bool, names 
 func ResolveUserModules(program *ast.Program, sourceDir string) error {
 	visited := map[string]bool{}
 	processing := map[string]bool{}
-	if err := resolveImports(program, sourceDir, visited, processing); err != nil {
+	owners := map[string]string{}
+	if err := resolveImports(program, sourceDir, visited, processing, owners); err != nil {
 		return err
 	}
 	resolveQualifiedGlobals(program)
@@ -139,7 +180,7 @@ func resolveQualifiedGlobals(program *ast.Program) {
 	})
 }
 
-func resolveImports(program *ast.Program, sourceDir string, visited, processing map[string]bool) error {
+func resolveImports(program *ast.Program, sourceDir string, visited, processing map[string]bool, owners map[string]string) error {
 	var userImports []ast.Import
 	var stdlibImports []ast.Import
 
@@ -175,7 +216,7 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 			return fmt.Errorf("circular import detected: '%s'", imp.Path)
 		}
 
-		if err := resolveModuleFile(filePath, absPath, moduleName, program, visited, processing); err != nil {
+		if err := resolveModuleFile(filePath, absPath, moduleName, program, visited, processing, owners); err != nil {
 			return err
 		}
 	}
@@ -185,7 +226,7 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 
 // Sub-imports are resolved before this module is parsed, so their struct types
 // are registered by the time its type annotations are read.
-func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Program, visited, processing map[string]bool) error {
+func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Program, visited, processing map[string]bool, owners map[string]string) error {
 	processing[absPath] = true
 
 	source, err := os.ReadFile(filePath)
@@ -199,14 +240,22 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		return err
 	}
 
-	importPaths := ExtractImportPaths(tokens)
+	subImports := ExtractImports(tokens)
+	importPaths := make([]string, 0, len(subImports))
+	for _, ref := range subImports {
+		importPaths = append(importPaths, ref.Path)
+	}
 
 	modDir := filepath.Dir(absPath)
-	for _, subPath := range importPaths {
+	for _, ref := range subImports {
+		subPath := ref.Path
 		if stdlib.Lookup(subPath) != nil {
 			continue
 		}
 		subModuleName := filepath.Base(subPath)
+		if ref.Alias != "" {
+			subModuleName = ref.Alias
+		}
 		subFilePath := filepath.Join(modDir, subPath+".dx")
 		subAbsPath, err := filepath.Abs(subFilePath)
 		if err != nil {
@@ -223,7 +272,7 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 			return fmt.Errorf("circular import detected: '%s'", subPath)
 		}
 
-		if err := resolveModuleFile(subFilePath, subAbsPath, subModuleName, program, visited, processing); err != nil {
+		if err := resolveModuleFile(subFilePath, subAbsPath, subModuleName, program, visited, processing, owners); err != nil {
 			return err
 		}
 	}
@@ -281,6 +330,9 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	for _, fn := range modProgram.Functions {
 		if fn.Name == "main" {
 			continue
+		}
+		if err := own(owners, fn.Name, absPath, moduleName); err != nil {
+			return err
 		}
 		program.Functions = append(program.Functions, fn)
 	}

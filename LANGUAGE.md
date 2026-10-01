@@ -1495,9 +1495,27 @@ let kind: int = frame.CALL              // a module-level const
 http.route("GET", "/items", chargers.list)   // a function as a value
 ```
 
-Module names are flat, so two files with the same base name cannot both be
-imported into one program, and type names are shared across the whole program.
-Give a type or module a name that is unique project-wide.
+Module names are flat and so are type names: both are shared across the whole
+program. Two files with the same base name therefore merge under one module
+name, which is fine until they both declare the same function or module-level
+value — at which point the compiler names the two files and the clashing symbol
+and asks you to rename one of them.
+
+### Aliasing an import
+
+`as` gives an import a different module name, which is how two files with the
+same base name are used together:
+
+```dex
+import "model/charging" as "charge"
+import "service/charging" as "charging"
+
+let s: charge.Session = charge.Session{}
+let priced: long = charging.price(s)
+```
+
+The alias is a **string**, not a bare identifier. It works in any file, not just
+the program's entry point.
 
 A name declared in the importing scope shadows a module of the same name, so a
 local called `chargers` is a variable, not the module.

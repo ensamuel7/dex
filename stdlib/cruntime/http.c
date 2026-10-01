@@ -30,19 +30,39 @@ typedef struct {
     DexClosure* handler;
 } dex_route_entry;
 
-#define DEX_MAX_ROUTES 256
-static dex_route_entry dex_routes[DEX_MAX_ROUTES];
+/* Grown on demand rather than fixed. An entry is a little over 9KB — the
+ * pre-split segments are most of it — so a static table generous enough for a
+ * large service would cost tens of megabytes of BSS in every binary that links
+ * this, including the ones serving six routes. Doubling from a small start
+ * means a small service pays for what it registers and a large one is not
+ * capped at all.
+ *
+ * Safe to move under realloc because the table is built in full before
+ * dex_http_listen begins serving and is never written again: every dex_route
+ * call happens during startup, and the worker processes listen forks already
+ * inherit a finished table. */
+static dex_route_entry* dex_routes = NULL;
 static int dex_route_count = 0;
+static int dex_route_capacity = 0;
+
+#define DEX_ROUTES_INITIAL 16
 
 void dex_route(const char* method, const char* path, DexClosure* handler) {
-    /* Dropping a route silently is worse than the limit itself: the route
-     * simply answers 404 with nothing anywhere to say why. */
-    if (dex_route_count >= DEX_MAX_ROUTES) {
-        fprintf(stderr,
-            "[http] route table full (%d): dropped %s %s. "
-            "Raise DEX_MAX_ROUTES in stdlib/cruntime/http.c.\n",
-            DEX_MAX_ROUTES, method, path);
-        return;
+    if (dex_route_count == dex_route_capacity) {
+        int grown = dex_route_capacity ? dex_route_capacity * 2 : DEX_ROUTES_INITIAL;
+        dex_route_entry* table =
+            (dex_route_entry*)realloc(dex_routes, (size_t)grown * sizeof(dex_route_entry));
+        /* Dropping a route silently is worse than the failure itself: the route
+         * simply answers 404 with nothing anywhere to say why. */
+        if (!table) {
+            fprintf(stderr,
+                "[http] out of memory growing the route table to %d entries: "
+                "dropped %s %s.\n",
+                grown, method, path);
+            return;
+        }
+        dex_routes = table;
+        dex_route_capacity = grown;
     }
     dex_route_entry* r = &dex_routes[dex_route_count];
     r->method = method;

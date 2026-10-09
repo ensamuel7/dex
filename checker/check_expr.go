@@ -566,9 +566,11 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		return 0, c.errAt(e.Pos, "receive() requires a channel or task handle, got %s", typeName(srcType))
 
 	case *ast.CallExpr:
-		// Method call on an arbitrary receiver expression, e.g. parsed[0].asInt().
-		// Only types whose methods do not depend on a variable name can be
-		// reached this way; the rest still go through the named-receiver path.
+		// Method call on an arbitrary receiver expression — parsed[0].asInt(),
+		// sb.toString().len(), a fluent builder chain. The named-receiver path
+		// below does the same work for a bare variable; the method checkers take
+		// the receiver's name only to put it in their error messages, so the
+		// same ones serve both and "<expression>" stands in for the name.
 		if e.Recv != nil {
 			recvType, err := c.checkExpr(e.Recv)
 			if err != nil {
@@ -577,15 +579,57 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if ast.IsRefType(recvType) {
 				recvType = ast.RefInnerType(recvType)
 			}
-			if recvType == ast.TypeJsonValue {
+			// Codegen needs the result type on every one of these: the receiver
+			// is an expression, so it is evaluated into a temp whose type has to
+			// be declared, and released there if the expression minted it.
+			const exprName = "<expression>"
+			switch {
+			case recvType == ast.TypeJsonValue:
 				ret, err := c.checkJsonValueMethod(e.Name, e.Args, e.Pos)
 				if err != nil {
 					return 0, err
 				}
-				// Codegen needs the result type to declare the temp it releases
-				// the receiver through.
 				e.ResolvedType = ret
 				return ret, nil
+			case recvType == ast.TypeString:
+				ret, err := c.checkStringMethod(exprName, e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				e.ResolvedType = ret
+				return ret, nil
+			case recvType == ast.TypeStringBuilder:
+				ret, err := c.checkStringBuilderMethod(exprName, e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				e.ResolvedType = ret
+				return ret, nil
+			case ast.IsArrayType(recvType):
+				ret, err := c.checkArrayMethod(exprName, recvType, e.Name, e.Args)
+				if err != nil {
+					return 0, c.errAt(e.Pos, "%s", err)
+				}
+				e.ResolvedType = ret
+				return ret, nil
+			case ast.IsMapType(recvType):
+				ret, err := c.checkMapMethod(exprName, recvType, e.Name, e.Args, e.Pos)
+				if err != nil {
+					return 0, err
+				}
+				e.ResolvedType = ret
+				return ret, nil
+			case ast.IsStructType(recvType) && !ast.IsArrayType(recvType):
+				// A method on the struct a previous link returned — the fluent
+				// case, q.table("x").limit(25).
+				if ret, found, err := c.checkStructMethodCall(e, recvType, typeName(recvType)); found {
+					if err != nil {
+						return 0, err
+					}
+					e.ResolvedType = ret
+					return ret, nil
+				}
+				return 0, c.errAt(e.Pos, "%s has no method '%s'", typeName(recvType), e.Name)
 			}
 			return 0, c.errAt(e.Pos, "cannot call method '%s' on a %s expression; assign it to a variable first", e.Name, typeName(recvType))
 		}
@@ -702,7 +746,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if isVar && ast.IsRefType(varType) {
 				varType = ast.RefInnerType(varType)
 			}
-			// Array method call on dotted field (e.g. charger.connectors.len())
+			// Array method call on dotted field (e.g. post.views.len())
 			if isVar && ast.IsArrayType(varType) {
 				retType, err := c.checkArrayMethod(e.Module, varType, e.Name, e.Args)
 				if err != nil {
@@ -754,27 +798,8 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			}
 			// Struct method call: instance.method()
 			if isVar && ast.IsStructType(varType) {
-				structDef := ast.GetStructDef(varType)
-				if structDef != nil {
-					if methods, ok := c.structMethods[structDef.Name]; ok {
-						if methodSig, ok := methods[e.Name]; ok {
-							e.IsMethodCall = true
-							e.StructType = varType
-							if len(e.Args) != len(methodSig.Params) {
-								return 0, c.errAt(e.Pos, "%s.%s() takes exactly %d argument(s), got %d", e.Module, e.Name, len(methodSig.Params), len(e.Args))
-							}
-							for i, arg := range e.Args {
-								argType, err := c.checkExpr(arg)
-								if err != nil {
-									return 0, err
-								}
-								if argType != methodSig.Params[i] && !canAssign(methodSig.Params[i], argType, e.Args[i]) {
-									return 0, c.errAt(e.Pos, "%s.%s() argument %d must be %s, got %s", e.Module, e.Name, i+1, typeName(methodSig.Params[i]), typeName(argType))
-								}
-							}
-							return methodSig.ReturnType, nil
-						}
-					}
+				if ret, found, err := c.checkStructMethodCall(e, varType, e.Module); found {
+					return ret, err
 				}
 			}
 

@@ -76,6 +76,12 @@ func (g *Generator) genMethodValue(out *strings.Builder, recvExpr ast.Expr, stru
 	tmp := g.nextTemp()
 	out.WriteString(fmt.Sprintf("({ %s* %s = (%s*)dex_closure_env_alloc(sizeof(%s), %s); %s->self = ",
 		envName, tmp, envName, envName, g.methodValueEnvDestroy(structType), tmp))
+	// The environment stores the receiver by value. Taking a method value off a
+	// reference — inside another method, where self is one — therefore copies
+	// what it points at.
+	if ast.IsRefType(g.typeOfExpr(recvExpr)) {
+		out.WriteString("*")
+	}
 	g.genExpr(out, recvExpr)
 	out.WriteString("; ")
 	// The environment is now a second owner of every heap field the receiver
@@ -139,7 +145,11 @@ func (g *Generator) methodValueWrapper(structType ast.Type, method *ast.Function
 	if method.ReturnType != ast.TypeVoid {
 		w.WriteString("return ")
 	}
-	w.WriteString(fmt.Sprintf("%s(_e->self", flatName))
+	// self is a pointer receiver, so the environment's copy is passed by
+	// address. It stays a copy — which is what a method value means here: it
+	// operates on the receiver as it was when the value was taken, so a
+	// mutating method reached this way changes the copy and not the original.
+	w.WriteString(fmt.Sprintf("%s(&_e->self", flatName))
 	for i := range method.Params {
 		w.WriteString(fmt.Sprintf(", _a%d", i))
 	}

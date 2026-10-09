@@ -121,11 +121,11 @@ func (p *Parser) parseUnary() (ast.Expr, error) {
 	return p.parsePrimary()
 }
 
-
-// parsePostfix consumes trailing index and field-access operators after a base
-// expression, so chains like a.b[i], arr[i].field, and m[i][j].x parse fully
-// instead of stopping at the first operator. A ".name(" sequence is left
-// unconsumed: method calls on an arbitrary expression are not representable.
+// parsePostfix consumes trailing index, field-access and method-call operators
+// after a base expression, so chains like a.b[i], arr[i].field, m[i][j].x,
+// sb.toString().len() and a fluent q.where(..).limit(..) parse fully instead of
+// stopping at the first operator. A method call on an arbitrary expression is
+// representable: the receiver travels on CallExpr.Recv.
 func (p *Parser) parsePostfix(base ast.Expr, pos ast.Pos) (ast.Expr, error) {
 	for {
 		if p.check(token.TokenLBracket) {
@@ -204,7 +204,10 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 
 	case token.TokenString:
 		p.advance()
-		return &ast.StringLit{Pos: pos, Value: tok.Value}, nil
+		// Through parsePostfix so a literal is a receiver like any other string:
+		// "a,b".split(",") and "  x ".trim().len() work without a variable to
+		// hang them on.
+		return p.parsePostfix(&ast.StringLit{Pos: pos, Value: tok.Value}, pos)
 
 	case token.TokenInterpStringStart:
 		return p.parseStringInterp()
@@ -438,7 +441,10 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 					callExpr.ArgNames = p.lastArgNames
 					p.lastArgNames = nil
 				}
-				return callExpr, nil
+				// Through parsePostfix so a call is not the end of the
+				// expression: sb.toString().len() and a fluent chain of
+				// builder steps keep parsing instead of stopping here.
+				return p.parsePostfix(callExpr, pos)
 			}
 			// Otherwise it's a field access chain: a.b.c parses as ((a.b).c)
 			var chain ast.Expr = &ast.Ident{Pos: pos, Name: name}
@@ -507,7 +513,8 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				callExpr.ArgNames = p.lastArgNames
 				p.lastArgNames = nil
 			}
-			return callExpr, nil
+			// As above: build().field and build().method() continue from here.
+			return p.parsePostfix(callExpr, pos)
 		}
 
 		return &ast.Ident{Pos: pos, Name: name}, nil
@@ -769,7 +776,6 @@ func (p *Parser) parseLambdaExpr() (ast.Expr, error) {
 
 	return &ast.LambdaExpr{Pos: pos, Params: params, ReturnType: retType, Body: body}, nil
 }
-
 
 // parseObjectLit parses a JSON object literal: { name: "Dex", "wire-key": 1 }.
 // Keys may be bare identifiers, string literals, or keywords that happen to read

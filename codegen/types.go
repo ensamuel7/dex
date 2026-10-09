@@ -550,6 +550,17 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 				return ast.ElementType(arrType)
 			}
 		}
+		// The indexed thing need not be a name: csv.split(",")[2] indexes a call's
+		// result, so the element type comes from the expression's own type. The
+		// name-keyed registries above stay authoritative for locals.
+		if t := g.typeOfExpr(e.Array); t != 0 {
+			if ast.IsMapType(t) {
+				return ast.MapValueType(t)
+			}
+			if ast.IsArrayType(t) {
+				return ast.ElementType(t)
+			}
+		}
 	case *ast.ObjectLitExpr:
 		return ast.TypeJsonValue
 	case *ast.ArrayLitExpr:
@@ -562,6 +573,10 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			if arrType, ok := g.arrVars[ident.Name]; ok {
 				return arrType // slice returns same array type
 			}
+		}
+		// As with indexing, the sliced thing may be an expression.
+		if t := g.typeOfExpr(e.Array); ast.IsArrayType(t) {
+			return t
 		}
 	case *ast.StructLitExpr:
 		if t, ok := ast.LookupStructType(e.Name); ok {

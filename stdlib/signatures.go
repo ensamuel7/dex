@@ -33,6 +33,35 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 			return "arr: string, value: int|long|double|string|bool", "string", true
 		}
 
+	case "reflect":
+		// Every function here is polymorphic in its subject — any struct, by
+		// value or by reference — so the signature is written out rather than
+		// derived from Params.
+		switch funcName {
+		case "typeName":
+			return "value: struct|&struct", "string", true
+		case "fieldCount":
+			return "value: struct|&struct", "int", true
+		case "fields":
+			return "value: struct|&struct", "string[]", true
+		case "fieldName", "fieldKind":
+			return "value: struct|&struct, index: int", "string", true
+		case "indexOf":
+			return "value: struct|&struct, name: string", "int", true
+		case "has":
+			return "value: struct|&struct, name: string", "bool", true
+		case "asInt":
+			return "value: struct|&struct, index: int", "int", true
+		case "asLong":
+			return "value: struct|&struct, index: int", "long", true
+		case "asDouble":
+			return "value: struct|&struct, index: int", "double", true
+		case "asBool":
+			return "value: struct|&struct, index: int", "bool", true
+		case "asString", "toString":
+			return "value: struct|&struct, index: int", "string", true
+		}
+
 	case "db":
 		switch funcName {
 		case "col":

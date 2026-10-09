@@ -90,8 +90,8 @@ fn newService(label: string): Service {
 
 fn main(): void {
     // Empty map literals take their type from the field they initialise.
-    let svc: Service = newService("chargers")
-    assert(svc.label == "chargers")
+    let svc: Service = newService("records")
+    assert(svc.label == "records")
     assert(svc.online() == 0)
 
     svc.connect(7, 42)

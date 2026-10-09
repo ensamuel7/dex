@@ -357,6 +357,13 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 		}
 	}
 
+	// Registered before the body is parsed, so a method inside it can name the
+	// struct it belongs to — `fn limit(n: int): &Query` within struct Query.
+	// RegisterStructType updates an existing entry, so the call after the body
+	// fills in the real fields over this placeholder.
+	p.structNames[name] = true
+	ast.RegisterStructType(ast.StructDef{Name: name, ConstructorParams: constructorParams})
+
 	if err := p.expect(token.TokenLBrace); err != nil {
 		return nil, err
 	}

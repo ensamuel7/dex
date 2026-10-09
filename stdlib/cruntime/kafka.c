@@ -101,7 +101,7 @@ int dex_kafka_producer(const char* brokers) {
 }
 
 // Enqueues. The key decides the partition, so everything sharing a key keeps
-// its order — which is why a charger tag makes a good key.
+// its order — which is why a user tag makes a good key.
 _Bool dex_kafka_produce(int h, const char* topic, const char* key, const char* value) {
     DexKafkaClient* c = dex_kafka_at(h);
     if (!c || c->is_consumer) return 0;

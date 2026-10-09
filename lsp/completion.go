@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -33,11 +34,20 @@ func (s *Server) completionsAt(text string, pos Position, uri string) []Completi
 		words := strings.Fields(before)
 		if len(words) > 0 {
 			moduleName := words[len(words)-1]
+			// `self.` reaches the enclosing struct's fields and methods, which is
+			// neither a module nor an enum and so would otherwise complete to
+			// nothing at all.
+			if moduleName == "self" {
+				if items := s.selfMemberCompletions(text, pos.Line, uri); items != nil {
+					return items
+				}
+			}
 			return s.moduleCompletions(moduleName, text, uri)
 		}
 	}
 
-	var items []CompletionItem
+	// `self` is offered only where it means something: inside a struct body.
+	items := selfItem(text, pos.Line)
 
 	// Keywords
 	for _, kw := range []struct {
@@ -133,7 +143,119 @@ func (s *Server) completionsAt(text string, pos Position, uri string) []Completi
 		}
 	}
 
+	// A name typed bare may live in a module the file never imported, so offer
+	// the qualified call with the import line attached.
+	items = append(items, s.autoImportCompletions(identifierPrefix(prefix), text, uri)...)
+
 	return items
+}
+
+// identifierPrefix returns the identifier being typed at the end of a line.
+func identifierPrefix(linePrefix string) string {
+	end := len(linePrefix)
+	start := end
+	for start > 0 && isIdentContinue(linePrefix[start-1]) {
+		start--
+	}
+	if start > 0 && linePrefix[start-1] == '.' {
+		return "" // a module member, already handled by moduleCompletions
+	}
+	word := linePrefix[start:end]
+	if word != "" && !isIdentStart(word[0]) {
+		return ""
+	}
+	return word
+}
+
+// maxAutoImportItems keeps a two-letter prefix from flooding the popup with
+// every stdlib function that happens to match.
+const maxAutoImportItems = 50
+
+// autoImportCompletions suggests `module.fn` for every unimported module that
+// exports a function matching the identifier being typed, carrying the import
+// line as an additional edit so accepting one item writes both.
+func (s *Server) autoImportCompletions(word string, text string, uri string) []CompletionItem {
+	if len(word) < 2 {
+		return nil
+	}
+	filePath := uriToPath(uri)
+	sourceDir := filepath.Dir(filePath)
+	lower := strings.ToLower(word)
+
+	var items []CompletionItem
+	add := func(modPath, modName, fnName, detail, doc string) {
+		if len(items) >= maxAutoImportItems {
+			return
+		}
+		label := modName + "." + fnName
+		items = append(items, CompletionItem{
+			Label:               label,
+			Kind:                CompletionKindFunction,
+			Detail:              detail + " — auto-import \"" + modPath + "\"",
+			Documentation:       doc,
+			InsertText:          label,
+			FilterText:          fnName,
+			SortText:            "zz" + label,
+			AdditionalTextEdits: buildImportEdit(modPath, text),
+		})
+	}
+
+	for _, modName := range sortedModuleNames() {
+		if isModuleImported(modName, text) {
+			continue
+		}
+		mod := stdlib.Lookup(modName)
+		for _, fnName := range sortedFuncNames(mod) {
+			if !strings.HasPrefix(strings.ToLower(fnName), lower) {
+				continue
+			}
+			fdef := mod.Funcs[fnName]
+			add(modName, modName, fnName, stdlibSignature(modName, fnName, &fdef), fdef.Doc)
+		}
+	}
+
+	files := userModuleFiles(sourceDir)
+	for _, impPath := range sortedKeys(files) {
+		if sameFile(files[impPath], filePath) || isModuleImported(impPath, text) {
+			continue
+		}
+		program := parseModuleFile(files[impPath])
+		if program == nil {
+			continue
+		}
+		for i := range program.Functions {
+			fn := &program.Functions[i]
+			if fn.Name == "main" || fn.IsPrivate {
+				continue
+			}
+			if !strings.HasPrefix(strings.ToLower(fn.Name), lower) {
+				continue
+			}
+			add(impPath, filepath.Base(impPath), fn.Name, formatFuncSignature(fn), "")
+		}
+	}
+
+	return items
+}
+
+// sortedModuleNames lists the stdlib modules in a stable order.
+func sortedModuleNames() []string {
+	names := make([]string, 0, len(stdlib.AllModules()))
+	for name := range stdlib.AllModules() {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// sortedFuncNames lists one module's functions in a stable order.
+func sortedFuncNames(mod *stdlib.Module) []string {
+	names := make([]string, 0, len(mod.Funcs))
+	for name := range mod.Funcs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (s *Server) moduleCompletions(moduleName string, text string, uri string) []CompletionItem {
@@ -205,6 +327,12 @@ func (s *Server) moduleCompletions(moduleName string, text string, uri string) [
 
 	// Check if moduleName is a user module import
 	if items := s.userModuleCompletions(moduleName, text, uri); items != nil {
+		return items
+	}
+
+	// Not imported yet, but a .dx file next to this one defines it — offer its
+	// members with the import attached.
+	if items := s.unimportedUserModuleCompletions(moduleName, text, uri); items != nil {
 		return items
 	}
 
@@ -318,46 +446,65 @@ func (s *Server) userModuleCompletions(moduleName string, text string, uri strin
 	sourceDir := filepath.Dir(filePath)
 	modFile := filepath.Join(sourceDir, importPath+".dx")
 
-	source, err := os.ReadFile(modFile)
-	if err != nil {
+	if _, err := os.Stat(modFile); err != nil {
 		return nil
 	}
+	return moduleMemberCompletions(modFile, nil)
+}
 
-	lex := lexer.New(string(source))
-	tokens, err := lex.Tokenize()
-	if err != nil {
+// unimportedUserModuleCompletions answers `someModule.` for a module the file
+// has not imported, found by its .dx file next to the open document. Every item
+// carries the import line, so picking one both qualifies and imports.
+func (s *Server) unimportedUserModuleCompletions(moduleName string, text string, uri string) []CompletionItem {
+	filePath := uriToPath(uri)
+	impPath, modFile, ok := userModuleNamed(moduleName, filepath.Dir(filePath), filePath)
+	if !ok {
 		return nil
 	}
+	return moduleMemberCompletions(modFile, buildImportEdit(impPath, text))
+}
 
-	p := parser.New(tokens)
-	seedParserModuleTypes(p, tokens, filepath.Dir(modFile))
-	program, errs := p.Parse()
-	if len(errs) > 0 {
+// moduleMemberCompletions lists the functions and struct types a .dx module
+// offers its importers. autoImport, when set, is attached to every item.
+func moduleMemberCompletions(modFile string, autoImport []TextEdit) []CompletionItem {
+	program := parseModuleFile(modFile)
+	if program == nil {
 		return nil
 	}
 
 	var items []CompletionItem
 
-	for _, fn := range program.Functions {
+	for i := range program.Functions {
+		fn := &program.Functions[i]
 		if fn.Name == "main" || fn.IsPrivate {
 			continue
 		}
 		items = append(items, CompletionItem{
-			Label:  fn.Name,
-			Kind:   CompletionKindFunction,
-			Detail: formatFuncSignature(&fn),
+			Label:               fn.Name,
+			Kind:                CompletionKindFunction,
+			Detail:              withAutoImportNote(formatFuncSignature(fn), autoImport),
+			AdditionalTextEdits: autoImport,
 		})
 	}
 
 	for _, sd := range program.Structs {
 		items = append(items, CompletionItem{
-			Label:  sd.Name,
-			Kind:   CompletionKindType,
-			Detail: "Struct type",
+			Label:               sd.Name,
+			Kind:                CompletionKindType,
+			Detail:              withAutoImportNote("Struct type", autoImport),
+			AdditionalTextEdits: autoImport,
 		})
 	}
 
 	return items
+}
+
+// withAutoImportNote marks a detail line whose item also writes an import.
+func withAutoImportNote(detail string, autoImport []TextEdit) string {
+	if len(autoImport) == 0 {
+		return detail
+	}
+	return detail + " (auto-import)"
 }
 
 // resolveModuleNameToPath scans the text for import declarations and returns

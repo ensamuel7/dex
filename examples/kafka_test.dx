@@ -27,7 +27,7 @@ fn main(): void {
                 kafka.poll(c, 300)
             }
 
-            assert(kafka.produce(p, "dex.test", "charger-1", "{\"event\":\"boot\"}"))
+            assert(kafka.produce(p, "dex.test", "order-1", "{\"event\":\"boot\"}"))
             // Everything queued has left by the time flush returns.
             assert(kafka.flush(p, 10000) == 0)
             kafka.close(p)
@@ -40,7 +40,7 @@ fn main(): void {
             }
             assert(!payload.isEmpty())
             assert(kafka.lastTopic(c) == "dex.test")
-            assert(kafka.lastKey(c) == "charger-1")
+            assert(kafka.lastKey(c) == "order-1")
             assert(kafka.commit(c))
             kafka.close(c)
             fmt.println("kafka ok: " + payload)

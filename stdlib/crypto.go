@@ -47,7 +47,7 @@ func init() {
 				Params:     []ast.Type{},
 				ReturnType: ast.TypeString,
 				CName:      "dex_crypto_uuid",
-				Doc:        "Generate a random UUID v4 string.",
+				Doc:        "Generate a random UUID v4 string from the system entropy source. Returns \"\" if that source cannot be read, rather than a guessable id.",
 			},
 			"base64Encode": {
 				Params:     []ast.Type{ast.TypeString},

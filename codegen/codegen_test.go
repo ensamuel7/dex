@@ -665,7 +665,12 @@ func TestCodegenArrayIndexOf(t *testing.T) {
 		let a: string[] = ["a", "b"]
 		let i: int = a.indexOf("b")
 	}`)
-	assertContains(t, out, `dex_array_string_indexOf(a, dex_string_from_lit("b"))`)
+	// The needle is hoisted rather than inlined. indexOf only reads it, so a
+	// literal argument minted a reference nobody owned; this assertion used to
+	// require that leaking shape.
+	assertContains(t, out, `dex_array_string_indexOf(a, _dex_tmp_`)
+	assertContains(t, out, `_dex_tmp_2 = dex_string_from_lit("b")`)
+	assertContains(t, out, `dex_release(_dex_tmp_2)`)
 }
 
 func TestCodegenCrossNumericAdd(t *testing.T) {

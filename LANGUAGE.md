@@ -392,16 +392,16 @@ private struct InternalConfig {
 map, an optional, a reference, or an **array** (including an array of structs):
 
 ```dex
-struct Connector {
+struct Tag {
   id: int
   kind: string
 }
 
-struct Charger {
+struct Post {
   tag: string
-  connectors: int[]        // primitive array
+  views: int[]             // primitive array
   names: string[]
-  ports: Connector[]       // struct array
+  tags: Tag[]              // struct array
 }
 ```
 
@@ -681,7 +681,9 @@ fn main(): void {
 
 ### How it works
 
-Interfaces compile to C vtable structs. Each interface value holds a pointer to the underlying data (`_data`) and a table of function pointers (`_vtable`). The compiler wires up the vtable at the call site based on the concrete struct type. All dispatch is resolved at compile time — there is no runtime type metadata or reflection.
+Interfaces compile to C vtable structs. Each interface value holds a pointer to the underlying data (`_data`) and a table of function pointers (`_vtable`). The compiler wires up the vtable at the call site based on the concrete struct type. All dispatch is resolved at compile time: an interface call carries no type metadata and no lookup.
+
+Struct *fields* can be read by position at runtime through the [`reflect`](#reflect) module, but that is a separate, opt-in mechanism — the compiler emits a name table and typed accessors for the structs some `reflect` call names, and nothing for the rest. Interface dispatch does not use it.
 
 ### Why no `instanceof` or `typeof`
 
@@ -911,6 +913,133 @@ let result: int = add(5, 10)
 fmt.println(42)
 let doc: json.Value = json.decode(text)
 ```
+
+### Method chaining
+
+A call is not the end of an expression. Its result can be indexed, have a field
+read, or have a method called on it, so a chain keeps going for as long as each
+link has something to offer:
+
+```dex
+let n: int = sb.toString().len()
+let short: int = str.fromInt(42).trim().len()
+let count: int = csv.split(",").len()
+let third: string = csv.split(",")[2]
+let size: int = csv.split(",")[2].len()
+let keys: int = settings.keys().len()
+let shouted: string = "  mixed  ".trim().toUpper()
+```
+
+A string, array, map or `StringBuilder` is a receiver whether it is a named
+variable, a literal, or the result of the call before it.
+
+Each link's receiver is **evaluated once** and released if that link minted it.
+`csv.split(",")[2].len()` splits once, not twice, and the array the split
+produced is freed at the end of the statement even though only one of its
+elements was wanted. A receiver that is simply a variable is used directly, with
+no temporary, so chaining costs nothing where it is not used.
+
+A chain of your own making works the same way — see
+[Fluent builders](#fluent-builders).
+
+---
+
+### Fluent builders
+
+A method receives the instance it was called on as a **pointer**, named `self`.
+Assigning to one of its fields changes that instance, and returning `self` lets
+the next call in a chain continue from it:
+
+```dex
+struct Query {
+    from: string
+    max: int
+
+    fn table(name: string): &Query {
+        self.from = name
+        return self
+    }
+
+    fn limit(n: int): &Query {
+        self.max = n
+        return self
+    }
+
+    fn text(): string {
+        return "SELECT * FROM " + self.from
+    }
+}
+
+let q: Query = Query { from: "", max: 0 }
+q.table("users").limit(25)
+// q.from is "users", q.max is 25
+```
+
+One instance is threaded through the whole chain; nothing is copied per step.
+`&Query` is the return type that says so — the same `&T` that a mutable
+parameter uses.
+
+A chain may start from a temporary. The value is bound to a statement-scoped
+variable for the length of the statement, so each link mutates the same thing
+and its heap fields are released when the statement ends:
+
+```dex
+fn insertInto(name: string): Stmt {
+    return Stmt { table: name, cols: "" }
+}
+
+let sql: string = insertInto("users").col("id").col("email").text()
+```
+
+The result of a chain can also be bound as a reference:
+
+```dex
+let r: &Counter = c.bump()
+```
+
+#### self
+
+`self` names the receiver inside any method. It is readable and assignable:
+
+```dex
+fn col(name: string): &Stmt {
+    if (self.cols.isEmpty()) {
+        self.cols = name
+    } else {
+        self.cols = self.cols + ", " + name
+    }
+    return self
+}
+```
+
+Bare field names still read through the receiver, so `cols` and `self.cols` mean
+the same thing when read. **Assignment requires `self`** — a bare `cols = name`
+is an undefined variable, because a method's locals and its fields are separate
+namespaces.
+
+Assigning a heap field through `self` follows the usual rule: the string being
+replaced is released and the new one retained, so reassigning in a loop does not
+grow.
+
+#### Methods on a reference
+
+Because the receiver is a pointer, a method can be called on a `&T` just as on a
+value, and a method reached from inside another method — `self.reg.attach(..)` —
+threads the reference through without a copy.
+
+A **method value** is still a copy. Taking `q.get` captures the receiver as it
+was, so a mutating method reached that way changes the capture and not the
+original:
+
+```dex
+let f: fn(): int = q.get   // copies q
+```
+
+#### A field and a method may share a name
+
+`q.table` reads the field and `q.table(..)` calls the method, so the two do not
+collide. The method value of a method shadowed this way is not reachable, since
+`q.table` resolves to the field.
 
 ---
 
@@ -1486,13 +1615,13 @@ name is the file's base name, and its top-level functions, module-level values,
 and types are reached through it:
 
 ```dex
-import "service/chargers"     // module `chargers`
-import "../ocpp/frame"        // module `frame`
+import "service/users"        // module `users`
+import "../wire/frame"        // module `frame`
 
-let svc: chargers.Service = chargers.newService(db)
+let svc: users.Service = users.newService(db)
 let text: string = frame.call(id, action, payload)
 let kind: int = frame.CALL              // a module-level const
-http.route("GET", "/items", chargers.list)   // a function as a value
+http.route("GET", "/items", users.list)      // a function as a value
 ```
 
 Module names are flat and so are type names: both are shared across the whole
@@ -1507,18 +1636,18 @@ and asks you to rename one of them.
 same base name are used together:
 
 ```dex
-import "model/charging" as "charge"
-import "service/charging" as "charging"
+import "model/billing" as "bill"
+import "service/billing" as "billing"
 
-let s: charge.Session = charge.Session{}
-let priced: long = charging.price(s)
+let inv: bill.Invoice = bill.Invoice{}
+let total: long = billing.total(inv)
 ```
 
 The alias is a **string**, not a bare identifier. It works in any file, not just
 the program's entry point.
 
 A name declared in the importing scope shadows a module of the same name, so a
-local called `chargers` is a variable, not the module.
+local called `users` is a variable, not the module.
 
 Declarations may appear in any order within a file — a `const` above the struct
 it describes, a function above the type it returns.
@@ -2291,8 +2420,8 @@ import "redis"
 
 let r: int = redis.connect("127.0.0.1", 6379, "")   // "" = no password
 if (r != -1) {
-    redis.setex(r, "charger:CP-42", "node-a", 30)
-    let owner: string = redis.get(r, "charger:CP-42")   // "" when absent
+    redis.setex(r, "session:ab12", "node-a", 30)
+    let owner: string = redis.get(r, "session:ab12")    // "" when absent
     redis.close(r)
 }
 ```
@@ -2332,7 +2461,7 @@ of its own and messages are pulled rather than pushed:
 
 ```dex
 spawn {
-    redis.subscribe(sub, "ocpp:instance:node-a")
+    redis.subscribe(sub, "jobs:instance:node-a")
     while (true) {
         let msg: string = redis.nextMessage(sub)
         if (msg.isEmpty()) {
@@ -2346,7 +2475,7 @@ spawn {
 Anything without a wrapper is spelled as its arguments:
 
 ```dex
-let args: string[] = ["ZADD", "leaderboard", "42", "charger-1"]
+let args: string[] = ["ZADD", "leaderboard", "42", "player-1"]
 redis.command(r, args)
 ```
 
@@ -2369,14 +2498,14 @@ on a path it never takes still builds and runs.
 import "kafka"
 
 let p: int = kafka.producer("localhost:9092")
-kafka.produce(p, "ocpp.meter-values", "CP-42", payload)   // key picks the partition
+kafka.produce(p, "orders.created", "order-42", payload)   // key picks the partition
 kafka.flush(p, 5000)
 kafka.close(p)
 ```
 
 ```dex
 let c: int = kafka.consumer("localhost:9092", "persister")
-kafka.subscribe(c, "ocpp.meter-values")
+kafka.subscribe(c, "orders.created")
 while (true) {
     let msg: string = kafka.poll(c, 1000)     // "" when nothing arrived
     if (!msg.isEmpty()) {
@@ -2401,7 +2530,7 @@ while (true) {
 | `close` | `close(handle: int): void` | Flush or leave the group, then close |
 
 Messages sharing a key land on the same partition and keep their order, which is
-why a stable identity — a charger tag, a user id — makes a good key. Auto-commit
+why a stable identity — an account id, a user id — makes a good key. Auto-commit
 is off: a consumer commits once a message is safely handled, so a crash replays
 it rather than losing it.
 
@@ -2670,6 +2799,133 @@ let b: string = str.fromBool(true)    // "true"
 | `\t`     | Tab            |
 | `\\`     | Backslash      |
 | `\"`     | Double quote   |
+
+### reflect
+
+Reads a struct's fields by position, so a function can walk a value whose shape
+it does not have written down — a row mapper, a validator, an audit diff, a
+debug dump.
+
+```dex
+import "reflect"
+
+struct User {
+    id: long
+    email: string
+    score: double
+    active: bool
+}
+
+fn main(): void {
+    let unit: User = User { id: 42, email: "ada@example.com",
+                            score: 150.0, active: true }
+
+    let i: int = 0
+    while (i < reflect.fieldCount(unit)) {
+        fmt.println(reflect.fieldName(unit, i) + " (" +
+                    reflect.fieldKind(unit, i) + ") = " +
+                    reflect.toString(unit, i))
+        i = i + 1
+    }
+}
+```
+
+```
+id (long) = 42
+email (string) = ada@example.com
+score (double) = 150
+active (bool) = true
+```
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `reflect.typeName(value)` | `string` | The struct's type name. A compile-time constant. |
+| `reflect.fieldCount(value)` | `int` | How many fields the struct declares. A compile-time constant. |
+| `reflect.fields(value)` | `string[]` | Field names in declaration order. Allocates; prefer `fieldName` in a loop. |
+| `reflect.fieldName(value, index)` | `string` | Name of the field at this index, `""` if out of range. |
+| `reflect.fieldKind(value, index)` | `string` | `"int"`, `"long"`, `"double"`, `"bool"`, `"string"`, `"char"`, `"struct"`, `"array"`, or `"other"` for a field reflection cannot read (a map, a `json.Value`, an enum); `""` if out of range. |
+| `reflect.indexOf(value, name)` | `int` | Index of the named field, `-1` if absent. |
+| `reflect.has(value, name)` | `bool` | Whether the struct declares that field. |
+| `reflect.asInt(value, index)` | `int` | The field as an `int`, `0` if the index is out of range or the field is another type. |
+| `reflect.asLong(value, index)` | `long` | As above, for `long`. |
+| `reflect.asDouble(value, index)` | `double` | As above, for `double`. |
+| `reflect.asBool(value, index)` | `bool` | As above, for `bool`. |
+| `reflect.asString(value, index)` | `string` | As above, for `string`. |
+| `reflect.toString(value, index)` | `string` | The field rendered as text whatever its type. `""` for a `struct` or `array` field — use `json.encode` for those. |
+
+The subject may be a struct value or a `&T`, so a helper that takes its argument
+by reference reads the same as one that takes it by value:
+
+```dex
+fn describe(c: &User): string {
+    let sb = StringBuilder()
+    let i: int = 0
+    while (i < reflect.fieldCount(c)) {
+        sb.append(reflect.fieldName(c, i))
+        sb.append("=")
+        sb.append(reflect.toString(c, i))
+        sb.append(";")
+        i = i + 1
+    }
+    return sb.toString()
+}
+```
+
+A nested struct field and an array element are each subjects in their own right:
+`reflect.asString(unit.detail, 0)`, `reflect.asString(fleet[0], 1)`.
+
+#### What it costs
+
+Reflection here is not the usual trade of speed for flexibility, because the
+metadata is generated rather than discovered.
+
+**Nothing is emitted unless it is used.** The compiler records which structs a
+`reflect` call names and emits a name table, a kind table and typed accessors
+for exactly those. A program that does not import `reflect` is byte-for-byte
+what it was without the module; a program that reflects over one struct carries
+one struct's worth.
+
+**A known field costs what a field access costs.** `fieldCount` and `typeName`
+become literals. `indexOf` with a literal name resolves at compile time, so
+
+```dex
+reflect.asString(unit, reflect.indexOf(unit, "email"))
+```
+
+compiles to a constant index into a `switch` — the same load as
+`unit.email`, plus the retain that ownership requires. Only a name computed
+at runtime searches the name table, and that search is the one cost reflection
+actually adds.
+
+**A mismatched read cannot misread memory.** Each accessor is generated with a
+case for the fields of its own type only, so `asLong` on a `string` field falls
+through to the default and returns `0` rather than reinterpreting a pointer as
+an integer. There is no offset arithmetic anywhere in the generated code.
+
+#### Reading a string field mints a reference
+
+`asString` and `toString` return an owned `string`, like any other call — the
+accessor retains the struct's field rather than handing back a borrowed pointer,
+so the ordinary release at the end of the statement is correct and the struct
+keeps its own reference.
+
+#### Limits
+
+Reflection is **read-only**. There are no setters, so a struct cannot yet be
+filled in field by field from reflection — writing would have to release the old
+value and retain the new one through a generated setter, and that is deliberately
+left for a later version rather than bolted on.
+
+The subject must be a variable, field, or element, not a temporary:
+
+```dex
+let n: int = reflect.fieldCount(build())   // error: subject must not be a temporary
+let u: User = build()
+let n: int = reflect.fieldCount(u)         // fine
+```
+
+A temporary owns its heap fields, and reflecting one would leave nobody to
+release them. Binding it to a variable first makes that ownership visible.
 
 ---
 

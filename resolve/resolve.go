@@ -486,7 +486,12 @@ func FlattenStructMethods(program *ast.Program) {
 				IsPrivate:  method.IsPrivate,
 			}
 
-			selfParam := ast.Param{Name: "self", Type: structType}
+			// A pointer receiver, not a copy. A method that assigned to a field
+			// of a by-value receiver compiled and then did nothing, which is a
+			// worse outcome than either mutating or being rejected — and it is
+			// what `return self` has to mean for a chain to thread one instance
+			// through. It also stops every method call copying its struct.
+			selfParam := ast.Param{Name: "self", Type: ast.RefTypeOf(structType)}
 			flatFn.Params = append(flatFn.Params, selfParam)
 			flatFn.Params = append(flatFn.Params, method.Params...)
 

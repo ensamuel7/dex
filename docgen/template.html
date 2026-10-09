@@ -232,6 +232,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
         <a onclick="show('mod-os')">os</a>
         <a onclick="show('mod-crypto')">crypto</a>
         <a onclick="show('mod-str')">str</a>
+        <a onclick="show('mod-reflect')">reflect</a>
       </div>
     </div>
     <div class="nav-group" data-group="internals">
@@ -1050,6 +1051,45 @@ let p = Point{x: 3, y: 4}
 let total: int = p.sum()    // 7
 p.display()                  // Point(3, 4)</code></pre>
 
+<p>A method receives the instance it was called on as a <strong>pointer</strong>, named <code>self</code>. Bare field names read through the receiver, so <code>x</code> and <code>self.x</code> mean the same thing when read — but <strong>assignment requires <code>self</code></strong>, because a method's locals and its fields are separate namespaces.</p>
+<pre><code>fn moveTo(nx: int, ny: int): void {
+    self.x = nx      // changes the instance
+    self.y = ny
+}</code></pre>
+
+<h3>Fluent builders</h3>
+<p>Returning <code>self</code> from a method lets the next call in a chain continue from the same instance, so a builder reads as one expression:</p>
+<pre><code>struct Query {
+    from: string
+    max: int
+
+    fn table(name: string): &amp;Query {
+        self.from = name
+        return self
+    }
+
+    fn limit(n: int): &amp;Query {
+        self.max = n
+        return self
+    }
+}
+
+let q: Query = Query { from: "", max: 0 }
+q.table("users").limit(25)
+// q.from is "users", q.max is 25</code></pre>
+<p>The <code>&amp;Query</code> return type is what says one instance is threaded through: nothing is copied per step. A chain may also start from a temporary, which is bound for the length of the statement and released at its end:</p>
+<pre><code>let sql: string = insertInto("users").col("id").col("email").text()</code></pre>
+<p>A chain's result can be bound as a reference with <code>let r: &amp;Counter = c.bump()</code>. A <strong>method value</strong> such as <code>q.sum</code> still copies its receiver, so a mutating method reached that way changes the copy rather than the original.</p>
+
+<h3>Method chaining</h3>
+<p>More generally, a call is not the end of an expression. Its result can be indexed, have a field read, or have a method called on it:</p>
+<pre><code>let n: int = sb.toString().len()
+let count: int = csv.split(",").len()
+let third: string = csv.split(",")[2]
+let size: int = csv.split(",")[2].len()
+let shouted: string = "  mixed  ".trim().toUpper()</code></pre>
+<p>A string, array, map or <code>StringBuilder</code> is a receiver whether it is a named variable, a literal, or the result of the call before it. Each link's receiver is evaluated <strong>once</strong> and released if that link produced it, so <code>csv.split(",")[2].len()</code> splits once and frees the array at the end of the statement. A receiver that is simply a variable is used directly, with no temporary.</p>
+
 <h3>Zero Values</h3>
 <p>Omitted fields in struct literals are initialized to their zero value:</p>
 <table>
@@ -1203,7 +1243,7 @@ fn main(): void {
 <!-- Standard Library -->
 <section id="stdlib" class="page-section">
 <h2>Standard Library</h2>
-<p>DexLang ships with 12 built-in modules covering output, JSON serialization, networking, databases, file I/O, math, time, cryptography, and system interaction. Import any module with the <code>import</code> keyword:</p>
+<p>DexLang ships with 16 built-in modules covering output, JSON serialization, reflection, networking, databases, message queues, email, file I/O, math, time, cryptography, and system interaction. Import any module with the <code>import</code> keyword:</p>
 <pre><code>import "fmt"
 import "json"</code></pre>
 
@@ -1222,6 +1262,10 @@ import "json"</code></pre>
 <tr><td><code><a onclick="show('mod-os')" style="cursor:pointer">os</a></code></td><td>Environment variables and command execution</td><td><code>env</code>, <code>exit</code>, <code>exec</code></td></tr>
 <tr><td><code><a onclick="show('mod-crypto')" style="cursor:pointer">crypto</a></code></td><td>Cryptographic utilities</td><td><code>uuid</code></td></tr>
 <tr><td><code><a onclick="show('mod-str')" style="cursor:pointer">str</a></code></td><td>String/type conversion utilities</td><td><code>fromInt</code>, <code>toInt</code>, <code>fromDouble</code>, <code>toDouble</code>, ...</td></tr>
+<tr><td><code><a onclick="show('mod-reflect')" style="cursor:pointer">reflect</a></code></td><td>Read a struct's fields by position at runtime</td><td><code>fieldCount</code>, <code>fieldName</code>, <code>fieldKind</code>, <code>asString</code>, <code>toString</code>, <code>indexOf</code>, ...</td></tr>
+<tr><td><code>redis</code></td><td>Redis client: keys, hashes, sets, pub/sub</td><td><code>connect</code>, <code>get</code>, <code>set</code>, <code>hget</code>, <code>publish</code>, <code>subscribe</code>, ...</td></tr>
+<tr><td><code>kafka</code></td><td>Kafka producer and consumer</td><td><code>producer</code>, <code>produce</code>, <code>consumer</code>, <code>subscribe</code>, <code>poll</code>, <code>commit</code>, ...</td></tr>
+<tr><td><code>smtp</code></td><td>Send email over SMTP</td><td><code>send</code>, <code>sendHtml</code></td></tr>
 </table>
 
 <h3>Quick Reference</h3>
@@ -2369,6 +2413,86 @@ fn main(): void {
     fmt.println(s)
     fmt.println(n)
 }</code></pre>
+</section>
+
+<!-- reflect -->
+<section id="mod-reflect" class="page-section">
+<h2>reflect<span class="badge">module</span></h2>
+<p>The <code>reflect</code> module reads a struct's fields <strong>by position</strong>, so a function can walk a value whose shape it does not have written down &mdash; a row mapper, a validator, an audit diff, a debug dump.</p>
+<pre><code>import "reflect"</code></pre>
+
+<h3>Walking a struct</h3>
+<pre><code>import "fmt"
+import "reflect"
+
+struct User {
+    id: long
+    email: string
+    score: double
+    active: bool
+}
+
+fn main(): void {
+    let unit: User = User { id: 42, email: "ada@example.com",
+                            score: 150.0, active: true }
+
+    let i: int = 0
+    while (i &lt; reflect.fieldCount(unit)) {
+        fmt.println(reflect.fieldName(unit, i) + " (" +
+                    reflect.fieldKind(unit, i) + ") = " +
+                    reflect.toString(unit, i))
+        i = i + 1
+    }
+}</code></pre>
+<pre><code>id (long) = 42
+email (string) = ada@example.com
+score (double) = 150
+active (bool) = true</code></pre>
+
+<h3>Shape</h3>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.typeName(<span class="ptype">value: struct|&amp;struct</span>) <span class="ret">-&gt; string</span></div><p class="doc">The struct's type name. A compile-time constant.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.fieldCount(<span class="ptype">value: struct|&amp;struct</span>) <span class="ret">-&gt; int</span></div><p class="doc">How many fields the struct declares. A compile-time constant, so a loop over it can be unrolled by the C compiler.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.fields(<span class="ptype">value: struct|&amp;struct</span>) <span class="ret">-&gt; string[]</span></div><p class="doc">Field names in declaration order. Allocates an array; prefer <code>fieldName</code> in a loop.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.fieldName(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; string</span></div><p class="doc">Name of the field at this index, or "" if the index is out of range.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.fieldKind(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; string</span></div><p class="doc">"int", "long", "double", "bool", "string", "char", "struct", "array", or "other" for a field reflection cannot read (a map, a json.Value, an enum); "" if the index is out of range.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.indexOf(<span class="ptype">value: struct|&amp;struct, name: string</span>) <span class="ret">-&gt; int</span></div><p class="doc">Index of the named field, or -1 if absent. Folded to a constant when the name is a string literal.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.has(<span class="ptype">value: struct|&amp;struct, name: string</span>) <span class="ret">-&gt; bool</span></div><p class="doc">Whether the struct declares that field. Folded to a constant when the name is a string literal.</p></div>
+
+<h3>Reading a field</h3>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.asInt(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; int</span></div><p class="doc">The field as an int. Returns 0 if the index is out of range or the field is another type.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.asLong(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; long</span></div><p class="doc">As above, for long.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.asDouble(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; double</span></div><p class="doc">As above, for double.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.asBool(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; bool</span></div><p class="doc">As above, for bool.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.asString(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; string</span></div><p class="doc">As above, for string.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.toString(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; string</span></div><p class="doc">The field rendered as text whatever its type. "" for a struct or array field &mdash; use json.encode for those.</p></div>
+
+<h3>By reference, and on nested values</h3>
+<p>The subject may be a struct value or a <code>&amp;T</code>, so a generic helper reads the same either way. A nested struct field and an array element are each subjects in their own right.</p>
+<pre><code>fn describe(c: &amp;User): string {
+    let sb = StringBuilder()
+    let i: int = 0
+    while (i &lt; reflect.fieldCount(c)) {
+        sb.append(reflect.fieldName(c, i))
+        sb.append("=")
+        sb.append(reflect.toString(c, i))
+        sb.append(";")
+        i = i + 1
+    }
+    return sb.toString()
+}
+
+reflect.asString(unit.detail, 0)    // a nested struct field
+reflect.asString(fleet[0], 1)       // an array element</code></pre>
+
+<h3>What it costs</h3>
+<p>Reflection here is not the usual trade of speed for flexibility, because the metadata is <strong>generated rather than discovered</strong>.</p>
+<p><strong>Nothing is emitted unless it is used.</strong> The compiler records which structs a <code>reflect</code> call names and emits a name table, a kind table and typed accessors for exactly those. A program that does not import <code>reflect</code> is byte-for-byte what it was without the module.</p>
+<p><strong>A known field costs what a field access costs.</strong> <code>fieldCount</code> and <code>typeName</code> become literals, and <code>indexOf</code> with a literal name resolves at compile time &mdash; so <code>reflect.asString(unit, reflect.indexOf(unit, "email"))</code> compiles to a constant index into a <code>switch</code>, the same load as <code>unit.email</code>. Only a name computed at runtime searches the name table.</p>
+<p><strong>A mismatched read cannot misread memory.</strong> Each accessor is generated with a case for the fields of its own type only, so <code>asLong</code> on a string field returns 0 rather than reinterpreting a pointer as an integer. There is no offset arithmetic in the generated code.</p>
+
+<h3>Limits</h3>
+<p>Reflection is <strong>read-only</strong>: there are no setters, so a struct cannot yet be filled in field by field. Writing would have to release the old value and retain the new one through a generated setter, and that is left for a later version rather than bolted on.</p>
+<p>The subject must be a variable, field, or element &mdash; not a temporary. A temporary owns its heap fields, and reflecting one would leave nobody to release them, so bind it to a variable first.</p>
 </section>
 
 <!-- AST (Abstract Syntax Tree) -->

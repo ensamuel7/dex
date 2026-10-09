@@ -43,6 +43,9 @@
       "include": "#function-call"
     },
     {
+      "include": "#self"
+    },
+    {
       "include": "#operators"
     },
     {
@@ -201,6 +204,15 @@
         {
           "name": "constant.language.boolean.dex",
           "match": "\\b(true|false|null)\\b"
+        }
+      ]
+    },
+    "self": {
+      "patterns": [
+        {
+          "comment": "The receiver inside a struct method",
+          "name": "variable.language.self.dex",
+          "match": "\\bself\\b"
         }
       ]
     },

@@ -14,28 +14,28 @@ import (
 
 const jsonFeatureSource = `import "json"
 
-struct Connector {
+struct Tag {
     id: int
     kind: string
 }
 
-struct Charger {
+struct User {
     tag: string
-    connectors: int[]
+    views: int[]
     names: string[]
-    ports: Connector[]
+    tags: Tag[]
 }
 
 fn main(): void {
     let ids: int[] = [1, 2]
-    let c: Charger = Charger { tag: "a", connectors: ids, names: ["x"], ports: [Connector{id: 1, kind: "AC"}] }
+    let c: User = User { tag: "a", views: ids, names: ["x"], tags: [Tag{id: 1, kind: "news"}] }
     let s: string = json.encode(c)
-    let one: Charger? = json.decode(s)
+    let one: User? = json.decode(s)
     if (one != null) {
-        let n: int = one.connectors.len()
+        let n: int = one.views.len()
         assert(n == 2)
     }
-    let many: Connector[] = json.decode("[]")
+    let many: Tag[] = json.decode("[]")
     let m: int = many.len()
     assert(m == 0)
 }

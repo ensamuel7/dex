@@ -287,8 +287,17 @@ func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
 }
 
 // Wraps a generated statement in a block declaring and releasing its hoists.
+//
+// The test is on the prelude rather than on the temporaries because the two no
+// longer imply each other. genBorrowed only ever hoists something it also has to
+// release, so for a long time "has declarations" and "has releases" were the
+// same question. An expression method receiver broke that: it is hoisted so it
+// is evaluated exactly once, but a receiver read out of an array or a field was
+// only borrowed and must not be released. Keying off the temporaries dropped
+// those declarations on the floor and emitted a statement referring to a
+// variable that was never declared.
 func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
-	if g.stmtPrelude == nil || len(g.stmtTemps) == 0 {
+	if g.stmtPrelude == nil || (g.stmtPrelude.Len() == 0 && len(g.stmtTemps) == 0) {
 		out.WriteString(prefix + stmt)
 		g.stmtPrelude = nil
 		g.stmtTemps = nil

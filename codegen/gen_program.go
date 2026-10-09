@@ -381,6 +381,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// the conditionally-emitted array runtime.
 	g.emitArrayFieldCodecs(&out, program)
 
+	// Emit reflection tables and accessors. Here because the accessors call the
+	// string and array runtimes above, and because nothing is emitted unless a
+	// reflect.* call named a struct — see gen_reflect.go.
+	g.emitReflectMetadata(&out, program)
+
 	if out.Len() > 0 {
 		out.WriteString("\n")
 	}

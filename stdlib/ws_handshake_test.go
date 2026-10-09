@@ -40,29 +40,29 @@ int main(void) {
 
 	char neg[128];
 	expect_int("offer matches", dex_ws_client_offers(
-		"GET / HTTP/1.1\r\nSec-WebSocket-Protocol: ocpp1.6\r\n\r\n",
-		"ocpp1.6", neg, sizeof(neg)), 1);
-	expect_str("offer echoed verbatim", neg, "ocpp1.6");
+		"GET / HTTP/1.1\r\nSec-WebSocket-Protocol: chat.v1\r\n\r\n",
+		"chat.v1", neg, sizeof(neg)), 1);
+	expect_str("offer echoed verbatim", neg, "chat.v1");
 
 	/* Echo the client's spelling: browsers compare case-sensitively. */
-	dex_ws_client_offers("GET / HTTP/1.1\r\nSec-WebSocket-Protocol: OCPP1.6\r\n\r\n",
-		"ocpp1.6", neg, sizeof(neg));
-	expect_str("offer echoed with client casing", neg, "OCPP1.6");
+	dex_ws_client_offers("GET / HTTP/1.1\r\nSec-WebSocket-Protocol: CHAT.V1\r\n\r\n",
+		"chat.v1", neg, sizeof(neg));
+	expect_str("offer echoed with client casing", neg, "CHAT.V1");
 
 	expect_int("picks from a list", dex_ws_client_offers(
-		"GET / HTTP/1.1\r\nSec-WebSocket-Protocol: foo, ocpp1.6 , bar\r\n\r\n",
-		"ocpp1.6", neg, sizeof(neg)), 1);
+		"GET / HTTP/1.1\r\nSec-WebSocket-Protocol: foo, chat.v1 , bar\r\n\r\n",
+		"chat.v1", neg, sizeof(neg)), 1);
 
 	expect_int("no header offers nothing", dex_ws_client_offers(
-		"GET / HTTP/1.1\r\nHost: x\r\n\r\n", "ocpp1.6", neg, sizeof(neg)), 0);
+		"GET / HTTP/1.1\r\nHost: x\r\n\r\n", "chat.v1", neg, sizeof(neg)), 0);
 
 	expect_int("non-matching offer declined", dex_ws_client_offers(
-		"GET / HTTP/1.1\r\nSec-WebSocket-Protocol: ocpp2.0.1\r\n\r\n",
-		"ocpp1.6", neg, sizeof(neg)), 0);
+		"GET / HTTP/1.1\r\nSec-WebSocket-Protocol: chat.v2\r\n\r\n",
+		"chat.v1", neg, sizeof(neg)), 0);
 
 	expect_int("prefix is not a match", dex_ws_client_offers(
-		"GET / HTTP/1.1\r\nSec-WebSocket-Protocol: ocpp1.6.1\r\n\r\n",
-		"ocpp1.6", neg, sizeof(neg)), 0);
+		"GET / HTTP/1.1\r\nSec-WebSocket-Protocol: chat.v1.1\r\n\r\n",
+		"chat.v1", neg, sizeof(neg)), 0);
 
 	char good[256];
 	snprintf(good, sizeof(good),

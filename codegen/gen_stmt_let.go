@@ -218,7 +218,13 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 	// Special case for ref type declarations
 	if ast.IsRefType(s.Type) {
 		ctyp := g.cType(s.Type)
-		out.WriteString(fmt.Sprintf("%s%s %s = &", prefix, ctyp, s.Name))
+		out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
+		// Only a value needs its address taken. An expression that is already a
+		// reference — a method returning &Self — is assigned straight across;
+		// taking its address asked C for the address of an rvalue.
+		if !ast.IsRefType(g.typeOfExpr(s.Value)) {
+			out.WriteString("&")
+		}
 		g.genExpr(out, s.Value)
 		out.WriteString(";\n")
 		g.varTypes[s.Name] = s.Type

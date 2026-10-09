@@ -21,9 +21,9 @@ fn main(): void {
     assert(!device.has("serial"))
 
     // A key that is not a Dex identifier still works as a JSON key
-    let snake: json.Value = { "charger_tag": "CP-1", "connector_id": 2 }
-    assert(snake["charger_tag"].asString() == "CP-1")
-    assert(snake["connector_id"].asInt() == 2)
+    let snake: json.Value = { "user_name": "ada", "item_id": 2 }
+    assert(snake["user_name"].asString() == "ada")
+    assert(snake["item_id"].asInt() == 2)
 
     // --- Array literals, mixed element types ---
     let frame: json.Value = [4, "abc123", "NotImplemented", "no such action", {}]

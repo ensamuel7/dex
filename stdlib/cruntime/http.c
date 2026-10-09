@@ -546,9 +546,9 @@ static void dex_shutdown_handler(int sig) {
     if (dex_server_fd >= 0) close(dex_server_fd);
     /* This handler may have displaced the WebSocket listener's — they install
      * one each and the last to start wins. Exiting here would drop every
-     * charger without a close frame and without its disconnect handler running,
+     * user without a close frame and without its disconnect handler running,
      * so the drain runs first and ends the process when it is done. An HTTP
-     * request in flight is abandoned either way; they are short, and a charger's
+     * request in flight is abandoned either way; they are short, and a user's
      * connection is not. */
     if (dex_shutdown_drain_hook) {
         dex_shutdown_drain_hook();

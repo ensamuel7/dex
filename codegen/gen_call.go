@@ -16,6 +16,11 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			return
 		}
 	}
+	// Any other expression receiver is materialised into a temporary and
+	// forwarded to the named-receiver path below. See gen_call_recv.go.
+	if g.genExprReceiverCall(out, e) {
+		return
+	}
 	if e.Recv == nil && e.Module != "" {
 		// A plain variable, or a dotted field path such as msg.payload.
 		recvType := g.varTypes[e.Module]
@@ -73,12 +78,21 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		}
 		out.WriteString(flatName)
 		out.WriteString("(")
-		// If instance is a ref type, dereference for value self param
+		// self is a pointer, so a value instance has its address taken and one
+		// that is already a reference is passed straight through.
 		instanceType := g.resolveFieldChainType(e.Module)
-		if ast.IsRefType(instanceType) {
-			out.WriteString("*")
+		if !ast.IsRefType(instanceType) {
+			out.WriteString("&")
 		}
-		out.WriteString(e.Module) // the instance variable name
+		// Rendered rather than written through: the receiver may be a dotted
+		// path — self.reg.attach(..) — and each step is '.' or '->' depending on
+		// whether that step is a reference. Emitting the Dex spelling verbatim
+		// happened to be valid C only while every receiver was a value.
+		if strings.Contains(e.Module, ".") {
+			out.WriteString(g.fieldChainC(e.Module))
+		} else {
+			out.WriteString(e.Module) // the instance variable name
+		}
 		for _, arg := range e.Args {
 			out.WriteString(", ")
 			// A method borrows its arguments just as a free function does, so an
@@ -90,8 +104,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	}
 
 	// User module call: emit prefixed function name.
-	// A local or global of the same name shadows the module — `chargers.push(x)`
-	// on a variable called chargers is a method call, not a call into a module
+	// A local or global of the same name shadows the module — `items.push(x)`
+	// on a variable called items is a method call, not a call into a module
 	// that happens to share the name.
 	_, shadowedByVar := g.varTypes[e.Module]
 	if e.Module != "" && g.userModules[e.Module] && !shadowedByVar {
@@ -171,6 +185,9 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		out.WriteString(fmt.Sprintf("printf(\"%s%s\", ", fmtStr, nl))
 		g.genExpr(out, e.Args[0])
 		out.WriteString(")")
+		return
+	}
+	if g.genReflectCall(out, e) {
 		return
 	}
 	if g.genJsonCall(out, e) {
@@ -546,7 +563,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	// Check if this is an array method call (e.Module is a variable name or field chain)
 	if e.Module != "" {
 		arrType, ok := g.arrVars[e.Module]
-		// Field chain resolution: e.g., charger.connectors → look up field type
+		// Field chain resolution: e.g., post.views → look up field type
 		if !ok && strings.Contains(e.Module, ".") {
 			chainType := g.resolveFieldChainType(e.Module)
 			if ast.IsArrayType(chainType) {
@@ -648,15 +665,18 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					out.WriteString(")")
 					return
 				case "contains":
+					// Searching only reads the needle, so an argument that minted
+					// a reference — a literal, a concat — is hoisted and released
+					// after the statement rather than left behind.
 					containsFn := g.arrayContainsFunc(arrType)
 					out.WriteString(fmt.Sprintf("%s(%s, ", containsFn, e.Module))
-					g.genExpr(out, e.Args[0])
+					g.genBorrowed(out, e.Args[0])
 					out.WriteString(")")
 					return
 				case "indexOf":
 					indexOfFn := g.arrayIndexOfFunc(arrType)
 					out.WriteString(fmt.Sprintf("%s(%s, ", indexOfFn, e.Module))
-					g.genExpr(out, e.Args[0])
+					g.genBorrowed(out, e.Args[0])
 					out.WriteString(")")
 					return
 				case "reverse":

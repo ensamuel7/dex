@@ -191,19 +191,36 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		if e.Module == "" && e.Name == "StringBuilder" {
 			g.usesStringBuilder = true
 		}
+		// Reflection hands back names and kinds as strings and renders a field
+		// of any type through the builder, so those runtimes are needed even by
+		// a program whose own code never builds a string. fields() is the only
+		// one that allocates an array.
+		if e.Module == "reflect" {
+			g.usesString = true
+			g.usesRefcount = true
+			g.usesBool = true
+			g.usesStringBuilder = true
+			if e.Name == "fields" {
+				g.usesArray = true
+			}
+		}
 		// Scan for assert usage
 		if e.Module == "" && e.Name == "assert" {
 			g.usesAssert = true
 			g.usesBool = true
 		}
 		// Scan for mutex method usage
-		if e.Module != "" && (e.Name == "lock" || e.Name == "unlock") {
+		if (e.Module != "" || e.Recv != nil) && (e.Name == "lock" || e.Name == "unlock") {
 			g.usesConcurrency = true
 		}
 		// Scan for string method usage — conservatively detect potential string methods.
 		// False positives (e.g. array.len()) are harmless since the included static
 		// functions will simply be unused and stripped by the C compiler.
-		if e.Module != "" {
+		//
+		// A Recv receiver counts the same as a named one: sb.toString().len() needs
+		// the string-methods runtime just as s.len() does, and it is the only thing
+		// that pulls that runtime in.
+		if e.Module != "" || e.Recv != nil {
 			switch e.Name {
 			case "len", "contains", "startsWith", "endsWith", "indexOf",
 				"toLower", "toUpper", "trim", "split", "substring", "replace", "charAt",
@@ -211,6 +228,9 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 				"containsUppercase", "containsLowercase", "containsDigit":
 				g.usesStringMethods = true
 			}
+		}
+		if e.Recv != nil {
+			g.scanExpr(e.Recv)
 		}
 		for _, arg := range e.Args {
 			g.scanExpr(arg)

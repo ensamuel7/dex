@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,13 +63,13 @@ func defineAt(t *testing.T, dir, mainRel string, line, char int) (string, int) {
 // that defines it, because only the open document was ever searched.
 func TestDefinitionFollowsModuleQualifiedCall(t *testing.T) {
 	dir := writeProject(t, map[string]string{
-		"main.dx": `import "service/chargerService"
+		"main.dx": `import "service/userService"
 
 fn main(): void {
-    chargerService.init(1)
+    userService.init(1)
 }
 `,
-		"service/chargerService.dx": `let dbConn: int = 0
+		"service/userService.dx": `let dbConn: int = 0
 
 fn init(conn: int): void {
     dbConn = conn
@@ -76,9 +77,9 @@ fn init(conn: int): void {
 `,
 	})
 
-	// Cursor on `init` in `chargerService.init(1)`.
+	// Cursor on `init` in `userService.init(1)`.
 	gotFile, gotLine := defineAt(t, dir, "main.dx", 3, 19)
-	want := filepath.Join(dir, "service/chargerService.dx")
+	want := filepath.Join(dir, "service/userService.dx")
 	if gotFile != want {
 		t.Fatalf("file = %q, want %q", gotFile, want)
 	}
@@ -90,17 +91,17 @@ fn init(conn: int): void {
 // Putting the cursor on the module name itself opens that module's file.
 func TestDefinitionOnModuleNameOpensItsFile(t *testing.T) {
 	dir := writeProject(t, map[string]string{
-		"main.dx": `import "service/chargerService"
+		"main.dx": `import "service/userService"
 
 fn main(): void {
-    chargerService.init(1)
+    userService.init(1)
 }
 `,
-		"service/chargerService.dx": "fn init(conn: int): void {\n}\n",
+		"service/userService.dx": "fn init(conn: int): void {\n}\n",
 	})
 
 	gotFile, gotLine := defineAt(t, dir, "main.dx", 3, 6)
-	want := filepath.Join(dir, "service/chargerService.dx")
+	want := filepath.Join(dir, "service/userService.dx")
 	if gotFile != want {
 		t.Fatalf("file = %q, want %q", gotFile, want)
 	}
@@ -112,21 +113,22 @@ fn main(): void {
 // A struct type used unqualified still resolves into the module that declares it.
 func TestDefinitionFindsStructInImportedModule(t *testing.T) {
 	dir := writeProject(t, map[string]string{
-		"main.dx": `import "types/charger"
+		"main.dx": `import "types/user"
 
 fn main(): void {
-    let c: charger.Charger = charger.Charger{id: 1}
+    let c: user.User = user.User{id: 1}
 }
 `,
-		"types/charger.dx": `struct Charger {
+		"types/user.dx": `struct User {
     id: int
 }
 `,
 	})
 
-	// Cursor on the `Charger` of the type annotation.
-	gotFile, gotLine := defineAt(t, dir, "main.dx", 3, 20)
-	want := filepath.Join(dir, "types/charger.dx")
+	// Cursor on the `User` of the type annotation. The column is derived from the
+	// line so it does not depend on how long these identifiers happen to be.
+	gotFile, gotLine := defineAt(t, dir, "main.dx", 3, columnOf(t, dir, "main.dx", 3, "user.User")+len("user."))
+	want := filepath.Join(dir, "types/user.dx")
 	if gotFile != want {
 		t.Fatalf("file = %q, want %q", gotFile, want)
 	}
@@ -171,18 +173,39 @@ fn main(): void {
     api.start()
 }
 `,
-		"handler/api.dx": `import "../service/charger"
+		"handler/api.dx": `import "../service/user"
 
 fn start(): void {
-    charger.boot()
+    user.boot()
 }
 `,
-		"service/charger.dx": "fn boot(): void {\n}\n",
+		"service/user.dx": "fn boot(): void {\n}\n",
 	})
 
-	gotFile, _ := defineAt(t, dir, "handler/api.dx", 3, 13)
-	want := filepath.Join(dir, "service/charger.dx")
+	gotFile, _ := defineAt(t, dir, "handler/api.dx", 3, columnOf(t, dir, "handler/api.dx", 3, "user.boot")+len("user."))
+	want := filepath.Join(dir, "service/user.dx")
 	if gotFile != want {
 		t.Fatalf("file = %q, want %q", gotFile, want)
 	}
+}
+
+// columnOf finds the 0-based column where needle starts on the given 0-based
+// line of a file in the project, so a cursor position can be stated in terms of
+// the text it should land on rather than a count that silently goes stale when
+// an identifier is renamed.
+func columnOf(t *testing.T, dir, rel string, line int, needle string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	lines := strings.Split(string(data), "\n")
+	if line >= len(lines) {
+		t.Fatalf("%s has no line %d", rel, line)
+	}
+	col := strings.Index(lines[line], needle)
+	if col < 0 {
+		t.Fatalf("%q not found on line %d of %s", needle, line, rel)
+	}
+	return col
 }

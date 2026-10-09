@@ -162,11 +162,18 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			g.genJsonValueIndex(out, e)
 			break
 		}
+		// The indexed container is written into the output more than once — the
+		// bounds check reads its length and the access reads its data — so it is
+		// rendered once here and that text reused. genBorrowed leaves a plain
+		// variable inline exactly as before, and hoists a container the
+		// expression minted: csv.split(",")[2] indexes an array nobody else
+		// holds, and without the hoist that array is never released.
+		var arrBuf strings.Builder
+		g.genBorrowed(&arrBuf, e.Array)
+		arrC := arrBuf.String()
 		if ast.IsMapType(arrType) {
 			suffix := g.mapSuffix(arrType)
-			out.WriteString(fmt.Sprintf("dex_map_%s_get(", suffix))
-			g.genExpr(out, e.Array)
-			out.WriteString(", ")
+			out.WriteString(fmt.Sprintf("dex_map_%s_get(%s, ", suffix, arrC))
 			g.genBorrowed(out, e.Index)
 			out.WriteString(")")
 			break
@@ -177,21 +184,13 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			elemCType := g.cType(elemType)
 			out.WriteString(fmt.Sprintf("(dex_bounds_check("))
 			g.genExpr(out, e.Index)
-			out.WriteString(", ")
-			g.genExpr(out, e.Array)
-			out.WriteString(fmt.Sprintf("->len), *(%s*)dex_array_struct_get(", elemCType))
-			g.genExpr(out, e.Array)
-			out.WriteString(", ")
+			out.WriteString(fmt.Sprintf(", %s->len), *(%s*)dex_array_struct_get(%s, ", arrC, elemCType, arrC))
 			g.genExpr(out, e.Index)
 			out.WriteString("))")
 		} else {
 			out.WriteString("(dex_bounds_check(")
 			g.genExpr(out, e.Index)
-			out.WriteString(", ")
-			g.genExpr(out, e.Array)
-			out.WriteString("->len), ")
-			g.genExpr(out, e.Array)
-			out.WriteString("->data[")
+			out.WriteString(fmt.Sprintf(", %s->len), %s->data[", arrC, arrC))
 			g.genExpr(out, e.Index)
 			out.WriteString("])")
 		}

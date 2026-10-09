@@ -67,10 +67,15 @@ type TextEdit struct {
 }
 
 type CompletionItem struct {
-	Label               string     `json:"label"`
-	Kind                int        `json:"kind"`
-	Detail              string     `json:"detail,omitempty"`
-	Documentation       string     `json:"documentation,omitempty"`
+	Label         string `json:"label"`
+	Kind          int    `json:"kind"`
+	Detail        string `json:"detail,omitempty"`
+	Documentation string `json:"documentation,omitempty"`
+	// InsertText/FilterText let an auto-import item be labelled `fmt.println`
+	// while still matching the bare `println` the user is typing.
+	InsertText          string     `json:"insertText,omitempty"`
+	FilterText          string     `json:"filterText,omitempty"`
+	SortText            string     `json:"sortText,omitempty"`
 	AdditionalTextEdits []TextEdit `json:"additionalTextEdits,omitempty"`
 }
 
@@ -81,6 +86,9 @@ const (
 	CompletionKindKeyword  = 14
 	CompletionKindType     = 25 // TypeParameter
 	CompletionKindValue    = 12 // Value (LSP EnumMember)
+	CompletionKindField    = 5  // Field
+	CompletionKindMethod   = 2  // Method
+	CompletionKindVariable = 6  // Variable
 )
 
 // --- Server ---
@@ -91,6 +99,9 @@ type Server struct {
 	writer       io.Writer
 	logger       *log.Logger
 	importedURIs map[string][]string // main document URI -> list of imported file URIs we published diagnostics for
+	// lastDiags keeps the diagnostics last published per URI, so a code action
+	// request still finds them when the client sends none of its own.
+	lastDiags map[string][]Diagnostic
 	// respond, when set, receives responses instead of the wire. Tests use it to
 	// observe a handler's result without standing up a transport.
 	respond func(id *json.RawMessage, result interface{})
@@ -105,6 +116,7 @@ func Run() {
 		writer:       os.Stdout,
 		logger:       logger,
 		importedURIs: make(map[string][]string),
+		lastDiags:    make(map[string][]Diagnostic),
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -224,6 +236,8 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 		s.handleCompletion(msg)
 	case "textDocument/definition":
 		s.handleDefinition(msg)
+	case "textDocument/codeAction":
+		s.handleCodeAction(msg)
 	case "textDocument/semanticTokens/full":
 		s.handleSemanticTokens(msg)
 	default:
@@ -242,6 +256,9 @@ func (s *Server) handleInitialize(msg *jsonrpcMessage) {
 			"textDocumentSync":   1, // Full document sync
 			"hoverProvider":      true,
 			"definitionProvider": true,
+			"codeActionProvider": map[string]interface{}{
+				"codeActionKinds": []string{codeActionQuickFix},
+			},
 			"completionProvider": map[string]interface{}{
 				"triggerCharacters": []string{"."},
 			},
@@ -301,6 +318,7 @@ func (s *Server) handleDidClose(msg *jsonrpcMessage) {
 	json.Unmarshal(msg.Params, &params)
 
 	delete(s.documents, params.TextDocument.URI)
+	delete(s.lastDiags, params.TextDocument.URI)
 	// Clear diagnostics for imported files
 	if uris, ok := s.importedURIs[params.TextDocument.URI]; ok {
 		for _, impURI := range uris {
@@ -452,7 +470,7 @@ func findDefinitionIn(path string, src string, name string, skipLine, skipCol in
 }
 
 // qualifierAt returns the module qualifier immediately before the token at
-// index i, as in the `chargerService` of `chargerService.init`.
+// index i, as in the `userService` of `userService.init`.
 func qualifierAt(tokens []token.Token, i int) string {
 	if i < 2 {
 		return ""
@@ -504,7 +522,7 @@ func (s *Server) handleDefinition(msg *jsonrpcMessage) {
 	}
 
 	// A qualified reference resolves inside the qualifying module's file, which
-	// is the case that previously failed: chargerService.init lives in another
+	// is the case that previously failed: userService.init lives in another
 	// file, and only the open document was ever searched.
 	if qual := qualifierAt(tokens, idx); qual != "" {
 		if target, isModule := modules[qual]; isModule {
@@ -787,6 +805,10 @@ func (s *Server) publishDiagnostics(uri string, diagnostics []Diagnostic) {
 	if diagnostics == nil {
 		diagnostics = []Diagnostic{}
 	}
+	if s.lastDiags == nil {
+		s.lastDiags = make(map[string][]Diagnostic)
+	}
+	s.lastDiags[uri] = diagnostics
 	s.sendNotification("textDocument/publishDiagnostics", map[string]interface{}{
 		"uri":         uri,
 		"diagnostics": diagnostics,
@@ -895,7 +917,7 @@ func typeName(t ast.Type) string {
 // seedParserModuleTypes extracts import paths from tokens and seeds the parser
 // with struct type names from imported modules — both stdlib modules and user
 // .dx modules resolved relative to sourceDir. Without the user-module names the
-// parser rejects qualified type annotations (e.g. ocppMessage.OcppMessage) and
+// parser rejects qualified type annotations (e.g. wireMessage.WireMessage) and
 // struct literal syntax for types defined in imported files.
 func seedParserModuleTypes(p *parser.Parser, tokens []token.Token, sourceDir string) {
 	importPaths := resolve.ExtractImportPaths(tokens)

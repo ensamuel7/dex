@@ -1,0 +1,108 @@
+// Fluent builders: a method names the struct it belongs to, mutates the
+// receiver through `self`, and returns it so the next call continues the chain.
+//
+// The receiver is a pointer, so `return self` threads one instance through the
+// whole chain rather than copying it at each step.
+import "fmt"
+
+struct Stmt {
+    table: string
+    cols: string
+    conds: string
+    lim: int
+
+    fn into(name: string): &Stmt {
+        self.table = name
+        return self
+    }
+
+    // Reassigns a heap field, so the string it replaces has to be released.
+    fn col(name: string): &Stmt {
+        if (self.cols.isEmpty()) {
+            self.cols = name
+        } else {
+            self.cols = self.cols + ", " + name
+        }
+        return self
+    }
+
+    fn where(cond: string): &Stmt {
+        self.conds = cond
+        return self
+    }
+
+    fn limit(n: int): &Stmt {
+        self.lim = n
+        return self
+    }
+
+    fn text(): string {
+        let sb = StringBuilder()
+        sb.append("INSERT INTO ")
+        sb.append(self.table)
+        sb.append(" (")
+        sb.append(self.cols)
+        sb.append(") WHERE ")
+        sb.append(self.conds)
+        return sb.toString()
+    }
+}
+
+fn blank(): Stmt {
+    return Stmt { table: "", cols: "", conds: "", lim: 0 }
+}
+
+// Returns a fresh Stmt by value: the chain below mutates a temporary nobody
+// else holds, and its heap fields are released when the statement ends.
+fn insertInto(name: string): Stmt {
+    return Stmt { table: name, cols: "", conds: "", lim: 0 }
+}
+
+struct Counter {
+    n: int
+    fn bump(): &Counter {
+        self.n = self.n + 1
+        return self
+    }
+}
+
+fn main(): void {
+    // A chain over a named variable mutates that variable.
+    let s: Stmt = blank()
+    s.into("users").col("id").col("email").col("name").where("active = true").limit(25)
+    assert(s.table == "users")
+    assert(s.cols == "id, email, name")
+    assert(s.lim == 25)
+    fmt.println(s.text())
+
+    // A chain over a temporary, ending in a method that reads it.
+    fmt.println(insertInto("posts").col("title").col("views").text())
+
+    // The chain returns the same instance, not a copy.
+    let c: Counter = Counter { n: 0 }
+    c.bump().bump().bump()
+    assert(c.n == 3)
+
+    // The result of a chain can be bound as a reference.
+    let r: &Counter = c.bump()
+    assert(c.n == 4)
+    assert(r.n == 4)
+
+    // self is readable as well as assignable, and bare field names still work
+    // alongside it.
+    assert(c.n == 4)
+
+    // Repeated chains: a heap field assigned over must release what it held, or
+    // this shows up in a leak check rather than passing unnoticed.
+    let i: int = 0
+    let total: int = 0
+    while (i < 2000) {
+        let b: Stmt = blank()
+        b.into("t").col("a").col("b").where("x = 1").limit(i)
+        total = total + b.text().len()
+        // And the same over a temporary.
+        total = total + insertInto("u").col("c").text().len()
+        i = i + 1
+    }
+    fmt.println(total)
+}

@@ -29,16 +29,16 @@ struct Item {
     geo: Geo
 }
 
-struct Connector {
+struct Tag {
     id: int
     kind: string
 }
 
-struct Charger {
+struct Post {
     tag: string
-    connectors: int[]
+    views: int[]
     names: string[]
-    ports: Connector[]
+    tags: Tag[]
 }
 
 fn main(): void {
@@ -199,32 +199,32 @@ fn main(): void {
     //Array struct fields — primitive, string, and struct element types
     let ids: int[] = [7,8]
     let ns: string[] = ["a", "b"]
-    let ports: Connector[] = [Connector{id: 1, kind: "AC"},Connector{id: 2, kind: "DC"}]
-    let ch: Charger = Charger { tag: "CP", connectors: ids, names: ns, ports: ports }
+    let tags: Tag[] = [Tag{id: 1, kind: "news"},Tag{id: 2, kind: "tech"}]
+    let ch: Post = Post { tag: "p1", views: ids, names: ns, tags: tags }
 
     let chJson: string = json.encode(ch)
-    assert(chJson == "{\"tag\":\"CP\",\"connectors\":[7,8],\"names\":[\"a\",\"b\"],\"ports\":[{\"id\":1,\"kind\":\"AC\"},{\"id\":2,\"kind\":\"DC\"}]}")
+    assert(chJson == "{\"tag\":\"p1\",\"views\":[7,8],\"names\":[\"a\",\"b\"],\"tags\":[{\"id\":1,\"kind\":\"news\"},{\"id\":2,\"kind\":\"tech\"}]}")
 
-    let chBack: Charger = json.decode(chJson)
-    assert(chBack.tag == "CP")
-    let cn: int = chBack.connectors.len()
+    let chBack: Post = json.decode(chJson)
+    assert(chBack.tag == "p1")
+    let cn: int = chBack.views.len()
     let nn: int = chBack.names.len()
-    let pn: int = chBack.ports.len()
+    let pn: int = chBack.tags.len()
     assert(cn == 2)
     assert(nn == 2)
     assert(pn == 2)
-    assert(chBack.connectors[1] == 8)
+    assert(chBack.views[1] == 8)
     assert(chBack.names[1] == "b")
-    let port0: Connector = chBack.ports[0]
+    let port0: Tag = chBack.tags[0]
     assert(port0.id == 1)
-    assert(port0.kind == "AC")
+    assert(port0.kind == "news")
 
     //Re-encoding is byte-identical
     assert(json.encode(chBack) == chJson)
 
     //An absent array key decodes to an empty array, not null
-    let chPartial: Charger = json.decode("{\"tag\":\"X\"}")
-    let pc: int = chPartial.connectors.len()
+    let chPartial: Post = json.decode("{\"tag\":\"X\"}")
+    let pc: int = chPartial.views.len()
     assert(pc == 0)
 
     fmt.println("json_struct_test: all assertions passed")

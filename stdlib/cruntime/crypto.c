@@ -3,16 +3,40 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#if defined(__APPLE__)
+#include <sys/random.h>
+#endif
+
+// Returns "" rather than a predictable id when the system has no entropy to
+// give: callers use a uuid as a secret often enough that a guessable one is
+// worse than a failure they can see.
+static int dex_random_bytes(unsigned char* out, size_t want) {
+#if defined(__APPLE__) || defined(__GLIBC__) || defined(__OpenBSD__) || defined(__FreeBSD__)
+    if (getentropy(out, want) == 0) return 1;
+#endif
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0) return 0;
+    size_t got = 0;
+    while (got < want) {
+        ssize_t n = read(fd, out + got, want - got);
+        if (n > 0) {
+            got += (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    return 1;
+}
 
 const char* dex_crypto_uuid(void) {
     unsigned char bytes[16];
-    int fd = open("/dev/urandom", O_RDONLY);
-    if (fd < 0) {
-        // fallback to rand()
-        for (int i = 0; i < 16; i++) bytes[i] = (unsigned char)(rand() & 0xFF);
-    } else {
-        read(fd, bytes, 16);
-        close(fd);
+    if (!dex_random_bytes(bytes, sizeof(bytes))) {
+        return strdup("");
     }
     // Set version 4 (bits 6-7 of byte 6)
     bytes[6] = (bytes[6] & 0x0F) | 0x40;

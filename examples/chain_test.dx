@@ -1,0 +1,60 @@
+// Method chaining: a call is no longer the end of an expression, so the result
+// of one can be indexed, have a field read, or have a method called on it.
+//
+// The receiver of each link is evaluated into a statement-scoped temporary, so
+// it runs exactly once and is released if the expression minted it.
+import "fmt"
+import "str"
+import "reflect"
+
+struct Q {
+    a: int
+    b: string
+}
+
+fn main(): void {
+    // A method on a method's result.
+    let sb = StringBuilder()
+    sb.append("hello")
+    assert(sb.toString().len() == 5)
+
+    // A method on a module call's result.
+    assert(str.fromInt(42).len() == 2)
+    assert(str.fromInt(7).trim().len() == 1)
+
+    // Three links deep, each minting a string.
+    assert("  Mixed  ".trim().toUpper().len() == 5)
+
+    // An array returned by a string method, then an array method on it.
+    let csv: string = "a,bb,ccc"
+    assert(csv.split(",").len() == 3)
+    assert(csv.split(",").contains("bb"))
+
+    // Indexing a call's result, then a method on the element.
+    assert(csv.split(",")[2].len() == 3)
+
+    // A map method returning an array, chained.
+    let m: map[string, int] = {}
+    m.set("x", 1)
+    m.set("y", 2)
+    assert(m.keys().len() == 2)
+
+    // Reflection's array result, chained.
+    let q: Q = Q { a: 1, b: "xy" }
+    assert(reflect.fields(q).len() == 2)
+
+    // Chaining in a loop: a link that minted a reference and never released it
+    // would show up in a leak check rather than passing unnoticed.
+    let total: int = 0
+    let i: int = 0
+    while (i < 2000) {
+        let b = StringBuilder()
+        b.append("row-")
+        b.append(i)
+        total = total + b.toString().trim().toUpper().len()
+        total = total + str.fromInt(i).trim().len()
+        i = i + 1
+    }
+    assert(total > 0)
+    fmt.println(total)
+}

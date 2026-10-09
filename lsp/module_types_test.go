@@ -18,21 +18,21 @@ func writeModule(t *testing.T, dir, name, src string) string {
 }
 
 // A user module that imports another user module and uses its struct type
-// through a qualified annotation (ocppMessage.OcppMessage) must parse cleanly
+// through a qualified annotation (wireMessage.WireMessage) must parse cleanly
 // when diagnosed on its own, exactly as it does through `dex build`.
 func TestDiagnoseImportedFileResolvesQualifiedUserTypes(t *testing.T) {
 	dir := t.TempDir()
-	writeModule(t, dir, "ocppMessage", `struct OcppMessage {
+	writeModule(t, dir, "wireMessage", `struct WireMessage {
     action: string
 }
 
-fn make(action: string): OcppMessage {
-    return OcppMessage { action: action }
+fn make(action: string): WireMessage {
+    return WireMessage { action: action }
 }
 `)
-	handler := writeModule(t, dir, "handler", `import "ocppMessage"
+	handler := writeModule(t, dir, "handler", `import "wireMessage"
 
-fn describe(m: ocppMessage.OcppMessage): string {
+fn describe(m: wireMessage.WireMessage): string {
     return m.action
 }
 `)
@@ -47,20 +47,20 @@ fn describe(m: ocppMessage.OcppMessage): string {
 // prefix, so a lookup by the bare name finds nothing.
 func TestHoverUserModuleFunction(t *testing.T) {
 	dir := t.TempDir()
-	writeModule(t, dir, "ocppMessage", `struct OcppMessage {
+	writeModule(t, dir, "wireMessage", `struct WireMessage {
     action: string
 }
 
-fn parseMessage(raw: string): OcppMessage {
-    return OcppMessage { action: raw }
+fn parseMessage(raw: string): WireMessage {
+    return WireMessage { action: raw }
 }
 `)
 	mainPath := writeModule(t, dir, "main", "")
 
-	text := `import "ocppMessage"
+	text := `import "wireMessage"
 
 fn main(): void {
-    let m: ocppMessage.OcppMessage = ocppMessage.parseMessage("Boot")
+    let m: wireMessage.WireMessage = wireMessage.parseMessage("Boot")
 }
 `
 	// Position the cursor inside "parseMessage" on line 4 (0-based line 3).
@@ -69,7 +69,7 @@ fn main(): void {
 
 	s := &Server{}
 	got := s.hoverAt(pathToURI(mainPath), text, Position{Line: line, Character: col + 1})
-	if !strings.Contains(got, "fn ocppMessage.parseMessage(raw: string): OcppMessage") {
+	if !strings.Contains(got, "fn wireMessage.parseMessage(raw: string): WireMessage") {
 		t.Fatalf("expected function signature in hover, got:\n%s", got)
 	}
 }
@@ -78,13 +78,13 @@ fn main(): void {
 // source depends on types from a further user module.
 func TestUserModuleCompletionsWithQualifiedUserTypes(t *testing.T) {
 	dir := t.TempDir()
-	writeModule(t, dir, "ocppMessage", `struct OcppMessage {
+	writeModule(t, dir, "wireMessage", `struct WireMessage {
     action: string
 }
 `)
-	writeModule(t, dir, "handler", `import "ocppMessage"
+	writeModule(t, dir, "handler", `import "wireMessage"
 
-fn describe(m: ocppMessage.OcppMessage): string {
+fn describe(m: wireMessage.WireMessage): string {
     return m.action
 }
 `)

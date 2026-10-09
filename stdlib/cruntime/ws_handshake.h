@@ -76,8 +76,8 @@ static const char* DEX_WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 /* RFC 6455 forbids naming a subprotocol the client did not offer — a browser
  * fails the connection when we do. Returns 1 only when `proto` appears in the
- * request's comma-separated offer list. A client offering none (as many OCPP
- * chargers do) returns 0, and the header is then omitted rather than refused:
+ * request's comma-separated offer list. A client offering none (as many simple
+ * some clients do) returns 0, and the header is then omitted rather than refused:
  * the connection's protocol is whichever listener's port it arrived on.
  * Written without strcasestr/strncasecmp, which need _GNU_SOURCE on glibc. */
 static int dex_ws_ci_eq(const char* a, const char* b, size_t n) {
@@ -92,7 +92,7 @@ static int dex_ws_ci_eq(const char* a, const char* b, size_t n) {
 
 /* On a match, copies the client's own spelling of the token into `out`: a
  * browser compares the echoed value against its offer list case-sensitively,
- * so answering "ocpp1.6" to a charger that asked for "OCPP1.6" is refused. */
+ * so answering "chat.v1" to a client that asked for "CHAT.V1" is refused. */
 static int dex_ws_client_offers(const char* request, const char* proto,
                                 char* out, size_t out_size) {
     if (!proto || !*proto) return 0;

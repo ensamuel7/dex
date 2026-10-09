@@ -96,6 +96,49 @@ let temps = [1.0, 2.5]  // double[]
 const pi = 3.14159
 ```
 
+Methods take the instance as `self`, and returning it builds a fluent chain:
+
+```dex
+struct Query {
+    from: string
+    max: int
+
+    fn table(name: string): &Query {
+        self.from = name
+        return self
+    }
+
+    fn limit(n: int): &Query {
+        self.max = n
+        return self
+    }
+}
+
+let q: Query = Query { from: "", max: 0 }
+q.table("users").limit(25)
+```
+
+A call is not the end of an expression, so results keep chaining:
+
+```dex
+let n: int = sb.toString().len()
+let third: string = csv.split(",")[2]
+let size: int = csv.split(",")[2].len()
+```
+
+Structs can also be read by field position at runtime, through compiler-emitted
+metadata that costs nothing when unused:
+
+```dex
+import "reflect"
+
+let i: int = 0
+while (i < reflect.fieldCount(q)) {
+    fmt.println(reflect.fieldName(q, i) + " = " + reflect.toString(q, i))
+    i = i + 1
+}
+```
+
 ## Concurrency
 
 Spawn tasks, send and receive values through channels. Compiles down to pthreads and lock-free channels in C.
@@ -170,7 +213,11 @@ See the [Language Reference](LANGUAGE.md#testing) for the full testing specifica
 
 ## Editor Support
 
-There's a VSCode extension in `editors/vscode/dex-lang/` with syntax highlighting and LSP integration (completions, diagnostics).
+There's a VSCode extension in `editors/vscode/dex-lang/` with syntax highlighting and LSP integration (completions, diagnostics, hover, go-to-definition).
+
+`self` highlights as a language variable, and inside a struct body completion offers `self` plus the struct's own fields and methods behind `self.`.
+
+Unresolved names carry an import quick fix. A call into a module the file never imported (`fmt.println(...)`, `userService.init(...)`) offers to add the import line, and an unqualified call offers to add the import and qualify the call. Typing a bare name also completes to `module.function` from any stdlib module or sibling `.dx` file that exports it, writing the import alongside.
 
 ```bash
 dex lsp

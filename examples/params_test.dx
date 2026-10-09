@@ -1,0 +1,14 @@
+import "fmt"
+
+fn main(): void {
+    printParams(from: "2024-01-01", optional: "N/A", to: "2024-12-31")
+}
+
+struct Params {
+    from: string
+    to: string
+}
+
+fn printParams(from: string, to: string, optional: string): void {
+    fmt.println("From: " + from + ", To: " + to + ", Optional: " + optional)
+}

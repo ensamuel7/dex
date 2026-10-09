@@ -9,6 +9,13 @@ import (
 // polymorphic or context-dependent, and so cannot be expressed as a plain
 // FuncDef. The second result reports whether the call was one of them.
 func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type, bool, error) {
+	// Every reflect function is polymorphic in its subject, so the whole module
+	// resolves in one place rather than a special case per name.
+	if e.Module == "reflect" {
+		t, err := c.checkReflectCall(e)
+		return t, true, err
+	}
+
 	// Special case: fmt.print/fmt.println — accepts any primitive type
 	if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
 		if len(e.Args) != 1 {

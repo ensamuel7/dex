@@ -284,7 +284,7 @@ typedef struct DexWsConn {
 } DexWsConn;
 
 /* Per-listener server state. Each dex_ws_listen() owns one of these, so running
- * several WS servers in one process (e.g. OCPP 1.6 on one port and 2.0.1 on
+ * several WS servers in one process (e.g. chat.v1 on one port and chat.v2 on
  * another) keeps its own event loop, thread pool and handlers. */
 struct DexWsServer {
     DexEventLoop*  loop;
@@ -620,7 +620,7 @@ static void dex_ws_hard_exit(int sig) {
 /* Closing the listeners and calling _exit — which is what this used to do —
  * drops every connection without a close frame and without running the
  * disconnect handler. For a charging network that is the expensive part: the
- * handler is what clears the charger's presence claim, and a claim that outlives
+ * handler is what clears the client's presence claim, and a claim that outlives
  * its process keeps drawing commands towards a socket that is gone until it
  * expires.
  *

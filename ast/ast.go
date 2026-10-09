@@ -100,6 +100,7 @@ func init() {
 func ResetStructTypes() {
 	structDefs = nil
 	structByName = make(map[string]Type)
+	reflectedStructs = map[string]bool{}
 }
 
 func RegisterStructType(def StructDef) Type {
@@ -701,4 +702,34 @@ func HasAnnotation(annotations []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// --- Reflection metadata registry -------------------------------------------
+
+// reflectedStructs names the structs some reflect.* call takes as its subject.
+// The checker records a name here as it resolves each call; codegen reads the
+// set and emits a name table, a kind table and the typed accessors for exactly
+// those structs.
+//
+// It exists so that reflection costs nothing it is not asked for. A program
+// that never imports reflect carries no tables, and one that reflects over a
+// single struct carries one struct's worth — rather than every struct in the
+// program paying for metadata on the chance someone looks at it.
+var reflectedStructs = map[string]bool{}
+
+// MarkReflected records that name is the subject of a reflect.* call.
+func MarkReflected(name string) {
+	reflectedStructs[name] = true
+}
+
+// IsReflected reports whether any reflect.* call named this struct, and so
+// whether codegen owes it metadata.
+func IsReflected(name string) bool {
+	return reflectedStructs[name]
+}
+
+// ReflectedStructCount reports how many structs carry metadata, for tests that
+// assert reflection stayed opt-in.
+func ReflectedStructCount() int {
+	return len(reflectedStructs)
 }

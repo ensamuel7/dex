@@ -815,6 +815,88 @@ static size_t dex_http_write_cb(void* contents, size_t size, size_t nmemb, void*
     return total;
 }
 
+// Response headers, kept as the newline-separated "Key: Value" pairs that
+// http.header() builds and http.responseWith() consumes, so both directions of
+// the client speak one format. The status line is not a header and is not kept;
+// the status code is already its own field. Following a redirect produces one
+// block per hop and only the last survives, so resp.headers always describes
+// the response resp.statusCode came from.
+static size_t dex_http_header_cb(char* buffer, size_t size, size_t nitems, void* userp) {
+    size_t total = size * nitems;
+    dex_http_buf* buf = (dex_http_buf*)userp;
+
+    if (total >= 5 && strncmp(buffer, "HTTP/", 5) == 0) {
+        buf->len = 0;
+        if (buf->data) buf->data[0] = '\0';
+        return total;
+    }
+
+    size_t n = total;
+    while (n > 0 && (buffer[n - 1] == '\n' || buffer[n - 1] == '\r')) n--;
+    if (n == 0) return total; // the blank line that closes the block
+
+    char* ptr = realloc(buf->data, buf->len + n + 2);
+    if (!ptr) return 0;
+    buf->data = ptr;
+    memcpy(buf->data + buf->len, buffer, n);
+    buf->len += n;
+    buf->data[buf->len++] = '\n';
+    buf->data[buf->len] = '\0';
+    return total;
+}
+
+// Every string field of a response is a real DexString, including on the paths
+// that fail before a request leaves. A NULL field reaches .dx code as a NULL
+// DexString* and faults on the first read of it.
+static Dex_HttpResponse dex_http_resp_failed(const char* reason) {
+    Dex_HttpResponse resp;
+    resp.statusCode = 0;
+    resp.body = dex_string_from_lit(reason);
+    resp.contentType = dex_string_from_lit("");
+    resp.headers = dex_string_from_lit("");
+    return resp;
+}
+
+#define DEX_HTTP_TIMEOUT_MS 30000
+#define DEX_HTTP_CONNECT_TIMEOUT_MS 10000
+
+// A request to a host the caller does not control needs a deadline, and
+// curl_easy_perform has none of its own: without one, a target that accepts a
+// connection and then says nothing holds the calling thread until the process
+// restarts. NOSIGNAL is part of that — libcurl otherwise resolves with SIGALRM,
+// which is not safe in a process with threads, and this one has them.
+//
+// Redirects are not followed unless asked for, which hands the 3xx and its
+// Location to the caller. That is the right default for anything grading a
+// redirect chain, and the safe one for anything that has to re-check where it
+// is being sent before it goes.
+static void dex_http_apply_opts(CURL* curl, const Dex_HttpOptions* o) {
+    long timeout = DEX_HTTP_TIMEOUT_MS;
+    long connect = DEX_HTTP_CONNECT_TIMEOUT_MS;
+    long follow = 0;
+    int insecure = 0;
+
+    if (o) {
+        if (o->timeoutMs > 0) timeout = (long)o->timeoutMs;
+        if (o->connectTimeoutMs > 0) connect = (long)o->connectTimeoutMs;
+        if (o->maxRedirects > 0) follow = (long)o->maxRedirects;
+        insecure = o->insecureTls ? 1 : 0;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, connect);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+    if (follow > 0) {
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, follow);
+    }
+    if (insecure) {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    }
+}
+
 // --- Header builder ---
 const char* dex_http_header(const char* headers, const char* key, const char* value) {
     size_t hlen = strlen(headers);
@@ -865,20 +947,30 @@ static struct curl_slist* dex_http_parse_json_headers(const char* json_str) {
     return list;
 }
 
-static Dex_HttpResponse dex_http_request_impl(const char* method, const char* url, const char* body, const char* headers) {
-    Dex_HttpResponse resp = {0, NULL};
+static Dex_HttpResponse dex_http_request_impl(const char* method, const char* url, const char* body, const char* headers, const Dex_HttpOptions* opts) {
     CURL* curl = curl_easy_init();
-    if (!curl) return resp;
+    if (!curl) return dex_http_resp_failed("could not initialise the http client");
 
     dex_http_buf buf = {NULL, 0};
+    dex_http_buf hbuf = {NULL, 0};
     buf.data = malloc(1);
-    if (!buf.data) { curl_easy_cleanup(curl); return resp; }
+    hbuf.data = malloc(1);
+    if (!buf.data || !hbuf.data) {
+        free(buf.data);
+        free(hbuf.data);
+        curl_easy_cleanup(curl);
+        return dex_http_resp_failed("out of memory");
+    }
     buf.data[0] = '\0';
+    hbuf.data[0] = '\0';
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, dex_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, dex_http_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hbuf);
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+    dex_http_apply_opts(curl, opts);
 
     if (body && body[0] != '\0') {
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -914,20 +1006,25 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
     }
     if (hdr_list) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr_list);
 
+    Dex_HttpResponse resp;
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
         long code;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
         resp.statusCode = (int)code;
+        // from_cstr takes the buffer and frees it, so neither is freed here.
         resp.body = dex_string_from_cstr(buf.data);
+        resp.headers = dex_string_from_cstr(hbuf.data);
         char* ct = NULL;
         curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ct);
         resp.contentType = dex_string_from_lit(ct ? ct : "");
     } else {
-        resp.statusCode = 0;
-        resp.body = dex_string_from_lit(curl_easy_strerror(res));
-        resp.contentType = dex_string_from_lit("");
+        // A refused connection, a timeout and a certificate we would not accept
+        // all arrive here. The reason goes in the body because a caller that
+        // only prints the body still learns what happened.
         free(buf.data);
+        free(hbuf.data);
+        resp = dex_http_resp_failed(curl_easy_strerror(res));
     }
 
     if (hdr_list) curl_slist_free_all(hdr_list);
@@ -936,47 +1033,51 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
 }
 
 Dex_HttpResponse dex_http_get(const char* url) {
-    return dex_http_request_impl("GET", url, NULL, NULL);
+    return dex_http_request_impl("GET", url, NULL, NULL, NULL);
 }
 
 Dex_HttpResponse dex_http_get_h(const char* url, const char* headers) {
-    return dex_http_request_impl("GET", url, NULL, headers);
+    return dex_http_request_impl("GET", url, NULL, headers, NULL);
 }
 
 Dex_HttpResponse dex_http_post(const char* url, const char* body) {
-    return dex_http_request_impl("POST", url, body, "Content-Type: application/json");
+    return dex_http_request_impl("POST", url, body, "Content-Type: application/json", NULL);
 }
 
 Dex_HttpResponse dex_http_post_h(const char* url, const char* body, const char* headers) {
-    return dex_http_request_impl("POST", url, body, headers);
+    return dex_http_request_impl("POST", url, body, headers, NULL);
 }
 
 Dex_HttpResponse dex_http_put(const char* url, const char* body) {
-    return dex_http_request_impl("PUT", url, body, "Content-Type: application/json");
+    return dex_http_request_impl("PUT", url, body, "Content-Type: application/json", NULL);
 }
 
 Dex_HttpResponse dex_http_put_h(const char* url, const char* body, const char* headers) {
-    return dex_http_request_impl("PUT", url, body, headers);
+    return dex_http_request_impl("PUT", url, body, headers, NULL);
 }
 
 Dex_HttpResponse dex_http_patch(const char* url, const char* body) {
-    return dex_http_request_impl("PATCH", url, body, "Content-Type: application/json");
+    return dex_http_request_impl("PATCH", url, body, "Content-Type: application/json", NULL);
 }
 
 Dex_HttpResponse dex_http_patch_h(const char* url, const char* body, const char* headers) {
-    return dex_http_request_impl("PATCH", url, body, headers);
+    return dex_http_request_impl("PATCH", url, body, headers, NULL);
 }
 
 Dex_HttpResponse dex_http_delete(const char* url) {
-    return dex_http_request_impl("DELETE", url, NULL, NULL);
+    return dex_http_request_impl("DELETE", url, NULL, NULL, NULL);
 }
 
 Dex_HttpResponse dex_http_delete_h(const char* url, const char* headers) {
-    return dex_http_request_impl("DELETE", url, NULL, headers);
+    return dex_http_request_impl("DELETE", url, NULL, headers, NULL);
 }
 
 Dex_HttpResponse dex_http_request(const char* method, const char* url, const char* body, const char* headers) {
-    return dex_http_request_impl(method, url, body, headers);
+    return dex_http_request_impl(method, url, body, headers, NULL);
+}
+
+Dex_HttpResponse dex_http_request_opts(const char* method, const char* url, const char* body, const char* headers, Dex_HttpOptions opts) {
+    return dex_http_request_impl(method, url, body, headers, &opts);
 }
 
 // --- Form data (multipart) ---
@@ -1011,18 +1112,28 @@ const char* dex_http_form_file(const char* form, const char* key, const char* pa
 }
 
 static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* form, const char* headers) {
-    Dex_HttpResponse resp = {0, NULL};
     CURL* curl = curl_easy_init();
-    if (!curl) return resp;
+    if (!curl) return dex_http_resp_failed("could not initialise the http client");
 
     dex_http_buf buf = {NULL, 0};
+    dex_http_buf hbuf = {NULL, 0};
     buf.data = malloc(1);
-    if (!buf.data) { curl_easy_cleanup(curl); return resp; }
+    hbuf.data = malloc(1);
+    if (!buf.data || !hbuf.data) {
+        free(buf.data);
+        free(hbuf.data);
+        curl_easy_cleanup(curl);
+        return dex_http_resp_failed("out of memory");
+    }
     buf.data[0] = '\0';
+    hbuf.data[0] = '\0';
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, dex_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, dex_http_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hbuf);
+    dex_http_apply_opts(curl, NULL);
 
     struct curl_slist* hdr_list = NULL;
     if (headers && headers[0] != '\0') {
@@ -1088,21 +1199,21 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
 
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
 
+    Dex_HttpResponse resp;
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
         long code;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
         resp.statusCode = (int)code;
         resp.body = dex_string_from_cstr(buf.data);
+        resp.headers = dex_string_from_cstr(hbuf.data);
         char* ct = NULL;
         curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ct);
-        resp.contentType = dex_string_from_cstr(ct ? ct : "");
-        free(buf.data);
+        resp.contentType = dex_string_from_lit(ct ? ct : "");
     } else {
-        resp.statusCode = 0;
-        resp.body = dex_string_from_cstr(curl_easy_strerror(res));
-        resp.contentType = dex_string_from_cstr("");
         free(buf.data);
+        free(hbuf.data);
+        resp = dex_http_resp_failed(curl_easy_strerror(res));
     }
 
     if (hdr_list) curl_slist_free_all(hdr_list);

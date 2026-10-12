@@ -395,6 +395,16 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				qualifiedName = qualifiedName + "." + nextMember
 			}
 
+			// Check for a module-qualified enum variant: module.Enum.Variant.
+			// An enum name is global once registered, so the module segment is
+			// dropped here exactly as it is for a module-qualified struct
+			// literal below. Two members is the only shape this can take; a
+			// longer chain is a field access.
+			if len(members) == 2 && p.enumNames[members[0]] {
+				enumType, _ := ast.LookupEnumType(members[0])
+				return &ast.EnumAccessExpr{Pos: pos, EnumName: members[0], Variant: members[1], EnumType: enumType}, nil
+			}
+
 			// Check for module-qualified struct literal: module.StructName { field: value, ... }
 			if len(members) == 1 && p.structNames[memberName] && p.check(token.TokenLBrace) {
 				p.advance() // consume '{'

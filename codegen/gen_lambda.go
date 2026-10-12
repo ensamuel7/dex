@@ -14,6 +14,44 @@ import (
 // The generated C representation uses function pointer typedefs.
 // Since DexLang already has FuncType support, we can generate a plain function
 // for lambdas without captures.
+// genLambdaClosure generates a lambda as a DexClosure*, whatever it captures.
+// genLambdaExpr yields a bare function name when there is nothing to capture,
+// which is what an ordinary assignment wants — but a deferred call needs a
+// closure in hand either way, since the defer stack holds closures.
+func (g *Generator) genLambdaClosure(out *strings.Builder, e *ast.LambdaExpr) {
+	if len(g.findCapturedVars(e.Body)) > 0 {
+		g.genLambdaExpr(out, e)
+		return
+	}
+	var name strings.Builder
+	g.genLambdaExpr(&name, e)
+	var params []ast.Type
+	for _, p := range e.Params {
+		params = append(params, p.Type)
+	}
+	// The thunk that ignores the environment calls this lambda, and thunks are
+	// emitted ahead of lambda bodies — so it needs a prototype. Declared with
+	// the closure typedefs, which come first of all.
+	g.closureTypes.WriteString(fmt.Sprintf("static %s %s(%s);\n",
+		g.cType(e.ReturnType), name.String(), g.paramListC(e.Params)))
+	g.genFuncValue(out, name.String(), ast.FuncTypeOf(params, e.ReturnType))
+}
+
+// paramListC renders a parameter list for a prototype, with void for none.
+func (g *Generator) paramListC(params []ast.Param) string {
+	if len(params) == 0 {
+		return "void"
+	}
+	var b strings.Builder
+	for i, p := range params {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(fmt.Sprintf("%s %s", g.cType(p.Type), p.Name))
+	}
+	return b.String()
+}
+
 func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 	idx := g.lambdaCounter
 	g.lambdaCounter++

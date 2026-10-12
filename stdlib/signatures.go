@@ -100,6 +100,8 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 			return "string, [string]", "HttpResponse", true
 		case "request":
 			return "string, string, string, string", "HttpResponse", true
+		case "requestWith":
+			return "string, string, string, string, HttpOptions", "HttpResponse", true
 		case "header":
 			return "string, string, string", "string", true
 		case "formNew":

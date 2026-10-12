@@ -166,6 +166,8 @@ func tokenKindName(k token.TokenKind) string {
 		return "TokenFinally"
 	case token.TokenThrow:
 		return "TokenThrow"
+	case token.TokenThrows:
+		return "TokenThrows"
 	case token.TokenSwitch:
 		return "TokenSwitch"
 	case token.TokenCase:

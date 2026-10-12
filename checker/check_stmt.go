@@ -524,17 +524,24 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		}
 		c.popScope()
 
-		// Check catch body (if present)
-		if s.CatchBody != nil {
-			c.pushScope()
-			// Define the catch variable as Exception struct type
-			excType, ok := ast.LookupStructType("Exception")
+		// Each catch clause binds its variable at the type it handles, so
+		// `catch (e: ParseError)` can read ParseError's own fields.
+		for i := range s.Catches {
+			clause := &s.Catches[i]
+			clauseType, ok := ast.LookupStructType(clause.TypeName)
 			if !ok {
-				return c.errAt(s.Pos, "built-in Exception type not registered")
+				return c.errAt(clause.Pos, "unknown type '%s' in catch clause", clause.TypeName)
 			}
-			c.define(s.CatchVar, excType)
-			for _, stmt := range s.CatchBody {
+			if throwable, reason := ast.ThrowableStruct(clauseType); !throwable {
+				return c.errAt(clause.Pos, "'%s' cannot be caught: %s", clause.TypeName, reason)
+			}
+			clause.Type = clauseType
+
+			c.pushScope()
+			c.define(clause.VarName, clauseType)
+			for _, stmt := range clause.Body {
 				if err := c.checkStmt(stmt, returnType); err != nil {
+					c.popScope()
 					return err
 				}
 			}
@@ -558,12 +565,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if err != nil {
 			return err
 		}
-		excType, ok := ast.LookupStructType("Exception")
-		if !ok {
-			return c.errAt(s.Pos, "built-in Exception type not registered")
-		}
-		if exprType != excType {
-			return c.errAt(s.Pos, "throw requires Exception type, got %s", typeName(exprType))
+		// Any struct carrying a message is throwable, not only the built-in
+		// Exception: that is what lets a caller catch one kind and not another.
+		if throwable, reason := ast.ThrowableStruct(exprType); !throwable {
+			return c.errAt(s.Pos, "cannot throw %s: %s", typeName(exprType), reason)
 		}
 		return nil
 

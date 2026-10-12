@@ -342,7 +342,7 @@ func TestReflectEmitsEverySetterKind(t *testing.T) {
 func TestReflectFieldTagsBuildsTheWholeTable(t *testing.T) {
 	c := generate(t, `import "fmt"
 	import "reflect"
-	struct Row { id: long  name: string ` + "`db:\"COALESCE(f.name, '')\"`" + `  note: string }
+	struct Row { id: long  name: string `+"`db:\"COALESCE(f.name, '')\"`"+`  note: string }
 	fn main(): void {
 		let shape: Row = Row {}
 		let tags: string[] = reflect.fieldTags(shape, "db")

@@ -58,14 +58,14 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 		out.WriteString(fmt.Sprintf("%sDexJsonValue* %s = ", prefix, s.Name))
 		g.genJsonValue(out, s.Value)
 		out.WriteString(";\n")
-		g.registerScopeVar(s.Name, s.Type)
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		return
 	}
 	// Special case for map literal: let m: map[K,V] = {}
 	if _, ok := s.Value.(*ast.MapLitExpr); ok {
 		suffix := g.mapSuffix(s.Type)
 		out.WriteString(fmt.Sprintf("%s%s %s = dex_map_%s_new();\n", prefix, g.cType(s.Type), s.Name, suffix))
-		g.registerScopeVar(s.Name, s.Type)
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		return
 	}
 	// Special case for channel/task types: let ch = channel(int), let t = spawn { ... }
@@ -78,7 +78,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 		out.WriteString(fmt.Sprintf("%s%s %s; dex_chan_recv(", prefix, ctyp, s.Name))
 		g.genExpr(out, recvExpr.Source)
 		out.WriteString(fmt.Sprintf(", &%s);\n", s.Name))
-		g.registerScopeVar(s.Name, s.Type)
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		return
 	}
 	// Special case for array literal value
@@ -94,7 +94,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 				g.genStructArrayLitElem(out, s.Name, elemType, elem)
 				out.WriteString("\n")
 			}
-			g.registerScopeVar(s.Name, s.Type)
+			g.registerScopeVar(out, prefix, s.Name, s.Type)
 			return
 		}
 		cNewFn := g.arrayNewFunc(s.Type)
@@ -104,7 +104,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 			g.genArrayLitElem(out, s.Name, s.Type, elem)
 			out.WriteString("\n")
 		}
-		g.registerScopeVar(s.Name, s.Type)
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		return
 	}
 	// Special case for string declarations
@@ -118,7 +118,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 				g.genExpr(out, s.Value)
 				out.WriteString(";\n")
 			}
-			g.registerScopeVar(s.Name, s.Type)
+			g.registerScopeVar(out, prefix, s.Name, s.Type)
 			return
 		}
 		if strLit, ok := s.Value.(*ast.StringLit); ok {
@@ -143,7 +143,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 				out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, s.Name))
 			}
 		}
-		g.registerScopeVar(s.Name, s.Type)
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		// Emit debug cycle tracking if annotated
 		if ast.HasAnnotation(s.Annotations, ast.AnnotDebugCycles) {
 			out.WriteString(fmt.Sprintf("%sdex_cycle_track(%s, %q);\n", prefix, s.Name, s.Name))
@@ -210,7 +210,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 				out.WriteString(";\n")
 			}
 		}
-		g.registerScopeVar(s.Name, s.Type)
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		return
 	}
 	// Special case for ref type declarations
@@ -233,7 +233,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 		out.WriteString(fmt.Sprintf("%sDexWeakRef* %s = dex_weak_new(", prefix, s.Name))
 		g.genExpr(out, s.Value)
 		out.WriteString(");\n")
-		g.registerScopeVar(s.Name, s.Type)
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		return
 	}
 	constPrefix := ""
@@ -257,7 +257,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 			g.emitRetainBorrowedStructFields(out, prefix, s.Name, s.Type)
 		}
 	}
-	g.registerScopeVar(s.Name, s.Type)
+	g.registerScopeVar(out, prefix, s.Name, s.Type)
 	// Emit debug cycle tracking if annotated
 	if ast.HasAnnotation(s.Annotations, ast.AnnotDebugCycles) && ast.IsHeapType(s.Type) {
 		out.WriteString(fmt.Sprintf("%sdex_cycle_track(%s, %q);\n", prefix, s.Name, s.Name))

@@ -138,8 +138,10 @@ func (g *Generator) scanStmt(stmt ast.Stmt) {
 		for _, stmt := range s.Body {
 			g.scanStmt(stmt)
 		}
-		for _, stmt := range s.CatchBody {
-			g.scanStmt(stmt)
+		for _, clause := range s.Catches {
+			for _, stmt := range clause.Body {
+				g.scanStmt(stmt)
+			}
 		}
 		for _, stmt := range s.FinallyBody {
 			g.scanStmt(stmt)
@@ -164,6 +166,12 @@ func (g *Generator) scanStmt(stmt ast.Stmt) {
 	case *ast.DestructureLetStmt:
 		g.scanExpr(s.Value)
 	case *ast.DeferStmt:
+		// A deferred call is compiled to a closure, registered when the defer
+		// runs and invoked when the frame is left, so the closure runtime has
+		// to be there even in a program with no function values of its own.
+		g.usesDefer = true
+		g.usesClosure = true
+		g.usesRefcount = true
 		g.scanExpr(s.Expr)
 	}
 }
@@ -352,9 +360,11 @@ func (g *Generator) stmtUsesRegion(stmt ast.Stmt) bool {
 				return true
 			}
 		}
-		for _, st := range s.CatchBody {
-			if g.stmtUsesRegion(st) {
-				return true
+		for _, clause := range s.Catches {
+			for _, st := range clause.Body {
+				if g.stmtUsesRegion(st) {
+					return true
+				}
 			}
 		}
 		for _, st := range s.FinallyBody {

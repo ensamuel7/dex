@@ -71,6 +71,7 @@ func (s *Server) completionsAt(text string, pos Position, uri string) []Completi
 		{"catch", "Catch exception"},
 		{"finally", "Finally block"},
 		{"throw", "Throw exception"},
+		{"throws", "Declare that a function may let an exception escape"},
 		{"switch", "Switch statement"},
 		{"case", "Case branch"},
 		{"default", "Default branch"},

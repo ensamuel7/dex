@@ -160,6 +160,12 @@ func TestNoFalseDiagnosticsOnReflect(t *testing.T) {
 			continue
 		}
 		for _, d := range msg.Params.Diagnostics {
+			// Hints are lint, not a complaint about the reflect API: this
+			// sample assigns results to variables it never reads, which is
+			// true of it and beside the point here.
+			if d.Severity == 4 {
+				continue
+			}
 			t.Errorf("unexpected diagnostic at %d:%d — %s",
 				d.Range.Start.Line+1, d.Range.Start.Character+1, d.Message)
 		}

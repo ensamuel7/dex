@@ -1,0 +1,124 @@
+// What a throw leaves behind, and what the runtime now collects.
+//
+// A throw is a longjmp: every frame between it and the catch is skipped, so
+// the releases those frames would have run never happen. Each heap value a
+// frame would release therefore also registers on a cleanup stack, and each
+// try records that stack's height — when the longjmp lands, everything above
+// that height belongs to a frame that no longer exists and is released.
+//
+// Both loops run many times because the symptom was per-throw: one pass leaked
+// two objects and looked like nothing.
+import "str"
+
+fn deepest(n: int): void throws {
+    throw Exception("boom " + str.fromInt(n))
+}
+
+// Two heap locals in a frame the throw unwinds, and a built message, so the
+// throw itself allocates too.
+fn middle(n: int): void throws {
+    let a = "local a " + str.fromInt(n)
+    let b = "local b " + str.fromInt(n)
+    deepest(n)
+    assert(a != b)
+}
+
+// A heap temporary belonging to the throwing statement: the string is built for
+// the call and released after it, and the longjmp skips that release.
+fn passesATemporary(n: int): void throws {
+    deepestWithArg("arg " + str.fromInt(n))
+}
+
+fn deepestWithArg(s: string): void throws {
+    throw Exception(s)
+}
+
+// Returning from inside a try leaves that try's exception frame behind unless
+// the return pops it. The frame stack is a fixed array, so a function like this
+// called in a loop used to walk off the end of it.
+fn guarded(n: int): int {
+    try {
+        return n * 2
+    } catch (e: Exception) {
+        return 0
+    }
+}
+
+// A break out of a try body is the same jump.
+fn breaksOut(limit: int): int {
+    let seen = 0
+    for (let i = 0; i < limit; i = i + 1) {
+        try {
+            if (i > 3) {
+                break
+            }
+            seen = seen + 1
+        } catch (e: Exception) {
+            seen = 0
+        }
+    }
+    return seen
+}
+
+// A return expression that throws is still inside its own try: the frames are
+// popped only once the value exists, or the exception goes to the caller's
+// handler instead of the one written around it.
+fn returnsAThrow(fail: bool): int {
+    try {
+        return mightThrow(fail)
+    } catch (e: Exception) {
+        return -1
+    }
+}
+
+fn mightThrow(fail: bool): int throws {
+    if (fail) {
+        throw Exception("from the return expression")
+    }
+    return 5
+}
+
+fn main(): void {
+    let caught = 0
+    for (let i = 0; i < 100; i = i + 1) {
+        try {
+            middle(i)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+    }
+    assert(caught == 100)
+
+    let temps = 0
+    for (let i = 0; i < 100; i = i + 1) {
+        try {
+            passesATemporary(i)
+        } catch (e: Exception) {
+            temps = temps + 1
+        }
+    }
+    assert(temps == 100)
+
+    // More iterations than the frame stack is deep, so a leaked frame per
+    // return would exhaust it.
+    let total = 0
+    for (let i = 0; i < 200; i = i + 1) {
+        total = total + guarded(i)
+    }
+    assert(total == 39800)
+
+    assert(breaksOut(10) == 4)
+
+    assert(returnsAThrow(false) == 5)
+    assert(returnsAThrow(true) == -1)
+
+    // The machinery still works after all of that, which it would not if the
+    // frame stack had drifted.
+    let last = ""
+    try {
+        throw Exception("final")
+    } catch (e: Exception) {
+        last = e.message
+    }
+    assert(last == "final")
+}

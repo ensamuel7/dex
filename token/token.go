@@ -98,6 +98,7 @@ const (
 	TokenInterface
 	TokenDefer
 	TokenMutex
+	TokenThrows // `throws` in a signature — the effect, not the `throw` statement
 	TokenEOF
 )
 
@@ -265,6 +266,8 @@ func (k TokenKind) String() string {
 		return "finally"
 	case TokenThrow:
 		return "throw"
+	case TokenThrows:
+		return "throws"
 	case TokenSwitch:
 		return "switch"
 	case TokenCase:
@@ -333,6 +336,7 @@ var Keywords = map[string]TokenKind{
 	"catch":    TokenCatch,
 	"finally":  TokenFinally,
 	"throw":    TokenThrow,
+	"throws":   TokenThrows,
 	"switch":   TokenSwitch,
 	"case":     TokenCase,
 	"default":  TokenDefault,

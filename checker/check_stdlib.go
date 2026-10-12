@@ -495,7 +495,7 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 	}
 
 	// HTTP client functions returning HttpResponse
-	if e.Module == "http" && (e.Name == "get" || e.Name == "post" || e.Name == "put" || e.Name == "patch" || e.Name == "delete" || e.Name == "request" || e.Name == "postForm") {
+	if e.Module == "http" && (e.Name == "get" || e.Name == "post" || e.Name == "put" || e.Name == "patch" || e.Name == "delete" || e.Name == "request" || e.Name == "requestWith" || e.Name == "postForm") {
 		httpRespType, ok := ast.LookupStructType("HttpResponse")
 		if !ok {
 			return 0, true, c.errAt(e.Pos, "HttpResponse type not registered (internal error)")
@@ -551,6 +551,27 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 				}
 				if argType != ast.TypeString {
 					return 0, true, c.errAt(e.Pos, "http.request() argument %d must be string, got %s", i+1, typeName(argType))
+				}
+			}
+		case "requestWith":
+			if len(e.Args) != 5 {
+				return 0, true, c.errAt(e.Pos, "http.requestWith() takes exactly 5 arguments, got %d", len(e.Args))
+			}
+			optsType, ok := ast.LookupStructType("HttpOptions")
+			if !ok {
+				return 0, true, c.errAt(e.Pos, "HttpOptions type not registered (internal error)")
+			}
+			for i, arg := range e.Args {
+				argType, err := c.checkExpr(arg)
+				if err != nil {
+					return 0, true, err
+				}
+				want := ast.TypeString
+				if i == 4 {
+					want = optsType
+				}
+				if argType != want {
+					return 0, true, c.errAt(e.Pos, "http.requestWith() argument %d must be %s, got %s", i+1, typeName(want), typeName(argType))
 				}
 			}
 		case "postForm":

@@ -283,6 +283,20 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString("typedef struct DexJsonValue DexJsonValue;\n")
 	}
 
+	// Enum typedefs come before the structs: an enum depends on nothing, and a
+	// struct may hold one as a field, which needs the name to already exist.
+	// Emitting them last meant a struct with an enum field never compiled.
+	for _, ed := range program.Enums {
+		out.WriteString("typedef enum { ")
+		for i, v := range ed.Variants {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(fmt.Sprintf("Dex_%s_%s = %d", ed.Name, v, i))
+		}
+		out.WriteString(fmt.Sprintf(" } Dex_%s;\n", ed.Name))
+	}
+
 	// Emit struct typedefs (module-provided types first, then user-defined)
 	for _, mod := range g.importedModules {
 		for _, sd := range mod.Types {
@@ -301,17 +315,6 @@ func (g *Generator) Generate(program *ast.Program) string {
 			out.WriteString(fmt.Sprintf("    %s %s;\n", g.cType(f.Type), f.Name))
 		}
 		out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
-	}
-	// Emit enum typedefs
-	for _, ed := range program.Enums {
-		out.WriteString("typedef enum { ")
-		for i, v := range ed.Variants {
-			if i > 0 {
-				out.WriteString(", ")
-			}
-			out.WriteString(fmt.Sprintf("Dex_%s_%s = %d", ed.Name, v, i))
-		}
-		out.WriteString(fmt.Sprintf(" } Dex_%s;\n", ed.Name))
 	}
 	// Emit cleanup functions for structs that have heap fields (used by struct arrays)
 	for _, sd := range program.Structs {

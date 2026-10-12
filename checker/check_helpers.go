@@ -94,6 +94,20 @@ func validateAnnotations(annotations []string, typ ast.Type, name string) error 
 		return nil
 	}
 
+	// A lint suppression carries no meaning for the compiler, so it is neither
+	// part of the memory annotation set nor restricted to heap types. Lint
+	// validates the rule it names.
+	var directives []string
+	for _, a := range annotations {
+		if _, ok := ast.ParseAllowAnnotation(a); !ok {
+			directives = append(directives, a)
+		}
+	}
+	if len(directives) == 0 {
+		return nil
+	}
+	annotations = directives
+
 	// Validate each annotation is known
 	validAnnotations := map[string]bool{
 		ast.AnnotOwned:       true,
@@ -352,9 +366,9 @@ func collectReferencedVars(stmts []ast.Stmt, used, defined map[string]bool) {
 			collectReferencedVarsExpr(s.Value, used)
 		case *ast.TryCatchStmt:
 			collectReferencedVars(s.Body, used, defined)
-			if s.CatchBody != nil {
-				defined[s.CatchVar] = true
-				collectReferencedVars(s.CatchBody, used, defined)
+			for _, clause := range s.Catches {
+				defined[clause.VarName] = true
+				collectReferencedVars(clause.Body, used, defined)
 			}
 			if s.FinallyBody != nil {
 				collectReferencedVars(s.FinallyBody, used, defined)

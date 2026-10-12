@@ -37,6 +37,12 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if sig, found := c.funcs[e.Name]; found {
 				return ast.FuncTypeOf(sig.Params, sig.ReturnType), nil
 			}
+			// `self` resolves only inside a method, where the receiver parameter
+			// carries that name. Outside one it is not a misspelling of
+			// anything, so say what it actually is.
+			if e.Name == "self" {
+				return 0, c.errAt(e.Pos, "'self' is only available inside a struct method; a module-level value is reached by its own name")
+			}
 			return 0, c.errAt(e.Pos, "undefined variable '%s'", e.Name)
 		}
 		return typ, nil

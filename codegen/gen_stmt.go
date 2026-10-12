@@ -138,11 +138,17 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 				g.emitRetainStructLitFields(out, prefix+"    ", s.Name, varType, lit)
 			} else if g.borrowsHeapValue(s.Value) {
 				// Borrowed whole struct — the target becomes a second owner.
-				for _, f := range def.Fields {
-					if ast.IsHeapType(f.Type) {
-						out.WriteString(fmt.Sprintf("%s    dex_retain(%s.%s);\n", prefix, s.Name, f.Name))
-					}
-				}
+				//
+				// Through emitRetainBorrowedStructFields, which recurses, because
+				// the release loop below goes through emitReleaseVar and that
+				// descends into a nested struct field. A flat loop over
+				// IsHeapType here did not: a nested struct is not a heap type, so
+				// `page = plain` retained plain's own strings and silently skipped
+				// `plain.headers.raw`, leaving it one reference short. Both
+				// locals then released it at scope exit — a use-after-free from
+				// an ordinary reassignment, and the declaration path one line
+				// away had been doing it correctly all along.
+				g.emitRetainBorrowedStructFields(out, prefix+"    ", s.Name, varType)
 			}
 			for _, f := range def.Fields {
 				if ast.NeedsRelease(f.Type) {
@@ -158,7 +164,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 
 	case *ast.IfStmt:
 		out.WriteString(fmt.Sprintf("%sif (", prefix))
-		g.genExprNoParen(out, s.Cond)
+		g.genCondition(out, s.Cond)
 		out.WriteString(") {\n")
 		g.pushScope()
 		// Detect null check for type narrowing
@@ -194,12 +200,14 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 
 	case *ast.WhileStmt:
 		out.WriteString(fmt.Sprintf("%swhile (", prefix))
-		g.genExprNoParen(out, s.Cond)
+		g.genCondition(out, s.Cond)
 		out.WriteString(") {\n")
 		savedLoop := g.isInLoop
 		savedDepth := g.loopDepth
+		savedTryDepth := g.loopTryDepth
 		g.isInLoop = true
 		g.loopDepth = len(g.scopeStack)
+		g.loopTryDepth = g.tryDepth
 		g.pushScope()
 		for _, stmt := range s.Body {
 			g.genStmt(out, stmt, indent+1)
@@ -207,6 +215,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		g.popScope(out, prefix+"    ")
 		g.isInLoop = savedLoop
 		g.loopDepth = savedDepth
+		g.loopTryDepth = savedTryDepth
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 	case *ast.ForStmt:
@@ -219,8 +228,10 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		out.WriteString(") {\n")
 		savedLoop := g.isInLoop
 		savedDepth := g.loopDepth
+		savedTryDepth := g.loopTryDepth
 		g.isInLoop = true
 		g.loopDepth = len(g.scopeStack)
+		g.loopTryDepth = g.tryDepth
 		g.pushScope()
 		for _, stmt := range s.Body {
 			g.genStmt(out, stmt, indent+1)
@@ -228,6 +239,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		g.popScope(out, prefix+"    ")
 		g.isInLoop = savedLoop
 		g.loopDepth = savedDepth
+		g.loopTryDepth = savedTryDepth
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 	case *ast.ForeachStmt:
@@ -245,8 +257,10 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			prefix, idxVar, idxVar, arrExpr, idxVar))
 		savedLoop := g.isInLoop
 		savedDepth := g.loopDepth
+		savedTryDepth := g.loopTryDepth
 		g.isInLoop = true
 		g.loopDepth = len(g.scopeStack)
+		g.loopTryDepth = g.tryDepth
 		g.pushScope()
 		// Declare value variable
 		innerPrefix := strings.Repeat("    ", indent+1)
@@ -276,18 +290,23 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		g.popScope(out, innerPrefix)
 		g.isInLoop = savedLoop
 		g.loopDepth = savedDepth
+		g.loopTryDepth = savedTryDepth
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 	case *ast.BreakStmt:
 		if g.isInLoop {
 			g.emitCleanupInnerScopes(out, prefix, g.loopDepth)
 		}
+		// A break out of a try body leaves that frame behind as surely as a
+		// return does.
+		g.emitExcFramePops(out, prefix, g.tryDepth-g.loopTryDepth)
 		out.WriteString(fmt.Sprintf("%sbreak;\n", prefix))
 
 	case *ast.ContinueStmt:
 		if g.isInLoop {
 			g.emitCleanupInnerScopes(out, prefix, g.loopDepth)
 		}
+		g.emitExcFramePops(out, prefix, g.tryDepth-g.loopTryDepth)
 		out.WriteString(fmt.Sprintf("%scontinue;\n", prefix))
 
 	case *ast.IncrementStmt:
@@ -418,6 +437,11 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			out.WriteString(prefix)
 			g.genExpr(out, s.Object)
 			out.WriteString(fmt.Sprintf("%s%s = %s;\n", accessOp, s.Field, tmpVal))
+			// The field's old value has just been released, so its cleanup
+			// entry — if it has one — has to follow the new value.
+			if ident, ok := s.Object.(*ast.Ident); ok {
+				g.emitUnwindFieldUpdate(out, prefix, ident.Name, s.Field)
+			}
 		} else {
 			out.WriteString(prefix)
 			g.genExpr(out, s.Object)
@@ -526,55 +550,106 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		// A literal message is static storage and can be thrown directly.
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Name == "Exception" && len(call.Args) == 1 {
 			if strLit, isLit := call.Args[0].(*ast.StringLit); isLit {
-				out.WriteString(fmt.Sprintf("%s_dex_throw(%q);\n", prefix, strLit.Value))
+				out.WriteString(fmt.Sprintf("%s_dex_throw(\"Exception\", %q);\n", prefix, strLit.Value))
 				break
 			}
 			g.genThrowMessage(out, prefix, call.Args[0], false)
 			break
+		}
+		// Throwing a struct held in a variable consumes it: the message is
+		// staged and the struct's heap fields are released, here rather than at
+		// a scope exit the longjmp will skip. So the cleanup entries for those
+		// fields are given up first — left in place, the unwind would release
+		// them a second time.
+		if ident, ok := s.Value.(*ast.Ident); ok {
+			g.emitUnwindEntriesCleared(out, prefix, ident.Name)
 		}
 		g.genThrowMessage(out, prefix, s.Value, true)
 
 	case *ast.TryCatchStmt:
 		id := g.tryCatchCounter
 		g.tryCatchCounter++
-		hasCatch := s.CatchBody != nil
 		hasFinally := s.FinallyBody != nil
 
+		// The cleanup height as it stands before the try. Anything registered
+		// above this belongs to a frame the longjmp skipped, or to the try's own
+		// body, and nothing released it on the way out.
+		cleanupMark := g.nextCleanupMark()
+		out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_top;\n", prefix, cleanupMark))
+		// And the defer stack's height, so the catch can run the deferred calls
+		// of every frame the longjmp skipped. Only when the program defers at
+		// all: the stack lives in the closure runtime, which a program with no
+		// deferred call anywhere does not carry.
+		deferMark := ""
+		if g.usesDefer {
+			deferMark = g.nextCleanupMark()
+			out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_defer_top;\n", prefix, deferMark))
+		}
+
 		// Push exception frame
-		out.WriteString(fmt.Sprintf("%s_dex_exc_top++;\n", prefix))
+		out.WriteString(fmt.Sprintf("%s_dex_exc_push_frame();\n", prefix))
 		out.WriteString(fmt.Sprintf("%svolatile int _dex_exc_%d_caught = 0;\n", prefix, id))
+		out.WriteString(fmt.Sprintf("%svolatile int _dex_exc_%d_handled = 0;\n", prefix, id))
 		out.WriteString(fmt.Sprintf("%sif (setjmp(_dex_exc_stack[_dex_exc_top].env) == 0) {\n", prefix))
 		out.WriteString(fmt.Sprintf("%s    _dex_exc_stack[_dex_exc_top].active = 0;\n", prefix))
 
 		// Try body
 		g.pushScope()
+		g.tryDepth++
 		for _, stmt := range s.Body {
 			g.genStmt(out, stmt, indent+1)
 		}
+		g.tryDepth--
 		g.popScope(out, prefix+"    ")
 		out.WriteString(fmt.Sprintf("%s} else {\n", prefix))
 		out.WriteString(fmt.Sprintf("%s    _dex_exc_%d_caught = 1;\n", prefix, id))
+		// The skipped frames' deferred calls run first — they are user code,
+		// and may read what they captured — and then what those frames held is
+		// released. Both happen before any handler runs: the catch body
+		// allocates, and the entries above the mark are already dead.
+		if deferMark != "" {
+			out.WriteString(fmt.Sprintf("%s    _dex_defer_run_to(%s);\n", prefix, deferMark))
+		}
+		out.WriteString(fmt.Sprintf("%s    _dex_cleanup_unwind_to(%s);\n", prefix, cleanupMark))
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 		// Pop exception frame
 		out.WriteString(fmt.Sprintf("%s_dex_exc_top--;\n", prefix))
 
-		// Catch block
-		if hasCatch {
+		// Dispatch to the first clause whose type matches what was thrown. The
+		// frame was popped, so the exception it carries is one past the top.
+		if len(s.Catches) > 0 {
+			thrownType := fmt.Sprintf("_dex_exc_stack[_dex_exc_top + 1].type")
 			out.WriteString(fmt.Sprintf("%sif (_dex_exc_%d_caught) {\n", prefix, id))
-			// Create Exception struct with message from exception stack
-			out.WriteString(fmt.Sprintf("%s    DexString* %s_msg = dex_string_from_lit(_dex_exc_stack[_dex_exc_top + 1].message);\n", prefix, s.CatchVar))
-			out.WriteString(fmt.Sprintf("%s    Dex_Exception %s = { .message = %s_msg };\n", prefix, s.CatchVar, s.CatchVar))
+			for i := range s.Catches {
+				clause := &s.Catches[i]
+				keyword := "if"
+				if i > 0 {
+					keyword = "} else if"
+				}
+				out.WriteString(fmt.Sprintf("%s    %s (_dex_exc_matches(%s, %q)) {\n",
+					prefix, keyword, thrownType, clause.TypeName))
+				out.WriteString(fmt.Sprintf("%s        _dex_exc_%d_handled = 1;\n", prefix, id))
 
-			g.pushScope()
-			excType, _ := ast.LookupStructType("Exception")
-			g.varTypes[s.CatchVar] = excType
-			g.structVars[s.CatchVar] = excType
-			g.registerScopeVar(s.CatchVar+"_msg", ast.TypeString)
-			for _, stmt := range s.CatchBody {
-				g.genStmt(out, stmt, indent+1)
+				// The caught value is rebuilt here: its own fields from the
+				// staged payload, its message from the staged text.
+				cType := g.cType(clause.Type)
+				out.WriteString(fmt.Sprintf("%s        %s %s; _dex_exc_restore(%q, &%s, sizeof(%s));\n",
+					prefix, cType, clause.VarName, clause.TypeName, clause.VarName, clause.VarName))
+				out.WriteString(fmt.Sprintf("%s        DexString* %s_msg = dex_string_from_lit(_dex_exc_stack[_dex_exc_top + 1].message);\n",
+					prefix, clause.VarName))
+				out.WriteString(fmt.Sprintf("%s        %s.message = %s_msg;\n", prefix, clause.VarName, clause.VarName))
+
+				g.pushScope()
+				g.varTypes[clause.VarName] = clause.Type
+				g.structVars[clause.VarName] = clause.Type
+				g.registerScopeVar(out, prefix+"        ", clause.VarName+"_msg", ast.TypeString)
+				for _, stmt := range clause.Body {
+					g.genStmt(out, stmt, indent+2)
+				}
+				g.popScope(out, prefix+"        ")
 			}
-			g.popScope(out, prefix+"    ")
+			out.WriteString(fmt.Sprintf("%s    }\n", prefix))
 			out.WriteString(fmt.Sprintf("%s}\n", prefix))
 		}
 
@@ -587,16 +662,30 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			g.popScope(out, prefix)
 		}
 
-		// If no catch clause, re-throw after finally
-		if !hasCatch {
-			out.WriteString(fmt.Sprintf("%sif (_dex_exc_%d_caught) {\n", prefix, id))
-			out.WriteString(fmt.Sprintf("%s    _dex_throw(_dex_exc_stack[_dex_exc_top + 1].message);\n", prefix))
-			out.WriteString(fmt.Sprintf("%s}\n", prefix))
-		}
+		// An exception no clause claimed carries on outward, after the finally
+		// has run. A try with only a finally always lands here.
+		out.WriteString(fmt.Sprintf("%sif (_dex_exc_%d_caught && !_dex_exc_%d_handled) {\n", prefix, id, id))
+		out.WriteString(fmt.Sprintf("%s    _dex_rethrow(_dex_exc_stack[_dex_exc_top + 1].type, _dex_exc_stack[_dex_exc_top + 1].message);\n", prefix))
+		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 
 	case *ast.DeferStmt:
-		// Accumulate deferred expression (will be emitted at function exit / return)
-		g.deferExprs = append(g.deferExprs, s.Expr)
+		// Registered where the defer runs, not accumulated at compile time.
+		// That is what makes it conditional — a defer in a branch not taken
+		// registers nothing — what makes one in a loop run per iteration, and
+		// what lets an unwind run it: the catch runs everything registered
+		// above its own height.
+		//
+		// The call becomes a closure, so what it needs is captured and owned by
+		// the closure rather than read out of a frame that may be gone by then.
+		// Capture happens here, which is also when the arguments are evaluated.
+		lam := &ast.LambdaExpr{
+			Pos:        s.Pos,
+			ReturnType: ast.TypeVoid,
+			Body:       []ast.Stmt{&ast.ExprStmt{Pos: s.Pos, Expr: s.Expr}},
+		}
+		out.WriteString(prefix + "_dex_defer_push(")
+		g.genLambdaClosure(out, lam)
+		out.WriteString(");\n")
 
 	case *ast.DestructureLetStmt:
 		// Generate RHS into a temp variable
@@ -632,7 +721,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 					// Retain heap types since we're creating a new reference
 					if ast.IsHeapType(f.Type) {
 						out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, name))
-						g.registerScopeVar(name, f.Type)
+						g.registerScopeVar(out, prefix, name, f.Type)
 					}
 					break
 				}
@@ -650,6 +739,11 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 // left to own it and leaked one string per throw.
 //
 // A message that was only borrowed is not released, on the usual terms.
+// genThrowMessage emits a throw whose message is not a literal. The order is
+// the whole of it: the message text is staged into the runtime's buffer, the
+// struct's own fields are staged as bytes, whatever the expression allocated is
+// released, and only then does the longjmp happen — after a longjmp there is no
+// way to release anything.
 func (g *Generator) genThrowMessage(out *strings.Builder, prefix string, msg ast.Expr, fromStruct bool) {
 	field := ""
 	if fromStruct {
@@ -657,13 +751,22 @@ func (g *Generator) genThrowMessage(out *strings.Builder, prefix string, msg ast
 	}
 	tmp := g.nextTemp()
 	typ := ast.TypeString
+	typeName := "Exception"
 	if fromStruct {
 		typ = g.typeOfExpr(msg)
+		if ast.IsStructType(typ) {
+			typeName = ast.StructName(typ)
+		}
 	}
 	out.WriteString(fmt.Sprintf("%s{ %s %s = ", prefix, g.cType(typ), tmp))
 	g.genExpr(out, msg)
 	out.WriteString(fmt.Sprintf("; _dex_exc_stage(%s%s->data);", tmp, field))
 	if fromStruct {
+		// The remaining fields travel as bytes. The assert is here rather than
+		// in the runtime because a payload too large to carry should stop the
+		// build, not silently arrive zeroed.
+		out.WriteString(fmt.Sprintf(" _Static_assert(sizeof(%s) <= DEX_EXCEPTION_PAYLOAD_MAX, \"exception payload too large to cross a throw\");", g.cType(typ)))
+		out.WriteString(fmt.Sprintf(" _dex_exc_stage_payload(&%s, sizeof(%s));", tmp, tmp))
 		if ast.NeedsRelease(typ) {
 			var rel strings.Builder
 			g.emitReleaseVar(&rel, "", tmp, typ)
@@ -672,5 +775,5 @@ func (g *Generator) genThrowMessage(out *strings.Builder, prefix string, msg ast
 	} else if g.isNewAlloc(msg) {
 		out.WriteString(fmt.Sprintf(" dex_release(%s);", tmp))
 	}
-	out.WriteString(" _dex_throw_staged(); }\n")
+	out.WriteString(fmt.Sprintf(" _dex_throw_staged(%q); }\n", typeName))
 }

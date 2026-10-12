@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/resolve"
 )
 
 func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
@@ -23,7 +24,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.loopDepth = 0
 	g.narrowedVars = make(map[string]string)
 	g.narrowedTypes = make(map[string]ast.Type)
-	g.deferExprs = nil
+	g.fnHasDefer = containsDefer(fn.Body)
 
 	// Register global variables so all functions can resolve them
 	for name, typ := range g.globalVars {
@@ -95,6 +96,13 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		out.WriteString("    DexArena* _arena = dex_arena_new(65536);\n")
 	}
 
+	// Where this frame's deferred calls start. Taken before the body, so every
+	// exit — a return, falling off the end, or an unwind reaching a catch
+	// further out — runs exactly the calls this frame registered.
+	if g.fnHasDefer {
+		out.WriteString("    size_t _dex_defer_base = _dex_defer_top;\n")
+	}
+
 	// Line-buffer stdout. C block-buffers it whenever it is not a terminal, so a
 	// long-running program whose output is redirected to a file or captured by a
 	// container runtime would emit nothing until 4KB had accumulated — its logs
@@ -149,9 +157,63 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	} else {
 		// Pop function scope (cleanup for functions that fall through without return)
 		g.popScope(out, "    ")
+
+		// A function that always leaves by throwing never falls off its end,
+		// but C cannot see that through longjmp and warns about the missing
+		// return on every build. Saying so explicitly is the whole fix. A body
+		// ending in a plain return needs nothing: C can see that one.
+		if fn.ReturnType != ast.TypeVoid && !endsInReturn(fn.Body) && neverFallsThrough(fn.Body) {
+			out.WriteString("    __builtin_unreachable();\n")
+		}
 	}
 
 	out.WriteString("}\n")
+}
+
+func endsInReturn(body []ast.Stmt) bool {
+	if len(body) == 0 {
+		return false
+	}
+	_, ok := body[len(body)-1].(*ast.ReturnStmt)
+	return ok
+}
+
+// neverFallsThrough reports whether a body always leaves by returning or
+// throwing. A try counts when its own body and every handler do: an exception
+// no handler claims is re-thrown, which does not return either.
+func neverFallsThrough(body []ast.Stmt) bool {
+	if len(body) == 0 {
+		return false
+	}
+	switch last := body[len(body)-1].(type) {
+	case *ast.ReturnStmt, *ast.ThrowStmt:
+		return true
+	case *ast.IfStmt:
+		return len(last.Else) > 0 && neverFallsThrough(last.Then) && neverFallsThrough(last.Else)
+	case *ast.BlockStmt:
+		return neverFallsThrough(last.Stmts)
+	case *ast.TryCatchStmt:
+		if !neverFallsThrough(last.Body) {
+			return false
+		}
+		for i := range last.Catches {
+			if !neverFallsThrough(last.Catches[i].Body) {
+				return false
+			}
+		}
+		return true
+	case *ast.SwitchStmt:
+		if len(last.Default) == 0 {
+			return false
+		}
+		for i := range last.Cases {
+			if !neverFallsThrough(last.Cases[i].Body) {
+				return false
+			}
+		}
+		return neverFallsThrough(last.Default)
+	}
+	return false
 }
 
 // genGlobalInit emits initialization code for a module-level let/const variable.
@@ -275,7 +337,28 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	g.emitHoistPrelude(out, prefix)
 	out.WriteString(body.String())
 	g.emitHoistReleases(out, prefix)
+	// An assignment replaced what the variable held, and released it. Every
+	// branch of the assignment leaves the new value in the variable, so the
+	// cleanup entry is pointed at it here — once, rather than in each of them.
+	if assign, ok := stmt.(*ast.AssignStmt); ok {
+		g.emitUnwindSlotUpdate(out, prefix, assign.Name)
+	}
 	g.stmtPrelude, g.stmtTemps = savedPrelude, savedTemps
+}
+
+// containsDefer reports whether a body registers any deferred call of its own.
+// A defer inside a lambda belongs to that lambda's frame, not this one, so the
+// walk stops at nested bodies.
+func containsDefer(body []ast.Stmt) bool {
+	found := false
+	for _, stmt := range body {
+		resolve.VisitStmtInFrame(stmt, func(st ast.Stmt) {
+			if _, ok := st.(*ast.DeferStmt); ok {
+				found = true
+			}
+		}, nil)
+	}
+	return found
 }
 
 // emitSiteMarker records the .dx position of the statement about to be

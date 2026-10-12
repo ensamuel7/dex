@@ -90,20 +90,26 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 				g.genStringConcat(out, e)
 				return
 			case ast.BinEq, ast.BinStrictEq:
-				out.WriteString("(strcmp(")
-				g.genStringData(out, e.Left)
-				out.WriteString(", ")
-				g.genStringData(out, e.Right)
-				out.WriteString(") == 0)")
+				g.genStringCompare(out, e, "==")
 				return
 			case ast.BinNeq, ast.BinStrictNeq:
-				out.WriteString("(strcmp(")
-				g.genStringData(out, e.Left)
-				out.WriteString(", ")
-				g.genStringData(out, e.Right)
-				out.WriteString(") != 0)")
+				g.genStringCompare(out, e, "!=")
 				return
 			}
+		}
+
+		// The operands of a short-circuit must not be hoisted out of it: the
+		// right-hand side may never be evaluated, and a hoisted declaration
+		// would evaluate it anyway. See genCondition.
+		if e.Op == ast.BinAnd || e.Op == ast.BinOr {
+			restore := g.suspendHoisting()
+			out.WriteString("(")
+			g.genExpr(out, e.Left)
+			out.WriteString(fmt.Sprintf(" %s ", g.cBinOp(e.Op)))
+			g.genExpr(out, e.Right)
+			out.WriteString(")")
+			restore()
+			return
 		}
 
 		// Cross-numeric operations: cast narrower operand to wider type
@@ -321,7 +327,13 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			g.genMethodValueExpr(out, e)
 			break
 		}
-		g.genExpr(out, e.Object)
+		// Reading a field only borrows it, but the *subject* may have been
+		// built on the spot: `parse(x).ok` returns a struct that nothing binds,
+		// and a struct owns its heap fields, so without this the fields had
+		// nobody to release them — one leak per call. genBorrowed already
+		// knows how to hold a struct for the length of the statement; the field
+		// access just has to ask it to.
+		g.genBorrowed(out, e.Object)
 		objType := g.typeOfExpr(e.Object)
 		// Optional structs are represented as Dex_Foo*, so they dereference too.
 		if ast.IsRefType(objType) || (ast.IsOptionalType(objType) && ast.IsStructType(ast.OptionalInnerType(objType))) {
@@ -450,6 +462,86 @@ func (g *Generator) fieldChainC(chain string) string {
 	var out strings.Builder
 	g.genExpr(&out, expr)
 	return out.String()
+}
+
+// genStringCompare generates a string equality test.
+//
+// When an operand allocates — `s.trim() == want`, a concatenation, an
+// interpolation — the comparison only reads the bytes and nobody else owns the
+// result, so it has to be released here. It is done inside a statement
+// expression rather than by hoisting into the enclosing statement for two
+// reasons, and the second one is the important one:
+//
+// A condition is not a statement. `if` and `while` generate their condition
+// with no prelude to hoist into, so a minted operand there was simply leaked —
+// one object per evaluation, which in a loop is one per iteration.
+//
+// Hoisting out of a condition would also break short-circuiting. In
+// `if (!s.isEmpty() && s.substring(0, 1) == "a")` the right-hand operand must
+// not be evaluated when the left is false, and a hoisted declaration ahead of
+// the `if` evaluates it unconditionally — turning a leak into a crash. A
+// statement expression evaluates exactly where it stands, so the guard still
+// guards.
+func (g *Generator) genStringCompare(out *strings.Builder, e *ast.BinaryExpr, op string) {
+	leftOwned := !isStringLiteral(e.Left) && g.isNewAlloc(e.Left)
+	rightOwned := !isStringLiteral(e.Right) && g.isNewAlloc(e.Right)
+
+	// Nothing to release: the original form, which keeps the generated C
+	// readable for the overwhelmingly common literal and variable comparisons.
+	if !leftOwned && !rightOwned {
+		out.WriteString("(strcmp(")
+		g.genStringData(out, e.Left)
+		out.WriteString(", ")
+		g.genStringData(out, e.Right)
+		out.WriteString(fmt.Sprintf(") %s 0)", op))
+		return
+	}
+
+	// Each side that allocates is bound once, compared, and released. A side
+	// that does not allocate is left inline, so a borrowed reference is never
+	// released by mistake.
+	out.WriteString("({ ")
+	var leftRef, rightRef string
+	if leftOwned {
+		leftRef = g.nextTemp()
+		out.WriteString(fmt.Sprintf("DexString* %s = ", leftRef))
+		g.genExpr(out, e.Left)
+		out.WriteString("; ")
+	}
+	if rightOwned {
+		rightRef = g.nextTemp()
+		out.WriteString(fmt.Sprintf("DexString* %s = ", rightRef))
+		g.genExpr(out, e.Right)
+		out.WriteString("; ")
+	}
+
+	result := g.nextTemp()
+	out.WriteString(fmt.Sprintf("_Bool %s = (strcmp(", result))
+	if leftOwned {
+		out.WriteString(leftRef + "->data")
+	} else {
+		g.genStringData(out, e.Left)
+	}
+	out.WriteString(", ")
+	if rightOwned {
+		out.WriteString(rightRef + "->data")
+	} else {
+		g.genStringData(out, e.Right)
+	}
+	out.WriteString(fmt.Sprintf(") %s 0); ", op))
+
+	if leftOwned {
+		out.WriteString(fmt.Sprintf("dex_release(%s); ", leftRef))
+	}
+	if rightOwned {
+		out.WriteString(fmt.Sprintf("dex_release(%s); ", rightRef))
+	}
+	out.WriteString(fmt.Sprintf("%s; })", result))
+}
+
+func isStringLiteral(expr ast.Expr) bool {
+	_, ok := expr.(*ast.StringLit)
+	return ok
 }
 
 // genStringData generates the raw C string (->data) for use in strcmp etc.

@@ -1,0 +1,45 @@
+// An enum declared in a module, used from another file. The point of this
+// module is the enum crossing the import boundary.
+
+enum Band {
+    Pass
+    Merit
+    Distinction
+}
+
+struct Mark {
+    subject: string
+    band: Band
+}
+
+fn name(b: Band): string {
+    switch (b) {
+        case Band.Pass: {
+            return "pass"
+        }
+        case Band.Merit: {
+            return "merit"
+        }
+        default: {
+            return "distinction"
+        }
+    }
+}
+
+fn points(b: Band): int {
+    switch (b) {
+        case Band.Distinction: {
+            return 3
+        }
+        case Band.Merit: {
+            return 2
+        }
+        default: {
+            return 1
+        }
+    }
+}
+
+fn best(): Band {
+    return Band.Distinction
+}

@@ -70,6 +70,13 @@ func init() {
 				CName:      "",
 				Doc:        "Send a custom HTTP request with the given method.",
 			},
+			"requestWith": {
+				Params:     nil,
+				ParamNames: []string{"method", "url", "body", "headers", "options"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Send a request under explicit HttpOptions: timeouts, redirect following, and TLS verification. Use it for any host you do not control.",
+			},
 			"formNew": {
 				Params:     nil,
 				ReturnType: ast.TypeString,
@@ -128,13 +135,23 @@ func init() {
 		},
 		Types: []ast.StructDef{
 			{
+				Name: "HttpOptions",
+				Doc:  "Options for http.requestWith(). Every field's zero value is its default, so an empty literal behaves exactly like http.request().",
+				Fields: []ast.StructField{
+					{Name: "timeoutMs", Type: ast.TypeInt, Doc: "Deadline for the whole request. 0 for the default of 30000."},
+					{Name: "connectTimeoutMs", Type: ast.TypeInt, Doc: "Deadline for the connection alone. 0 for the default of 10000."},
+					{Name: "maxRedirects", Type: ast.TypeInt, Doc: "How many redirects to follow. 0, the default, follows none and hands you the 3xx with its Location header."},
+					{Name: "insecureTls", Type: ast.TypeBool, Doc: "Skip certificate and hostname verification. Named for the danger rather than the safety so that the zero value verifies: set it only when a broken certificate is the thing being inspected."},
+				},
+			},
+			{
 				Name: "HttpResponse",
 				Doc:  "Represents an HTTP response returned by client request functions (get, post, put, patch, delete, request).",
 				Fields: []ast.StructField{
 					{Name: "statusCode", Type: ast.TypeInt, Doc: "HTTP status code (e.g. 200, 404, 500)."},
 					{Name: "body", Type: ast.TypeString, Doc: "Response body content as a string."},
 					{Name: "contentType", Type: ast.TypeString, Doc: "Content-Type header from the response (e.g. \"application/json\"). Optional in struct literals — defaults to \"application/json\" on the server."},
-					{Name: "headers", Type: ast.TypeString, Doc: "Extra response headers, newline-separated \"Key: Value\" pairs as built by http.header(). Empty for none. A key may repeat, which is what Set-Cookie needs."},
+					{Name: "headers", Type: ast.TypeString, Doc: "Headers, newline-separated \"Key: Value\" pairs as built by http.header(). On a response you build, the extra headers to send; on a response from a client call, the headers that arrived, without the status line. Empty for none. A key may repeat, which is what Set-Cookie needs."},
 				},
 			},
 			{

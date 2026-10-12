@@ -1,0 +1,50 @@
+// String interpolation, one case per part type. Every part is appended to a
+// StringBuilder, and each type has its own append — so a type without a case
+// here is a type whose generated C nothing checks.
+struct Point {
+    x: int
+    y: int
+}
+
+fn describe(n: int): string {
+    return "n=${n}"
+}
+
+fn main(): void {
+    let i = 7
+    assert("int ${i}" == "int 7")
+
+    let l: long = 9000000000
+    assert("long ${l}" == "long 9000000000")
+
+    let d: double = 1.5
+    assert("double ${d}" == "double 1.5")
+
+    let yes = true
+    let no = false
+    assert("bool ${yes} ${no}" == "bool true false")
+
+    let c: char = 'x'
+    assert("char ${c}" == "char x")
+
+    let s = "dex"
+    assert("string ${s}" == "string dex")
+
+    // An expression, not just a name.
+    assert("sum ${i + 1}" == "sum 8")
+
+    // Two interpolations and text on both sides.
+    assert("a${i}b${i}c" == "a7b7c")
+
+    // Interpolation with nothing around it.
+    assert("${i}" == "7")
+
+    // A call in an interpolation runs exactly once.
+    assert(describe(3) == "n=3")
+
+    // The fallback path: a type with no dedicated append goes through the
+    // same string conversion `as string` uses.
+    let p = Point { x: 1, y: 2 }
+    let shown = "point ${p}"
+    assert(shown.contains("1"))
+}

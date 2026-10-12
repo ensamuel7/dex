@@ -66,19 +66,24 @@ func own(owners map[string]string, flatName, absPath, moduleName string) error {
 
 // Registers struct and enum declarations from user modules globally so the main
 // file's parser recognizes their literal and type-annotation syntax.
-func PreRegisterUserStructs(importPaths []string, sourceDir string) []string {
-	var names []string
+//
+// The two kinds are returned separately because the parser keeps separate
+// registries for them, and feeding an enum name to AddStructName is what made
+// `module.Enum` fail as an unknown struct type.
+func PreRegisterUserStructs(importPaths []string, sourceDir string) ([]string, []string) {
+	var structNames []string
+	var enumNames []string
 	visited := map[string]bool{}
 	for _, path := range importPaths {
 		if stdlib.Lookup(path) != nil {
 			continue
 		}
-		preRegisterStructsFromFile(filepath.Join(sourceDir, path+".dx"), visited, &names)
+		preRegisterStructsFromFile(filepath.Join(sourceDir, path+".dx"), visited, &structNames, &enumNames)
 	}
-	return names
+	return structNames, enumNames
 }
 
-func preRegisterStructsFromFile(filePath string, visited map[string]bool, names *[]string) {
+func preRegisterStructsFromFile(filePath string, visited map[string]bool, structNames *[]string, enumNames *[]string) {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil || visited[absPath] {
 		return
@@ -101,12 +106,12 @@ func preRegisterStructsFromFile(filePath string, visited map[string]bool, names 
 	for i := 0; i < len(tokens)-1; i++ {
 		if tokens[i].Kind == token.TokenStruct && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
-			*names = append(*names, name)
+			*structNames = append(*structNames, name)
 			ast.RegisterStructType(ast.StructDef{Name: name})
 		}
 		if tokens[i].Kind == token.TokenEnum && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
-			*names = append(*names, name)
+			*enumNames = append(*enumNames, name)
 			ast.RegisterEnumType(ast.EnumDef{Name: name})
 		}
 	}
@@ -117,7 +122,7 @@ func preRegisterStructsFromFile(filePath string, visited map[string]bool, names 
 		if stdlib.Lookup(subPath) != nil {
 			continue
 		}
-		preRegisterStructsFromFile(filepath.Join(modDir, subPath+".dx"), visited, names)
+		preRegisterStructsFromFile(filepath.Join(modDir, subPath+".dx"), visited, structNames, enumNames)
 	}
 }
 
@@ -285,6 +290,9 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	for _, name := range ast.AllStructNames() {
 		p.AddStructName(name)
 	}
+	for _, name := range ast.AllEnumNames() {
+		p.AddEnumName(name)
+	}
 	modProgram, errs := p.Parse()
 	if len(errs) > 0 {
 		return errs[0]
@@ -347,6 +355,15 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	}
 	program.Structs = append(program.Structs, modProgram.Structs...)
 
+	// Enums merge the same way structs do. Without this an imported enum has no
+	// typedef emitted and no variants validated, which is what made a
+	// cross-module enum fail at the first use.
+	for _, ed := range modProgram.Enums {
+		if !containsEnum(program.Enums, ed.Name) {
+			program.Enums = append(program.Enums, ed)
+		}
+	}
+
 	for _, modImp := range modProgram.Imports {
 		if stdlib.Lookup(modImp.Path) != nil && !containsImport(program.Imports, modImp.Path) {
 			program.Imports = append(program.Imports, modImp)
@@ -372,6 +389,15 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 func containsString(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEnum(enums []ast.EnumDef, name string) bool {
+	for _, ed := range enums {
+		if ed.Name == name {
 			return true
 		}
 	}
@@ -481,9 +507,12 @@ func FlattenStructMethods(program *ast.Program) {
 
 		for _, method := range sd.Methods {
 			flatFn := ast.Function{
-				Name:       sd.Name + "_" + method.Name,
-				ReturnType: method.ReturnType,
-				IsPrivate:  method.IsPrivate,
+				Pos:         method.Pos,
+				Name:        sd.Name + "_" + method.Name,
+				ReturnType:  method.ReturnType,
+				IsPrivate:   method.IsPrivate,
+				Throws:      method.Throws,
+				ThrowsTypes: method.ThrowsTypes,
 			}
 
 			// A pointer receiver, not a copy. A method that assigned to a field
@@ -491,7 +520,7 @@ func FlattenStructMethods(program *ast.Program) {
 			// worse outcome than either mutating or being rejected — and it is
 			// what `return self` has to mean for a chain to thread one instance
 			// through. It also stops every method call copying its struct.
-			selfParam := ast.Param{Name: "self", Type: ast.RefTypeOf(structType)}
+			selfParam := ast.Param{Pos: method.Pos, Name: "self", Type: ast.RefTypeOf(structType)}
 			flatFn.Params = append(flatFn.Params, selfParam)
 			flatFn.Params = append(flatFn.Params, method.Params...)
 
@@ -574,132 +603,169 @@ func walkStmts(stmts []ast.Stmt, fn func(ast.Expr) ast.Expr) {
 	walkStmtsWith(stmts, nil, fn)
 }
 
+// A walker carries both callbacks through the whole traversal. They used to be
+// passed as separate arguments, which lost stmtFn the moment an expression
+// contained statements: a spawn block's body was visited with the statement
+// callback dropped. Holding them together makes that impossible to reintroduce.
+type walker struct {
+	stmtFn func(ast.Stmt)
+	exprFn func(ast.Expr) ast.Expr
+	// inFrame stops the traversal at a nested function body — a lambda, or a
+	// spawn. Those statements run in another frame, and on another thread for a
+	// spawn, so an analysis about what happens in *this* call must not read
+	// them as if they were inline.
+	inFrame bool
+}
+
 // stmtFn, when non-nil, runs on each statement before its children — assignment
 // targets are plain strings rather than expressions, so a rewrite needs it.
 func walkStmtsWith(stmts []ast.Stmt, stmtFn func(ast.Stmt), exprFn func(ast.Expr) ast.Expr) {
-	for _, stmt := range stmts {
-		walkStmtWith(stmt, stmtFn, exprFn)
-	}
-}
-
-func walkStmt(stmt ast.Stmt, fn func(ast.Expr) ast.Expr) {
-	walkStmtWith(stmt, nil, fn)
-}
-
-func walkStmtWith(stmt ast.Stmt, stmtFn func(ast.Stmt), exprFn func(ast.Expr) ast.Expr) {
-	if stmt == nil {
-		return
-	}
-	if stmtFn != nil {
-		stmtFn(stmt)
-	}
-	fn := exprFn
-	walkStmts := func(body []ast.Stmt) { walkStmtsWith(body, stmtFn, exprFn) }
-	walkStmt := func(st ast.Stmt) { walkStmtWith(st, stmtFn, exprFn) }
-	_ = walkStmt
-	switch s := stmt.(type) {
-	case *ast.ExprStmt:
-		s.Expr = walkExpr(s.Expr, fn)
-	case *ast.LetStmt:
-		s.Value = walkExpr(s.Value, fn)
-	case *ast.AssignStmt:
-		s.Value = walkExpr(s.Value, fn)
-	case *ast.IndexAssignStmt:
-		s.Array = walkExpr(s.Array, fn)
-		s.Index = walkExpr(s.Index, fn)
-		s.Value = walkExpr(s.Value, fn)
-	case *ast.FieldAssignStmt:
-		s.Value = walkExpr(s.Value, fn)
-	case *ast.ReturnStmt:
-		s.Value = walkExpr(s.Value, fn)
-	case *ast.IfStmt:
-		s.Cond = walkExpr(s.Cond, fn)
-		walkStmts(s.Then)
-		walkStmts(s.Else)
-	case *ast.WhileStmt:
-		s.Cond = walkExpr(s.Cond, fn)
-		walkStmts(s.Body)
-	case *ast.ForStmt:
-		if s.Init != nil {
-			walkStmt(s.Init)
-		}
-		s.Cond = walkExpr(s.Cond, fn)
-		if s.Post != nil {
-			walkStmt(s.Post)
-		}
-		walkStmts(s.Body)
-	case *ast.ForeachStmt:
-		s.Iterable = walkExpr(s.Iterable, fn)
-		walkStmts(s.Body)
-	case *ast.SwitchStmt:
-		s.Tag = walkExpr(s.Tag, fn)
-		for i := range s.Cases {
-			for j := range s.Cases[i].Values {
-				s.Cases[i].Values[j] = walkExpr(s.Cases[i].Values[j], fn)
-			}
-			walkStmts(s.Cases[i].Body)
-		}
-		walkStmts(s.Default)
-	case *ast.SendStmt:
-		s.Target = walkExpr(s.Target, fn)
-		s.Value = walkExpr(s.Value, fn)
-	case *ast.ThrowStmt:
-		s.Value = walkExpr(s.Value, fn)
-	case *ast.TryCatchStmt:
-		walkStmts(s.Body)
-		walkStmts(s.CatchBody)
-		walkStmts(s.FinallyBody)
-	case *ast.DeferStmt:
-		s.Expr = walkExpr(s.Expr, fn)
-	case *ast.BlockStmt:
-		walkStmts(s.Stmts)
-	}
+	(&walker{stmtFn: stmtFn, exprFn: exprFn}).stmts(stmts)
 }
 
 func walkExpr(expr ast.Expr, fn func(ast.Expr) ast.Expr) ast.Expr {
+	return (&walker{exprFn: fn}).expr(expr)
+}
+
+func (w *walker) stmts(stmts []ast.Stmt) {
+	for _, stmt := range stmts {
+		w.stmt(stmt)
+	}
+}
+
+func (w *walker) stmt(stmt ast.Stmt) {
+	if stmt == nil {
+		return
+	}
+	if w.stmtFn != nil {
+		w.stmtFn(stmt)
+	}
+	switch s := stmt.(type) {
+	case *ast.ExprStmt:
+		s.Expr = w.expr(s.Expr)
+	case *ast.LetStmt:
+		s.Value = w.expr(s.Value)
+	case *ast.AssignStmt:
+		s.Value = w.expr(s.Value)
+	case *ast.IndexAssignStmt:
+		s.Array = w.expr(s.Array)
+		s.Index = w.expr(s.Index)
+		s.Value = w.expr(s.Value)
+	case *ast.FieldAssignStmt:
+		s.Object = w.expr(s.Object)
+		s.Value = w.expr(s.Value)
+	case *ast.CompoundAssignStmt:
+		s.Value = w.expr(s.Value)
+	case *ast.DestructureLetStmt:
+		s.Value = w.expr(s.Value)
+	case *ast.ReturnStmt:
+		s.Value = w.expr(s.Value)
+	case *ast.IfStmt:
+		s.Cond = w.expr(s.Cond)
+		w.stmts(s.Then)
+		w.stmts(s.Else)
+	case *ast.WhileStmt:
+		s.Cond = w.expr(s.Cond)
+		w.stmts(s.Body)
+	case *ast.ForStmt:
+		w.stmt(s.Init)
+		s.Cond = w.expr(s.Cond)
+		w.stmt(s.Post)
+		w.stmts(s.Body)
+	case *ast.ForeachStmt:
+		s.Iterable = w.expr(s.Iterable)
+		w.stmts(s.Body)
+	case *ast.SwitchStmt:
+		s.Tag = w.expr(s.Tag)
+		for i := range s.Cases {
+			for j := range s.Cases[i].Values {
+				s.Cases[i].Values[j] = w.expr(s.Cases[i].Values[j])
+			}
+			w.stmts(s.Cases[i].Body)
+		}
+		w.stmts(s.Default)
+	case *ast.SendStmt:
+		s.Target = w.expr(s.Target)
+		s.Value = w.expr(s.Value)
+	case *ast.ThrowStmt:
+		s.Value = w.expr(s.Value)
+	case *ast.TryCatchStmt:
+		w.stmts(s.Body)
+		for i := range s.Catches {
+			w.stmts(s.Catches[i].Body)
+		}
+		w.stmts(s.FinallyBody)
+	case *ast.DeferStmt:
+		s.Expr = w.expr(s.Expr)
+	case *ast.BlockStmt:
+		w.stmts(s.Stmts)
+	}
+}
+
+func (w *walker) expr(expr ast.Expr) ast.Expr {
 	if expr == nil {
 		return nil
 	}
-	if replacement := fn(expr); replacement != nil {
-		return replacement
+	if w.exprFn != nil {
+		if replacement := w.exprFn(expr); replacement != nil {
+			return replacement
+		}
 	}
 	switch e := expr.(type) {
 	case *ast.CallExpr:
-		e.Recv = walkExpr(e.Recv, fn)
+		e.Recv = w.expr(e.Recv)
 		for i := range e.Args {
-			e.Args[i] = walkExpr(e.Args[i], fn)
+			e.Args[i] = w.expr(e.Args[i])
 		}
 	case *ast.BinaryExpr:
-		e.Left = walkExpr(e.Left, fn)
-		e.Right = walkExpr(e.Right, fn)
+		e.Left = w.expr(e.Left)
+		e.Right = w.expr(e.Right)
 	case *ast.UnaryExpr:
-		e.Operand = walkExpr(e.Operand, fn)
+		e.Operand = w.expr(e.Operand)
 	case *ast.IndexExpr:
-		e.Array = walkExpr(e.Array, fn)
-		e.Index = walkExpr(e.Index, fn)
+		e.Array = w.expr(e.Array)
+		e.Index = w.expr(e.Index)
 	case *ast.SliceExpr:
-		e.Array = walkExpr(e.Array, fn)
-		e.Start = walkExpr(e.Start, fn)
-		e.End = walkExpr(e.End, fn)
+		e.Array = w.expr(e.Array)
+		e.Start = w.expr(e.Start)
+		e.End = w.expr(e.End)
 	case *ast.ArrayLitExpr:
 		for i := range e.Elems {
-			e.Elems[i] = walkExpr(e.Elems[i], fn)
+			e.Elems[i] = w.expr(e.Elems[i])
 		}
 	case *ast.ObjectLitExpr:
 		for i := range e.Values {
-			e.Values[i] = walkExpr(e.Values[i], fn)
+			e.Values[i] = w.expr(e.Values[i])
 		}
 	case *ast.StructLitExpr:
 		for i := range e.FieldValues {
-			e.FieldValues[i] = walkExpr(e.FieldValues[i], fn)
+			e.FieldValues[i] = w.expr(e.FieldValues[i])
 		}
 	case *ast.FieldAccessExpr:
-		e.Object = walkExpr(e.Object, fn)
+		e.Object = w.expr(e.Object)
+	case *ast.StringInterpExpr:
+		for i := range e.Parts {
+			e.Parts[i] = w.expr(e.Parts[i])
+		}
+	case *ast.MatchExpr:
+		e.Tag = w.expr(e.Tag)
+		for i := range e.Arms {
+			for j := range e.Arms[i].Patterns {
+				e.Arms[i].Patterns[j] = w.expr(e.Arms[i].Patterns[j])
+			}
+			e.Arms[i].Body = w.expr(e.Arms[i].Body)
+		}
+	case *ast.LambdaExpr:
+		if !w.inFrame {
+			w.stmts(e.Body)
+		}
 	case *ast.SpawnExpr:
-		e.Call = walkExpr(e.Call, fn)
-		walkStmts(e.Body, fn)
+		if !w.inFrame {
+			e.Call = w.expr(e.Call)
+			w.stmts(e.Body)
+		}
 	case *ast.ReceiveExpr:
-		e.Source = walkExpr(e.Source, fn)
+		e.Source = w.expr(e.Source)
 	}
 	return expr
 }

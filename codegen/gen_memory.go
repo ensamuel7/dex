@@ -2,14 +2,16 @@ package codegen
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/resolve"
 )
 
 // Scope management
 func (g *Generator) pushScope() {
-	g.scopeStack = append(g.scopeStack, nil)
+	g.scopeStack = append(g.scopeStack, scopeFrame{})
 }
 
 func (g *Generator) popScope(out *strings.Builder, prefix string) {
@@ -18,13 +20,22 @@ func (g *Generator) popScope(out *strings.Builder, prefix string) {
 	}
 	scope := g.scopeStack[len(g.scopeStack)-1]
 	g.scopeStack = g.scopeStack[:len(g.scopeStack)-1]
-	for i := len(scope) - 1; i >= 0; i-- {
-		sv := scope[i]
+	for i := len(scope.vars) - 1; i >= 0; i-- {
+		sv := scope.vars[i]
 		g.emitReleaseVar(out, prefix, sv.name, sv.typ)
 	}
+	// The releases above already happened, so the entries are dropped without
+	// releasing anything. Only an unwind releases through them.
+	g.emitCleanupRestore(out, prefix, scope.mark)
 }
 
-func (g *Generator) registerScopeVar(name string, typ ast.Type) {
+// registerScopeVar records a variable for release at scope exit, and registers
+// its value with the runtime so an exception unwinding past this frame releases
+// it too. Emission happens here rather than at the call sites because the two
+// have to stay together: a variable released at scope exit but never registered
+// leaks on an unwind, and one registered but not released leaks on the normal
+// path.
+func (g *Generator) registerScopeVar(out *strings.Builder, prefix, name string, typ ast.Type) {
 	if !ast.NeedsRelease(typ) {
 		return
 	}
@@ -32,7 +43,270 @@ func (g *Generator) registerScopeVar(name string, typ ast.Type) {
 		return
 	}
 	idx := len(g.scopeStack) - 1
-	g.scopeStack[idx] = append(g.scopeStack[idx], scopeVar{name: name, typ: typ})
+	sv := scopeVar{name: name, typ: typ}
+
+	switch {
+	case g.unwindTrackable(typ):
+		g.markScopeForUnwind(out, prefix, idx)
+		if g.isReassigned(name) {
+			// Assigned again later, so the entry has to be findable: the slot
+			// is kept in a C variable the assignment writes through.
+			sv.slot = g.nextCleanupSlot()
+			out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_push(%s);\n", prefix, sv.slot, name))
+		} else {
+			out.WriteString(fmt.Sprintf("%s_dex_cleanup_push(%s);\n", prefix, name))
+		}
+	case ast.IsStructType(typ):
+		sv.fieldSlots = g.registerStructFieldsForUnwind(out, prefix, idx, name, typ)
+	}
+
+	g.scopeStack[idx].vars = append(g.scopeStack[idx].vars, sv)
+}
+
+// registerStructFieldsForUnwind registers the heap fields of a struct local.
+//
+// The struct itself cannot be registered — releasing one means releasing its
+// fields through its address, and the unwind cannot safely read a dead frame's
+// stack. Its fields are ordinary pointers though, and a struct owns them, so
+// registering those is the same bargain as for any other heap local: released
+// once, by whichever path runs.
+//
+// Each field keeps a slot, because every way its value can stop being the
+// field's own has to be able to say so: writing the field, assigning the whole
+// struct over it, and throwing the struct — a throw consumes it and releases
+// its fields, so the entries have to be cleared or the unwind releases them a
+// second time.
+//
+// A field that is itself a struct or an optional is skipped rather than
+// descended into: it is still released on the normal path, and leaks on an
+// unwind as before.
+func (g *Generator) registerStructFieldsForUnwind(out *strings.Builder, prefix string, idx int, name string, typ ast.Type) map[string]string {
+	if !g.usesExceptions {
+		return nil
+	}
+	def := ast.GetStructDef(typ)
+	if def == nil {
+		return nil
+	}
+	var slots map[string]string
+	for _, f := range def.Fields {
+		if !ast.IsHeapType(f.Type) {
+			continue
+		}
+		g.markScopeForUnwind(out, prefix, idx)
+		slot := g.nextCleanupSlot()
+		if slots == nil {
+			slots = map[string]string{}
+		}
+		slots[f.Name] = slot
+		out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_push(%s.%s);\n", prefix, slot, name, f.Name))
+	}
+	return slots
+}
+
+// markScopeForUnwind gives a scope its cleanup-stack mark, once, on the first
+// registration that needs one.
+func (g *Generator) markScopeForUnwind(out *strings.Builder, prefix string, idx int) {
+	if g.scopeStack[idx].mark != "" {
+		return
+	}
+	g.scopeStack[idx].mark = g.nextCleanupMark()
+	out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_top;\n", prefix, g.scopeStack[idx].mark))
+}
+
+// emitUnwindSlotUpdate points a registered variable's cleanup entry at the
+// value it now holds. Emitted after an assignment, which has already released
+// the old one — leaving the entry behind would name freed memory.
+func (g *Generator) emitUnwindSlotUpdate(out *strings.Builder, prefix, name string) {
+	sv := g.lookupScopeVar(name)
+	if sv == nil {
+		return
+	}
+	if sv.slot != "" {
+		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s);\n", prefix, sv.slot, name))
+	}
+	// Assigning a struct replaces every field at once, so every field's entry
+	// moves with it. Sorted, because a map's order would churn the output.
+	fields := make([]string, 0, len(sv.fieldSlots))
+	for field := range sv.fieldSlots {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	for _, field := range fields {
+		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s.%s);\n", prefix, sv.fieldSlots[field], name, field))
+	}
+}
+
+// emitUnwindFieldUpdate does the same for one field of a struct local.
+func (g *Generator) emitUnwindFieldUpdate(out *strings.Builder, prefix, name, field string) {
+	sv := g.lookupScopeVar(name)
+	if sv == nil || sv.fieldSlots == nil {
+		return
+	}
+	if slot, ok := sv.fieldSlots[field]; ok {
+		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s.%s);\n", prefix, slot, name, field))
+	}
+}
+
+// emitUnwindEntriesCleared gives up a variable's cleanup entries without
+// releasing anything: whatever is about to release the values has taken them
+// over. Clearing rather than dropping the height, because entries below this
+// one on the stack are still live.
+func (g *Generator) emitUnwindEntriesCleared(out *strings.Builder, prefix, name string) {
+	sv := g.lookupScopeVar(name)
+	if sv == nil {
+		return
+	}
+	if sv.slot != "" {
+		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, 0);\n", prefix, sv.slot))
+	}
+	fields := make([]string, 0, len(sv.fieldSlots))
+	for field := range sv.fieldSlots {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	for _, field := range fields {
+		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, 0);\n", prefix, sv.fieldSlots[field]))
+	}
+}
+
+// lookupScopeVar finds a name's innermost declaration, which is the one in
+// scope where a shadowing inner block has redeclared it.
+func (g *Generator) lookupScopeVar(name string) *scopeVar {
+	for i := len(g.scopeStack) - 1; i >= 0; i-- {
+		vars := g.scopeStack[i].vars
+		for j := len(vars) - 1; j >= 0; j-- {
+			if vars[j].name == name {
+				return &vars[j]
+			}
+		}
+	}
+	return nil
+}
+
+func (g *Generator) nextCleanupSlot() string {
+	name := fmt.Sprintf("_dex_slot_%d", g.cleanupMarks)
+	g.cleanupMarks++
+	return name
+}
+
+// unwindTrackable reports whether a value of this type is a single pointer the
+// cleanup stack can hold and dex_release can free. A struct is not — see
+// registerStructFieldsForUnwind, which registers its fields instead.
+func (g *Generator) unwindTrackable(typ ast.Type) bool {
+	if !g.usesExceptions {
+		return false
+	}
+	if ast.IsOptionalType(typ) {
+		return ast.IsHeapType(ast.OptionalInnerType(typ))
+	}
+	return ast.IsHeapType(typ)
+}
+
+// registerTempForUnwind registers a hoisted temporary, so a throw from inside
+// the statement that built it releases it. A temporary is written once and read
+// once, so it needs no slot: nothing can replace the value its entry names.
+func (g *Generator) registerTempForUnwind(out *strings.Builder, name string, typ ast.Type) {
+	if !g.unwindTrackable(typ) {
+		return
+	}
+	out.WriteString(fmt.Sprintf("_dex_cleanup_push(%s); ", name))
+	g.stmtTempsRegistered = true
+}
+
+// emitCleanupRestore drops the cleanup entries a scope registered, without
+// releasing them.
+func (g *Generator) emitCleanupRestore(out *strings.Builder, prefix, mark string) {
+	if mark == "" {
+		return
+	}
+	out.WriteString(fmt.Sprintf("%s_dex_cleanup_drop_to(%s);\n", prefix, mark))
+}
+
+// outermostMark returns the cleanup height to restore when leaving every scope
+// from depth down — the first mark at or above it, since a scope with no mark
+// registered nothing.
+func (g *Generator) outermostMark(depth int) string {
+	for i := depth; i < len(g.scopeStack); i++ {
+		if g.scopeStack[i].mark != "" {
+			return g.scopeStack[i].mark
+		}
+	}
+	return ""
+}
+
+func (g *Generator) nextCleanupMark() string {
+	name := fmt.Sprintf("_dex_clm_%d", g.cleanupMarks)
+	g.cleanupMarks++
+	return name
+}
+
+// isFieldAssigned reports whether the function being generated ever writes a
+// field of this variable. `p.message = x` releases what the field held, so a
+// cleanup entry naming the old value would be stale; `p.inner.message = x` is
+// the same question about the same variable, which is why only the head of the
+// access matters.
+func (g *Generator) isFieldAssigned(name string) bool {
+	if g.currentFn == nil {
+		return true
+	}
+	found := false
+	resolve.VisitStmts(g.currentFn.Body, func(st ast.Stmt) {
+		switch s := st.(type) {
+		case *ast.FieldAssignStmt:
+			if headIdentName(s.Object) == name {
+				found = true
+			}
+		case *ast.IndexAssignStmt:
+			// An element of an array held in a field, reached through this
+			// variable: the element is replaced, and a field of it may be what
+			// was registered.
+			if headIdentName(s.Array) == name {
+				found = true
+			}
+		}
+	}, nil)
+	return found
+}
+
+// headIdentName returns the variable an access chain starts from: cmd for
+// cmd.action.name, and "" for anything not rooted in a plain name.
+func headIdentName(expr ast.Expr) string {
+	for {
+		switch e := expr.(type) {
+		case *ast.Ident:
+			return e.Name
+		case *ast.FieldAccessExpr:
+			expr = e.Object
+		case *ast.IndexExpr:
+			expr = e.Array
+		default:
+			return ""
+		}
+	}
+}
+
+// isReassigned reports whether the function being generated ever assigns to a
+// name after its declaration. A compound assignment counts, and so does one
+// inside a lambda that captured it.
+func (g *Generator) isReassigned(name string) bool {
+	if g.currentFn == nil {
+		return true
+	}
+	found := false
+	resolve.VisitStmts(g.currentFn.Body, func(st ast.Stmt) {
+		switch s := st.(type) {
+		case *ast.AssignStmt:
+			if s.Name == name {
+				found = true
+			}
+		case *ast.CompoundAssignStmt:
+			if s.Name == name {
+				found = true
+			}
+		}
+	}, nil)
+	return found
 }
 
 func (g *Generator) emitReleaseVar(out *strings.Builder, prefix, name string, typ ast.Type) {
@@ -89,39 +363,56 @@ func (g *Generator) emitReleaseVar(out *strings.Builder, prefix, name string, ty
 func (g *Generator) emitCleanupAll(out *strings.Builder, prefix string, exceptVar string) {
 	for i := len(g.scopeStack) - 1; i >= 0; i-- {
 		scope := g.scopeStack[i]
-		for j := len(scope) - 1; j >= 0; j-- {
-			sv := scope[j]
+		for j := len(scope.vars) - 1; j >= 0; j-- {
+			sv := scope.vars[j]
 			if sv.name == exceptVar {
 				continue
 			}
 			g.emitReleaseVar(out, prefix, sv.name, sv.typ)
 		}
 	}
+	g.emitCleanupRestore(out, prefix, g.outermostMark(0))
 }
 
 // emitCleanupInnerScopes releases vars from inner scopes down to (and including) targetDepth
 func (g *Generator) emitCleanupInnerScopes(out *strings.Builder, prefix string, targetDepth int) {
 	for i := len(g.scopeStack) - 1; i >= targetDepth; i-- {
 		scope := g.scopeStack[i]
-		for j := len(scope) - 1; j >= 0; j-- {
-			sv := scope[j]
+		for j := len(scope.vars) - 1; j >= 0; j-- {
+			sv := scope.vars[j]
 			g.emitReleaseVar(out, prefix, sv.name, sv.typ)
 		}
 	}
+	g.emitCleanupRestore(out, prefix, g.outermostMark(targetDepth))
 }
 
-// emitDeferredCalls emits accumulated defer expressions in LIFO order (last defer first).
-func (g *Generator) emitDeferredCalls(out *strings.Builder, prefix string) {
-	for i := len(g.deferExprs) - 1; i >= 0; i-- {
-		out.WriteString(prefix)
-		g.genExpr(out, g.deferExprs[i])
-		out.WriteString(";\n")
+// emitExcFramePops closes the exception frames a jump leaves behind. A try
+// pushes its frame before its setjmp and pops it after the handlers, so a
+// return or a break from inside the try body skips that pop — and the frame
+// stack is a fixed array, so skipped pops accumulate until it is walked past
+// its end.
+func (g *Generator) emitExcFramePops(out *strings.Builder, prefix string, frames int) {
+	if frames <= 0 {
+		return
 	}
+	out.WriteString(fmt.Sprintf("%s_dex_exc_top -= %d;\n", prefix, frames))
 }
 
-// hasDefers returns true if there are pending deferred expressions.
+// emitDeferredCalls runs the deferred calls this frame registered, most recent
+// first, and is emitted at every way out of the frame. The calls themselves are
+// on a runtime stack rather than inlined here: which of them to run is a
+// question about what actually executed, which only the running program knows.
+func (g *Generator) emitDeferredCalls(out *strings.Builder, prefix string) {
+	if !g.hasDefers() {
+		return
+	}
+	out.WriteString(prefix + "_dex_defer_run_to(_dex_defer_base);\n")
+}
+
+// hasDefers reports whether the function being generated contains a defer, and
+// so needs the base height recorded on entry.
 func (g *Generator) hasDefers() bool {
-	return len(g.deferExprs) > 0
+	return g.fnHasDefer
 }
 
 // isBorrowedExpr reports whether an expression yields a reference owned by
@@ -293,7 +584,7 @@ func (g *Generator) emitRetainBorrowedStructFields(out *strings.Builder, prefix,
 // hasHeapVarsInScope checks if there are any heap vars tracked in any scope
 func (g *Generator) hasHeapVarsInScope() bool {
 	for _, scope := range g.scopeStack {
-		if len(scope) > 0 {
+		if len(scope.vars) > 0 {
 			return true
 		}
 	}

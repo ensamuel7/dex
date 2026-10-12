@@ -16,13 +16,13 @@ type funcSig struct {
 }
 
 type Checker struct {
-	scopes           []map[string]ast.Type
-	constScopes      []map[string]bool
+	scopes      []map[string]ast.Type
+	constScopes []map[string]bool
 	// By-value struct parameters of the function being checked. A reflect
 	// setter refuses to write through one: it is a copy sharing the caller's
 	// heap pointers, so writing a string field releases a reference the caller
 	// still holds. Keyed by name, valued by type so the error can name &Struct.
-	valueParams map[string]ast.Type
+	valueParams      map[string]ast.Type
 	annotationScopes []map[string][]string // per-variable annotation tracking
 	funcs            map[string]funcSig
 	imports          map[string]*stdlib.Module
@@ -255,6 +255,10 @@ func (c *Checker) Check(program *ast.Program) []error {
 
 	// Second pass: check function bodies (global scope remains so functions can resolve globals)
 	for _, fn := range program.Functions {
+		if err := c.checkThrowsDeclaration(fn); err != nil {
+			c.addError(err)
+		}
+
 		c.pushScope()
 
 		c.valueParams = make(map[string]ast.Type, len(fn.Params))
@@ -282,6 +286,27 @@ func (c *Checker) Check(program *ast.Program) []error {
 	c.popScope() // pop global scope
 
 	return c.errors
+}
+
+// checkThrowsDeclaration validates the types named after `throws`. The
+// declaration is a promise to callers, so a name in it has to mean something —
+// lint compares it against what the body actually throws.
+func (c *Checker) checkThrowsDeclaration(fn ast.Function) error {
+	seen := make(map[string]bool, len(fn.ThrowsTypes))
+	for _, name := range fn.ThrowsTypes {
+		t, ok := ast.LookupStructType(name)
+		if !ok {
+			return c.errAt(fn.Pos, "unknown type '%s' in the throws declaration of '%s'", name, fn.Name)
+		}
+		if throwable, reason := ast.ThrowableStruct(t); !throwable {
+			return c.errAt(fn.Pos, "'%s' cannot be thrown: %s", name, reason)
+		}
+		if seen[name] {
+			return c.errAt(fn.Pos, "'%s' is named twice in the throws declaration of '%s'", name, fn.Name)
+		}
+		seen[name] = true
+	}
+	return nil
 }
 
 // Scope management

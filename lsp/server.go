@@ -19,6 +19,7 @@ import (
 	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/checker"
 	"github.com/ensamuel7/dex/lexer"
+	"github.com/ensamuel7/dex/lint"
 	"github.com/ensamuel7/dex/parser"
 	"github.com/ensamuel7/dex/resolve"
 	"github.com/ensamuel7/dex/stdlib"
@@ -718,9 +719,35 @@ func (s *Server) diagnose(uri string, text string) {
 		return
 	}
 
-	// No errors — clear diagnostics
+	// Nothing is wrong with the program, so what is left is lint: a binding
+	// nothing reads, an exception nothing handles. This runs only once the
+	// checker is happy, because the throw analysis reads the struct types the
+	// checker resolves.
+	for _, f := range lint.Run(program, lint.Options{}) {
+		result := makeDiagnosticForFileWithSource(f.Error(), filePath, text)
+		if result.file != "" {
+			continue
+		}
+		result.diag.Severity = lintSeverity(f.Rule)
+		diagnostics = append(diagnostics, result.diag)
+	}
+
 	s.publishDiagnostics(uri, diagnostics)
 	s.publishCrossFileDiags(uri, crossFileDiags)
+}
+
+// lintSeverity grades a finding for an editor. An exception nobody handles is a
+// warning: it changes what the program does at runtime. A binding nothing reads
+// is a hint, which editors render as a quiet grey rather than a squiggle,
+// because the program is correct and only the reader is being misled.
+func lintSeverity(rule string) int {
+	switch rule {
+	case lint.RuleUncaughtThrow, lint.RuleUndeclaredThrow, lint.RuleUnneededThrows,
+		lint.RuleUnreachableCatch, lint.RuleUnreachable, lint.RuleUnknownAllow:
+		return 2
+	default:
+		return 4
+	}
 }
 
 // publishCrossFileDiags publishes diagnostics to imported file URIs and tracks
@@ -910,23 +937,30 @@ func typeName(t ast.Type) string {
 		if ast.IsMapType(t) {
 			return "map[" + typeName(ast.MapKeyType(t)) + ", " + typeName(ast.MapValueType(t)) + "]"
 		}
+		if ast.IsRefType(t) {
+			return "&" + typeName(ast.RefInnerType(t))
+		}
 		return "unknown"
 	}
 }
 
 // seedParserModuleTypes extracts import paths from tokens and seeds the parser
-// with struct type names from imported modules — both stdlib modules and user
-// .dx modules resolved relative to sourceDir. Without the user-module names the
-// parser rejects qualified type annotations (e.g. wireMessage.WireMessage) and
-// struct literal syntax for types defined in imported files.
+// with type names from imported modules — both stdlib modules and user .dx
+// modules resolved relative to sourceDir. Without these the parser rejects
+// qualified type annotations (e.g. wireMessage.WireMessage), struct literal
+// syntax, and qualified enum variants for types defined in imported files.
 func seedParserModuleTypes(p *parser.Parser, tokens []token.Token, sourceDir string) {
 	importPaths := resolve.ExtractImportPaths(tokens)
 	for _, name := range stdlib.ModuleTypesForImports(importPaths) {
 		p.AddStructName(name)
 	}
 	if sourceDir != "" {
-		for _, name := range resolve.PreRegisterUserStructs(importPaths, sourceDir) {
+		userStructs, userEnums := resolve.PreRegisterUserStructs(importPaths, sourceDir)
+		for _, name := range userStructs {
 			p.AddStructName(name)
+		}
+		for _, name := range userEnums {
+			p.AddEnumName(name)
 		}
 	}
 	p.AddStructName("Exception") // built-in Exception type

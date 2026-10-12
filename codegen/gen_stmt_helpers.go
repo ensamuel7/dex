@@ -177,14 +177,14 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 // It emits a push rather than writing `arr->data[i]` directly, which is what
 // the three array-literal sites used to do. That shape was wrong twice over:
 //
-//   Ownership. The array's destructor releases every slot, so an element the
-//   literal only borrowed — a variable, a struct field, an index — was
-//   released once by the array and again by whoever actually owned it.
-//   `let argv: string[] = ["find", dir]` freed the caller's `dir`, and the
-//   damage surfaced as a SIGBUS in unrelated code several calls later.
+//	Ownership. The array's destructor releases every slot, so an element the
+//	literal only borrowed — a variable, a struct field, an index — was
+//	released once by the array and again by whoever actually owned it.
+//	`let argv: string[] = ["find", dir]` freed the caller's `dir`, and the
+//	damage surfaced as a SIGBUS in unrelated code several calls later.
 //
-//   Capacity. A fresh array has room for eight, and a literal with more
-//   elements than that wrote past the allocation.
+//	Capacity. A fresh array has room for eight, and a literal with more
+//	elements than that wrote past the allocation.
 //
 // push grows the array and retains what it is handed, so an expression that
 // minted a reference has to give it back afterwards. isNewAlloc is the single
@@ -288,6 +288,7 @@ func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
 			g.stmtPrelude.WriteString(" ")
 		}
 	}
+	g.registerTempForUnwind(g.stmtPrelude, tmp, t)
 	g.stmtTemps = append(g.stmtTemps, scopeVar{name: tmp, typ: t})
 	out.WriteString(tmp)
 }
@@ -309,15 +310,91 @@ func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
 		g.stmtTemps = nil
 		return
 	}
-	out.WriteString(prefix + "{ " + g.stmtPrelude.String() + strings.TrimRight(stmt, "\n") + " ")
+	mark := ""
+	if g.stmtTempsRegistered {
+		mark = g.nextCleanupMark()
+	}
+	out.WriteString(prefix + "{ ")
+	if mark != "" {
+		out.WriteString(fmt.Sprintf("size_t %s = _dex_cleanup_top; ", mark))
+	}
+	out.WriteString(g.stmtPrelude.String() + strings.TrimRight(stmt, "\n") + " ")
 	for i := len(g.stmtTemps) - 1; i >= 0; i-- {
 		var rel strings.Builder
 		g.emitReleaseVar(&rel, "", g.stmtTemps[i].name, g.stmtTemps[i].typ)
 		out.WriteString(strings.ReplaceAll(strings.TrimRight(rel.String(), "\n"), "\n", " ") + " ")
 	}
+	if mark != "" {
+		out.WriteString(fmt.Sprintf("_dex_cleanup_drop_to(%s); ", mark))
+	}
 	out.WriteString("}\n")
 	g.stmtPrelude = nil
 	g.stmtTemps = nil
+	g.stmtTempsRegistered = false
+}
+
+// genCondition generates an `if` or `while` condition, releasing anything the
+// condition itself minted.
+//
+// A condition is not a statement, so there is no prelude for genBorrowed to
+// hoist into: a minted operand or argument there used to be leaked once per
+// evaluation, which in a loop is once per iteration. The hoists are therefore
+// emitted inside a statement expression wrapping the condition rather than
+// ahead of it, which matters twice over. A `while` re-evaluates its condition,
+// and a statement expression is re-evaluated with it, where a declaration
+// placed before the loop would not be. And a release that happens inside the
+// condition cannot be skipped by a `return` or a `break` in the body.
+//
+// Hoisting is suspended inside `&&` and `||`, because the whole point of those
+// is that their right-hand side may not be evaluated at all. In
+// `if (!s.isEmpty() && s.substring(0, 1) == "a")` the substring must not run on
+// an empty string, and a hoisted declaration would run it unconditionally —
+// turning a leak into a crash. Operands of a short-circuit therefore keep
+// whatever self-contained handling they have of their own; genStringCompare is
+// the one that matters in practice.
+func (g *Generator) genCondition(out *strings.Builder, cond ast.Expr) {
+	savedPrelude := g.stmtPrelude
+	savedTemps := g.stmtTemps
+	savedRegistered := g.stmtTempsRegistered
+	g.stmtPrelude = &strings.Builder{}
+	g.stmtTemps = nil
+	g.stmtTempsRegistered = false
+
+	var condBuf strings.Builder
+	g.genExprNoParen(&condBuf, cond)
+
+	prelude := g.stmtPrelude.String()
+	temps := g.stmtTemps
+	registered := g.stmtTempsRegistered
+	g.stmtPrelude = savedPrelude
+	g.stmtTemps = savedTemps
+	g.stmtTempsRegistered = savedRegistered
+
+	if prelude == "" && len(temps) == 0 {
+		out.WriteString(condBuf.String())
+		return
+	}
+
+	result := g.nextTemp()
+	mark := ""
+	if registered {
+		mark = g.nextCleanupMark()
+	}
+	out.WriteString("({ ")
+	if mark != "" {
+		out.WriteString(fmt.Sprintf("size_t %s = _dex_cleanup_top; ", mark))
+	}
+	out.WriteString(prelude)
+	out.WriteString(fmt.Sprintf("_Bool %s = (%s); ", result, condBuf.String()))
+	for i := len(temps) - 1; i >= 0; i-- {
+		var rel strings.Builder
+		g.emitReleaseVar(&rel, "", temps[i].name, temps[i].typ)
+		out.WriteString(strings.ReplaceAll(strings.TrimRight(rel.String(), "\n"), "\n", " ") + " ")
+	}
+	if mark != "" {
+		out.WriteString(fmt.Sprintf("_dex_cleanup_drop_to(%s); ", mark))
+	}
+	out.WriteString(fmt.Sprintf("%s; })", result))
 }
 
 // For a statement that must not be wrapped in a block — a `let`, whose variable
@@ -325,6 +402,13 @@ func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
 func (g *Generator) emitHoistPrelude(out *strings.Builder, prefix string) {
 	if g.stmtPrelude == nil || g.stmtPrelude.Len() == 0 {
 		return
+	}
+	// No block to scope the mark to, so it is declared alongside the statement.
+	// emitHoistReleases drops to it once the releases have run.
+	g.stmtTempMark = ""
+	if g.stmtTempsRegistered {
+		g.stmtTempMark = g.nextCleanupMark()
+		out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_top;\n", prefix, g.stmtTempMark))
 	}
 	out.WriteString(prefix + g.stmtPrelude.String() + "\n")
 }
@@ -337,6 +421,9 @@ func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
 		// releasing each of its heap fields, not the struct itself.
 		g.emitReleaseVar(out, prefix, g.stmtTemps[i].name, g.stmtTemps[i].typ)
 	}
+	g.emitCleanupRestore(out, prefix, g.stmtTempMark)
+	g.stmtTempMark = ""
+	g.stmtTempsRegistered = false
 	g.stmtTemps = nil
 }
 

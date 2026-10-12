@@ -887,7 +887,13 @@ func (g *Generator) genStringArg(out *strings.Builder, arg ast.Expr) {
 			// String literal — just use C string directly
 			out.WriteString(fmt.Sprintf("%q", strLit.Value))
 		} else {
-			g.genExpr(out, arg)
+			// Through genBorrowed, as genStringData is: what reaches the callee
+			// is a raw char*, so the callee cannot take ownership of the
+			// DexString, so an argument that allocates has to be released here.
+			// Reading ->data straight off a minted value leaked it once per
+			// call — `os.env(name)` on a built string, `http.header(h, k, v)`
+			// on one, `os.exec("cmd " + arg)`.
+			g.genBorrowed(out, arg)
 			out.WriteString("->data")
 		}
 	} else {

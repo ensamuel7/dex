@@ -22,18 +22,10 @@ func (g *Generator) genExprNoParen(out *strings.Builder, expr ast.Expr) {
 		if g.isStringExpr(e.Left) || g.isStringExpr(e.Right) {
 			switch e.Op {
 			case ast.BinEq, ast.BinStrictEq:
-				out.WriteString("strcmp(")
-				g.genStringData(out, e.Left)
-				out.WriteString(", ")
-				g.genStringData(out, e.Right)
-				out.WriteString(") == 0")
+				g.genStringCompare(out, e, "==")
 				return
 			case ast.BinNeq, ast.BinStrictNeq:
-				out.WriteString("strcmp(")
-				g.genStringData(out, e.Left)
-				out.WriteString(", ")
-				g.genStringData(out, e.Right)
-				out.WriteString(") != 0")
+				g.genStringCompare(out, e, "!=")
 				return
 			}
 		}
@@ -643,7 +635,7 @@ func (g *Generator) genStringInterpExpr(out *strings.Builder, e *ast.StringInter
 	for _, part := range e.Parts {
 		if strLit, ok := part.(*ast.StringLit); ok {
 			if strLit.Value != "" {
-				out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, %q, %d); ", sbName, strLit.Value, len(strLit.Value)))
+				out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, %q); ", sbName, strLit.Value))
 			}
 		} else {
 			// Expression part — use genAppendToSB
@@ -653,7 +645,7 @@ func (g *Generator) genStringInterpExpr(out *strings.Builder, e *ast.StringInter
 		}
 	}
 
-	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_to_string(%s); ", resultName, sbName))
+	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); ", resultName, sbName))
 	out.WriteString(fmt.Sprintf("dex_release(%s); ", sbName))
 	out.WriteString(fmt.Sprintf("%s; })", resultName))
 }
@@ -662,7 +654,7 @@ func (g *Generator) genStringInterpExpr(out *strings.Builder, e *ast.StringInter
 func (g *Generator) genAppendExprToSB(out *strings.Builder, sbName string, expr ast.Expr, typ ast.Type) {
 	switch typ {
 	case ast.TypeString:
-		out.WriteString(fmt.Sprintf("dex_sb_append(%s, ", sbName))
+		out.WriteString(fmt.Sprintf("dex_sb_append_str(%s, ", sbName))
 		g.genExpr(out, expr)
 		out.WriteString(")")
 	case ast.TypeInt:
@@ -678,11 +670,12 @@ func (g *Generator) genAppendExprToSB(out *strings.Builder, sbName string, expr 
 		g.genExpr(out, expr)
 		out.WriteString(")")
 	case ast.TypeBool:
-		out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, (", sbName))
+		// dex_sb_append_bool rather than a ternary over two cstr appends: the
+		// ternary form emitted the expression twice, so an interpolated call
+		// ran twice.
+		out.WriteString(fmt.Sprintf("dex_sb_append_bool(%s, ", sbName))
 		g.genExpr(out, expr)
-		out.WriteString(") ? \"true\" : \"false\", (")
-		g.genExpr(out, expr)
-		out.WriteString(") ? 4 : 5)")
+		out.WriteString(")")
 	case ast.TypeChar:
 		out.WriteString(fmt.Sprintf("dex_sb_append_char(%s, ", sbName))
 		g.genExpr(out, expr)
@@ -691,6 +684,6 @@ func (g *Generator) genAppendExprToSB(out *strings.Builder, sbName string, expr 
 		// For other types, use genExprAsString and append
 		out.WriteString("{ DexString* _interp_tmp = ")
 		g.genExprAsString(out, expr)
-		out.WriteString(fmt.Sprintf("; dex_sb_append(%s, _interp_tmp); dex_release(_interp_tmp); }", sbName))
+		out.WriteString(fmt.Sprintf("; dex_sb_append_str(%s, _interp_tmp); dex_release(_interp_tmp); }", sbName))
 	}
 }

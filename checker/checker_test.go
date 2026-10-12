@@ -2060,7 +2060,7 @@ func TestThrow(t *testing.T) {
 func TestThrowNonException(t *testing.T) {
 	mustFail(t, `fn main(): void {
 		throw "error"
-	}`, "throw requires Exception type, got string")
+	}`, "cannot throw string: only a struct can be thrown")
 }
 
 // =============================================================================

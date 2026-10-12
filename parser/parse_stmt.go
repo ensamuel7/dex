@@ -109,7 +109,7 @@ func (p *Parser) parseLetStmt() (ast.Stmt, error) {
 		return p.parseDestructureLetStmt(pos, false)
 	}
 
-	name, err := p.expectIdent()
+	name, err := p.expectDeclName("a variable name")
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func (p *Parser) parseConstStmt() (ast.Stmt, error) {
 		return p.parseDestructureLetStmt(pos, true)
 	}
 
-	name, err := p.expectIdent()
+	name, err := p.expectDeclName("a constant name")
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +454,7 @@ func (p *Parser) parseForeachStmt() (ast.Stmt, error) {
 	}
 
 	// Parse first identifier
-	firstName, err := p.expectIdent()
+	firstName, err := p.expectDeclName("a loop variable")
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +463,7 @@ func (p *Parser) parseForeachStmt() (ast.Stmt, error) {
 	// If comma follows, first is index, second is value
 	if p.match(token.TokenComma) {
 		indexVar = firstName
-		valueVar2, err := p.expectIdent()
+		valueVar2, err := p.expectDeclName("a loop variable")
 		if err != nil {
 			return nil, err
 		}
@@ -508,35 +508,32 @@ func (p *Parser) parseTryStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 
-	var catchVar string
-	var catchBody []ast.Stmt
+	var catches []ast.CatchClause
 	var finallyBody []ast.Stmt
 
-	// Optional catch clause
-	if p.check(token.TokenCatch) {
+	// Any number of catch clauses, each naming the type it handles. The first
+	// whose type matches the thrown one runs; a clause naming Exception matches
+	// everything, which is what the single clause always did.
+	for p.check(token.TokenCatch) {
+		clausePos := p.nodePos()
 		p.advance() // consume 'catch'
 
 		if err := p.expect(token.TokenLParen); err != nil {
 			return nil, err
 		}
 
-		name, err := p.expectIdent()
+		name, err := p.expectDeclName("a catch binding")
 		if err != nil {
 			return nil, err
 		}
-		catchVar = name
 
 		if err := p.expect(token.TokenColon); err != nil {
 			return nil, err
 		}
 
-		// Must be Exception type
 		typeName, err := p.expectIdent()
 		if err != nil {
 			return nil, err
-		}
-		if typeName != "Exception" {
-			return nil, p.errorf("catch clause must use Exception type, got '%s'", typeName)
 		}
 
 		if err := p.expect(token.TokenRParen); err != nil {
@@ -547,10 +544,17 @@ func (p *Parser) parseTryStmt() (ast.Stmt, error) {
 			return nil, err
 		}
 
-		catchBody, err = p.parseBlock()
+		clauseBody, err := p.parseBlock()
 		if err != nil {
 			return nil, err
 		}
+
+		catches = append(catches, ast.CatchClause{
+			Pos:      clausePos,
+			VarName:  name,
+			TypeName: typeName,
+			Body:     clauseBody,
+		})
 	}
 
 	// Optional finally clause
@@ -568,15 +572,14 @@ func (p *Parser) parseTryStmt() (ast.Stmt, error) {
 	}
 
 	// Must have at least one of catch or finally
-	if catchBody == nil && finallyBody == nil {
+	if len(catches) == 0 && finallyBody == nil {
 		return nil, p.errorf("try statement must have at least a catch or finally clause")
 	}
 
 	return &ast.TryCatchStmt{
 		Pos:         pos,
 		Body:        body,
-		CatchVar:    catchVar,
-		CatchBody:   catchBody,
+		Catches:     catches,
 		FinallyBody: finallyBody,
 	}, nil
 }
@@ -865,7 +868,7 @@ func (p *Parser) parseDestructureLetStmt(pos ast.Pos, isConst bool) (ast.Stmt, e
 
 	var names []string
 	for !p.check(token.TokenRBrace) && !p.atEnd() {
-		name, err := p.expectIdent()
+		name, err := p.expectDeclName("a variable name")
 		if err != nil {
 			return nil, err
 		}
@@ -894,7 +897,7 @@ func (p *Parser) parseDestructureLetStmt(pos ast.Pos, isConst bool) (ast.Stmt, e
 func (p *Parser) parseMultiLetStmt(pos ast.Pos, firstName string, isConst bool) (ast.Stmt, error) {
 	names := []string{firstName}
 	for p.match(token.TokenComma) {
-		name, err := p.expectIdent()
+		name, err := p.expectDeclName("a variable name")
 		if err != nil {
 			return nil, err
 		}

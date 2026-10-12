@@ -53,6 +53,15 @@ func (p *Parser) AddStructName(name string) {
 	p.structNames[name] = true
 }
 
+// AddEnumName registers an enum name so the parser recognizes it as a type and
+// as the subject of a variant access. An imported module's enums have to come
+// through here rather than through AddStructName: registered as a struct, the
+// name resolves in type position and then fails the struct lookup, which is
+// why `module.Enum` used to be reported as an unknown struct type.
+func (p *Parser) AddEnumName(name string) {
+	p.enumNames[name] = true
+}
+
 func (p *Parser) Parse() (program *ast.Program, errs []error) {
 	program = &ast.Program{}
 
@@ -68,6 +77,7 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 
 	// Parse import declarations
 	for p.check(token.TokenImport) {
+		importPos := p.nodePos()
 		p.advance() // consume 'import'
 		if !p.check(token.TokenString) {
 			p.recordError(p.errorf("expected string after 'import'"))
@@ -87,7 +97,7 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 			alias = p.current().Value
 			p.advance()
 		}
-		program.Imports = append(program.Imports, ast.Import{Path: path, Alias: alias})
+		program.Imports = append(program.Imports, ast.Import{Pos: importPos, Path: path, Alias: alias})
 		p.match(token.TokenSemicolon) // optional trailing semicolon
 	}
 
@@ -197,7 +207,7 @@ func (p *Parser) isInterfaceDefAhead() bool {
 func (p *Parser) parseInterfaceDef() (*ast.InterfaceDef, error) {
 	p.advance() // consume 'interface'
 
-	name, err := p.expectIdent()
+	name, err := p.expectDeclName("an interface name")
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +224,7 @@ func (p *Parser) parseInterfaceDef() (*ast.InterfaceDef, error) {
 		}
 		p.advance() // consume 'fn'/'function'
 
-		methodName, err := p.expectIdent()
+		methodName, err := p.expectDeclName("a method name")
 		if err != nil {
 			return nil, err
 		}
@@ -284,7 +294,7 @@ func (p *Parser) parseEnumDef() (*ast.EnumDef, error) {
 
 	p.advance() // consume 'enum'
 
-	name, err := p.expectIdent()
+	name, err := p.expectDeclName("an enum name")
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +305,7 @@ func (p *Parser) parseEnumDef() (*ast.EnumDef, error) {
 
 	var variants []string
 	for !p.check(token.TokenRBrace) && !p.atEnd() {
-		variant, err := p.expectIdent()
+		variant, err := p.expectDeclName("an enum variant")
 		if err != nil {
 			return nil, err
 		}
@@ -324,7 +334,7 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 
 	p.advance() // consume 'struct'
 
-	name, err := p.expectIdent()
+	name, err := p.expectDeclName("a struct name")
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +345,7 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 		p.advance() // consume '('
 		if !p.check(token.TokenRParen) {
 			for {
-				paramName, err := p.expectIdent()
+				paramName, err := p.expectDeclName("a constructor parameter")
 				if err != nil {
 					return nil, err
 				}
@@ -405,7 +415,7 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 		}
 
 		// Otherwise it's a field
-		fieldName, err := p.expectIdent()
+		fieldName, err := p.expectDeclName("a field name")
 		if err != nil {
 			return nil, err
 		}
@@ -437,6 +447,8 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 }
 
 func (p *Parser) parseFunction() (*ast.Function, error) {
+	declPos := p.nodePos()
+
 	// Check for optional access modifier
 	isPrivate := false
 	if p.check(token.TokenPrivate) {
@@ -451,7 +463,7 @@ func (p *Parser) parseFunction() (*ast.Function, error) {
 	}
 	p.advance()
 
-	name, err := p.expectIdent()
+	name, err := p.expectDeclName("a function name")
 	if err != nil {
 		return nil, err
 	}
@@ -478,6 +490,25 @@ func (p *Parser) parseFunction() (*ast.Function, error) {
 		return nil, err
 	}
 
+	// `throws` sits after the return type: fn parse(s: string): int throws.
+	// It declares that an exception may escape this function, so a caller is
+	// told to handle it rather than discovering it at runtime. Naming types
+	// after it — `throws ParseError, IOError` — says which.
+	throws := p.match(token.TokenThrows)
+	var throwsTypes []string
+	if throws {
+		for p.check(token.TokenIdent) {
+			name, err := p.expectIdent()
+			if err != nil {
+				return nil, err
+			}
+			throwsTypes = append(throwsTypes, name)
+			if !p.match(token.TokenComma) {
+				break
+			}
+		}
+	}
+
 	if err := p.expect(token.TokenLBrace); err != nil {
 		return nil, err
 	}
@@ -488,11 +519,14 @@ func (p *Parser) parseFunction() (*ast.Function, error) {
 	}
 
 	return &ast.Function{
-		Name:       name,
-		Params:     params,
-		ReturnType: retType,
-		Body:       body,
-		IsPrivate:  isPrivate,
+		Pos:         declPos,
+		Name:        name,
+		Params:      params,
+		ReturnType:  retType,
+		Body:        body,
+		IsPrivate:   isPrivate,
+		Throws:      throws,
+		ThrowsTypes: throwsTypes,
 	}, nil
 }
 
@@ -506,7 +540,8 @@ func (p *Parser) parseParams() ([]ast.Param, error) {
 	for {
 		annotations := p.collectAnnotations()
 
-		name, err := p.expectIdent()
+		paramPos := p.nodePos()
+		name, err := p.expectDeclName("a parameter name")
 		if err != nil {
 			return nil, err
 		}
@@ -520,7 +555,7 @@ func (p *Parser) parseParams() ([]ast.Param, error) {
 			return nil, err
 		}
 
-		param := ast.Param{Name: name, Type: typ, Annotations: annotations}
+		param := ast.Param{Pos: paramPos, Name: name, Type: typ, Annotations: annotations}
 
 		// Check for default value: = expr
 		if p.match(token.TokenAssign) {
@@ -739,6 +774,15 @@ func (p *Parser) parseType() (ast.Type, error) {
 					return 0, p.errorf("unknown struct type '%s.%s'", name, qualifiedName)
 				}
 				base = t
+			} else if p.enumNames[qualifiedName] {
+				p.advance() // consume module name
+				p.advance() // consume '.'
+				p.advance() // consume type name
+				t, ok := ast.LookupEnumType(qualifiedName)
+				if !ok {
+					return 0, p.errorf("unknown enum type '%s.%s'", name, qualifiedName)
+				}
+				base = t
 			} else {
 				return 0, p.errorf("unknown type '%s.%s'", name, qualifiedName)
 			}
@@ -816,6 +860,30 @@ func (p *Parser) expectIdent() (string, error) {
 	return tok.Value, nil
 }
 
+// expectDeclName reads a name being *declared* and refuses `self`.
+//
+// `self` is not a lexer keyword, and deliberately so: it has to remain an
+// ordinary expression, because `self.cols` and `return self` are the whole
+// point of it. What it must not be is a name anyone else can introduce —
+// FlattenStructMethods names a method's receiver parameter `self`, so a
+// user-written `self` elsewhere reads as a receiver where there is none, and
+// inside a method it would shadow the real one.
+//
+// So it is reserved at the declaration sites rather than at the lexer: a
+// parameter, a let, a const, a field, a loop variable, a catch binding, a
+// function, a struct, an enum, an interface or one of their members.
+func (p *Parser) expectDeclName(what string) (string, error) {
+	tok := p.current()
+	name, err := p.expectIdent()
+	if err != nil {
+		return "", err
+	}
+	if name == "self" {
+		return "", p.errorAt(tok, "'self' is reserved: it names the receiver inside a struct method and cannot be used as %s", what)
+	}
+	return name, nil
+}
+
 func (p *Parser) collectAnnotations() []string {
 	var annotations []string
 	for p.check(token.TokenAnnotation) {
@@ -823,6 +891,18 @@ func (p *Parser) collectAnnotations() []string {
 		p.advance()
 	}
 	return annotations
+}
+
+// errorAt reports against a token the parser has already consumed, so a
+// diagnostic can point at the name it is about rather than the one after it.
+func (p *Parser) errorAt(tok token.Token, format string, args ...interface{}) error {
+	var prefix string
+	if tok.File != "" {
+		prefix = fmt.Sprintf("%s:%d:%d: ", tok.File, tok.Line, tok.Col)
+	} else {
+		prefix = fmt.Sprintf("%d:%d: ", tok.Line, tok.Col)
+	}
+	return fmt.Errorf(prefix+format, args...)
 }
 
 func (p *Parser) errorf(format string, args ...interface{}) error {

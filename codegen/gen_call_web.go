@@ -193,6 +193,21 @@ func (g *Generator) genWebCall(out *strings.Builder, e *ast.CallExpr) bool {
 			g.genStringArg(out, e.Args[3])
 			out.WriteString(")")
 			return true
+		case "requestWith":
+			// The options struct is scalars only, so it is passed by value with
+			// no reference to take: nothing in it is heap-managed.
+			out.WriteString("dex_http_request_opts(")
+			g.genStringArg(out, e.Args[0])
+			out.WriteString(", ")
+			g.genStringArg(out, e.Args[1])
+			out.WriteString(", ")
+			g.genStringArg(out, e.Args[2])
+			out.WriteString(", ")
+			g.genStringArg(out, e.Args[3])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[4])
+			out.WriteString(")")
+			return true
 		case "header":
 			out.WriteString("dex_string_from_cstr(dex_http_header(")
 			g.genStringArg(out, e.Args[0])

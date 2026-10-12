@@ -12,6 +12,25 @@ import (
 type scopeVar struct {
 	name string
 	typ  ast.Type
+	// slot names the C variable holding this variable's index on the cleanup
+	// stack, for a variable that is assigned again after being registered: the
+	// assignment has to point the entry at the new value. Empty when the
+	// variable is written once, which needs no slot and so declares none.
+	slot string
+	// fieldSlots is the same thing per heap field, for a struct local: each
+	// field is registered separately, so each needs its own slot for the field
+	// assignment to write through.
+	fieldSlots map[string]string
+}
+
+// A scopeFrame is one C block's worth of cleanup: the variables it releases on
+// the way out, and the name of the C variable holding the cleanup stack's
+// height when it started. The height is what the scope restores on exit, and
+// what an unwind releases down to; it is only emitted for a scope that actually
+// registers something.
+type scopeFrame struct {
+	vars []scopeVar
+	mark string
 }
 
 type Generator struct {
@@ -64,6 +83,7 @@ type Generator struct {
 
 	funcTypedefs    map[ast.Type]string // function type → typedef name (e.g. DexFn_1)
 	usesClosure     bool                // any function value appears, so closures are needed
+	usesDefer       bool                // any defer appears, so the defer stack is needed
 	closureThunks   map[string]string   // function name → uniform-convention thunk
 	methodWrappers  map[string]string   // flattened method name → method-value wrapper
 	methodEnvTypes  map[ast.Type]bool   // struct types with a receiver environment emitted
@@ -73,7 +93,23 @@ type Generator struct {
 	funcTypedefCnt  int                 // counter for unique typedef names
 
 	// Scope tracking for cleanup
-	scopeStack     [][]scopeVar
+	scopeStack []scopeFrame
+	// cleanupMarks names the C variables that hold cleanup-stack heights.
+	cleanupMarks int
+	// stmtTempsRegistered records whether the statement being generated put any
+	// temporary on the cleanup stack, which is what decides if it needs a mark.
+	stmtTempsRegistered bool
+	// stmtTempMark is the mark for a statement whose hoists are emitted without
+	// a block around them — a `let`, whose variable has to stay in scope.
+	stmtTempMark string
+	// tryDepth is how many exception frames the statement being generated sits
+	// inside, counting only try bodies: a catch or finally body runs after its
+	// own frame has been popped. A return or a break leaving those frames has
+	// to pop them, or the frame stack walks off its end.
+	tryDepth int
+	// loopTryDepth is tryDepth as it stood when the enclosing loop started, so
+	// a break knows how many frames it is leaving.
+	loopTryDepth   int
 	currentFn      *ast.Function       // current function being generated
 	isInLoop       bool                // whether we're inside a loop body
 	loopDepth      int                 // scope depth at loop entry (for break/continue cleanup)
@@ -97,7 +133,11 @@ type Generator struct {
 	tempCounter  int // unique counter for temp names
 
 	// Defer tracking
-	deferExprs []ast.Expr // accumulated defer expressions for current function (LIFO order)
+	// fnHasDefer records that the function being generated contains a defer, so
+	// its entry records the defer stack's height and its exits run back down to
+	// it. The calls themselves live on that stack at runtime: which ones to run
+	// depends on what executed, not on what was written.
+	fnHasDefer bool
 
 	// Global variable tracking
 	globalLets []ast.LetStmt // module-level let/const declarations

@@ -240,7 +240,7 @@ fn main(): void {
     }
 }
 `)
-	line := lineContaining(t, out, "_dex_throw_staged(); }")
+	line := lineContaining(t, out, "_dex_throw_staged(\"Exception\"); }")
 	stage := strings.Index(line, "_dex_exc_stage(")
 	if stage < 0 {
 		t.Fatalf("no staged message:\n%s", line)
@@ -249,7 +249,7 @@ fn main(): void {
 	// operands earlier on the same line, and those are not what this is about.
 	tail := line[stage:]
 	release := strings.Index(tail, "dex_release(")
-	throw := strings.Index(tail, "_dex_throw_staged()")
+	throw := strings.Index(tail, "_dex_throw_staged(")
 	if release < 0 || throw < 0 || release > throw {
 		t.Errorf("the staged string must be released after staging and before the throw:\n%s", line)
 	}
@@ -267,10 +267,10 @@ func TestThrownLiteralNeedsNoStaging(t *testing.T) {
     }
 }
 `)
-	assertContains(t, out, `_dex_throw("plain")`)
+	assertContains(t, out, `_dex_throw("Exception", "plain")`)
 	// No staged throw anywhere — the runtime defines _dex_exc_stage either way,
 	// so what matters is that nothing calls it.
-	assertNotContains(t, out, "_dex_throw_staged(); }")
+	assertNotContains(t, out, "_dex_throw_staged(\"Exception\"); }")
 }
 
 // A borrowed message belongs to the caller and must survive the throw.
@@ -286,9 +286,9 @@ fn main(): void {
     }
 }
 `)
-	line := lineContaining(t, out, "_dex_throw_staged(); }")
+	line := lineContaining(t, out, "_dex_throw_staged(\"Exception\"); }")
 	if strings.Contains(line, "dex_release") {
 		t.Errorf("a borrowed message must not be released:\n%s", line)
 	}
-	assertContains(t, out, "_dex_throw_staged()")
+	assertContains(t, out, "_dex_throw_staged(\"Exception\"); }")
 }

@@ -341,7 +341,6 @@ func (g *Generator) emitReflectShow(out *strings.Builder, sd ast.StructDef, cTyp
 	out.WriteString("    (void)s;\n    (void)buf;\n    return dex_string_from_lit(\"\");\n}\n")
 }
 
-
 // dbFillerName is the generated filler for one struct read under one tag key.
 // The default key keeps its original name, so nothing that was already emitted
 // changes shape.

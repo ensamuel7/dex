@@ -272,14 +272,19 @@ func findLetInStmts(stmts []ast.Stmt, name string) string {
 				return t
 			}
 		case *ast.TryCatchStmt:
-			if s.CatchVar == name {
-				return "Exception"
+			// A catch binding has the type its clause names.
+			for i := range s.Catches {
+				if s.Catches[i].VarName == name {
+					return s.Catches[i].TypeName
+				}
 			}
 			if t := findLetInStmts(s.Body, name); t != "" {
 				return t
 			}
-			if t := findLetInStmts(s.CatchBody, name); t != "" {
-				return t
+			for i := range s.Catches {
+				if t := findLetInStmts(s.Catches[i].Body, name); t != "" {
+					return t
+				}
 			}
 			if t := findLetInStmts(s.FinallyBody, name); t != "" {
 				return t
@@ -392,27 +397,67 @@ func formatStdlibFuncHover(moduleName, funcName string, fdef *stdlib.FuncDef) st
 }
 
 func formatStructHover(def *ast.StructDef) string {
-	var fields []string
+	var members []string
 	for _, f := range def.Fields {
-		fields = append(fields, fmt.Sprintf("    %s: %s", f.Name, typeName(f.Type)))
+		members = append(members, fmt.Sprintf("    %s: %s", f.Name, typeName(f.Type)))
 	}
-	sig := fmt.Sprintf("struct %s {\n%s\n}", def.Name, strings.Join(fields, "\n"))
+	if len(def.Methods) > 0 {
+		members = append(members, "")
+		for i := range def.Methods {
+			members = append(members, "    "+methodSignature(&def.Methods[i]))
+		}
+	}
+	sig := fmt.Sprintf("struct %s {\n%s\n}", def.Name, strings.Join(members, "\n"))
 
 	doc := "User-defined struct."
 	if def.Doc != "" {
 		doc = def.Doc
 	}
 
-	var fieldDocs []string
-	for _, f := range def.Fields {
-		entry := fmt.Sprintf("- `%s`: `%s`", f.Name, typeName(f.Type))
-		if f.Doc != "" {
-			entry += " — " + f.Doc
+	out := fmt.Sprintf("```dex\n%s\n```\n\n%s", sig, doc)
+
+	if len(def.Fields) > 0 {
+		var fieldDocs []string
+		for _, f := range def.Fields {
+			entry := fmt.Sprintf("- `%s`: `%s`", f.Name, typeName(f.Type))
+			if f.Doc != "" {
+				entry += " — " + f.Doc
+			}
+			fieldDocs = append(fieldDocs, entry)
 		}
-		fieldDocs = append(fieldDocs, entry)
+		out += "\n\n**Fields:**\n" + strings.Join(fieldDocs, "\n")
 	}
 
-	return fmt.Sprintf("```dex\n%s\n```\n\n%s\n\n**Fields:**\n%s", sig, doc, strings.Join(fieldDocs, "\n"))
+	if len(def.Methods) > 0 {
+		var methodDocs []string
+		for i := range def.Methods {
+			methodDocs = append(methodDocs, "- `"+methodSignature(&def.Methods[i])+"`")
+		}
+		out += "\n\n**Methods:**\n" + strings.Join(methodDocs, "\n")
+	}
+
+	return out
+}
+
+// methodSignature renders a method as it was declared, receiver implicit: the
+// `self` parameter FlattenStructMethods prepends is an implementation detail of
+// the lowering, not part of the surface the caller writes.
+func methodSignature(m *ast.Function) string {
+	var params []string
+	for _, p := range m.Params {
+		if p.Name == "self" {
+			continue
+		}
+		params = append(params, fmt.Sprintf("%s: %s", p.Name, typeName(p.Type)))
+	}
+	sig := fmt.Sprintf("fn %s(%s): %s", m.Name, strings.Join(params, ", "), typeName(m.ReturnType))
+	if m.IsPrivate {
+		sig = "private " + sig
+	}
+	if m.Throws {
+		sig += " throws"
+	}
+	return sig
 }
 
 func formatEnumHover(def *ast.EnumDef) string {
@@ -432,6 +477,10 @@ func formatFieldHover(structName string, f *ast.StructField) string {
 	return header
 }
 
+func formatMethodHover(structName string, m *ast.Function) string {
+	return fmt.Sprintf("```dex\n(method) %s.%s\n```\n\nMethod of `%s`.", structName, strings.TrimPrefix(methodSignature(m), "fn "), structName)
+}
+
 func (s *Server) hoverFieldAccess(program *ast.Program, objName, fieldName string) string {
 	objType, ok := findVariableTypeID(program, objName)
 	if !ok || !ast.IsStructType(objType) {
@@ -448,7 +497,29 @@ func (s *Server) hoverFieldAccess(program *ast.Program, objName, fieldName strin
 			return formatFieldHover(def.Name, &def.Fields[i])
 		}
 	}
+	// The registry entry is written when the header is parsed and carries no
+	// methods, so the declaration in this program is the only place they can be
+	// read from.
+	if decl := structDeclByName(program, def.Name); decl != nil {
+		for i := range decl.Methods {
+			if decl.Methods[i].Name == fieldName {
+				return formatMethodHover(decl.Name, &decl.Methods[i])
+			}
+		}
+	}
 	return ""
+}
+
+func structDeclByName(program *ast.Program, name string) *ast.StructDef {
+	if program == nil {
+		return nil
+	}
+	for i := range program.Structs {
+		if program.Structs[i].Name == name {
+			return &program.Structs[i]
+		}
+	}
+	return nil
 }
 
 func tokenIndex(tokens []token.Token, tok *token.Token) int {
@@ -502,16 +573,20 @@ func findLetTypeIDInStmts(stmts []ast.Stmt, name string) (ast.Type, bool) {
 				return t, true
 			}
 		case *ast.TryCatchStmt:
-			if s.CatchVar == name {
-				if excType, ok := ast.LookupStructType("Exception"); ok {
-					return excType, true
+			for i := range s.Catches {
+				if s.Catches[i].VarName == name {
+					if t, ok := ast.LookupStructType(s.Catches[i].TypeName); ok {
+						return t, true
+					}
 				}
 			}
 			if t, ok := findLetTypeIDInStmts(s.Body, name); ok {
 				return t, true
 			}
-			if t, ok := findLetTypeIDInStmts(s.CatchBody, name); ok {
-				return t, true
+			for i := range s.Catches {
+				if t, ok := findLetTypeIDInStmts(s.Catches[i].Body, name); ok {
+					return t, true
+				}
 			}
 			if t, ok := findLetTypeIDInStmts(s.FinallyBody, name); ok {
 				return t, true

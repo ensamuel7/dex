@@ -116,20 +116,87 @@ It cannot find everything at compile time, and will not: whether a release is
 the last one is a runtime fact, and a reference cycle is not statically
 decidable at all — which is why `#[debug(cycles)]` is a runtime tool too.
 
-## Exceptions leak the frames they unwind
+## What an unwind collects, and what it still leaves
 
 A `throw` is `longjmp`, so every frame between the throw and the catch is
-skipped: its heap locals are never released and its `defer`s never run. Two
-heap locals per unwound frame, per throw — measured at 600 objects for 300
-throws through one intermediate frame. The thrown *message* is handled (it is
-staged into a thread-local buffer, the string released, and the longjmp done
-last — see `_dex_exc_stage`), but the unwound frames' own locals are not.
+skipped: nothing it would have released on its way out runs. That used to mean
+two heap locals leaked per unwound frame per throw — measured at 600 objects for
+300 throws through one intermediate frame. (Deferred calls were skipped the same
+way; they are a separate stack now, below.)
 
-So a throw on a hot error path accumulates. Keep heap locals out of functions a
-throw passes through, or use a return value rather than an exception there.
-Fixing it properly needs a per-frame cleanup list the runtime can walk on
-unwind, which costs a push per heap local everywhere — a deliberate trade, not a
-patch.
+The runtime now keeps a **cleanup stack** (`_dex_cleanup_push` /
+`_dex_cleanup_unwind_to` in `cruntime/exceptions.c`). Every heap value a frame
+would release on its way out also registers there, and each try records the
+stack's height before its `setjmp`; the caught branch releases everything above
+that height, because those entries belong to frames that no longer exist. The
+same measurement is now zero. `examples/unwind_test.dx` is the regression case.
+
+Three properties hold it together, and breaking any one turns a leak into a
+double free:
+
+- **Entries hold the pointer, not the variable's address.** The unwind runs in
+  the catching frame, whose own calls overwrite the stack memory the dead frames
+  occupied, so reading a dead frame's slot would be a use-after-free.
+- **A value that can be replaced keeps a slot.** Holding the pointer means the
+  write that replaces a value — and releases it — has to point the entry at the
+  new one, or the entry names freed memory. `_dex_cleanup_push` returns the slot
+  it took and `_dex_cleanup_set` writes through it: one slot per reassignable
+  local, one per heap field of a struct local whose fields are written or whose
+  whole value is assigned. A value written once takes no slot.
+- **Restoring the height only ever lowers it.** `_dex_cleanup_drop_to` is
+  monotone, so two restores in either order — a statement's and the enclosing
+  scope's — cannot bring a stale entry back into range.
+
+A struct is registered a field at a time rather than as itself: releasing a
+struct means releasing its fields through its address, which the unwind cannot
+safely read. `registerStructFieldsForUnwind` does that, and skips a field that
+is itself a struct or an optional rather than descending into it — those are
+what still leak on an unwind, and the only thing that does.
+
+Registration is guarded on `_dex_exc_top >= 0`: with no exception frame live a
+throw exits the process and nothing unwinds, so the push is a load and a branch.
+Nothing at all is emitted for a program that never throws (`usesExceptions`).
+
+A new leak here is now a regression worth a test rather than a known cost —
+`examples/unwind_test.dx` is the case.
+
+## Leaving a try by jumping out of it
+
+A try pushes its exception frame before the `setjmp` and pops it after the
+handlers, so a `return`, `break` or `continue` in the **try body** skips that
+pop. The frame stack is a fixed 64-entry thread-local array, so the skipped
+pops accumulated until it was written past the end — silently, into whatever
+thread-local followed it, which now includes the cleanup stack.
+
+`emitExcFramePops` emits the missing pops at each jump site, from `tryDepth`
+(incremented only while generating a try *body* — a catch or finally runs after
+its own frame is popped). `_dex_exc_push_frame` bounds-checks entry and exits
+naming the limit rather than overrunning.
+
+The pops go **after** the return value is evaluated, which `emitReturn` is there
+to enforce. A return expression can itself throw, and until it has produced a
+value the enclosing try is still its handler: popping first sent
+`return load(path)` to the caller's catch instead of the one wrapped around it.
+
+## Deferred calls are a runtime stack, not emitted code
+
+`defer` used to collect its expression at compile time and emit it at the
+function's exit. That made it lexical: a defer in a branch nothing took still
+ran, a defer in a loop ran once however many iterations there were, and an
+exception unwinding past the frame skipped it — the case that leaves a lock
+held, which is exactly what the docs recommended `defer` for.
+
+It now compiles to a closure pushed onto a defer stack (`_dex_defer_push` in
+`cruntime/closure.c`) where the statement runs, and `_dex_defer_run_to` runs
+them most-recent-first at every exit: each `return`, the fall-through at the end
+of a function, and the catch of a try the throw unwound past. `containsDefer`
+decides whether a function records a base height at entry.
+
+A closure is what makes the unwind case work: the call's operands are captured
+and owned where the defer is written, rather than read out of a frame that may
+be gone. The consequence is that arguments are evaluated at the `defer` rather
+than at the exit, which is also what Go does. `examples/defer_test.dx` pins all
+of it.
 
 ## Memory ownership rules
 
@@ -143,7 +210,26 @@ or a use-after-free, so change them deliberately:
 - A value passed somewhere that only *reads* it — a print, a borrowed function
   argument, a map key, a `StringBuilder.append`, a string comparison — must go through
   `genBorrowed`, which hoists an owned temporary into a statement-scoped variable and
-  releases it after the statement.
+  releases it after the statement. `genStringArg` is included: what reaches a
+  stdlib callee is a raw `char*`, so the callee cannot own the `DexString`, and
+  reading `->data` straight off a minted value leaked it once per call.
+- **A condition is not a statement.** `if` and `while` generate their condition
+  with no prelude for `genBorrowed` to hoist into, so a minted operand or
+  argument there is leaked once per evaluation — in a loop, once per iteration.
+  `genCondition` gives them one, emitted as a statement expression *inside* the
+  condition rather than ahead of it: a `while` re-evaluates it along with the
+  condition, and a release inside the condition cannot be skipped by a `return`
+  or `break` in the body.
+- **Hoisting out of a short-circuit changes behaviour, not just ownership.** The
+  right-hand side of `&&` or `||` may never be evaluated, and a hoisted
+  declaration evaluates it anyway: in
+  `if (!s.isEmpty() && s.substring(0, 1) == "a")` that turns a leak into a crash.
+  `genExpr` suspends hoisting for the operands of both operators, so anything
+  inside one must be self-contained — which is why `genStringCompare` releases
+  within a statement expression instead of asking for a hoist.
+- **A field access borrows the field but not its subject.** `parse(x).ok`
+  returns a struct nothing binds, and a struct owns its heap fields, so the
+  subject goes through `genBorrowed` even though the read itself is a borrow.
 - A struct **owns** its heap fields: they are released when the struct goes out of
   scope. A struct literal that stores a *borrowed* value must therefore retain it
   (`emitRetainStructLitFields`), including when the literal is returned from a

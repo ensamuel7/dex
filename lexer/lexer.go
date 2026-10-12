@@ -454,6 +454,11 @@ func (l *Lexer) scanStringLiteral(startLine, startCol int) ([]token.Token, error
 
 			// Collect raw expression source between ${ and }
 			if braceDepth > 0 {
+				// Where the expression starts in the real file. The sub-lexer
+				// below reads a detached substring, so without this every token
+				// inside ${...} reports line 1 column 1 — and so does every
+				// diagnostic about it.
+				exprLine, exprCol := l.line, l.col
 				var exprSource []rune
 				for l.pos < len(l.source) && braceDepth > 0 {
 					ch := l.source[l.pos]
@@ -475,6 +480,8 @@ func (l *Lexer) scanStringLiteral(startLine, startCol int) ([]token.Token, error
 				// Tokenize the expression
 				subLexer := New(string(exprSource))
 				subLexer.file = l.file
+				subLexer.line = exprLine
+				subLexer.col = exprCol
 				exprTokens, err := subLexer.Tokenize()
 				if err != nil {
 					return nil, err

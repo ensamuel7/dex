@@ -1,0 +1,63 @@
+// An enum defined in one module and used from another.
+//
+// This did not work at all before: an imported module's enums were dropped by
+// the merge rather than added to the program, and their names were registered
+// with the parser as struct names, so `grade.Band` in a type annotation was
+// reported as an unknown struct type and `grade.Band.Merit` as an undefined
+// variable. Every line here is one of the places that failed.
+
+import "modules/grade"
+
+// A qualified enum in a parameter type and a return type.
+fn promote(b: grade.Band): grade.Band {
+    if (b == grade.Band.Pass) {
+        return grade.Band.Merit
+    }
+    return grade.Band.Distinction
+}
+
+fn main(): void {
+    // A qualified enum as a declared type, and a qualified variant as a value.
+    let b: grade.Band = grade.Band.Merit
+    assert(grade.name(b) == "merit")
+    assert(grade.points(b) == 2)
+
+    // Switched on across the module boundary, including a multi-variant case.
+    switch (b) {
+        case grade.Band.Pass: {
+            assert(false)
+        }
+        case grade.Band.Merit, grade.Band.Distinction: {
+            assert(true)
+        }
+        default: {
+            assert(false)
+        }
+    }
+
+    // Compared, passed, and returned.
+    assert(promote(grade.Band.Pass) == grade.Band.Merit)
+    assert(promote(grade.Band.Merit) == grade.Band.Distinction)
+    assert(grade.best() == grade.Band.Distinction)
+
+    // Held in an array, which needs the element type to resolve.
+    let all: grade.Band[] = [grade.Band.Pass, grade.Band.Merit, grade.Band.Distinction]
+    assert(all.len() == 3)
+    let total: int = 0
+    let i: int = 0
+    while (i < all.len()) {
+        total = total + grade.points(all[i])
+        i = i + 1
+    }
+    assert(total == 6)
+
+    // Held as a struct field, which is where the missing typedef would bite:
+    // the struct is declared in the module and its field's type is the enum.
+    let m: grade.Mark = grade.Mark { subject: "transport", band: grade.Band.Distinction }
+    assert(grade.name(m.band) == "distinction")
+    assert(m.subject == "transport")
+
+    // The unqualified spelling still works inside the declaring module, which
+    // is what grade.name() exercises above, and the two must agree.
+    assert(grade.name(grade.best()) == "distinction")
+}

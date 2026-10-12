@@ -51,11 +51,19 @@ func formatError(msg string) string {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs|update|version> <file.dx>")
+		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
 	}
 
 	command := os.Args[1]
+
+	// Flags are pulled out before anything else so every command sees the same
+	// set and a positional filename stays at args[0].
+	args, err := parseFlags(os.Args[2:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
 	if command == "version" {
 		fmt.Println("dex version " + Version)
@@ -87,22 +95,26 @@ func main() {
 	}
 
 	if command == "test" {
-		runTests()
+		runTests(args)
 		return
 	}
 
 	if command == "update" {
-		force := len(os.Args) >= 3 && os.Args[2] == "--force"
-		selfUpdate(force)
+		selfUpdate(forceUpdate)
 		return
 	}
 
-	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|check|update|version> <file.dx>")
+	if command == "lint" && listRules {
+		printRules()
+		return
+	}
+
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
 	}
 
-	filename := os.Args[2]
+	filename := args[0]
 
 	switch command {
 	case "build":
@@ -139,19 +151,22 @@ func main() {
 	case "check":
 		check(filename)
 
+	case "lint":
+		lintOnly(filename)
+
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		fmt.Fprintln(os.Stderr, "Usage: dex <build|run|dev|test|check|lsp|docs|update|version> <file.dx>")
+		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
 	}
 }
 
-func runTests() {
+func runTests(args []string) {
 	var files []string
 
-	if len(os.Args) >= 3 {
+	if len(args) >= 1 {
 		// Run specific test file
-		files = append(files, os.Args[2])
+		files = append(files, args[0])
 	} else {
 		// Discover *_test.dx files recursively
 		err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
@@ -353,7 +368,11 @@ func dev(filename string) {
 	}
 }
 
-func build(filename string) (string, error) {
+// frontend runs the pipeline up to and including type checking: lex, parse,
+// flatten methods, merge user modules, check, then lint when asked. Building,
+// `dex check` and `dex lint` all need exactly this much and nothing more, and
+// keeping separate copies of it in step has not worked.
+func frontend(filename string) (*ast.Program, error) {
 	// Reset type registries to prevent state leaking between compilations
 	ast.ResetStructTypes()
 	ast.ResetDbFillKeys()
@@ -375,14 +394,14 @@ func build(filename string) (string, error) {
 
 	source, err := os.ReadFile(filename)
 	if err != nil {
-		return "", fmt.Errorf("%s: %v", filename, err)
+		return nil, fmt.Errorf("%s: %v", filename, err)
 	}
 
 	// Lex
 	lex := lexer.NewWithFile(string(source), filename)
 	tokens, err := lex.Tokenize()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Seed parser with module-provided struct type names from imported modules
@@ -396,7 +415,7 @@ func build(filename string) (string, error) {
 		sourceDir = "."
 	}
 	absSourceDir, _ := filepath.Abs(sourceDir)
-	userStructNames := resolve.PreRegisterUserStructs(importPaths, absSourceDir)
+	userStructNames, userEnumNames := resolve.PreRegisterUserStructs(importPaths, absSourceDir)
 
 	// Parse
 	p := parser.New(tokens)
@@ -406,10 +425,13 @@ func build(filename string) (string, error) {
 	for _, name := range userStructNames {
 		p.AddStructName(name)
 	}
+	for _, name := range userEnumNames {
+		p.AddEnumName(name)
+	}
 	p.AddStructName("Exception") // built-in Exception type
 	program, parseErrs := p.Parse()
 	if len(parseErrs) > 0 {
-		return "", parseErrs[0]
+		return nil, parseErrs[0]
 	}
 
 	// Flatten struct methods in the main program (before resolving modules)
@@ -417,7 +439,7 @@ func build(filename string) (string, error) {
 
 	// Resolve user module imports (non-stdlib .dx files)
 	if err := resolve.ResolveUserModules(program, absSourceDir); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Type check
@@ -425,7 +447,22 @@ func build(filename string) (string, error) {
 	checkErrs := ch.Check(program)
 	printWarnings(ch.Warnings())
 	if len(checkErrs) > 0 {
-		return "", checkErrs[0]
+		return nil, checkErrs[0]
+	}
+
+	// Lint runs on the checked AST: a method call only knows which struct it
+	// belongs to once the checker has resolved it.
+	if err := reportLint(program); err != nil {
+		return nil, err
+	}
+
+	return program, nil
+}
+
+func build(filename string) (string, error) {
+	program, err := frontend(filename)
+	if err != nil {
+		return "", err
 	}
 
 	// Generate C
@@ -506,67 +543,10 @@ func build(filename string) (string, error) {
 // generateC runs the compilation pipeline up to C code generation (no cc invocation).
 // Returns the path to the generated .c file.
 func generateC(filename string) (string, error) {
-	ast.ResetStructTypes()
-	ast.ResetDbFillKeys()
-	ast.ResetChanTypes()
-	ast.ResetTaskTypes()
-	ast.ResetWeakTypes()
-	ast.ResetStructArrayTypes()
-	ast.ResetOptionalTypes()
-	ast.ResetRefTypes()
-	ast.ResetFuncTypes()
-	ast.ResetMapTypes()
-	ast.ResetEnumTypes()
-
-	stdlib.RegisterAllModuleTypes()
-	ast.RegisterExceptionType()
-
-	source, err := os.ReadFile(filename)
-	if err != nil {
-		return "", fmt.Errorf("%s: %v", filename, err)
-	}
-
-	lex := lexer.NewWithFile(string(source), filename)
-	tokens, err := lex.Tokenize()
+	program, err := frontend(filename)
 	if err != nil {
 		return "", err
 	}
-
-	importPaths := resolve.ExtractImportPaths(tokens)
-	typeNames := stdlib.ModuleTypesForImports(importPaths)
-
-	sourceDir := filepath.Dir(filename)
-	if sourceDir == "" {
-		sourceDir = "."
-	}
-	absSourceDir, _ := filepath.Abs(sourceDir)
-	userStructNames := resolve.PreRegisterUserStructs(importPaths, absSourceDir)
-
-	p := parser.New(tokens)
-	for _, name := range typeNames {
-		p.AddStructName(name)
-	}
-	for _, name := range userStructNames {
-		p.AddStructName(name)
-	}
-	p.AddStructName("Exception")
-	program, parseErrs := p.Parse()
-	if len(parseErrs) > 0 {
-		return "", parseErrs[0]
-	}
-
-	resolve.FlattenStructMethods(program)
-	if err := resolve.ResolveUserModules(program, absSourceDir); err != nil {
-		return "", err
-	}
-
-	ch := checker.New()
-	checkErrs := ch.Check(program)
-	printWarnings(ch.Warnings())
-	if len(checkErrs) > 0 {
-		return "", checkErrs[0]
-	}
-
 	gen := codegen.New()
 	// DEX_MEM_CHECK=1 builds in the debug memory checker: every retain and
 	// release is validated against the object's header, a freed object is kept
@@ -776,7 +756,6 @@ func check(filename string) {
 		os.Exit(1)
 	}
 }
-
 
 // printWarnings reports non-fatal checker diagnostics. They never stop a build —
 // deprecated calls keep working — but they say what to move to.

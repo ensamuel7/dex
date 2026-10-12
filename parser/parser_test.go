@@ -1581,11 +1581,17 @@ func TestParseTryCatchStmt(t *testing.T) {
 	if len(tc.Body) != 1 {
 		t.Errorf("Body has %d stmts, want 1", len(tc.Body))
 	}
-	if tc.CatchVar != "e" {
-		t.Errorf("CatchVar = %q, want %q", tc.CatchVar, "e")
+	if len(tc.Catches) != 1 {
+		t.Fatalf("Catches has %d clauses, want 1", len(tc.Catches))
 	}
-	if len(tc.CatchBody) != 1 {
-		t.Errorf("CatchBody has %d stmts, want 1", len(tc.CatchBody))
+	if tc.Catches[0].VarName != "e" {
+		t.Errorf("catch binding = %q, want %q", tc.Catches[0].VarName, "e")
+	}
+	if tc.Catches[0].TypeName != "Exception" {
+		t.Errorf("catch type = %q, want %q", tc.Catches[0].TypeName, "Exception")
+	}
+	if len(tc.Catches[0].Body) != 1 {
+		t.Errorf("catch body has %d stmts, want 1", len(tc.Catches[0].Body))
 	}
 	if tc.FinallyBody != nil {
 		t.Errorf("FinallyBody should be nil")
@@ -1604,11 +1610,14 @@ func TestParseTryCatchFinallyStmt(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected TryCatchStmt, got %T", s)
 	}
-	if tc.CatchVar != "err" {
-		t.Errorf("CatchVar = %q, want %q", tc.CatchVar, "err")
+	if len(tc.Catches) != 1 {
+		t.Fatalf("Catches has %d clauses, want 1", len(tc.Catches))
 	}
-	if tc.CatchBody == nil {
-		t.Fatal("CatchBody should not be nil")
+	if tc.Catches[0].VarName != "err" {
+		t.Errorf("catch binding = %q, want %q", tc.Catches[0].VarName, "err")
+	}
+	if tc.Catches[0].Body == nil {
+		t.Fatal("catch body should not be nil")
 	}
 	if tc.FinallyBody == nil {
 		t.Fatal("FinallyBody should not be nil")
@@ -1628,11 +1637,8 @@ func TestParseTryFinallyStmt(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected TryCatchStmt, got %T", s)
 	}
-	if tc.CatchBody != nil {
-		t.Errorf("CatchBody should be nil, got %d stmts", len(tc.CatchBody))
-	}
-	if tc.CatchVar != "" {
-		t.Errorf("CatchVar should be empty, got %q", tc.CatchVar)
+	if len(tc.Catches) != 0 {
+		t.Errorf("Catches should be empty, got %d clauses", len(tc.Catches))
 	}
 	if tc.FinallyBody == nil {
 		t.Fatal("FinallyBody should not be nil")
@@ -1649,13 +1655,36 @@ func TestParseTryWithoutCatchOrFinallyError(t *testing.T) {
 	}
 }
 
-func TestParseTryCatchWrongTypeError(t *testing.T) {
-	err := parseError(t, `fn main(): void { try { } catch (e: WrongType) { } }`)
-	if err == nil {
-		t.Fatal("expected error for non-Exception catch type")
+// A catch clause names the type it handles, and the parser accepts any name:
+// whether that name is a type at all, and a throwable one, is the checker's
+// question. It used to insist on Exception here, which is what made a typed
+// handler unwritable.
+func TestParseTypedCatchClauses(t *testing.T) {
+	s := parseStmt(t, `try {
+		return 1
+	} catch (e: ParseError) {
+		return 2
+	} catch (e: Exception) {
+		return 0
+	}`)
+	tc, ok := s.(*ast.TryCatchStmt)
+	if !ok {
+		t.Fatalf("expected TryCatchStmt, got %T", s)
 	}
-	if !strings.Contains(err.Error(), "Exception") {
-		t.Errorf("error = %q, want to contain 'Exception'", err.Error())
+	if len(tc.Catches) != 2 {
+		t.Fatalf("Catches has %d clauses, want 2", len(tc.Catches))
+	}
+	if tc.Catches[0].TypeName != "ParseError" {
+		t.Errorf("first clause type = %q, want %q", tc.Catches[0].TypeName, "ParseError")
+	}
+	if tc.Catches[0].IsCatchAll() {
+		t.Error("a ParseError clause is not a catch-all")
+	}
+	if !tc.Catches[1].IsCatchAll() {
+		t.Error("an Exception clause is the catch-all")
+	}
+	if !tc.CatchesAnything() {
+		t.Error("a try with an Exception clause catches anything")
 	}
 }
 

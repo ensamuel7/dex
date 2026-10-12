@@ -1,0 +1,76 @@
+// `throws` in a signature says an exception may escape, so a caller sees it
+// without reading the body. The compiler does not enforce it — the program runs
+// either way — but `dex lint` compares the declaration against what the
+// function actually does, and tells a caller that has no try/catch.
+//
+// Nothing here throws through a frame holding heap locals: a throw is longjmp,
+// so an unwound frame's locals are never released.
+import "str"
+
+fn parseAge(s: string): int throws {
+    if (s == "") {
+        throw Exception("empty input")
+    }
+    return str.toInt(s)
+}
+
+// Declared throws without throwing itself: it propagates what parseAge raises.
+fn ageOrThrow(s: string): int throws {
+    return parseAge(s)
+}
+
+struct Validator {
+    min: int
+
+    fn check(age: int): int throws {
+        if (age < min) {
+            throw Exception("too young")
+        }
+        return age
+    }
+}
+
+fn main(): void {
+    // The happy path through two declared-throws frames.
+    try {
+        assert(ageOrThrow("42") == 42)
+    } catch (e: Exception) {
+        assert(false)
+    }
+
+    // The throw crosses ageOrThrow, which declared it.
+    //
+    // The argument is a local rather than a literal written at the call: a
+    // string temporary belonging to the throwing *statement* is released after
+    // that statement, and the longjmp skips it. Held by main — the frame that
+    // catches, and so the one frame not unwound — it is released normally.
+    let empty = ""
+    let caught = false
+    try {
+        assert(ageOrThrow(empty) == 0)
+    } catch (e: Exception) {
+        caught = true
+        assert(e.message == "empty input")
+    }
+    assert(caught)
+
+    // A method declaring throws behaves the same way.
+    let v = Validator { min: 18 }
+    try {
+        assert(v.check(21) == 21)
+    } catch (e: Exception) {
+        assert(false)
+    }
+
+    let rejected = false
+    try {
+        assert(v.check(9) == 0)
+    } catch (e: Exception) {
+        rejected = true
+    }
+    assert(rejected)
+
+    // A declared throws is a contract, so lint reports nothing here: every
+    // call is guarded.
+    assert(true)
+}

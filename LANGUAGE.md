@@ -8,7 +8,12 @@ DexLang is a statically-typed language that compiles to C. It is designed for bu
 dex build <file.dx>       # compiles to native binary
 dex run <file.dx>         # compiles and runs
 dex test [file_test.dx]   # runs test files (*_test.dx)
+dex lint <file.dx>        # reports lint findings without building
 ```
+
+Any of these accepts `--lint` to report findings alongside the build, and
+`--lint=strict` to fail the build when there are any. See
+[Linting](#linting).
 
 Pipeline: `.dx` source → tokens → AST (Abstract Syntax Tree) → type check → C code → native binary (via `cc`/`gcc`)
 
@@ -72,6 +77,7 @@ let b: int = 2
 | `catch`    | Handle an exception in a try block   |
 | `finally`  | Cleanup block that always runs       |
 | `throw`    | Throw an exception                   |
+| `throws`   | Declare that a function may let an exception escape |
 | `switch`   | Multi-way branch statement           |
 | `case`     | Case branch in a switch              |
 | `default`  | Default branch in a switch           |
@@ -666,6 +672,28 @@ switch (c) {
 
 Enums are value types (integers) — no heap allocation or refcounting needed.
 
+### Enums across modules
+
+An enum declared in one file is used from another through its module, in every
+position a type or a value can appear:
+
+```dex
+import "type/finding"
+
+fn rank(s: finding.Severity): int {
+    switch (s) {
+        case finding.Severity.Critical: { return 40 }
+        default: { return 0 }
+    }
+}
+
+let worst: finding.Severity = finding.Severity.Critical
+let all: finding.Severity[] = [finding.Severity.Low, finding.Severity.High]
+```
+
+A struct may hold one as a field, including a struct declared in the module
+that declares the enum.
+
 ---
 
 ## Interfaces
@@ -1102,6 +1130,38 @@ namespaces.
 Assigning a heap field through `self` follows the usual rule: the string being
 replaced is released and the new one retained, so reassigning in a loop does not
 grow.
+
+`self` is **reserved**. It cannot be declared as a parameter, variable, constant,
+field, loop variable, catch binding, function, struct, enum, interface or member
+name:
+
+```dex
+fn shadow(self: int): int { ... }   // error: 'self' is reserved
+let self: int = 1                   // error: 'self' is reserved
+```
+
+It is not a keyword, though, and that is deliberate — it has to remain an
+ordinary expression for `self.cols` and `return self` to mean anything. So it is
+refused where a name is *introduced*, and nowhere else.
+
+#### self is only a method's
+
+A module has no receiver, so `self` means nothing there. Module-level state is
+reached by its own name:
+
+```dex
+let total: int = 0
+
+fn bump(): int {
+    total = total + 1    // not self.total
+    return total
+}
+```
+
+Note that this is the mirror of the rule inside a method: at module level a bare
+*assignment* is the only form, because there is nothing to assign through.
+Writing `self.total` there is an error that says so rather than one about an
+undefined variable.
 
 #### Methods on a reference
 
@@ -1579,8 +1639,8 @@ fn increment(c: &Counter): void {
 
 **Use `defer` when the critical section can throw.** A bare `unlock()` is
 skipped if an exception unwinds past it, leaving the mutex held forever and
-every other thread blocked. `defer` runs on both the normal and the exceptional
-path:
+every other thread blocked. `defer` runs on every way out of the function,
+including an exception raised by something it called:
 
 ```dex
 fn increment(c: &Counter): void {
@@ -1590,6 +1650,9 @@ fn increment(c: &Counter): void {
     c.value = c.value + 1
 }
 ```
+
+`try`/`finally` does the same job when the cleanup belongs to a block rather
+than to the whole function.
 
 Hold a lock for as little as possible, and avoid doing I/O — a database call, a
 socket write — while holding one, since every other thread waits on you. Take
@@ -1622,6 +1685,75 @@ throw Exception("something went wrong")
 
 If an exception is not caught, the program prints the message to stderr and exits with code 1.
 
+### Throwable Types
+
+`Exception` is the built-in exception type, but any struct can be thrown when it
+carries a `message: string` and nothing that would need releasing:
+
+```dex
+struct ParseError(message: string, line: int) {}   // throwable
+struct IOError(message: string) {}                 // throwable
+struct Plain(code: int) {}                         // no message field
+struct TwoStrings(message: string, detail: string) {}  // detail cannot survive
+```
+
+The restriction is the unwind. A throw is a `longjmp`, so the frames between it
+and the catch never run their releases: the message is copied into the runtime
+before the jump, and the remaining fields travel as a flat byte copy. An `int`,
+`bool`, `double` or `char` survives that; a second string, an array or a nested
+struct holding either could only arrive already freed, so the compiler refuses
+it rather than hand you a dangling one.
+
+Declaring the struct with constructor parameters — `struct ParseError(message:
+string, line: int) {}` — is what makes `ParseError("bad digit", 12)` callable.
+With the fields written in the body instead, throw a struct literal:
+`throw ParseError { message: "bad digit", line: 12 }`.
+
+### Declaring That a Function Throws
+
+A `throws` after the return type says an exception may escape the function, so a
+caller can see it in the signature rather than discover it at runtime. Naming
+types after it says which:
+
+```dex
+fn load(path: string): int throws ParseError, IOError {
+    if (path == "") {
+        throw IOError("no path")
+    }
+    throw ParseError("bad digit", 12)
+}
+
+fn anything(): int throws {        // something escapes, unspecified
+    throw Exception("whatever")
+}
+```
+
+The declaration is checked against what the function actually does, by
+[lint](#linting) rather than by the compiler: the program runs either way.
+
+- An exception escaping a function that does not declare it, or reaching a call
+  site with no matching `catch`, is reported as `uncaught-throw`.
+- A type that escapes a function whose `throws` list leaves it out is reported
+  as `undeclared-throw`.
+- A `throws` naming a type the function cannot throw is reported as
+  `unnecessary-throws`.
+- Declaring `throws` is a contract. Callers are told the function may throw even
+  if its body does not throw today, which is what lets it start throwing later
+  without surprising them.
+- A bare `throws` promises nothing specific, so only a catch-all can be sure of
+  handling it.
+
+Throwing is inferred transitively: a function that calls a throwing function
+without catching can throw too. Two things stop that inference, because the
+exception does not escape where it is written:
+
+- a `throw` inside a lambda, which runs when the lambda is invoked, wherever
+  that is;
+- a `throw` inside a `spawn`, which unwinds on another thread.
+
+A call through a function value stops it from the other side: the target is not
+known statically, so it is assumed not to throw.
+
 ### Try-Catch-Finally
 
 ```dex
@@ -1638,8 +1770,62 @@ try {
 ```
 
 - At least one of `catch` or `finally` is required.
-- Only a single `catch` clause is supported, and it must use the `Exception` type.
 - The `finally` block always executes, whether or not an exception was thrown.
+
+### Catching by Type
+
+A `try` may have any number of `catch` clauses. The first whose type matches the
+thrown one runs:
+
+```dex
+try {
+    let n = load(path)
+    fmt.println("n=${n}")
+} catch (e: ParseError) {
+    fmt.println("line ${e.line}: ${e.message}")
+} catch (e: IOError) {
+    fmt.println("io: ${e.message}")
+}
+```
+
+- A clause reads the fields of the type it names: `e.line` above is the value
+  the throw carried.
+- `catch (e: Exception)` is the **catch-all** — it handles every type, which is
+  what a single catch clause always did. A clause after it can never run, and
+  lint reports that as `unreachable-catch`.
+- A catch-all handling some other type sees that type's `message` and zeroes
+  for anything else: the fields of a type it does not name are not its to read.
+- An exception **no clause matches carries on outward**, after this try's
+  `finally` has run. Its message and fields are preserved as it goes.
+- The heap values the skipped frames held are released when the exception is
+  caught, and their deferred calls run, so throwing on an error path neither
+  accumulates memory nor skips cleanup. What is still missed is narrow: the
+  nested-struct and optional fields of a struct local.
+- An exception that reaches the top of `main` unhandled prints
+  `Unhandled <Type>: <message>` and exits with code 1.
+
+### Deferred Calls
+
+`defer` registers a call to run when the function is left — on a `return`, on
+falling off the end, and when an exception unwinds past the frame:
+
+```dex
+fn readConfig(path: string): string throws {
+    let f = file.open(path)
+    defer f.close()        // runs however readConfig is left
+    return parse(f)        // including when this throws
+}
+```
+
+- The call is registered **when the `defer` statement runs**. One inside a
+  branch that was not taken registers nothing; one inside a loop registers per
+  iteration.
+- Registered calls run at the function's exit, **most recent first** — a defer
+  in a loop body runs after the statements that follow the loop, not at the end
+  of each iteration.
+- Whatever the call needs is **captured where the defer is written**, so it
+  still works after the frame it came from is gone. That also means its
+  arguments are evaluated at the `defer`, not at the exit.
 
 ### Try-Finally (Re-throw)
 
@@ -1896,6 +2082,19 @@ struct HttpResponse {
 
 The `contentType` field is set automatically for client responses (from the server's `Content-Type` header). In server-side struct literals it is optional — if omitted, defaults to `"application/json"`.
 
+The `headers` field means one thing in each direction. On a response you build
+for a client, it is the extra headers to send. On a response that came back
+from a client call, it is the headers that arrived — the status line excluded,
+since the status code is already its own field, and a repeated key kept rather
+than collapsed, which is what reading `Set-Cookie` needs. Both directions use
+the newline-separated `Key: Value` format that `http.header()` builds, so a
+header read from one response can be passed straight into another.
+
+Every field of a response is always a real string, including when the request
+never completed. A refused connection, a timeout and a rejected certificate
+all arrive as `statusCode == 0` with the reason in `body`, empty `headers` and
+empty `contentType`.
+
 **Convenience methods (headers optional):**
 
 | Function   | Signature                            | Description                              |
@@ -1911,6 +2110,44 @@ The `contentType` field is set automatically for client responses (from the serv
 | Function   | Signature                                                              | Description                    |
 |------------|------------------------------------------------------------------------|--------------------------------|
 | `request`  | `request(method: string, url: string, body: string, headers: string): HttpResponse` | Custom method and headers      |
+| `requestWith` | `requestWith(method: string, url: string, body: string, headers: string, options: HttpOptions): HttpResponse` | The same, under explicit timeouts, redirect and TLS options |
+
+**Options:**
+
+```dex
+struct HttpOptions {
+  timeoutMs: int              // whole request; 0 means the default, 30000
+  connectTimeoutMs: int       // the connection alone; 0 means the default, 10000
+  maxRedirects: int           // 0, the default, follows none
+  insecureTls: bool           // false, the default, verifies certificates
+}
+```
+
+Every field's zero value is its default, so `http.HttpOptions {}` behaves
+exactly like `http.request`, and a literal names only what it changes:
+
+```dex
+let fast: http.HttpOptions = http.HttpOptions { timeoutMs: 2000 }
+let r: http.HttpResponse = http.requestWith("GET", url, "", "", fast)
+```
+
+Three things are worth knowing about the defaults, because each of them is a
+decision rather than an omission:
+
+**Every request has a deadline**, 30 seconds overall and 10 to connect, on the
+convenience functions too. `curl_easy_perform` blocks and has no timeout of its
+own, so without one a host that accepts a connection and then says nothing
+holds the calling thread until the process restarts.
+
+**Redirects are not followed.** A 3xx is returned as itself, with its
+`Location` in `headers`, which is what anything inspecting a redirect chain
+wants and what anything re-checking where it is being sent needs. Set
+`maxRedirects` to follow; the `headers` of the result then describe the final
+hop only.
+
+**`insecureTls` is named for the danger, not the safety**, so that a
+zero-valued struct verifies. Set it only when a broken certificate is the thing
+being inspected.
 
 **Headers:**
 
@@ -3156,6 +3393,72 @@ assert(x > 0)         // passes if x > 0
 ### send, receive, channel, close
 
 See [Concurrency](#concurrency) section.
+
+---
+
+## Linting
+
+Lint reports what compiles but is probably not what was meant. It is off by
+default and never changes what is emitted:
+
+```
+dex lint <file.dx>              # front end only: no C generated, no cc run
+dex build <file.dx> --lint      # build and report
+dex build <file.dx> --lint=strict   # ... and fail the build if anything is reported
+dex lint --rules                # list the rules
+dex build <file.dx> --lint --lint-off=unused-param,shadow
+```
+
+The language server reports the same findings as you type: the exception rules
+as warnings, the rest as hints, which editors render as a quiet grey rather than
+a squiggle.
+
+| Rule | Reports |
+|------|---------|
+| `unused-var` | a local or loop variable that is never read |
+| `unused-param` | a parameter that the function body never reads |
+| `unused-import` | an imported module that is never referenced |
+| `unused-function` | a private function that nothing calls |
+| `shadow` | a declaration that hides a name from an enclosing scope |
+| `unreachable` | a statement after a `return`, `throw`, `break` or `continue` |
+| `uncaught-throw` | an exception that escapes a function not declared `throws` |
+| `undeclared-throw` | an exception type a `throws` declaration leaves out |
+| `unnecessary-throws` | a `throws` declaration naming a type the function cannot throw |
+| `unreachable-catch` | a `catch` clause that can never run |
+| `unknown-allow` | an `#[allow(...)]` naming a rule that does not exist |
+
+### Suppressing a Finding
+
+`#[allow(<rule>)]` on the declaration it fires on silences one rule there.
+`#[allow(unused)]` covers the four `unused-*` rules and `#[allow(all)]` covers
+everything:
+
+```dex
+#[allow(unused)]
+let reserved = buildHandle()   // kept for its side effect, never read
+```
+
+An `#[allow(...)]` is the one annotation the compiler does not interpret: it
+says what not to report, so it is accepted on any type rather than only on heap
+types the way `#[owned]` is.
+
+### What It Does Not Do
+
+- **Assignment is not use.** A variable that is only ever written to is reported
+  as unused, which is the point — `let total = 0` followed by `total += n` and
+  nothing else is dead arithmetic.
+- **A bare `return` ends its block.** `return` with no value takes the next
+  expression as its value, so nothing survives after it to be called
+  unreachable. The rule fires after `return <value>`, `throw`, `break` and
+  `continue`.
+- **A module that declares types is never reported unused.** `import "json"`
+  earns its keep through a `json.Value` annotation, and a type annotation is
+  resolved while parsing — by the time lint runs there is no mention of the
+  module left to find. Only function-only modules such as `str` and `math` are
+  checked.
+- **A call through a function value is assumed not to throw.** Which function a
+  closure holds is a runtime fact, so the throw inference stops there rather
+  than guessing.
 
 ---
 

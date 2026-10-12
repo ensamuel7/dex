@@ -1,6 +1,10 @@
 package ast
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // Pos represents a source position (file, line, and column).
 type Pos struct {
@@ -141,6 +145,15 @@ func AllStructNames() []string {
 	return names
 }
 
+// AllEnumNames returns the names of all registered enum types.
+func AllEnumNames() []string {
+	names := make([]string, 0, len(enumByName))
+	for name := range enumByName {
+		names = append(names, name)
+	}
+	return names
+}
+
 func GetStructDef(t Type) *StructDef {
 	idx := int(t - TypeStructBase)
 	if idx < 0 || idx >= len(structDefs) {
@@ -264,6 +277,7 @@ const (
 )
 
 type Import struct {
+	Pos   Pos
 	Path  string
 	Alias string // if set, use as module name instead of filepath.Base(Path)
 }
@@ -272,7 +286,7 @@ type Program struct {
 	Imports      []Import
 	Structs      []StructDef
 	Enums        []EnumDef
-	GlobalLets   []LetStmt         // module-level let/const declarations
+	GlobalLets   []LetStmt // module-level let/const declarations
 	Functions    []Function
 	Interfaces   []InterfaceDef
 	UserModules  []string          // module names (last path segment) of resolved user imports
@@ -280,15 +294,25 @@ type Program struct {
 }
 
 type Function struct {
+	Pos         Pos
 	Name        string
 	Params      []Param
 	ReturnType  Type
 	Body        []Stmt
 	IsPrivate   bool
 	Annotations []string
+	// Throws records a `throws` in the signature: this function is allowed to
+	// let an exception escape. It is a declaration, not a derived fact — the
+	// lint pass infers what actually throws and compares the two.
+	Throws bool
+	// ThrowsTypes are the types named after `throws`, in the order written. A
+	// bare `throws` leaves this empty, which declares that something escapes
+	// without saying what.
+	ThrowsTypes []string
 }
 
 type Param struct {
+	Pos          Pos
 	Name         string
 	Type         Type
 	Annotations  []string
@@ -432,13 +456,37 @@ type SendStmt struct {
 
 func (s *SendStmt) stmtNode() {}
 
-// TryCatchStmt — try { ... } catch (e: Exception) { ... } finally { ... }
+// CatchClause is one handler: catch (e: ParseError) { ... }. A clause naming
+// Exception catches everything, which is what every catch did before types
+// existed and so what keeps existing code meaning what it meant.
+type CatchClause struct {
+	Pos      Pos
+	VarName  string // the name the exception is bound to
+	TypeName string // the type as written
+	Type     Type   // resolved by the checker
+	Body     []Stmt
+}
+
+// IsCatchAll reports whether this clause handles every exception type.
+func (c CatchClause) IsCatchAll() bool { return c.TypeName == "Exception" }
+
+// TryCatchStmt — try { ... } catch (e: ParseError) { ... } catch (e: Exception) { ... } finally { ... }
 type TryCatchStmt struct {
 	Pos         Pos
-	Body        []Stmt // try body
-	CatchVar    string // variable name in catch clause (empty if no catch)
-	CatchBody   []Stmt // catch body (nil if no catch)
-	FinallyBody []Stmt // finally body (nil if no finally)
+	Body        []Stmt        // try body
+	Catches     []CatchClause // handlers, in the order written
+	FinallyBody []Stmt        // finally body (nil if no finally)
+}
+
+// CatchesAnything reports whether any clause is a catch-all, which is what
+// decides whether an exception can still escape the try.
+func (s *TryCatchStmt) CatchesAnything() bool {
+	for _, c := range s.Catches {
+		if c.IsCatchAll() {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *TryCatchStmt) stmtNode() {}
@@ -467,6 +515,65 @@ type SwitchStmt struct {
 }
 
 func (s *SwitchStmt) stmtNode() {}
+
+// ThrowableStruct reports whether a type can be thrown, and when it cannot,
+// why. A throwable struct carries a `message: string`, which is the one field
+// every handler can read, and nothing else that would need releasing: a throw
+// is a longjmp, so the frames between it and the catch never run their
+// releases, and only the message is staged somewhere that outlives the unwind.
+// An int or a bool rides along in the staged payload; a second string, an
+// array or a nested struct holding either could only arrive already freed.
+func ThrowableStruct(t Type) (ok bool, reason string) {
+	if !IsStructType(t) {
+		return false, "only a struct can be thrown"
+	}
+	def := GetStructDef(t)
+	if def == nil {
+		return false, "unknown struct type"
+	}
+	hasMessage := false
+	for _, f := range def.Fields {
+		if f.Name == "message" {
+			if f.Type != TypeString {
+				return false, fmt.Sprintf("'%s.message' must be a string, got %s", def.Name, typeLabel(f.Type))
+			}
+			hasMessage = true
+			continue
+		}
+		if NeedsRelease(f.Type) {
+			return false, fmt.Sprintf("field '%s' cannot cross a throw: only 'message' and fields that need no releasing survive the unwind", f.Name)
+		}
+	}
+	if !hasMessage {
+		return false, fmt.Sprintf("'%s' has no 'message: string' field", def.Name)
+	}
+	return true, ""
+}
+
+// typeLabel names a type for a diagnostic. The checker has a fuller version of
+// this; ast cannot import it, and what is needed here is only a name.
+func typeLabel(t Type) string {
+	switch t {
+	case TypeInt:
+		return "int"
+	case TypeBool:
+		return "bool"
+	case TypeString:
+		return "string"
+	case TypeLong:
+		return "long"
+	case TypeDouble:
+		return "double"
+	case TypeChar:
+		return "char"
+	case TypeVoid:
+		return "void"
+	}
+	if IsStructType(t) {
+		return StructName(t)
+	}
+	return "a non-string type"
+}
 
 // RegisterExceptionType registers the built-in Exception struct type if not already registered.
 func RegisterExceptionType() {
@@ -704,7 +811,21 @@ const (
 	AnnotRegion      = "region"
 	AnnotNoEscape    = "noEscape"
 	AnnotDebugCycles = "debug(cycles)"
+	// AnnotAllowPrefix introduces a lint suppression: #[allow(unused-var)].
+	// Unlike the others it is not a directive to the compiler — it says what
+	// not to report — so the checker lets it through untouched and lint is
+	// what reads it.
+	AnnotAllowPrefix = "allow("
 )
+
+// ParseAllowAnnotation recognises #[allow(<rule>)] and returns the rule named
+// inside it.
+func ParseAllowAnnotation(annotation string) (string, bool) {
+	if !strings.HasPrefix(annotation, AnnotAllowPrefix) || !strings.HasSuffix(annotation, ")") {
+		return "", false
+	}
+	return annotation[len(AnnotAllowPrefix) : len(annotation)-1], true
+}
 
 // HasAnnotation checks if the given annotation is present in the list.
 func HasAnnotation(annotations []string, name string) bool {
@@ -848,7 +969,6 @@ func TagValue(tag, key string) (string, bool) {
 	}
 	return "", false
 }
-
 
 // Row fillers are emitted per struct *and* per tag key, because a struct can
 // be read by more than one projection — db.fill(out, rows, "fleet") skips the

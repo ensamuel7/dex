@@ -13,6 +13,7 @@
 - Build a `.dx` file: `go run . build <file.dx>`
 - Run a `.dx` file: `go run . run <file.dx>`
 - Run tests: `go run . test`
+- Lint a file: `go run . lint <file.dx>` (or `--lint` / `--lint=strict` on build)
 - Generate docs: `go run . docs`
 - Start LSP: `go run . lsp`
 
@@ -22,6 +23,8 @@
 - `lexer/` - Tokenizer
 - `parser/` - Parser (tokens -> AST)
 - `checker/` - Type checker and semantic analysis
+- `resolve/` - User module resolution, method flattening, the shared AST walker
+- `lint/` - Lint rules run after checking (`dex lint`, `--lint`)
 - `codegen/` - C code generation
 - `stdlib/` - Standard library module definitions (Go) and C runtime (`stdlib/cruntime/`)
 - `docgen/` - Documentation generator (`template.html` + `generate.go`)
@@ -285,7 +288,15 @@ or a use-after-free, so change them deliberately:
 - Traversals over the AST use the shared walker in `resolve/resolve.go`
   (`walkStmtsWith`, `walkExpr`). Hand-written walkers drift: both the module
   prefixer and the method-body field rewriter had silently stopped visiting
-  `switch` bodies and object literals.
+  `switch` bodies and object literals, and compound assignment, destructuring,
+  lambda, match and interpolation bodies were missed for longer than that —
+  which is why `x += mod.f()` was not module-prefixed.
+- A pass that only *inspects* uses the read-only wrappers in `resolve/visit.go`
+  (`VisitStmts`, `VisitExpr`) rather than the mutating walker, whose callback
+  result is a replacement node: a visitor written against it truncates its own
+  traversal the first time a callback returns something. `VisitExprInFrame`
+  stops at a lambda or spawn body, for an analysis about what happens in *this*
+  call — which exceptions escape it, say.
 
 ## Post-Push Checks
 

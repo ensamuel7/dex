@@ -1810,10 +1810,11 @@ try {
 falling off the end, and when an exception unwinds past the frame:
 
 ```dex
-fn readConfig(path: string): string throws {
-    let f = file.open(path)
-    defer f.close()        // runs however readConfig is left
-    return parse(f)        // including when this throws
+fn increment(c: &Counter): void throws {
+    c.mu.lock()
+    defer c.mu.unlock()   // runs however increment is left
+    risky()               // including when this throws
+    c.value = c.value + 1
 }
 ```
 

@@ -321,9 +321,15 @@ CMD ["server"]</code></pre>
 <tr><td><code>dex build &lt;file&gt;</code></td><td>Compile to a native binary</td></tr>
 <tr><td><code>dex run &lt;file&gt;</code></td><td>Build and execute, then remove binary</td></tr>
 <tr><td><code>dex test [file]</code></td><td>Run test files (<code>*_test.dx</code>)</td></tr>
+<tr><td><code>dex lint &lt;file&gt;</code></td><td>Report what compiles but is probably not meant</td></tr>
 <tr><td><code>dex lsp</code></td><td>Start the Language Server Protocol server</td></tr>
 <tr><td><code>dex docs</code></td><td>Generate this documentation page</td></tr>
 </table>
+
+<p>Any build command takes <code>--lint</code> to report findings alongside the
+build, and <code>--lint=strict</code> to fail the build when there are any.
+<code>dex lint --rules</code> lists the rules; <code>--lint-off=a,b</code> turns
+individual ones off.</p>
 
 <h3>Language Features</h3>
 <div class="feature-grid">
@@ -353,7 +359,11 @@ CMD ["server"]</code></pre>
 </div>
 <div class="feature-card">
 <h4>Error Handling</h4>
-<p>try/catch/finally with Exception type</p>
+<p>Typed exceptions: throws declarations, a catch clause per type, try/catch/finally</p>
+</div>
+<div class="feature-card">
+<h4>Linting</h4>
+<p>Unused bindings, unreachable code, and exceptions nothing handles</p>
 </div>
 <div class="feature-card">
 <h4>String Operations</h4>
@@ -1571,7 +1581,8 @@ fn main(): void {
     riskyOperation()       // if this throws, defer still fires
     c.value = c.value + 1
 }</code></pre>
-<p><code>defer</code> queues a call that executes when the function exits — whether by <code>return</code> or by exception. Multiple defers run in LIFO order (last defer runs first).</p>
+<p><code>defer</code> queues a call that executes when the function exits — whether by <code>return</code>, by falling off the end, or because an exception unwound past the frame. Multiple defers run in LIFO order (last defer runs first).</p>
+<p>The call is registered <strong>when the <code>defer</code> statement runs</strong>: one inside a branch that was not taken registers nothing, and one inside a loop registers per iteration. What the call needs is captured where the <code>defer</code> is written, so it still works after the frame it came from is gone — which also means its arguments are evaluated at the <code>defer</code> rather than at the exit.</p>
 
 <h4>Safe unlock with try/finally</h4>
 <p>Alternatively, use <code>try</code>/<code>finally</code> for block-scoped cleanup:</p>
@@ -1627,18 +1638,41 @@ fn main(): void {
 <section id="error-handling" class="page-section">
 <h2>Error Handling</h2>
 
-<p>DexLang provides structured exception handling with <code>try</code>, <code>catch</code>, <code>finally</code>, and <code>throw</code>. Exceptions use the built-in <code>Exception</code> type.</p>
+<p>DexLang provides structured exception handling with <code>try</code>, <code>catch</code>, <code>finally</code> and <code>throw</code>. Exceptions carry a type, so a signature can say what escapes it and a handler can choose which kind it takes.</p>
 
 <h3>Exception Type</h3>
-<p><code>Exception</code> is a built-in struct with a single field:</p>
+<p><code>Exception</code> is the built-in exception type, a struct with a single field:</p>
 <pre><code>// Built-in (always available, no import needed)
 // struct Exception(message: string) {
 //     message: string
 // }</code></pre>
 
+<h3>Throwable Types</h3>
+<p>Any struct can be thrown when it carries a <code>message: string</code> and nothing that would need releasing:</p>
+<pre><code>struct ParseError(message: string, line: int) {}   // throwable
+struct IOError(message: string) {}                 // throwable
+struct Plain(code: int) {}                         // no message field
+struct TwoStrings(message: string, detail: string) {}  // detail cannot survive</code></pre>
+<p>The restriction comes from the unwind. A throw is a <code>longjmp</code>, so the message is copied into the runtime before the jump and the remaining fields travel as a flat byte copy. An <code>int</code>, <code>bool</code>, <code>double</code> or <code>char</code> survives that; a second string could only arrive already freed, so the compiler refuses it rather than hand you a dangling one.</p>
+
 <h3>Throwing Exceptions</h3>
 <p>Use <code>throw</code> to raise an exception with a message:</p>
-<pre><code>throw Exception("something went wrong")</code></pre>
+<pre><code>throw Exception("something went wrong")
+throw ParseError("not a digit", 12)</code></pre>
+
+<h3>Declaring That a Function Throws</h3>
+<p>A <code>throws</code> after the return type says an exception may escape, so a caller sees it in the signature rather than discovering it at runtime. Naming types after it says which:</p>
+<pre><code>fn load(path: string): int throws ParseError, IOError {
+    if (path == "") {
+        throw IOError("no path")
+    }
+    throw ParseError("bad digit", 12)
+}
+
+fn anything(): int throws {        // something escapes, unspecified
+    throw Exception("whatever")
+}</code></pre>
+<p>The declaration is checked against what the function does by <code>dex lint</code> rather than by the compiler — the program runs either way. Lint reports an exception that escapes a function not declaring it, a type a <code>throws</code> list leaves out, and a <code>throws</code> naming a type the function cannot throw. Throwing is inferred transitively; a <code>throw</code> inside a lambda or a <code>spawn</code> does not escape the function that wrote it, because it runs in another frame or on another thread.</p>
 
 <h3>Try-Catch-Finally</h3>
 <p>Use <code>try</code> to wrap code that may throw, <code>catch</code> to handle exceptions, and <code>finally</code> for cleanup that always runs:</p>
@@ -1653,6 +1687,19 @@ fn main(): void {
         fmt.println("cleanup")
     }
 }</code></pre>
+
+<h3>Catching by Type</h3>
+<p>A <code>try</code> may have any number of <code>catch</code> clauses. The first whose type matches the thrown one runs, and reads that type's own fields:</p>
+<pre><code>try {
+    let n = load(path)
+    fmt.println("n=${n}")
+} catch (e: ParseError) {
+    fmt.println("line ${e.line}: ${e.message}")
+} catch (e: IOError) {
+    fmt.println("io: ${e.message}")
+}</code></pre>
+<p><code>catch (e: Exception)</code> is the <strong>catch-all</strong> — it handles every type, which is what a single catch clause always did. A clause after it can never run, and lint reports that. A catch-all handling some other type sees that type's <code>message</code> and zeroes for anything else.</p>
+<p>An exception <strong>no clause matches carries on outward</strong>, after this try's <code>finally</code> has run, with its message and fields intact. The heap values the skipped frames held are released and their deferred calls run, so throwing on an error path neither accumulates memory nor skips cleanup.</p>
 
 <h3>Try-Finally (No Catch)</h3>
 <p>If only <code>finally</code> is used without <code>catch</code>, the exception is re-thrown after the finally block runs:</p>
@@ -1678,7 +1725,7 @@ fn main(): void {
 }</code></pre>
 
 <h3>Unhandled Exceptions</h3>
-<p>If an exception is not caught, the program prints the error message to stderr and exits with code 1.</p>
+<p>If an exception is not caught, the program prints <code>Unhandled &lt;Type&gt;: &lt;message&gt;</code> to stderr and exits with code 1.</p>
 </section>
 
 <!-- fmt module -->

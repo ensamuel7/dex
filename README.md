@@ -52,6 +52,9 @@ dex build examples/hello.dx
 
 # run tests
 dex test
+
+# report what compiles but is probably not meant
+dex lint app.dx
 ```
 
 ## Docker
@@ -150,6 +153,64 @@ while (i < reflect.fieldCount(q)) {
 }
 ```
 
+## Error Handling
+
+Exceptions carry a type. Any struct with a `message: string` can be thrown,
+`throws` says what escapes a signature, and a `try` takes a clause per type:
+
+```dex
+struct ParseError(message: string, line: int) {}
+struct IOError(message: string) {}
+
+fn load(path: string): int throws ParseError, IOError {
+    if (path == "") {
+        throw IOError("no path")
+    }
+    throw ParseError("bad digit", 12)
+}
+
+fn main(): void {
+    try {
+        let n = load("config.txt")
+        fmt.println("n=${n}")
+    } catch (e: ParseError) {
+        fmt.println("line ${e.line}: ${e.message}")
+    } catch (e: IOError) {
+        fmt.println("io: ${e.message}")
+    }
+}
+```
+
+`catch (e: Exception)` is the catch-all. Anything no clause matches carries on
+outward after `finally` runs, and the heap the skipped frames held is released
+on the way — so an error path does not accumulate memory.
+
+The compiler does not enforce a `throws` declaration; `dex lint` checks it
+against what the function actually does, and tells a caller that has no handler:
+
+```
+app.dx:13:12: 'load' may throw IOError (raised at app.dx:7:9), and 'readConfig'
+does not declare throws — wrap it in try/catch, or declare the signature throws
+IOError [uncaught-throw]
+```
+
+## Linting
+
+`dex lint` reports what compiles but is probably not meant: a binding nothing
+reads, a statement nothing reaches, an exception nothing handles. It is off by
+default and never changes what is emitted.
+
+```bash
+dex lint app.dx                 # front end only: no C generated, no cc run
+dex build app.dx --lint         # build and report
+dex build app.dx --lint=strict  # ... and fail the build if anything is reported
+dex lint --rules                # list the rules
+```
+
+Eleven rules, each suppressible on the declaration it fires on with
+`#[allow(<rule>)]`. The language server reports the same findings as you type.
+See the [Language Reference](LANGUAGE.md#linting) for the full list.
+
 ## Concurrency
 
 Spawn tasks, send and receive values through channels. Compiles down to pthreads and lock-free channels in C.
@@ -227,6 +288,8 @@ See the [Language Reference](LANGUAGE.md#testing) for the full testing specifica
 There's a VSCode extension in `editors/vscode/dex-lang/` with syntax highlighting and LSP integration (completions, diagnostics, hover, go-to-definition).
 
 `self` highlights as a language variable, and inside a struct body completion offers `self` plus the struct's own fields and methods behind `self.`.
+
+Lint findings appear as you type alongside type errors — the exception rules as warnings, the rest as hints, which editors render as a quiet grey rather than a squiggle.
 
 Unresolved names carry an import quick fix. A call into a module the file never imported (`fmt.println(...)`, `userService.init(...)`) offers to add the import line, and an unqualified call offers to add the import and qualify the call. Typing a bare name also completes to `module.function` from any stdlib module or sibling `.dx` file that exports it, writing the import alongside.
 

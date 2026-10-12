@@ -280,9 +280,9 @@ func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
 	g.stmtPrelude.WriteString(fmt.Sprintf("%s %s = %s; ", g.cType(t), tmp, exprBuf.String()))
 	// A struct literal copies borrowed heap fields without retaining them, and
 	// the temporary's release would drop a reference it never owned.
-	if lit, ok := expr.(*ast.StructLitExpr); ok && ast.IsStructType(t) {
+	if _, _, isLit := structAssignments(expr); isLit && ast.IsStructType(t) {
 		var retains strings.Builder
-		g.emitRetainStructLitFields(&retains, "", tmp, t, lit)
+		g.emitRetainStructLitFields(&retains, "", tmp, t, expr)
 		g.stmtPrelude.WriteString(strings.ReplaceAll(strings.TrimRight(retains.String(), "\n"), "\n", " "))
 		if retains.Len() > 0 {
 			g.stmtPrelude.WriteString(" ")
@@ -428,24 +428,50 @@ func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
 }
 
 // Such a literal needs a retain even in a function with nothing to clean up.
-func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit *ast.StructLitExpr) bool {
+func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit ast.Expr) bool {
 	def := ast.GetStructDef(structType)
 	if def == nil {
+		return false
+	}
+	names, values, ok := structAssignments(lit)
+	if !ok {
 		return false
 	}
 	fieldTypes := make(map[string]ast.Type, len(def.Fields))
 	for _, f := range def.Fields {
 		fieldTypes[f.Name] = f.Type
 	}
-	for i, name := range lit.FieldNames {
-		if i >= len(lit.FieldValues) {
+	for i, name := range names {
+		if i >= len(values) {
 			break
 		}
 		ft, ok := fieldTypes[name]
-		if !ok || !ast.IsHeapType(ft) {
+		if !ok {
 			continue
 		}
-		if g.borrowsHeapValue(lit.FieldValues[i]) {
+		val := values[i]
+		// **This recurses.** A nested struct is not a heap type, so asking
+		// IsHeapType about it answered no and the whole literal was declared
+		// to borrow nothing — while emitRetainStructLitFields, which does
+		// recurse, was never called to find out otherwise.
+		//
+		//	return Outer { inner: Inner { label: label }, n: 1 }
+		//
+		// took no reference to the caller's string, and the scope released it:
+		// the returned Outer carried a freed label, and comparing it failed
+		// against the value it was built from.
+		if _, _, isLit := structAssignments(val); isLit && ast.IsStructType(ft) {
+			if g.structLitBorrowsHeapField(ft, val) {
+				return true
+			}
+			continue
+		}
+		if !g.borrowsHeapValue(val) {
+			continue
+		}
+		// A heap field borrowed directly, or a nested struct copied from
+		// somewhere that still owns its fields.
+		if ast.IsHeapType(ft) || (ast.IsStructType(ft) && ast.NeedsRelease(ft)) {
 			return true
 		}
 	}
@@ -478,8 +504,8 @@ func (g *Generator) emitRetainPushedStructFields(out *strings.Builder, target st
 		return
 	}
 	var retains strings.Builder
-	if lit, ok := elem.(*ast.StructLitExpr); ok {
-		g.emitRetainStructLitFields(&retains, "", target, elemType, lit)
+	if _, _, isLit := structAssignments(elem); isLit {
+		g.emitRetainStructLitFields(&retains, "", target, elemType, elem)
 	} else if g.borrowsHeapValue(elem) {
 		g.emitRetainBorrowedStructFields(&retains, "", target, elemType)
 	}

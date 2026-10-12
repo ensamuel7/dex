@@ -225,3 +225,60 @@ fn main(): void {
 		t.Errorf("the return value must be evaluated before the frames are popped:\n%s", out)
 	}
 }
+
+// A struct's auto-constructor is the same initialiser as a brace literal
+// written another way, so it has the same ownership question: a borrowed value
+// stored in it needs a reference, because the struct's scope will release it.
+//
+// Keying the retain on the literal alone meant `return Result(status, message)`
+// kept the caller's string without taking a reference, released it at the call,
+// and released it again at scope exit — a dangling read, then a double free
+// that hung the program on the next allocation.
+func TestConstructorCallRetainsABorrowedField(t *testing.T) {
+	out := generate(t, `struct Boxed(label: string, n: int) {}
+
+fn viaConstructor(label: string): Boxed {
+    return Boxed(label, 1)
+}
+
+fn main(): void {
+    let a: Boxed = viaConstructor("one")
+    assert(a.label == "one")
+}
+`)
+	line := lineContaining(t, out, "_ret_tmp = (Dex_Boxed){ .label = label")
+	if line == "" {
+		t.Fatal("the constructor's result must be hoisted so its fields can be retained")
+	}
+	assertContains(t, out, "dex_retain(_ret_tmp.label)")
+}
+
+// The same question one level down: a constructor call nested in a literal.
+func TestNestedConstructorCallRetainsToo(t *testing.T) {
+	out := generate(t, `struct Inner(label: string) {}
+struct Outer(inner: Inner, n: int) {}
+
+fn wrap(label: string): Outer {
+    return Outer(Inner(label), 1)
+}
+
+fn main(): void {
+    let o: Outer = wrap("x")
+    assert(o.inner.label == "x")
+}
+`)
+	assertContains(t, out, "dex_retain(_ret_tmp.inner.label)")
+}
+
+// A freshly minted value carries the only reference there is, so taking
+// another would leak it.
+func TestConstructorCallDoesNotRetainAMintedField(t *testing.T) {
+	out := generate(t, `struct Boxed(label: string, n: int) {}
+
+fn main(): void {
+    let a: Boxed = Boxed("minted", 1)
+    assert(a.label == "minted")
+}
+`)
+	assertNotContains(t, out, "dex_retain(a.label)")
+}

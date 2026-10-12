@@ -476,7 +476,7 @@ func (g *Generator) isFuncValueIdent(e ast.Expr) bool {
 // this the returned struct would carry dangling pointers. Fields built from a
 // fresh temporary already carry the only reference and are deliberately skipped
 // so ownership simply moves to the caller.
-func (g *Generator) emitRetainReturnedLitFields(out *strings.Builder, prefix string, retType ast.Type, lit *ast.StructLitExpr) {
+func (g *Generator) emitRetainReturnedLitFields(out *strings.Builder, prefix string, retType ast.Type, lit ast.Expr) {
 	g.emitRetainStructLitFields(out, prefix, "_ret_tmp", retType, lit)
 }
 
@@ -484,24 +484,58 @@ func (g *Generator) emitRetainReturnedLitFields(out *strings.Builder, prefix str
 // initialised from a borrowed reference. The literal is a C compound literal, so
 // it copies those pointers without taking ownership; without this the struct and
 // the borrowed variable would each release the same reference at scope exit.
-func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, target string, structType ast.Type, lit *ast.StructLitExpr) {
+// structAssignments returns the field names and values a struct-producing
+// expression assigns, for either way of writing one: a brace literal, or a call
+// to the struct's auto-constructor.
+//
+// The two compile to the same C initialiser, so they have the same ownership
+// question — and keying the retain logic on the literal alone meant the
+// constructor form stored a borrowed value without taking a reference to it.
+// `fn notFound(m: string): Result { return Result(Status.NotFound, m) }` left
+// the caller's string in the struct, released it at the call, and released it
+// again at scope exit: a dangling read, then a double free.
+func structAssignments(expr ast.Expr) (names []string, values []ast.Expr, ok bool) {
+	switch e := expr.(type) {
+	case *ast.StructLitExpr:
+		return e.FieldNames, e.FieldValues, true
+	case *ast.CallExpr:
+		if !e.IsConstructor || !ast.IsStructType(e.StructType) {
+			return nil, nil, false
+		}
+		def := ast.GetStructDef(e.StructType)
+		if def == nil {
+			return nil, nil, false
+		}
+		for _, cp := range def.ConstructorParams {
+			names = append(names, cp.Name)
+		}
+		return names, e.Args, true
+	}
+	return nil, nil, false
+}
+
+func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, target string, structType ast.Type, lit ast.Expr) {
 	def := ast.GetStructDef(structType)
 	if def == nil {
+		return
+	}
+	litNames, litValues, ok := structAssignments(lit)
+	if !ok {
 		return
 	}
 	fieldTypes := make(map[string]ast.Type, len(def.Fields))
 	for _, f := range def.Fields {
 		fieldTypes[f.Name] = f.Type
 	}
-	for i, name := range lit.FieldNames {
-		if i >= len(lit.FieldValues) {
+	for i, name := range litNames {
+		if i >= len(litValues) {
 			break
 		}
 		ft, ok := fieldTypes[name]
 		if !ok || !ast.NeedsRelease(ft) {
 			continue
 		}
-		val := lit.FieldValues[i]
+		val := litValues[i]
 		// A nested struct *literal* is built right here, so the question is not
 		// whether it is borrowed — a literal never is — but which of its own
 		// fields are. Recurse, exactly as emitReleaseVar descends into it.
@@ -513,8 +547,8 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 		// retained `source` and nothing else, and the scope then released
 		// `exprs` and `at`. The returned Sel carried a freed array and a freed
 		// map, and the caller's first push into them hung the program.
-		if nested, isLit := val.(*ast.StructLitExpr); isLit && ast.IsStructType(ft) {
-			g.emitRetainStructLitFields(out, prefix, target+"."+name, ft, nested)
+		if _, _, isLit := structAssignments(val); isLit && ast.IsStructType(ft) {
+			g.emitRetainStructLitFields(out, prefix, target+"."+name, ft, val)
 			continue
 		}
 		if !g.borrowsHeapValue(val) {

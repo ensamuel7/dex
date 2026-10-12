@@ -156,10 +156,11 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 					if ident, ok := s.Value.(*ast.Ident); ok {
 						// `return m` — leave m's fields alone; the caller owns them now.
 						exceptVar = ident.Name
-					} else if lit, ok := s.Value.(*ast.StructLitExpr); ok {
-						// `return Msg{...}` — only fields taken from a borrowed
-						// reference need a retain to survive the cleanup.
-						g.emitRetainReturnedLitFields(out, prefix, retType, lit)
+					} else if _, _, isLit := structAssignments(s.Value); isLit {
+						// `return Msg{...}` or `return Msg(...)` — only fields
+						// taken from a borrowed reference need a retain to
+						// survive the cleanup.
+						g.emitRetainReturnedLitFields(out, prefix, retType, s.Value)
 					}
 				}
 				g.emitHoistReleases(out, prefix)
@@ -172,7 +173,7 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 				g.emitCleanupAll(out, prefix, "")
 				g.emitReturn(out, prefix, "")
 			}
-		} else if lit, ok := s.Value.(*ast.StructLitExpr); ok && ast.IsStructType(retType) && g.structLitBorrowsHeapField(retType, lit) {
+		} else if _, _, isLit := structAssignments(s.Value); isLit && ast.IsStructType(retType) && g.structLitBorrowsHeapField(retType, s.Value) {
 			// No locals to clean up, but the literal still copied a borrowed
 			// heap reference — typically a parameter, which the caller
 			// releases once the call returns. The struct outlives that, so it
@@ -181,7 +182,7 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 			out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
-			g.emitRetainReturnedLitFields(out, prefix, retType, lit)
+			g.emitRetainReturnedLitFields(out, prefix, retType, s.Value)
 			g.emitReturn(out, prefix, "_ret_tmp")
 		} else {
 			// Nothing in scope to clean up, but the return expression may

@@ -243,9 +243,11 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 	out.WriteString(fmt.Sprintf("%s%s%s %s = ", prefix, constPrefix, g.cType(s.Type), s.Name))
 	g.genExpr(out, s.Value)
 	out.WriteString(";\n")
-	// A struct literal copies borrowed heap fields without owning them.
-	if lit, ok := s.Value.(*ast.StructLitExpr); ok && ast.IsStructType(s.Type) {
-		g.emitRetainStructLitFields(out, prefix, s.Name, s.Type, lit)
+	// A struct literal copies borrowed heap fields without owning them, and so
+	// does a call to the struct's auto-constructor — the same initialiser
+	// written another way.
+	if _, _, isLit := structAssignments(s.Value); isLit && ast.IsStructType(s.Type) {
+		g.emitRetainStructLitFields(out, prefix, s.Name, s.Type, s.Value)
 	} else if !ast.HasAnnotation(s.Annotations, ast.AnnotOwned) && g.borrowsHeapValue(s.Value) {
 		// Binding from somewhere this scope does not own — an array element, a
 		// field, another variable. The string branch above has always retained

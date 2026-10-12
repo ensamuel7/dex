@@ -1,0 +1,72 @@
+// The two ways of writing a struct literal are the same initialiser, so they
+// carry the same ownership question: a borrowed value stored in one needs a
+// reference, because the struct's scope will release it.
+//
+// Both spellings got that wrong in different ways. The auto-constructor form
+// never retained at all — `Result(status, message)` kept the caller's string,
+// which was released at the call and again at scope exit: a dangling read and
+// then a double free. And for either spelling, a *nested* literal holding a
+// borrowed field was missed, because the check that decides whether a retain
+// is needed asked whether the field itself was heap-typed; a nested struct is
+// not, so the answer was no while its string was borrowed all the same.
+import "str"
+
+struct Inner(label: string) {}
+struct Outer(inner: Inner, n: int) {}
+struct Pair(first: string, second: string) {}
+
+// The caller still owns `label` once this returns.
+fn viaConstructor(label: string): Inner {
+    return Inner(label)
+}
+
+fn viaBraces(label: string): Inner {
+    return Inner { label: label }
+}
+
+// A nested literal, both ways round.
+fn nestedConstructor(label: string): Outer {
+    return Outer(Inner(label), 1)
+}
+
+fn nestedBraces(label: string): Outer {
+    return Outer { inner: Inner { label: label }, n: 1 }
+}
+
+// A minted value carries the only reference there is, so nothing is taken.
+fn minted(n: int): Inner {
+    return Inner("minted " + str.fromInt(n))
+}
+
+fn main(): void {
+    // Looped, because the symptom was per-call: one pass read a string that
+    // happened to still be intact, and the corruption showed up later.
+    let i: int = 0
+    while (i < 50) {
+        let held: string = "held " + str.fromInt(i)
+
+        let a: Inner = viaConstructor(held)
+        assert(a.label == held)
+
+        let b: Inner = viaBraces(held)
+        assert(b.label == held)
+
+        let c: Outer = nestedConstructor(held)
+        assert(c.inner.label == held)
+        assert(c.n == 1)
+
+        let d: Outer = nestedBraces(held)
+        assert(d.inner.label == held)
+
+        let e: Inner = minted(i)
+        assert(e.label == "minted " + str.fromInt(i))
+
+        // Both fields borrowed from the same local.
+        let p: Pair = Pair(held, held)
+        assert(p.first == p.second)
+
+        // The local is still usable afterwards: nothing above took it over.
+        assert(held.len() > 4)
+        i = i + 1
+    }
+}

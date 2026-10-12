@@ -240,6 +240,20 @@ or a use-after-free, so change them deliberately:
   a value, not a heap type, but the release pass descends into it — so the retain
   pass has to as well, or `Result { output: entry }` returns freed strings while
   `entry` looked perfectly alive at the call site.
+- **A struct has two spellings and one ownership rule.** `Point { x: a }` and
+  `Point(a)` compile to the same C initialiser, so every retain site keys off
+  `structAssignments`, which answers for both, rather than on `*StructLitExpr`.
+  It did key on the literal, and the auto-constructor form took no reference at
+  all: `return Result(status, message)` kept the caller's string, which was
+  released at the call and released again at scope exit.
+- **A predicate that gates a recursive pass has to recurse too.**
+  `structLitBorrowsHeapField` decides whether a returned literal needs any
+  retain, and it asked `IsHeapType` of each field. A nested struct is not a heap
+  type, so `return Outer { inner: Inner { label: label } }` was declared to
+  borrow nothing — and the retain pass that *does* recurse was never called.
+  The returned struct carried a freed string, and comparing it failed against
+  the value it had just been built from. `examples/structConstruct_test.dx`
+  covers both spellings, nested and flat.
 - **A container owns its elements.** `dex_array_string_push` retains what it is
   given and the array's destructor releases every slot, so an array literal
   built from a borrowed expression must let push take that reference and an

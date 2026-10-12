@@ -134,8 +134,8 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			out.WriteString(fmt.Sprintf("%s{ %s _dex_old = %s; %s = ", prefix, ctyp, s.Name, s.Name))
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
-			if lit, ok := s.Value.(*ast.StructLitExpr); ok {
-				g.emitRetainStructLitFields(out, prefix+"    ", s.Name, varType, lit)
+			if _, _, isLit := structAssignments(s.Value); isLit {
+				g.emitRetainStructLitFields(out, prefix+"    ", s.Name, varType, s.Value)
 			} else if g.borrowsHeapValue(s.Value) {
 				// Borrowed whole struct — the target becomes a second owner.
 				//

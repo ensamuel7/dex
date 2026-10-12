@@ -901,13 +901,13 @@ fn main(): void {
 `)
 }
 
-func TestAllowUncaughtThrowStopsItPropagating(t *testing.T) {
-	// A guard that aborts on a programming mistake is not an error a caller can
-	// act on, and without this one such throw reports every unguarded call site
-	// that can reach it — measured at 500 findings from a single throw in a
-	// real query builder. The annotation says "this one aborts" once.
-	assertRules(t, `
-#[allow(uncaught-throw)]
+// An undeclared throw is reported once, where it is raised — not at every call
+// site that can reach it. Inference is exact enough to report all of them, and
+// on a real codebase one guard in a shared query builder reached 500 unguarded
+// call sites: reporting each said nothing a reader could act on, because the
+// decision about where to catch is made once.
+func TestAnUndeclaredThrowIsReportedWhereItIsRaised(t *testing.T) {
+	findings := assertRules(t, `
 fn aliasFor(table: string): string {
     if (table == "") {
         throw Exception("a column named no table — the projection is wrong")
@@ -921,34 +921,81 @@ fn columnsFor(table: string): string {
 
 fn main(): void {
     assert(columnsFor("t") == "t")
+}
+`, RuleUncaughtThrow)
+	if findings[0].Pos.Line != 4 {
+		t.Errorf("the finding belongs on the throw, got line %d", findings[0].Pos.Line)
+	}
+}
+
+// Declaring it is what obligates the callers: that is the gradient Java gets
+// from making the declaration mandatory, reached here by making the obligation
+// follow the annotation.
+func TestDeclaringAThrowObligatesTheCallers(t *testing.T) {
+	findings := assertRules(t, `
+fn aliasFor(table: string): string throws {
+    if (table == "") {
+        throw Exception("a column named no table — the projection is wrong")
+    }
+    return table
+}
+
+fn columnsFor(table: string): string {
+    return aliasFor(table)
+}
+
+fn main(): void {
+    assert(columnsFor("t") == "t")
+}
+`, RuleUncaughtThrow)
+	// Reported at the call in columnsFor, not at the throw: aliasFor declared it.
+	if !strings.Contains(findings[0].Msg, "'aliasFor' may throw") {
+		t.Errorf("expected the call site to be named: %s", findings[0].Msg)
+	}
+	if !strings.Contains(findings[0].Msg, "'columnsFor' does not declare throws") {
+		t.Errorf("expected the caller to be named: %s", findings[0].Msg)
+	}
+}
+
+// And declaring it at each level moves the obligation outward, one step at a
+// time, until something catches it.
+func TestTheObligationMovesOutwardAsEachLevelDeclares(t *testing.T) {
+	findings := assertRules(t, `
+fn aliasFor(table: string): string throws {
+    throw Exception("wrong " + table)
+}
+
+fn columnsFor(table: string): string throws {
+    return aliasFor(table)
+}
+
+fn main(): void {
+    let c = columnsFor("t")
+    assert(c == "t")
+}
+`, RuleUncaughtThrow)
+	if !strings.Contains(findings[0].Msg, "nothing above main") {
+		t.Errorf("the obligation should have reached main: %s", findings[0].Msg)
+	}
+}
+
+// Catching it ends the chain rather than moving it.
+func TestCatchingItEndsTheChain(t *testing.T) {
+	assertRules(t, `
+fn aliasFor(table: string): string throws {
+    throw Exception("wrong " + table)
+}
+
+fn columnsFor(table: string): string {
+    try {
+        return aliasFor(table)
+    } catch (e: Exception) {
+        return ""
+    }
+}
+
+fn main(): void {
+    assert(columnsFor("t") == "")
 }
 `)
-}
-
-func TestWithoutTheAnnotationTheThrowStillPropagates(t *testing.T) {
-	// The same program, unannotated: the throw site, its caller and main.
-	findings := lintSource(t, `
-fn aliasFor(table: string): string {
-    if (table == "") {
-        throw Exception("a column named no table — the projection is wrong")
-    }
-    return table
-}
-
-fn columnsFor(table: string): string {
-    return aliasFor(table)
-}
-
-fn main(): void {
-    assert(columnsFor("t") == "t")
-}
-`, Options{})
-	if len(findings) != 3 {
-		t.Fatalf("expected the throw, its caller and main, got %v", rules(findings))
-	}
-	for _, f := range findings {
-		if f.Rule != RuleUncaughtThrow {
-			t.Errorf("unexpected rule %s", f.Rule)
-		}
-	}
 }

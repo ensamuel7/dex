@@ -3482,22 +3482,24 @@ An `#[allow(...)]` is the one annotation the compiler does not interpret: it
 says what not to report, so it is accepted on any type rather than only on heap
 types the way `#[owned]` is.
 
-`#[allow(uncaught-throw)]` does one thing more: it stops the function's throws
-propagating to callers at all. That is what makes it usable on a throw meant to
-be **fatal** — a guard deep in a shared helper that aborts on a programming
-mistake is not an error a caller can act on, and without this one such throw
-reports every unguarded call site that can reach it. Measured on a real
-codebase: a single `throw` in a query builder produced 500 findings, and
-annotating the three functions that raise one brought it to none.
+### Where an escaping exception is reported
 
-```dex
-// Throws rather than guessing: a column naming a table the query does not
-// join is a mistake in the projection, not a row with a missing value.
-#[allow(uncaught-throw)]
-fn aliasFor(source: string, table: string): string {
-    ...
-}
-```
+Throwing is inferred exactly, but a finding follows a **declaration** rather
+than the inference:
+
+- An **undeclared** throw is reported where it is raised — once per type, at
+  the one place that can fix it.
+- Writing `throws` there is what tells its callers. A call to a function that
+  declares it, unguarded and in a caller that does not declare it either, is
+  the caller's finding; declaring it there moves the obligation one step
+  further out, until something catches it.
+
+That is the gradient Java gets from making the declaration mandatory, reached
+by making the obligation follow the annotation instead. It also means a `throw`
+used as an assertion stays one finding. Measured on a 211-file codebase: a
+single guard in a shared query builder was reachable from 500 unguarded call
+sites, and reporting each of them said nothing a reader could act on, because
+the decision about where to catch is made once rather than 500 times.
 
 ### What It Does Not Do
 

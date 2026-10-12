@@ -1783,13 +1783,13 @@ dex build app.dx --lint --lint-off=unused-param,shadow</code></pre>
 <pre><code>#[allow(unused)]
 let reserved = buildHandle()   // kept for its side effect, never read</code></pre>
 <p>An <code>#[allow(...)]</code> is the one annotation the compiler does not interpret: it says what not to report, so it is accepted on any type rather than only on the heap types <code>#[owned]</code> is restricted to. A rule name it does not recognise is itself a finding, because a suppression that silences nothing reads as handled and behaves as forgotten.</p>
-<p><code>#[allow(uncaught-throw)]</code> does one thing more: it stops the function's throws propagating to callers at all. That is what makes it usable on a throw meant to be <strong>fatal</strong> — a guard deep in a shared helper that aborts on a programming mistake is not an error a caller can act on, and without it one such throw reports every unguarded call site that can reach it. Measured on a real codebase: a single <code>throw</code> in a query builder produced 500 findings, and annotating the three functions that raise one brought it to none.</p>
-<pre><code>// Throws rather than guessing: a column naming a table the query does not
-// join is a mistake in the projection, not a row with a missing value.
-#[allow(uncaught-throw)]
-fn aliasFor(source: string, table: string): string {
-    ...
-}</code></pre>
+<h3>Where an Escaping Exception Is Reported</h3>
+<p>Throwing is inferred exactly, but a finding follows a <strong>declaration</strong> rather than the inference:</p>
+<ul>
+<li>An <strong>undeclared</strong> throw is reported where it is raised — once per type, at the one place that can fix it.</li>
+<li>Writing <code>throws</code> there is what tells its callers. A call to a function that declares it, unguarded and in a caller that does not declare it either, is the caller's finding; declaring it there moves the obligation one step further out, until something catches it.</li>
+</ul>
+<p>That is the gradient Java gets from making the declaration mandatory, reached by making the obligation follow the annotation instead. It also means a <code>throw</code> used as an assertion stays one finding. Measured on a 211-file codebase: a single guard in a shared query builder was reachable from 500 unguarded call sites, and reporting each of them said nothing a reader could act on, because the decision about where to catch is made once rather than 500 times.</p>
 
 <h3>What It Does Not Do</h3>
 <ul>

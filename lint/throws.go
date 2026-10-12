@@ -116,18 +116,7 @@ type effects struct {
 // declaration together. A declaration counts even with nothing in the body
 // that throws: it is a contract with callers, which is what lets a function
 // start throwing later without surprising them.
-//
-// An #[allow(uncaught-throw)] stops the traversal here, which is what makes it
-// usable on a throw that is meant to be fatal. A guard deep in a shared helper
-// — "this column was never supplied, the builder is wrong" — is not an error a
-// caller can do anything about, and without this one such throw reported every
-// unguarded call site that could reach it: measured at 500 findings from a
-// single `throw` in a query builder. Annotating the function that raises it
-// says "this one aborts" once, rather than in every caller.
 func (e *effects) escaping(visit func(typ string, o origin)) {
-	if allows(e.fn.Annotations, RuleUncaughtThrow) {
-		return
-	}
 	for typ, o := range e.body {
 		visit(typ, o)
 	}
@@ -347,10 +336,25 @@ func (l *linter) reportThrowFindings(e *effects, all map[string]*effects) {
 		l.reportEscape(fn, t.pos, "this throws "+t.typ, []string{t.typ})
 	}
 
-	// A call that can raise something neither caught here nor declared.
+	// A call that can raise something neither caught here nor declared — and
+	// only when the callee *declared* that it throws.
+	//
+	// Inference is exact, so it is tempting to report every call that can reach
+	// a throw. On a real codebase that is unusable: one guard in a shared query
+	// builder reached 500 unguarded call sites, and reporting all of them said
+	// nothing a reader could act on, because the decision about where to catch
+	// is made once, not 500 times.
+	//
+	// So a finding follows a declaration. An undeclared throw is reported where
+	// it is raised, at the one place that can fix it; writing `throws` there is
+	// what tells its callers, and theirs in turn. That is the gradient Java
+	// gets from making the declaration mandatory, reached instead by making the
+	// obligation follow the annotation — which also means a throw used as an
+	// assertion, declared nowhere, stays one finding rather than becoming
+	// hundreds.
 	for _, esc := range e.escapes {
 		callee, ok := all[esc.callee]
-		if !ok {
+		if !ok || !callee.fn.Throws {
 			continue
 		}
 		var uncovered []string

@@ -3482,6 +3482,23 @@ An `#[allow(...)]` is the one annotation the compiler does not interpret: it
 says what not to report, so it is accepted on any type rather than only on heap
 types the way `#[owned]` is.
 
+`#[allow(uncaught-throw)]` does one thing more: it stops the function's throws
+propagating to callers at all. That is what makes it usable on a throw meant to
+be **fatal** — a guard deep in a shared helper that aborts on a programming
+mistake is not an error a caller can act on, and without this one such throw
+reports every unguarded call site that can reach it. Measured on a real
+codebase: a single `throw` in a query builder produced 500 findings, and
+annotating the three functions that raise one brought it to none.
+
+```dex
+// Throws rather than guessing: a column naming a table the query does not
+// join is a mistake in the projection, not a row with a missing value.
+#[allow(uncaught-throw)]
+fn aliasFor(source: string, table: string): string {
+    ...
+}
+```
+
 ### What It Does Not Do
 
 - **Assignment is not use.** A variable that is only ever written to is reported

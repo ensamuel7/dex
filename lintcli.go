@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -113,10 +114,33 @@ func reportLint(program *ast.Program) error {
 		return nil
 	}
 	if lintStrict {
-		return fmt.Errorf("%s; --lint=strict treats them as errors", plural(len(findings), "lint finding"))
+		return fmt.Errorf("%s; --lint=strict treats them as errors", summarise(findings))
 	}
-	fmt.Fprintf(os.Stderr, "%s\n", plural(len(findings), "lint finding"))
+	fmt.Fprintf(os.Stderr, "%s\n", summarise(findings))
 	return nil
+}
+
+// summarise counts the findings by rule. A bare total is no help once there are
+// hundreds of them: one rule firing across a whole codebase and twenty rules
+// firing once each are the same number and call for different reading.
+func summarise(findings []lint.Finding) string {
+	counts := map[string]int{}
+	for _, f := range findings {
+		counts[f.Rule]++
+	}
+	byCount := make([]string, 0, len(counts))
+	for _, rule := range lint.AllRules {
+		if n := counts[rule]; n > 0 {
+			byCount = append(byCount, fmt.Sprintf("%d %s", n, rule))
+		}
+	}
+	sort.SliceStable(byCount, func(i, j int) bool {
+		var a, b int
+		fmt.Sscanf(byCount[i], "%d", &a)
+		fmt.Sscanf(byCount[j], "%d", &b)
+		return a > b
+	})
+	return plural(len(findings), "lint finding") + ": " + strings.Join(byCount, ", ")
 }
 
 func plural(n int, what string) string {

@@ -116,7 +116,18 @@ type effects struct {
 // declaration together. A declaration counts even with nothing in the body
 // that throws: it is a contract with callers, which is what lets a function
 // start throwing later without surprising them.
+//
+// An #[allow(uncaught-throw)] stops the traversal here, which is what makes it
+// usable on a throw that is meant to be fatal. A guard deep in a shared helper
+// — "this column was never supplied, the builder is wrong" — is not an error a
+// caller can do anything about, and without this one such throw reported every
+// unguarded call site that could reach it: measured at 500 findings from a
+// single `throw` in a query builder. Annotating the function that raises it
+// says "this one aborts" once, rather than in every caller.
 func (e *effects) escaping(visit func(typ string, o origin)) {
+	if allows(e.fn.Annotations, RuleUncaughtThrow) {
+		return
+	}
 	for typ, o := range e.body {
 		visit(typ, o)
 	}

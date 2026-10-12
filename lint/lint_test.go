@@ -900,3 +900,55 @@ fn main(): void {
 }
 `)
 }
+
+func TestAllowUncaughtThrowStopsItPropagating(t *testing.T) {
+	// A guard that aborts on a programming mistake is not an error a caller can
+	// act on, and without this one such throw reports every unguarded call site
+	// that can reach it — measured at 500 findings from a single throw in a
+	// real query builder. The annotation says "this one aborts" once.
+	assertRules(t, `
+#[allow(uncaught-throw)]
+fn aliasFor(table: string): string {
+    if (table == "") {
+        throw Exception("a column named no table — the projection is wrong")
+    }
+    return table
+}
+
+fn columnsFor(table: string): string {
+    return aliasFor(table)
+}
+
+fn main(): void {
+    assert(columnsFor("t") == "t")
+}
+`)
+}
+
+func TestWithoutTheAnnotationTheThrowStillPropagates(t *testing.T) {
+	// The same program, unannotated: the throw site, its caller and main.
+	findings := lintSource(t, `
+fn aliasFor(table: string): string {
+    if (table == "") {
+        throw Exception("a column named no table — the projection is wrong")
+    }
+    return table
+}
+
+fn columnsFor(table: string): string {
+    return aliasFor(table)
+}
+
+fn main(): void {
+    assert(columnsFor("t") == "t")
+}
+`, Options{})
+	if len(findings) != 3 {
+		t.Fatalf("expected the throw, its caller and main, got %v", rules(findings))
+	}
+	for _, f := range findings {
+		if f.Rule != RuleUncaughtThrow {
+			t.Errorf("unexpected rule %s", f.Rule)
+		}
+	}
+}

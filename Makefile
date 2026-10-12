@@ -1,4 +1,4 @@
-DEX_VERSION ?= 0.6.0
+DEX_VERSION ?= 0.6.1
 IMAGE_NAME  := dexlang/dexlang
 PREFIX      ?= /usr/local
 

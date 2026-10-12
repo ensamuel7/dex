@@ -64,11 +64,13 @@ func (s *Server) hoverAt(uri string, text string, pos Position) string {
 	case token.TokenTry:
 		return "**keyword** `try`\n\nStarts a try-catch-finally block for exception handling."
 	case token.TokenCatch:
-		return "**keyword** `catch`\n\nCatches an exception thrown in a `try` block. Syntax: `catch (e: Exception) { ... }`"
+		return "**keyword** `catch`\n\nHandles one exception type thrown in a `try` block. Syntax: `catch (e: ParseError) { ... }`\n\nA `try` may have a clause per type; the first whose type matches runs. `catch (e: Exception)` is the catch-all, so a clause after it can never run."
 	case token.TokenFinally:
-		return "**keyword** `finally`\n\nBlock that always executes after `try` or `catch`, used for cleanup."
+		return "**keyword** `finally`\n\nBlock that always executes after `try` or `catch`, used for cleanup. An exception no clause matched carries on outward once it has run."
 	case token.TokenThrow:
-		return "**keyword** `throw`\n\nThrows an exception. Syntax: `throw Exception(\"message\")`"
+		return "**keyword** `throw`\n\nThrows an exception. Syntax: `throw Exception(\"message\")`\n\nAny struct carrying a `message: string` and no field needing release can be thrown: `throw ParseError(\"bad digit\", 12)`."
+	case token.TokenThrows:
+		return "**keyword** `throws`\n\nDeclares that an exception may escape this function, after the return type: `fn load(path: string): int throws`\n\nNaming types says which: `throws ParseError, IOError`. A bare `throws` promises nothing specific, so only a catch-all can be sure of handling it.\n\nChecked by `dex lint`, not by the compiler — it reports an exception that escapes a function not declaring it, a type the list leaves out, and a type the function cannot throw."
 	case token.TokenEnum:
 		return "**keyword** `enum`\n\nDeclares an enumerated type. Variants are integer constants.\n\nSyntax: `enum Name { Variant1 Variant2 ... }`"
 	case token.TokenMap:
@@ -94,7 +96,7 @@ func (s *Server) hoverAt(uri string, text string, pos Position) string {
 	case token.TokenMatch:
 		return "**keyword** `match`\n\nPattern matching expression. Syntax: `match (expr) { pattern => result, ... }`"
 	case token.TokenDefer:
-		return "**keyword** `defer`\n\nDefers execution of a statement until the enclosing scope exits."
+		return "**keyword** `defer`\n\nRegisters a call to run when the function is left — on a `return`, on falling off the end, and when an exception unwinds past the frame.\n\nThe call is registered where the statement runs, so one in a branch not taken registers nothing and one in a loop registers per iteration. Registered calls run at the exit, most recent first, and capture what they need where the `defer` is written."
 	case token.TokenInterface:
 		return "**keyword** `interface`\n\nDeclares an interface type. Syntax: `interface Name { method(params): ret ... }`"
 	case token.TokenSpawn:

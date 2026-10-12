@@ -736,13 +736,23 @@ func (s *Server) diagnose(uri string, text string) {
 	s.publishCrossFileDiags(uri, crossFileDiags)
 }
 
-// lintSeverity grades a finding for an editor. An exception nobody handles is a
-// warning: it changes what the program does at runtime. A binding nothing reads
-// is a hint, which editors render as a quiet grey rather than a squiggle,
-// because the program is correct and only the reader is being misled.
+// lintSeverity grades a finding for an editor.
+//
+// A warning is for something that is *wrong*: a declaration contradicted by the
+// body, a clause that can never run, code nothing reaches, a suppression naming
+// no rule. Everything else is a hint, which editors render as a quiet grey mark
+// rather than a squiggle.
+//
+// uncaught-throw is a hint deliberately, and it is the interesting case. On the
+// command line lint is opt-in, but an editor asks for diagnostics on every
+// keystroke and gets all of them — so a rule that fires on correct code has to
+// stay quiet there. `throws` is an optional declaration, which means every
+// `throw` in a codebase that has not adopted it is a finding, and squiggling
+// all of them says "this is broken" about code that compiles and runs. The
+// finding is still there to be read, and `dex lint` still reports it in full.
 func lintSeverity(rule string) int {
 	switch rule {
-	case lint.RuleUncaughtThrow, lint.RuleUndeclaredThrow, lint.RuleUnneededThrows,
+	case lint.RuleUndeclaredThrow, lint.RuleUnneededThrows,
 		lint.RuleUnreachableCatch, lint.RuleUnreachable, lint.RuleUnknownAllow:
 		return 2
 	default:

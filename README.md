@@ -289,7 +289,11 @@ There's a VSCode extension in `editors/vscode/dex-lang/` with syntax highlightin
 
 `self` highlights as a language variable, and inside a struct body completion offers `self` plus the struct's own fields and methods behind `self.`.
 
-Lint findings appear as you type alongside type errors — the exception rules as warnings, the rest as hints, which editors render as a quiet grey rather than a squiggle.
+Lint findings appear as you type alongside type errors. Only what is actually
+wrong is a warning — a `throws` the body contradicts, a `catch` that can never
+run, code nothing reaches. The rest are hints, which editors render as a quiet
+grey mark rather than a squiggle, because on the command line lint is opt-in
+while an editor asks for every diagnostic on every keystroke.
 
 Unresolved names carry an import quick fix. A call into a module the file never imported (`fmt.println(...)`, `userService.init(...)`) offers to add the import line, and an unqualified call offers to add the import and qualify the call. Typing a bare name also completes to `module.function` from any stdlib module or sibling `.dx` file that exports it, writing the import alongside.
 

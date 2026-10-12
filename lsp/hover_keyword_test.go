@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ensamuel7/dex/lint"
 )
 
 // Hovering a keyword answers from its own table, separate from completion's.
@@ -240,5 +242,38 @@ func TestHoverShowsTheThrowsClause(t *testing.T) {
 	plain := hoverIn(t, s, uri, throwsSigSource, "let p = plain", "plain")
 	if strings.Contains(plain, "throws") {
 		t.Errorf("a function that cannot throw must not claim it does:\n%s", plain)
+	}
+}
+
+// How a finding is graded decides whether an editor squiggles it. Lint is
+// opt-in on the command line but unconditional in an editor, so a rule that
+// fires on correct code has to stay a hint: `throws` is optional, and every
+// `throw` in a codebase that has not adopted it is an uncaught-throw finding.
+func TestLintSeverityKeepsOptionalAdviceQuiet(t *testing.T) {
+	const warning, hint = 2, 4
+
+	for _, rule := range []string{
+		lint.RuleUndeclaredThrow,  // a throws list the body contradicts
+		lint.RuleUnneededThrows,   // a throws naming what cannot be thrown
+		lint.RuleUnreachableCatch, // a clause that can never run
+		lint.RuleUnreachable,      // code nothing reaches
+		lint.RuleUnknownAllow,     // a suppression that suppresses nothing
+	} {
+		if got := lintSeverity(rule); got != warning {
+			t.Errorf("%s should be a warning, got severity %d", rule, got)
+		}
+	}
+
+	for _, rule := range []string{
+		lint.RuleUncaughtThrow, // advice about adopting an optional declaration
+		lint.RuleUnusedVar,
+		lint.RuleUnusedParam,
+		lint.RuleUnusedImport,
+		lint.RuleUnusedFunc,
+		lint.RuleShadow,
+	} {
+		if got := lintSeverity(rule); got != hint {
+			t.Errorf("%s should be a hint, got severity %d", rule, got)
+		}
 	}
 }

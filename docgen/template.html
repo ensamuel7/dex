@@ -1759,7 +1759,8 @@ dex build app.dx --lint=strict  # ... and fail the build if anything is reported
 dex lint --rules                # list the rules and what each one finds
 dex build app.dx --lint --lint-off=unused-param,shadow</code></pre>
 
-<p>The language server reports the same findings as you type: the exception rules as warnings, the rest as hints, which editors render as a quiet grey rather than a squiggle.</p>
+<p>The language server reports the same findings as you type, graded by whether something is actually wrong. A warning is for a <code>throws</code> the body contradicts, a <code>catch</code> that can never run, code nothing reaches, or an <code>#[allow(...)]</code> naming no rule. Everything else is a hint &mdash; a quiet grey mark rather than a squiggle.</p>
+<p><code>uncaught-throw</code> is a hint for that reason. On the command line lint is opt-in, but an editor asks for every diagnostic on every keystroke; since <code>throws</code> is an optional declaration, every <code>throw</code> in a codebase that has not adopted it would otherwise be underlined as though it were broken.</p>
 
 <h3>Rules</h3>
 <table>

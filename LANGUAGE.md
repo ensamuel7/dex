@@ -7,13 +7,15 @@ DexLang is a statically-typed language that compiles to C. It is designed for bu
 ```
 dex build <file.dx>       # compiles to native binary
 dex run <file.dx>         # compiles and runs
+dex dev <file.dx>         # rebuilds and reruns on every change
 dex test [file_test.dx]   # runs test files (*_test.dx)
 dex lint <file.dx>        # reports lint findings without building
+dex check <file.dx>       # runs cppcheck over the generated C
 ```
 
-Any of these accepts `--lint` to report findings alongside the build, and
-`--lint=strict` to fail the build when there are any. See
-[Linting](#linting).
+`build`, `run`, `dev` and `test` each accept `--lint` to report findings
+alongside the build, and `--lint=strict` to fail the build when there are any.
+See [Linting](#linting).
 
 Pipeline: `.dx` source → tokens → AST (Abstract Syntax Tree) → type check → C code → native binary (via `cc`/`gcc`)
 
@@ -602,6 +604,10 @@ f: string `db:"a"json:"b"`   // error: needs a space between keys
 This catches the typo that would otherwise make a key silently invisible to
 whatever was meant to read it.
 
+The one annotation that is neither directive nor data is `#[allow(...)]`: it
+suppresses a [lint](#linting) finding rather than changing what is emitted, so
+it is accepted on any declaration and the rule it names is checked by lint.
+
 #### Deriving a projection from the struct
 
 Tags exist so that a mapping can be read off the type rather than written beside
@@ -921,6 +927,32 @@ items.reverse()                    // reverse in place
 ```
 
 > **Note:** `.sort()` is supported on primitive-typed arrays (`int[]`, `long[]`, `double[]`, `string[]`, `char[]`). Struct arrays do not support sorting.
+
+### String interpolation
+
+A `${...}` inside a string literal substitutes the value of the expression
+inside it:
+
+```dex
+let n = 7
+let name = "dex"
+let s = "n=${n} name=${name} sum=${n + 1}"   // "n=7 name=dex sum=8"
+fmt.println("inline ${n}")
+```
+
+- Any expression goes inside, not only a name: `${n + 1}`, `${arr[0]}`,
+  `${describe(n)}`. A call inside an interpolation runs exactly once.
+- Every primitive converts without a cast — `int`, `long`, `double`, `bool`,
+  `char` and `string`. A `double` renders the way `%g` does, so `1.5` is
+  `"1.5"`.
+- Any other type goes through the same conversion `as string` uses, so a struct
+  renders as `Point{x: 1, y: 2}`.
+- The parts are appended to a `StringBuilder` and built once, so a literal with
+  several interpolations costs one allocation for the result rather than one per
+  concatenation.
+
+Interpolation is a string *literal* feature. A [tag](#tags) is raw and does not
+interpolate.
 
 ### String methods
 

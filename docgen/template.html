@@ -202,6 +202,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
         <a onclick="show('access-modifiers')">Access Modifiers</a>
         <a onclick="show('concurrency')">Concurrency</a>
         <a onclick="show('error-handling')">Error Handling</a>
+        <a onclick="show('linting')">Linting</a>
       </div>
     </div>
     <div class="nav-group" data-group="data">
@@ -320,10 +321,14 @@ CMD ["server"]</code></pre>
 <tr><th>Command</th><th>Description</th></tr>
 <tr><td><code>dex build &lt;file&gt;</code></td><td>Compile to a native binary</td></tr>
 <tr><td><code>dex run &lt;file&gt;</code></td><td>Build and execute, then remove binary</td></tr>
+<tr><td><code>dex dev &lt;file&gt;</code></td><td>Rebuild and rerun on every change</td></tr>
 <tr><td><code>dex test [file]</code></td><td>Run test files (<code>*_test.dx</code>)</td></tr>
 <tr><td><code>dex lint &lt;file&gt;</code></td><td>Report what compiles but is probably not meant</td></tr>
+<tr><td><code>dex check &lt;file&gt;</code></td><td>Run cppcheck over the generated C (needs <code>cppcheck</code>)</td></tr>
 <tr><td><code>dex lsp</code></td><td>Start the Language Server Protocol server</td></tr>
 <tr><td><code>dex docs</code></td><td>Generate this documentation page</td></tr>
+<tr><td><code>dex update</code></td><td>Update the <code>dex</code> binary in place</td></tr>
+<tr><td><code>dex version</code></td><td>Print the version</td></tr>
 </table>
 
 <p>Any build command takes <code>--lint</code> to report findings alongside the
@@ -938,6 +943,20 @@ let v2: int = m["bob"]</code></pre>
 <!-- String Methods -->
 <section id="string-methods" class="page-section">
 <h2>String Methods</h2>
+<h3>String Interpolation</h3>
+<p>A <code>${...}</code> inside a string literal substitutes the value of the expression inside it:</p>
+<pre><code>let n = 7
+let name = "dex"
+let s = "n=${n} name=${name} sum=${n + 1}"   // "n=7 name=dex sum=8"
+fmt.println("inline ${n}")</code></pre>
+<ul>
+<li>Any expression goes inside, not only a name &mdash; <code>${n + 1}</code>, <code>${arr[0]}</code>, <code>${describe(n)}</code>. A call inside an interpolation runs exactly once.</li>
+<li>Every primitive converts without a cast: <code>int</code>, <code>long</code>, <code>double</code>, <code>bool</code>, <code>char</code> and <code>string</code>. A <code>double</code> renders the way <code>%g</code> does, so <code>1.5</code> is <code>"1.5"</code>.</li>
+<li>Any other type goes through the same conversion <code>as string</code> uses, so a struct renders as <code>Point{x: 1, y: 2}</code>.</li>
+<li>The parts are appended to a <code>StringBuilder</code> and built once, so a literal with several interpolations costs one allocation for the result rather than one per concatenation.</li>
+</ul>
+<p>Interpolation is a string <em>literal</em> feature &mdash; a tag is raw and does not interpolate.</p>
+
 <p>String variables have built-in methods for common text operations. No import is needed.</p>
 
 <h3>Methods</h3>
@@ -1115,7 +1134,7 @@ let shouted: string = "  mixed  ".trim().toUpper()</code></pre>
 <pre><code>reflect.fieldTag(bk, 2, "db")      // "COALESCE(a.name, '')"
 reflect.fieldTag(bk, 4, "json")    // "price"
 reflect.fieldTag(bk, 0, "db")      // "" &mdash; that field has no tag</code></pre>
-<p><strong>A tag is data, not a directive.</strong> The compiler stores it and never interprets it: nothing in the language knows what <code>db</code> or <code>json</code> means. That is the difference from an annotation &mdash; <code>#[owned]</code> changes what the compiler emits, so the valid set is closed and an unknown one is an error, whereas any tag key is allowed. What the compiler does check is that the pairs are well formed, which catches the typo that would otherwise make a key silently invisible:</p>
+<p><strong>A tag is data, not a directive.</strong> The compiler stores it and never interprets it: nothing in the language knows what <code>db</code> or <code>json</code> means. That is the difference from an annotation &mdash; <code>#[owned]</code> changes what the compiler emits, so the valid set is closed and an unknown one is an error, whereas any tag key is allowed. (<code>#[allow(...)]</code> is the one exception: it suppresses a lint finding rather than directing the compiler, so it is accepted anywhere and checked by lint instead.) What the compiler does check is that the pairs are well formed, which catches the typo that would otherwise make a key silently invisible:</p>
 <pre><code>f: string `db:x`             // error: tag key 'db' must have a quoted value
 f: string `db`               // error: tag key 'db' is missing its ':"value"'
 f: string `db:"a" db:"b"`    // error: tag repeats key 'db'
@@ -1726,6 +1745,51 @@ fn main(): void {
 
 <h3>Unhandled Exceptions</h3>
 <p>If an exception is not caught, the program prints <code>Unhandled &lt;Type&gt;: &lt;message&gt;</code> to stderr and exits with code 1.</p>
+</section>
+
+<!-- Linting -->
+<section id="linting" class="page-section">
+<h2>Linting</h2>
+
+<p><code>dex lint</code> reports what compiles but is probably not what was meant: a binding nothing reads, a statement nothing reaches, an exception nothing handles. It is off by default and never changes what is emitted.</p>
+
+<pre><code>dex lint app.dx                 # front end only: no C generated, no cc run
+dex build app.dx --lint         # build and report
+dex build app.dx --lint=strict  # ... and fail the build if anything is reported
+dex lint --rules                # list the rules and what each one finds
+dex build app.dx --lint --lint-off=unused-param,shadow</code></pre>
+
+<p>The language server reports the same findings as you type: the exception rules as warnings, the rest as hints, which editors render as a quiet grey rather than a squiggle.</p>
+
+<h3>Rules</h3>
+<table>
+<tr><th>Rule</th><th>Reports</th></tr>
+<tr><td><code>unused-var</code></td><td>a local or loop variable that is never read</td></tr>
+<tr><td><code>unused-param</code></td><td>a parameter that the function body never reads</td></tr>
+<tr><td><code>unused-import</code></td><td>an imported module that is never referenced</td></tr>
+<tr><td><code>unused-function</code></td><td>a private function that nothing calls</td></tr>
+<tr><td><code>shadow</code></td><td>a declaration that hides a name from an enclosing scope</td></tr>
+<tr><td><code>unreachable</code></td><td>a statement after a <code>return</code>, <code>throw</code>, <code>break</code> or <code>continue</code></td></tr>
+<tr><td><code>uncaught-throw</code></td><td>an exception that escapes a function not declared <code>throws</code></td></tr>
+<tr><td><code>undeclared-throw</code></td><td>an exception type a <code>throws</code> declaration leaves out</td></tr>
+<tr><td><code>unnecessary-throws</code></td><td>a <code>throws</code> naming a type the function cannot throw</td></tr>
+<tr><td><code>unreachable-catch</code></td><td>a <code>catch</code> clause that can never run</td></tr>
+<tr><td><code>unknown-allow</code></td><td>an <code>#[allow(...)]</code> naming a rule that does not exist</td></tr>
+</table>
+
+<h3>Suppressing a Finding</h3>
+<p><code>#[allow(&lt;rule&gt;)]</code> on the declaration it fires on silences one rule there. <code>#[allow(unused)]</code> covers the four <code>unused-*</code> rules and <code>#[allow(all)]</code> covers everything:</p>
+<pre><code>#[allow(unused)]
+let reserved = buildHandle()   // kept for its side effect, never read</code></pre>
+<p>An <code>#[allow(...)]</code> is the one annotation the compiler does not interpret: it says what not to report, so it is accepted on any type rather than only on the heap types <code>#[owned]</code> is restricted to. A rule name it does not recognise is itself a finding, because a suppression that silences nothing reads as handled and behaves as forgotten.</p>
+
+<h3>What It Does Not Do</h3>
+<ul>
+<li><strong>Assignment is not use.</strong> A variable only ever written to is reported as unused, which is the point — <code>let total = 0</code> followed by <code>total += n</code> and nothing else is dead arithmetic.</li>
+<li><strong>A bare <code>return</code> ends its block.</strong> <code>return</code> with no value takes the next expression as its value, so nothing survives after it to be called unreachable. The rule fires after <code>return &lt;value&gt;</code>, <code>throw</code>, <code>break</code> and <code>continue</code>.</li>
+<li><strong>A module that declares types is never reported unused.</strong> <code>import "json"</code> earns its keep through a <code>json.Value</code> annotation, and a type annotation is resolved while parsing — by the time lint runs there is no mention of the module left to find. Only function-only modules such as <code>str</code> and <code>math</code> are checked.</li>
+<li><strong>A call through a function value is assumed not to throw.</strong> Which function a closure holds is a runtime fact, so the throw inference stops there rather than guessing.</li>
+</ul>
 </section>
 
 <!-- fmt module -->
@@ -2870,6 +2934,7 @@ var sectionNames = {
   'access-modifiers': 'Access Modifiers',
   'concurrency': 'Concurrency',
   'error-handling': 'Error Handling',
+  'linting': 'Linting',
   'arrays': 'Arrays',
   'structs': 'Structs',
   'enums': 'Enums',

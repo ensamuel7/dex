@@ -89,12 +89,10 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 			elemCType := g.cType(elemType)
 			cleanupFn := g.structArrayCleanupFunc(elemType)
 			out.WriteString(fmt.Sprintf("%sDexArrayStruct* %s = dex_array_struct_new(sizeof(%s), %s);\n", prefix, s.Name, elemCType, cleanupFn))
-			if len(arrLit.Elems) > 0 {
-				for _, elem := range arrLit.Elems {
-					out.WriteString(fmt.Sprintf("%s{ %s _tmp_elem = ", prefix, elemCType))
-					g.genExpr(out, elem)
-					out.WriteString(fmt.Sprintf("; dex_array_struct_push(%s, &_tmp_elem); }\n", s.Name))
-				}
+			for _, elem := range arrLit.Elems {
+				out.WriteString(prefix)
+				g.genStructArrayLitElem(out, s.Name, elemType, elem)
+				out.WriteString("\n")
 			}
 			g.registerScopeVar(s.Name, s.Type)
 			return

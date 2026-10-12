@@ -49,3 +49,6 @@ var StringBuilderRuntime string
 
 //go:embed cruntime/closure.c
 var ClosureRuntime string
+
+//go:embed cruntime/memcheck.c
+var MemCheckRuntime string

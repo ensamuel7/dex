@@ -479,9 +479,8 @@ func (g *Generator) genArrayLitExpr(out *strings.Builder, e *ast.ArrayLitExpr) {
 		out.WriteString(fmt.Sprintf("({ DexArrayStruct* %s = dex_array_struct_new(sizeof(%s), %s); ",
 			tmp, elemCType, g.structArrayCleanupFunc(e.ElemType)))
 		for _, elem := range e.Elems {
-			out.WriteString(fmt.Sprintf("{ %s _el = ", elemCType))
-			g.genExpr(out, elem)
-			out.WriteString(fmt.Sprintf("; dex_array_struct_push(%s, &_el); } ", tmp))
+			g.genStructArrayLitElem(out, tmp, e.ElemType, elem)
+			out.WriteString(" ")
 		}
 		out.WriteString(fmt.Sprintf("%s; })", tmp))
 		return

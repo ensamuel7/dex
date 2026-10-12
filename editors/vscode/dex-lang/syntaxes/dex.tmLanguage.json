@@ -7,6 +7,9 @@
       "include": "#comments"
     },
     {
+      "include": "#field-tags"
+    },
+    {
       "include": "#strings"
     },
     {
@@ -204,6 +207,32 @@
         {
           "name": "constant.language.boolean.dex",
           "match": "\\b(true|false|null)\\b"
+        }
+      ]
+    },
+    "field-tags": {
+      "patterns": [
+        {
+          "comment": "Backtick field tag: raw metadata after a struct field's type",
+          "name": "meta.field-tag.dex",
+          "begin": "`",
+          "end": "`",
+          "beginCaptures": { "0": { "name": "punctuation.definition.tag.begin.dex" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.tag.end.dex" } },
+          "patterns": [
+            {
+              "comment": "key of a key:\"value\" pair",
+              "match": "([A-Za-z_][A-Za-z0-9_]*)(:)",
+              "captures": {
+                "1": { "name": "entity.other.attribute-name.dex" },
+                "2": { "name": "punctuation.separator.key-value.dex" }
+              }
+            },
+            {
+              "name": "string.quoted.double.dex",
+              "match": "\"[^\"]*\""
+            }
+          ]
         }
       ]
     },

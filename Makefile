@@ -1,4 +1,4 @@
-DEX_VERSION ?= 0.4.9
+DEX_VERSION ?= 0.5.0
 IMAGE_NAME  := dexlang/dexlang
 PREFIX      ?= /usr/local
 
@@ -19,7 +19,19 @@ check:
 	go test ./...
 	go run . test
 
-.PHONY: build install check docker-build docker-publish release
+# The example suite under the debug memory checker, which validates every
+# retain and release against the object's header and reports anything still
+# alive at exit against the .dx statement that allocated it.
+#
+# A memory error — a double release, a pointer that is not a managed object —
+# fails the run on its own. Objects merely still alive at exit are reported but
+# tolerated, because a handler registered with http.route or ws.handleMessage
+# is owned by a table that outlives main; add DEX_MEM_LEAKS=error once a
+# program's expected-live set is known.
+memcheck:
+	DEX_MEM_CHECK=1 go run . test
+
+.PHONY: build install check memcheck docker-build docker-publish release
 
 
 docker-build:

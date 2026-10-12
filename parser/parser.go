@@ -416,7 +416,13 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 		if err != nil {
 			return nil, err
 		}
-		fields = append(fields, ast.StructField{Name: fieldName, Type: fieldType, IsPrivate: isPrivate, Annotations: annotations})
+		// An optional tag follows the type: name: type `db:"..."`.
+		tag := ""
+		if p.check(token.TokenTag) {
+			tag = p.current().Value
+			p.advance()
+		}
+		fields = append(fields, ast.StructField{Name: fieldName, Type: fieldType, IsPrivate: isPrivate, Annotations: annotations, Tag: tag})
 	}
 
 	if err := p.expect(token.TokenRBrace); err != nil {

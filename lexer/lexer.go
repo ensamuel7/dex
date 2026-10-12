@@ -237,6 +237,29 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 			continue
 		}
 
+		// Field tags: `db:"..."` after a struct field's type. Raw and
+		// uninterpreted — no escapes and no interpolation — because what goes in
+		// one is a string meant for some library to read, and an SQL fragment
+		// such as COALESCE(f.name, '') should be written exactly as it will be
+		// used.
+		if ch == '`' {
+			l.advance() // consume opening backtick
+			start := l.pos
+			for l.pos < len(l.source) && l.source[l.pos] != '`' {
+				if l.source[l.pos] == '\n' {
+					return nil, fmt.Errorf("%s%d:%d: unterminated field tag", l.errPrefix(), startLine, startCol)
+				}
+				l.advance()
+			}
+			if l.pos >= len(l.source) {
+				return nil, fmt.Errorf("%s%d:%d: unterminated field tag", l.errPrefix(), startLine, startCol)
+			}
+			value := string(l.source[start:l.pos])
+			l.advance() // consume closing backtick
+			tokens = append(tokens, token.Token{Kind: token.TokenTag, Value: value, File: l.file, Line: startLine, Col: startCol})
+			continue
+		}
+
 		// String literals (with interpolation support)
 		if ch == '"' {
 			l.advance() // consume opening quote

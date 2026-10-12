@@ -126,6 +126,17 @@ let third: string = csv.split(",")[2]
 let size: int = csv.split(",")[2].len()
 ```
 
+Fields can carry tags — metadata the compiler stores and never interprets, so a
+library decides what its own keys mean:
+
+```dex
+struct Book {
+    id: long
+    authorName: string `db:"COALESCE(a.name, '')"`
+    priceMinor: long `db:"b.price_minor" json:"price"`
+}
+```
+
 Structs can also be read by field position at runtime, through compiler-emitted
 metadata that costs nothing when unused:
 

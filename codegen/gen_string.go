@@ -223,6 +223,14 @@ func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) 
 			g.genExpr(out, op)
 			out.WriteString("; ")
 			g.genAppendToSB(out, sbTmp, tmpName, typ)
+			// A heap operand that minted its reference is released here too.
+			// Appending only reads it, and this branch is reached whenever
+			// isStringExpr could not place the operand — so without this, any
+			// future gap in that function silently becomes a leak rather than a
+			// mis-typing.
+			if ast.NeedsRelease(typ) && g.isNewAlloc(op) {
+				out.WriteString(fmt.Sprintf("dex_release(%s); ", tmpName))
+			}
 		}
 	}
 
@@ -360,13 +368,23 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 		if e.Module != "" && g.sbVars[e.Module] {
 			return e.Name == "toString"
 		}
-		// String methods that return strings
-		if e.Module != "" && g.strVars[e.Module] {
-			switch e.Name {
-			case "toLower", "toUpper", "trim", "substring", "replace":
-				return true
+		// String methods that return strings. The receiver may be a dotted field
+		// path as well as a plain variable — self.tag.toUpper() inside a method —
+		// which is the shape the map case above already handles. Missing it here
+		// made the operand look non-string, and the non-string append path has no
+		// release, so `return tag.toUpper() + "/" + x` leaked one string a call.
+		if e.Module != "" {
+			recvIsString := g.strVars[e.Module]
+			if !recvIsString && strings.Contains(e.Module, ".") {
+				recvIsString = g.resolveFieldChainType(e.Module) == ast.TypeString
 			}
-			return false
+			if recvIsString {
+				switch e.Name {
+				case "toLower", "toUpper", "trim", "substring", "replace":
+					return true
+				}
+				return false
+			}
 		}
 		// Check stdlib functions
 		if e.Module != "" {

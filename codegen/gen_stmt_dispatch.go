@@ -104,6 +104,11 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		out.WriteString("    setvbuf(stdout, NULL, _IOLBF, 0);\n")
 	}
 
+	// Register the leak report before anything can allocate.
+	if fn.Name == "main" && g.memCheck && g.usesRefcount {
+		out.WriteString("    dex_mc_init();\n")
+	}
+
 	// Initialize thread pool for spawn (must happen before any spawn calls)
 	if fn.Name == "main" && g.usesConcurrency {
 		out.WriteString("    dex_spawn_pool_init();\n")
@@ -211,9 +216,9 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 				cleanupFn := g.structArrayCleanupFunc(elemType)
 				out.WriteString(fmt.Sprintf("%s%s = dex_array_struct_new(sizeof(%s), %s);\n", prefix, name, elemCType, cleanupFn))
 				for _, elem := range arrLit.Elems {
-					out.WriteString(fmt.Sprintf("%s{ %s _tmp_elem = ", prefix, elemCType))
-					g.genExpr(out, elem)
-					out.WriteString(fmt.Sprintf("; dex_array_struct_push(%s, &_tmp_elem); }\n", name))
+					out.WriteString(prefix)
+					g.genStructArrayLitElem(out, name, elemType, elem)
+					out.WriteString("\n")
 				}
 			} else {
 				cNewFn := g.arrayNewFunc(gl.Type)
@@ -242,6 +247,7 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 // a block would put the declared variable out of scope, so the two halves are
 // emitted around the statement rather than wrapped about it.
 func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
+	g.emitSiteMarker(out, stmt, indent)
 	switch stmt.(type) {
 	case *ast.LetStmt, *ast.AssignStmt:
 	case *ast.ReturnStmt:
@@ -270,4 +276,45 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	out.WriteString(body.String())
 	g.emitHoistReleases(out, prefix)
 	g.stmtPrelude, g.stmtTemps = savedPrelude, savedTemps
+}
+
+// emitSiteMarker records the .dx position of the statement about to be
+// generated, so that an allocation made while it runs can be reported against
+// it. Only mem-check builds emit anything: DEX_AT is a no-op macro otherwise,
+// but the marker is also pure noise in the C that DEX_KEEP_C leaves behind, so
+// it is left out entirely rather than emitted and compiled away.
+func (g *Generator) emitSiteMarker(out *strings.Builder, stmt ast.Stmt, indent int) {
+	if !g.memCheck || !g.usesRefcount {
+		return
+	}
+	pos := ast.StmtPos(stmt)
+	if pos.Line == 0 {
+		return
+	}
+	file := pos.File
+	if file == "" {
+		file = "<unknown>"
+	}
+	out.WriteString(fmt.Sprintf("%sDEX_AT(%s);\n",
+		strings.Repeat("    ", indent),
+		cStringLit(fmt.Sprintf("%s:%d", file, pos.Line))))
+}
+
+// cStringLit quotes a string for emission as a C literal.
+func cStringLit(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\', '"':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case '\n':
+			b.WriteString("\\n")
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }

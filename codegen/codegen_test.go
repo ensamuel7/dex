@@ -15,7 +15,15 @@ import (
 // generate runs the full pipeline (lex -> parse -> check -> codegen) and returns the C code.
 func generate(t *testing.T, source string) string {
 	t.Helper()
+	return generateWith(t, source, nil)
+}
+
+// generateWith is generate with a hook to configure the generator first, for
+// the modes that are off by default.
+func generateWith(t *testing.T, source string, configure func(*Generator)) string {
+	t.Helper()
 	ast.ResetStructTypes()
+	ast.ResetDbFillKeys()
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
 	ast.ResetWeakTypes()
@@ -26,6 +34,7 @@ func generate(t *testing.T, source string) string {
 	ast.ResetMapTypes()
 	ast.ResetEnumTypes()
 	stdlib.RegisterAllModuleTypes()
+	ast.RegisterExceptionType() // built-in, registered the same way main.go does
 
 	tokens, err := lexer.New(source).Tokenize()
 	if err != nil {
@@ -39,6 +48,7 @@ func generate(t *testing.T, source string) string {
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
+	p.AddStructName("Exception") // built-in, registered the same way main.go does
 	prog, parseErrs := p.Parse()
 	if len(parseErrs) > 0 {
 		t.Fatalf("parser error: %v", parseErrs[0])
@@ -46,7 +56,11 @@ func generate(t *testing.T, source string) string {
 	if checkErrs := checker.New().Check(prog); len(checkErrs) > 0 {
 		t.Fatalf("checker error: %v", checkErrs[0])
 	}
-	return New().Generate(prog)
+	g := New()
+	if configure != nil {
+		configure(g)
+	}
+	return g.Generate(prog)
 }
 
 func extractCodegenImportPaths(tokens []token.Token) []string {
@@ -1119,6 +1133,7 @@ fn main(): void {
 func generateWithGen(t *testing.T, source string) (string, *Generator) {
 	t.Helper()
 	ast.ResetStructTypes()
+	ast.ResetDbFillKeys()
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
 	ast.ResetWeakTypes()

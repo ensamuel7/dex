@@ -356,6 +356,7 @@ func dev(filename string) {
 func build(filename string) (string, error) {
 	// Reset type registries to prevent state leaking between compilations
 	ast.ResetStructTypes()
+	ast.ResetDbFillKeys()
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
 	ast.ResetWeakTypes()
@@ -429,6 +430,15 @@ func build(filename string) (string, error) {
 
 	// Generate C
 	gen := codegen.New()
+	// DEX_MEM_CHECK=1 builds in the debug memory checker: every retain and
+	// release is validated against the object's header, a freed object is kept
+	// in quarantine so a second release panics instead of corrupting the
+	// allocator, and anything still alive at exit is reported against the .dx
+	// statement that allocated it.
+	memCheck := os.Getenv("DEX_MEM_CHECK") == "1"
+	if memCheck {
+		gen.EnableMemCheck()
+	}
 	cCode := gen.Generate(program)
 
 	// Ensure build output directory exists
@@ -477,6 +487,11 @@ func build(filename string) (string, error) {
 	if os.Getenv("DEX_SANITIZE") == "1" {
 		args = append(args, "-fsanitize=address", "-fno-omit-frame-pointer", "-g")
 	}
+	// The checker aborts on a bad release, so the build carries symbols for the
+	// resulting backtrace.
+	if memCheck {
+		args = append(args, "-g", "-fno-omit-frame-pointer")
+	}
 	args = append(args, cFile)
 	args = append(args, libflags...)
 	cmd := exec.Command(compiler, args...)
@@ -492,6 +507,7 @@ func build(filename string) (string, error) {
 // Returns the path to the generated .c file.
 func generateC(filename string) (string, error) {
 	ast.ResetStructTypes()
+	ast.ResetDbFillKeys()
 	ast.ResetChanTypes()
 	ast.ResetTaskTypes()
 	ast.ResetWeakTypes()
@@ -552,6 +568,15 @@ func generateC(filename string) (string, error) {
 	}
 
 	gen := codegen.New()
+	// DEX_MEM_CHECK=1 builds in the debug memory checker: every retain and
+	// release is validated against the object's header, a freed object is kept
+	// in quarantine so a second release panics instead of corrupting the
+	// allocator, and anything still alive at exit is reported against the .dx
+	// statement that allocated it.
+	memCheck := os.Getenv("DEX_MEM_CHECK") == "1"
+	if memCheck {
+		gen.EnableMemCheck()
+	}
 	cCode := gen.Generate(program)
 
 	buildDir := "build"

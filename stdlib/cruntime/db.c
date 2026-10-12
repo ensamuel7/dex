@@ -698,6 +698,47 @@ int dex_db_col_int(int rows, int col) {
 }
 
 // ==========================================================================
+// dex_db_col_long
+//
+// The 64-bit read. dex_db_col_int truncates anything past 2^31, which matters
+// for an id column on a table that has been running for a while, so a long
+// field goes through here rather than through the int reader.
+// ==========================================================================
+long dex_db_col_long(int rows, int col) {
+    if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) return 0;
+    DexDbResult* r = &dex_db_results[rows];
+
+    if (r->driver == DEX_DB_DRIVER_SQLITE) {
+        return (long)sqlite3_column_int64(r->sqlite_stmt, col);
+
+#ifdef DEX_HAS_POSTGRES
+    } else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
+        char* val = PQgetvalue(r->pg_result, r->pg_row, col);
+        if (!val || val[0] == '\0') return 0;
+        return atol(val);
+#endif
+
+#ifdef DEX_HAS_MYSQL
+    } else if (r->driver == DEX_DB_DRIVER_MYSQL) {
+        if (!r->mysql_row || !r->mysql_row[col]) return 0;
+        return atol(r->mysql_row[col]);
+#endif
+
+#ifdef DEX_HAS_MONGO
+    } else if (r->driver == DEX_DB_DRIVER_MONGO) {
+        bson_iter_t iter;
+        if (!dex_db_mongo_iter_to(r->mongo_doc, col, &iter)) return 0;
+        if (BSON_ITER_HOLDS_INT64(&iter)) return (long)bson_iter_int64(&iter);
+        if (BSON_ITER_HOLDS_INT32(&iter)) return (long)bson_iter_int32(&iter);
+        if (BSON_ITER_HOLDS_DOUBLE(&iter)) return (long)bson_iter_double(&iter);
+        if (BSON_ITER_HOLDS_UTF8(&iter)) return atol(bson_iter_utf8(&iter, NULL));
+        return 0;
+#endif
+    }
+    return 0;
+}
+
+// ==========================================================================
 // dex_db_col_str
 // ==========================================================================
 const char* dex_db_col_str(int rows, int col) {

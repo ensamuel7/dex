@@ -18,6 +18,11 @@ type funcSig struct {
 type Checker struct {
 	scopes           []map[string]ast.Type
 	constScopes      []map[string]bool
+	// By-value struct parameters of the function being checked. A reflect
+	// setter refuses to write through one: it is a copy sharing the caller's
+	// heap pointers, so writing a string field releases a reference the caller
+	// still holds. Keyed by name, valued by type so the error can name &Struct.
+	valueParams map[string]ast.Type
 	annotationScopes []map[string][]string // per-variable annotation tracking
 	funcs            map[string]funcSig
 	imports          map[string]*stdlib.Module
@@ -174,6 +179,14 @@ func (c *Checker) Check(program *ast.Program) []error {
 
 	// Register struct methods and constructor params
 	for _, sd := range program.Structs {
+		// Tag syntax only: what a key means belongs to whichever library reads
+		// it, but a malformed pair makes a key invisible and is worth catching
+		// here rather than at the far end.
+		for _, f := range sd.Fields {
+			if err := validateFieldTag(sd.Name, f.Name, f.Tag); err != nil {
+				c.addError(err)
+			}
+		}
 		if len(sd.ConstructorParams) > 0 {
 			var paramTypes []ast.Type
 			for _, cp := range sd.ConstructorParams {
@@ -244,8 +257,12 @@ func (c *Checker) Check(program *ast.Program) []error {
 	for _, fn := range program.Functions {
 		c.pushScope()
 
+		c.valueParams = make(map[string]ast.Type, len(fn.Params))
 		for _, p := range fn.Params {
 			c.define(p.Name, p.Type)
+			if ast.IsStructType(p.Type) && !ast.IsArrayType(p.Type) {
+				c.valueParams[p.Name] = p.Type
+			}
 		}
 
 		for _, stmt := range fn.Body {

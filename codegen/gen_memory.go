@@ -150,7 +150,33 @@ func (g *Generator) borrowsHeapValue(e ast.Expr) bool {
 	if fa, ok := e.(*ast.FieldAccessExpr); ok && fa.IsMethodValue {
 		return false
 	}
+	// And naming a plain function builds one over no environment at all.
+	if g.isFuncValueIdent(e) {
+		return false
+	}
 	return isBorrowedExpr(e)
+}
+
+// isFuncValueIdent reports whether an identifier names a top-level function
+// used as a value rather than a variable. genExpr compiles that to a
+// dex_closure_new, so it mints a reference — but it is spelled as an Ident, so
+// without this both ownership predicates read it as borrowed.
+// `let f: fn(int): int = twice` then retained a closure that already held the
+// only reference there was and leaked it, and `apply(twice, 4)` minted one
+// that nothing ever released.
+//
+// A local may shadow a function name, so a known variable wins — the same
+// order genExpr resolves the identifier in.
+func (g *Generator) isFuncValueIdent(e ast.Expr) bool {
+	ident, ok := e.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if _, isVar := g.varTypes[ident.Name]; isVar {
+		return false
+	}
+	_, isFn := g.funcs[ident.Name]
+	return isFn
 }
 
 // emitRetainReturnedLitFields retains the heap fields of a returned struct
@@ -184,7 +210,23 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 		if !ok || !ast.NeedsRelease(ft) {
 			continue
 		}
-		if !g.borrowsHeapValue(lit.FieldValues[i]) {
+		val := lit.FieldValues[i]
+		// A nested struct *literal* is built right here, so the question is not
+		// whether it is borrowed — a literal never is — but which of its own
+		// fields are. Recurse, exactly as emitReleaseVar descends into it.
+		//
+		// Asking borrowsHeapValue first skipped this case entirely:
+		//
+		//	return Sel { source: source, cols: Cols { exprs: exprs, at: at } }
+		//
+		// retained `source` and nothing else, and the scope then released
+		// `exprs` and `at`. The returned Sel carried a freed array and a freed
+		// map, and the caller's first push into them hung the program.
+		if nested, isLit := val.(*ast.StructLitExpr); isLit && ast.IsStructType(ft) {
+			g.emitRetainStructLitFields(out, prefix, target+"."+name, ft, nested)
+			continue
+		}
+		if !g.borrowsHeapValue(val) {
 			// A fresh temporary already carries the only reference there is;
 			// ownership simply moves into the literal.
 			continue

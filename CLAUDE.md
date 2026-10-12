@@ -59,11 +59,12 @@ parser, checker, or LSP change run `make install` — otherwise the IDE reports
 errors the current compiler does not have. The language server is spawned once
 per session, so it also needs restarting to pick the new binary up.
 
-A compiler change is not verified until all three pass:
+A compiler change is not verified until all four pass:
 
 1. `go test ./...` — compiler unit tests
 2. `go run . test` — the `.dx` example suite in `examples/`
-3. A leak sweep — every example must report zero leaks:
+3. `make memcheck` — the same suite under the debug memory checker
+4. A leak sweep — every example must report zero leaks:
 
 ```sh
 for f in examples/*_test.dx; do
@@ -76,6 +77,59 @@ done
 Memory correctness is a recurring problem area: a change that passes tests but leaks
 is not finished. `DEX_KEEP_C=1 go run . build <file>.dx` keeps the generated C in
 `build/` so ownership decisions can be inspected directly.
+
+## Finding a memory error
+
+`DEX_MEM_CHECK=1 go run . build <file>.dx` builds with the debug memory
+checker (`codegen/cruntime/memcheck.c`). It widens every object header with a
+magic word, a size, and the `.dx` statement that allocated it, keeps a registry
+of live objects, and parks each freed object in a quarantine ring with its
+payload poisoned instead of handing it straight back to `malloc`. Codegen emits
+a `DEX_AT("file.dx:line")` marker ahead of every statement so an allocation is
+attributed to the line that made it.
+
+What it turns into a diagnosis rather than a mystery:
+
+- a release or retain of an already-freed object — panics *at that release*,
+  naming the statement that allocated it and the one that freed it;
+- a release of something that is not a managed object;
+- a reference count that would go negative;
+- a read through a freed pointer, which sees `0xDD` rather than plausible data;
+- everything still alive at exit, grouped by allocating statement.
+
+Runtime switches: `DEX_MEM_LEAKS=error` makes objects-alive-at-exit a failing
+exit status (70) — the default only reports them, because a handler registered
+with `http.route` is owned by a table that outlives `main`. `DEX_MEM_VERBOSE=1`
+confirms a clean run. `DEX_MEM_ABORT=1` aborts on an error instead of exiting,
+for a core dump; the default is a fast exit because `abort()` on macOS hands the
+process to the crash reporter and looks like a hang.
+
+It complements rather than replaces the two existing tools. `leaks` is
+reachability-based and conservatively scans the stack, so it reports zero for a
+closure whose only remaining pointer is a dead stack slot — the checker catches
+those. The quarantine is bounded, so a double release separated by thousands of
+intervening frees can still reach real freed memory; `DEX_SANITIZE=1` (ASan)
+catches that. The checker knows about `.dx` statements and reference counts,
+ASan knows about the whole heap.
+
+It cannot find everything at compile time, and will not: whether a release is
+the last one is a runtime fact, and a reference cycle is not statically
+decidable at all — which is why `#[debug(cycles)]` is a runtime tool too.
+
+## Exceptions leak the frames they unwind
+
+A `throw` is `longjmp`, so every frame between the throw and the catch is
+skipped: its heap locals are never released and its `defer`s never run. Two
+heap locals per unwound frame, per throw — measured at 600 objects for 300
+throws through one intermediate frame. The thrown *message* is handled (it is
+staged into a thread-local buffer, the string released, and the longjmp done
+last — see `_dex_exc_stage`), but the unwound frames' own locals are not.
+
+So a throw on a hot error path accumulates. Keep heap locals out of functions a
+throw passes through, or use a return value rather than an exception there.
+Fixing it properly needs a per-frame cleanup list the runtime can walk on
+unwind, which costs a push per heap local everywhere — a deliberate trade, not a
+patch.
 
 ## Memory ownership rules
 
@@ -105,6 +159,38 @@ or a use-after-free, so change them deliberately:
   is what made `["find", dir]` free the caller's `dir`, and it also wrote past
   the eight-slot initial capacity. Assigning into a slot (`names[0] = other`)
   is the same rule: release the old, retain a borrowed new one.
+- A **struct array** is the same rule with the retain one level down.
+  `dex_array_struct_push` is a `memcpy` and cannot retain what it copies —
+  only the element type's cleanup function knows the layout — so the reference
+  has to be taken at the push site. All four push sites go through
+  `emitRetainPushedStructFields`; the three literal ones did not, and `[unit]`
+  freed strings that `unit` still held. The generated `dex_cleanup_<Struct>`
+  that the array's destructor runs goes through `emitReleaseVar`, so an element
+  is torn down exactly as a local of the same type is — releasing only the
+  top-level heap fields left nested struct fields and heap-backed optionals
+  alive.
+- **An identifier is not always a borrow.** Naming a top-level function where a
+  value is expected compiles to a `dex_closure_new`, so it mints a reference
+  despite being spelled as an `Ident` — `isFuncValueIdent` is the carve-out, the
+  mirror of `IsMethodValue` for a field access. Without it `let f = twice`
+  retained a closure that already held the only reference there was, and
+  `apply(twice, 4)` minted one that nothing released.
+- **A row filler owns what it stores, the other way round.** `db.fill` assigns a
+  freshly-read column into a string field, and `dex_db_col_dexstr` already
+  minted that reference — so the field's old one is released and the new one
+  moves in with *no* retain. Retaining there would leak one reference per row.
+  That is the mirror of the setter rule below, where the value arrives borrowed.
+- **A reflective write owns what it stores.** `reflect.setString` releases what
+  the field held and retains what replaced it, retain *first* — the two can be
+  the same object when a field is written from a borrowed read of itself. The
+  value argument goes through `genBorrowed`, so a string built for the call is
+  released after the statement rather than handed over; the setter takes its own
+  reference, the same convention `dex_array_string_push` follows.
+  `checkReflectSetterSubject` is the other half: a by-value struct parameter is
+  a copy sharing the caller's heap pointers, so writing one would release a
+  reference the caller still holds, and an array element would write into the
+  shallow copy `genReflectSubject` makes for reads. Both are compile errors, and
+  `genReflectMutableSubject` therefore has no element path at all.
 - `json.Value` has its own ownership rules — indexing a document mints a reference
   where indexing an array only borrows one. See `jsonValueOwned` in `gen_jsonvalue.go`.
 - A method value is a fresh closure even though it reads like a field access, so

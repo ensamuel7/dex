@@ -547,6 +547,88 @@ let svc = Service{db: db}   // svc.db points to db
 
 ---
 
+### Field tags
+
+A field may carry a tag: backtick-delimited metadata written after its type.
+
+```dex
+struct Book {
+    id: long
+    pages: int
+    authorName: string `db:"COALESCE(a.name, '')"`
+    releasedOn: string `db:"b.released_on::text"`
+    priceMinor: long `db:"b.price_minor" json:"price"`
+    note: string
+}
+```
+
+The format is space-separated `key:"value"` pairs, so one field can carry
+several namespaces at once. A tag is **raw**: no escape sequences, no
+interpolation, which is what lets an SQL fragment like `COALESCE(a.name, '')` be
+written exactly as it will be used.
+
+Tags are read back through [`reflect.fieldTag`](#reflect):
+
+```dex
+reflect.fieldTag(bk, 2, "db")      // "COALESCE(a.name, '')"
+reflect.fieldTag(bk, 4, "json")    // "price"
+reflect.fieldTag(bk, 0, "db")      // "" — that field has no tag
+```
+
+#### A tag is data, not a directive
+
+The compiler stores a tag and never interprets it. Nothing in the language knows
+what `db` or `json` means; a library decides what its own keys mean, and an
+unrecognised key is simply one nobody asked about.
+
+That is the distinction between a tag and an annotation. `#[owned]` is a
+**directive** — it changes what the compiler emits, so the set of valid
+annotations is closed and an unknown one is an error. A tag is **data**, so any
+key is allowed and the compiler checks only that the pairs are well formed:
+
+```dex
+f: string `db:x`             // error: tag key 'db' must have a quoted value
+f: string `db`               // error: tag key 'db' is missing its ':"value"'
+f: string `db:"a" db:"b"`    // error: tag repeats key 'db'
+f: string `db:"a"json:"b"`   // error: needs a space between keys
+```
+
+This catches the typo that would otherwise make a key silently invisible to
+whatever was meant to read it.
+
+#### Deriving a projection from the struct
+
+Tags exist so that a mapping can be read off the type rather than written beside
+it. Reading a tag is a read, so the read-only reflection above is enough:
+
+```dex
+fn columnsFor(bk: Book, alias: string): string[] {
+    let out: string[] = []
+    let i: int = 0
+    while (i < reflect.fieldCount(bk)) {
+        let name: string = reflect.fieldName(bk, i)
+        let tagged: string = reflect.fieldTag(bk, i, "db")
+        if (tagged.isEmpty()) {
+            out.push(alias + "." + snake(name) + " AS " + name)
+        } else {
+            out.push(tagged + " AS " + name)
+        }
+        i = i + 1
+    }
+    return out
+}
+```
+
+```
+b.id AS id
+COALESCE(a.name, '') AS authorName
+b.price_minor AS priceMinor
+```
+
+Any struct may carry tags — there is no separate kind of struct for it. The key
+is the discriminator: a type that means nothing to a database layer simply has
+no `db` key, and `fieldTag` reports `""`.
+
 ## Enums
 
 Enums define named sets of integer constants.
@@ -1639,8 +1721,8 @@ same base name are used together:
 import "model/billing" as "bill"
 import "service/billing" as "billing"
 
-let inv: bill.Invoice = bill.Invoice{}
-let total: long = billing.total(inv)
+let e: bill.Entry = bill.Entry{}
+let total: long = billing.total(e)
 ```
 
 The alias is a **string**, not a bare identifier. It works in any file, not just
@@ -2124,13 +2206,50 @@ db.free(rows)
 db.close(conn)
 ```
 
+#### Filling a struct from a row
+
+A row mapper written by hand names every field twice — once in the struct and
+once in the mapper — and only the struct side is checked, so a renamed field or
+a column inserted into the middle of a projection goes wrong silently.
+`db.fill` reads column `i` into field `i`, so the struct is the only place the
+shape is written down:
+
+```dex
+struct Person {
+    id: long
+    name: string
+    age: int
+}
+
+let rows: int = db.query(conn, "SELECT id, name, age FROM people")
+while (db.next(rows)) {
+    let p: Person = Person {}
+    db.fill(p, rows)
+    fmt.println(p.name)
+}
+db.free(rows)
+```
+
+Field order is column order, so the projection must select one column per field
+in declaration order — build it from the struct's own field list with
+[`reflect.fields`](#reflect) and [`reflect.fieldTags`](#reflect) and the two
+cannot drift apart. A field reflection cannot read (an array, a map, a nested
+struct) is skipped but still consumes its column position, so the fields after
+it stay aligned.
+
+The subject is held to the same rules a [reflect setter](#writing-fields) is: a
+`&Struct` or a local variable, never a by-value parameter, an array element, or
+a temporary. A `string` field's old reference is released and the column's
+freshly-read one moves in, so filling the same struct in a loop does not leak.
+
 | Function | Signature                                     | Description                              |
 |----------|-----------------------------------------------|------------------------------------------|
 | `open`   | `open(driver: string, dsn: string): int`      | Open a connection, returns handle        |
 | `exec`   | `exec(conn: int, sql: string): int`           | Execute a statement, returns affected rows |
 | `query`  | `query(conn: int, sql: string): int`          | Execute a query, returns result handle   |
 | `next`   | `next(rows: int): bool`                       | Advance to next row                      |
-| `col`    | `col(rows: int, index: int): int\|string\|double\|bool` | Read a column value (type from context) |
+| `col`    | `col(rows: int, index: int): int\|long\|string\|double\|bool` | Read a column value (type from context) |
+| `fill`   | `fill(into: struct\|&struct, rows: int): void` | Fill a struct from the current row, column `i` into field `i` |
 | `free`   | `free(rows: int): void`                       | Free a result set                        |
 | `close`  | `close(conn: int): void`                      | Close a connection                       |
 
@@ -2802,9 +2921,9 @@ let b: string = str.fromBool(true)    // "true"
 
 ### reflect
 
-Reads a struct's fields by position, so a function can walk a value whose shape
-it does not have written down — a row mapper, a validator, an audit diff, a
-debug dump.
+Reads and writes a struct's fields by position, so a function can walk a value
+whose shape it does not have written down — a row mapper, a validator, an audit
+diff, a debug dump.
 
 ```dex
 import "reflect"
@@ -2844,6 +2963,8 @@ active (bool) = true
 | `reflect.fields(value)` | `string[]` | Field names in declaration order. Allocates; prefer `fieldName` in a loop. |
 | `reflect.fieldName(value, index)` | `string` | Name of the field at this index, `""` if out of range. |
 | `reflect.fieldKind(value, index)` | `string` | `"int"`, `"long"`, `"double"`, `"bool"`, `"string"`, `"char"`, `"struct"`, `"array"`, or `"other"` for a field reflection cannot read (a map, a `json.Value`, an enum); `""` if out of range. |
+| `reflect.fieldTag(value, index, key)` | `string` | The value this field's tag gives for `key`, or `""` if the field has no tag or no such key. See [Field tags](#field-tags). |
+| `reflect.fieldTags(value, key)` | `string[]` | Every field's tag value for `key`, in declaration order, `""` where a field has none. The array form of `fieldTag`. |
 | `reflect.indexOf(value, name)` | `int` | Index of the named field, `-1` if absent. |
 | `reflect.has(value, name)` | `bool` | Whether the struct declares that field. |
 | `reflect.asInt(value, index)` | `int` | The field as an `int`, `0` if the index is out of range or the field is another type. |
@@ -2852,6 +2973,11 @@ active (bool) = true
 | `reflect.asBool(value, index)` | `bool` | As above, for `bool`. |
 | `reflect.asString(value, index)` | `string` | As above, for `string`. |
 | `reflect.toString(value, index)` | `string` | The field rendered as text whatever its type. `""` for a `struct` or `array` field — use `json.encode` for those. |
+| `reflect.setInt(value, index, to)` | `bool` | Write an `int` field. `false` without writing if the index is out of range or the field is another type. |
+| `reflect.setLong(value, index, to)` | `bool` | As above, for `long`. |
+| `reflect.setDouble(value, index, to)` | `bool` | As above, for `double`. |
+| `reflect.setBool(value, index, to)` | `bool` | As above, for `bool`. |
+| `reflect.setString(value, index, to)` | `bool` | As above, for `string`. The struct takes its own reference and releases what the field held, so the value may be borrowed or freshly built. |
 
 The subject may be a struct value or a `&T`, so a helper that takes its argument
 by reference reads the same as one that takes it by value:
@@ -2872,7 +2998,90 @@ fn describe(c: &User): string {
 ```
 
 A nested struct field and an array element are each subjects in their own right:
-`reflect.asString(unit.detail, 0)`, `reflect.asString(fleet[0], 1)`.
+`reflect.asString(unit.detail, 0)`, `reflect.asString(people[0], 1)`.
+
+#### Describing a struct to a function that has no type for it
+
+A function cannot take "any struct" as a parameter — DexLang has no generics —
+so the generic half of a metadata-driven library cannot be written as an
+ordinary function. `fields()` and `fieldTags()` close that gap: together they
+hand a plain function over two `string[]` everything it needs, and a function
+over two string arrays needs no polymorphism at all.
+
+```dex
+// Serves every model in the program. No struct type in its signature.
+fn projection(names: string[], tags: string[], alias: string): string[] {
+    let out: string[] = []
+    let i: int = 0
+    while (i < names.len()) {
+        if (tags[i] == "-") {
+            // not selected
+        } else if (tags[i].isEmpty()) {
+            out.push(alias + "." + snake(names[i]))
+        } else {
+            out.push(tags[i])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// The one place that knows which struct this is, names it once.
+let cols: string[] = projection(reflect.fields(row), reflect.fieldTags(row, "db"), "i")
+```
+
+Tag keys are the library's to define — `"-"` meaning "skip this field" above is
+a convention of that `projection` function, not something the compiler knows.
+
+#### Writing fields
+
+The `set*` functions are the `as*` accessors with the assignment the other way
+round. They exist for the shape that motivated them — filling a struct from a
+result set, a form, or anything that hands over values in declaration order —
+so that one loop replaces one assignment per field per struct:
+
+```dex
+fn fill(out: &Pending, rows: int): void {
+    let i: int = 0
+    while (i < reflect.fieldCount(out)) {
+        let kind: string = reflect.fieldKind(out, i)
+        if (kind == "int") {
+            reflect.setInt(out, i, db.colInt(rows, i))
+        } else if (kind == "long") {
+            reflect.setLong(out, i, db.colLong(rows, i))
+        } else if (kind == "string") {
+            reflect.setString(out, i, db.colStr(rows, i))
+        }
+        i = i + 1
+    }
+}
+```
+
+Each returns whether it wrote. A setter whose index is out of range, or which
+names a field of another type, writes nothing and reports `false` — a read in
+that position returns a zero value, but a write that silently did nothing would
+never be noticed, so it is reported instead.
+
+A write is held to more than a read, because a read only has to be able to see
+the subject while a write changes it. Three subjects the compiler refuses:
+
+```dex
+fn bad(p: Pending): void { reflect.setString(p, 4, "v") }  // by-value parameter
+reflect.setString(list[0], 4, "v")                         // array element
+reflect.setString(makePending(), 4, "v")                   // temporary
+```
+
+A **by-value struct parameter** is a copy that shares the caller's string
+pointers without owning them, so writing one releases a reference the caller
+still holds — and even for a value field the caller never sees the write. Take
+the subject as `&Pending` instead, which is the form that means what was
+intended. An **array element** has no in-place write in the language at all
+(`list[0].currency = "v"` does not parse), and reflection is not a back door
+into it: bind the element to a variable, write that, and put it back. A
+**temporary** owns its heap fields and nobody would be left to release them.
+
+A field of a *local* struct is fine, including a nested one —
+`reflect.setString(outer.inner, 0, "v")` — because a local owns what it holds.
 
 #### What it costs
 

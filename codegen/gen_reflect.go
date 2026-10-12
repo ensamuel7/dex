@@ -157,6 +157,27 @@ func (g *Generator) emitReflectForStruct(out *strings.Builder, sd ast.StructDef)
 	out.WriteString(fmt.Sprintf("    if (i < 0 || i >= %d) return dex_string_from_lit(\"\");\n", n))
 	out.WriteString(fmt.Sprintf("    return dex_string_from_lit(_dex_refl_kinds_%s[i]);\n}\n", sd.Name))
 
+	// Field tags, stored verbatim. A field without one carries "" rather than
+	// being absent from the table, so the index still lines up with the others.
+	out.WriteString(fmt.Sprintf("static const char* const _dex_refl_tags_%s[%d] = {", sd.Name, max(n, 1)))
+	for i, f := range sd.Fields {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(fmt.Sprintf("%q", f.Tag))
+	}
+	if n == 0 {
+		out.WriteString("0")
+	}
+	out.WriteString("};\n")
+
+	out.WriteString(fmt.Sprintf("static DexString* _dex_refl_tag_%s(int i, const char* key) {\n", sd.Name))
+	out.WriteString(fmt.Sprintf("    if (i < 0 || i >= %d) return dex_string_from_lit(\"\");\n", n))
+	out.WriteString("    char buf[512];\n")
+	out.WriteString(fmt.Sprintf("    dex_refl_tag(_dex_refl_tags_%s[i], key, buf, sizeof(buf));\n", sd.Name))
+	// from_lit copies; from_cstr would free this stack buffer.
+	out.WriteString("    return dex_string_from_lit(buf);\n}\n")
+
 	// Typed accessors. Each lists only the fields of its own kind, which is what
 	// makes a mismatched read return a zero value instead of garbage.
 	g.emitReflectAccessor(out, sd, cType, "int", "int", ast.TypeInt, "0")
@@ -174,7 +195,107 @@ func (g *Generator) emitReflectForStruct(out *strings.Builder, sd ast.StructDef)
 	out.WriteString("        default: break;\n    }\n")
 	out.WriteString("    (void)s;\n    return dex_string_from_lit(\"\");\n}\n")
 
+	// Typed writers, the same switch with the assignment the other way round.
+	g.emitReflectSetter(out, sd, cType, "int", "int", ast.TypeInt)
+	g.emitReflectSetter(out, sd, cType, "long", "long", ast.TypeLong)
+	g.emitReflectSetter(out, sd, cType, "dbl", "double", ast.TypeDouble)
+	g.emitReflectSetter(out, sd, cType, "bool", "_Bool", ast.TypeBool)
+	g.emitReflectStringSetter(out, sd, cType)
+
 	g.emitReflectShow(out, sd, cType)
+	g.emitDbFiller(out, sd, cType)
+}
+
+// emitDbFiller writes the straight-line row reader behind db.fill: column i
+// into field i, one assignment per field, no switch and no loop.
+//
+// It is straight-line because the field index is a constant at every position,
+// which is the same reason a reflective read with a known index costs what a
+// field read costs. A field reflection cannot read — an array, a map, a nested
+// struct — is skipped, but its column position is still consumed, so the fields
+// after it stay aligned with the projection.
+//
+// A string column mints its reference, so the field's old one is released and
+// the new one moves in without a retain.
+func (g *Generator) emitDbFiller(out *strings.Builder, sd ast.StructDef, cType string) {
+	if g.importedModules["db"] == nil {
+		return
+	}
+	keys := ast.DbFillKeys(sd.Name)
+	if len(keys) == 0 {
+		keys = []string{"db"}
+	}
+	for _, key := range keys {
+		g.emitDbFillerForKey(out, sd, cType, key)
+	}
+}
+
+func (g *Generator) emitDbFillerForKey(out *strings.Builder, sd ast.StructDef, cType, key string) {
+	out.WriteString(fmt.Sprintf("static void %s(%s* s, int rows) {\n", dbFillerName(sd.Name, key), cType))
+	// The column counter is separate from the field index. A field the
+	// projection does not select — `db:"-"` — takes no column, so counting
+	// fields would read everything after it one position out. This is the one
+	// place the compiler reads a tag's meaning rather than just its syntax, and
+	// it is the db module reading its own key.
+	col := 0
+	for _, f := range sd.Fields {
+		if v, ok := ast.TagValue(f.Tag, key); ok && v == "-" {
+			out.WriteString(fmt.Sprintf("    // %s is tagged %s:\"-\" — not selected, and takes no column\n", f.Name, key))
+			continue
+		}
+		switch f.Type {
+		case ast.TypeString:
+			out.WriteString(fmt.Sprintf("    { DexString* _v = dex_db_col_dexstr(rows, %d); dex_release(s->%s); s->%s = _v; }\n", col, f.Name, f.Name))
+		case ast.TypeLong:
+			out.WriteString(fmt.Sprintf("    s->%s = dex_db_col_long(rows, %d);\n", f.Name, col))
+		case ast.TypeInt:
+			out.WriteString(fmt.Sprintf("    s->%s = dex_db_col_int(rows, %d);\n", f.Name, col))
+		case ast.TypeDouble:
+			out.WriteString(fmt.Sprintf("    s->%s = dex_db_col_double(rows, %d);\n", f.Name, col))
+		case ast.TypeBool:
+			out.WriteString(fmt.Sprintf("    s->%s = dex_db_col_bool(rows, %d);\n", f.Name, col))
+		default:
+			// A kind reflection cannot read still occupies its column: the
+			// projection selected one for it, and the caller fills the field.
+			out.WriteString(fmt.Sprintf("    // column %d: %s has kind %s — left to the caller\n", col, f.Name, reflectKindName(f.Type)))
+		}
+		col++
+	}
+	out.WriteString("    (void)s;\n    (void)rows;\n}\n")
+}
+
+// emitReflectSetter writes one value-kind writer. It reports whether it wrote,
+// because a setter that silently does nothing is a worse failure than a read
+// that returns zero — nothing downstream would ever notice.
+func (g *Generator) emitReflectSetter(out *strings.Builder, sd ast.StructDef, cType, suffix, valType string, kind ast.Type) {
+	out.WriteString(fmt.Sprintf("static _Bool _dex_refl_set_%s_%s(%s* s, int i, %s v) {\n", suffix, sd.Name, cType, valType))
+	out.WriteString("    switch (i) {\n")
+	for i, f := range sd.Fields {
+		if f.Type == kind {
+			out.WriteString(fmt.Sprintf("        case %d: s->%s = v; return 1;\n", i, f.Name))
+		}
+	}
+	out.WriteString("        default: break;\n    }\n")
+	out.WriteString("    (void)s;\n    (void)v;\n    return 0;\n}\n")
+}
+
+// emitReflectStringSetter writes the one setter with an ownership obligation: a
+// struct owns its string fields, so the field's old reference is released and a
+// reference to the new value is taken.
+//
+// Retain before release, not after. The two can be the same object — writing a
+// field from a borrowed read of itself — and releasing first could drop the
+// last reference to the very value being stored.
+func (g *Generator) emitReflectStringSetter(out *strings.Builder, sd ast.StructDef, cType string) {
+	out.WriteString(fmt.Sprintf("static _Bool _dex_refl_set_str_%s(%s* s, int i, DexString* v) {\n", sd.Name, cType))
+	out.WriteString("    switch (i) {\n")
+	for i, f := range sd.Fields {
+		if f.Type == ast.TypeString {
+			out.WriteString(fmt.Sprintf("        case %d: dex_retain(v); dex_release(s->%s); s->%s = v; return 1;\n", i, f.Name, f.Name))
+		}
+	}
+	out.WriteString("        default: break;\n    }\n")
+	out.WriteString("    (void)s;\n    (void)v;\n    return 0;\n}\n")
 }
 
 // emitReflectAccessor writes one value-kind accessor: the fields of exactly one
@@ -218,4 +339,15 @@ func (g *Generator) emitReflectShow(out *strings.Builder, sd ast.StructDef, cTyp
 	}
 	out.WriteString("        default: break;\n    }\n")
 	out.WriteString("    (void)s;\n    (void)buf;\n    return dex_string_from_lit(\"\");\n}\n")
+}
+
+
+// dbFillerName is the generated filler for one struct read under one tag key.
+// The default key keeps its original name, so nothing that was already emitted
+// changes shape.
+func dbFillerName(structName, key string) string {
+	if key == "db" {
+		return "_dex_db_fill_" + structName
+	}
+	return "_dex_db_fill_" + structName + "_" + key
 }

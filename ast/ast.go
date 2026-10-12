@@ -1,5 +1,7 @@
 package ast
 
+import "sort"
+
 // Pos represents a source position (file, line, and column).
 type Pos struct {
 	File string
@@ -77,6 +79,13 @@ type StructField struct {
 	IsPrivate   bool
 	Annotations []string
 	Doc         string // documentation string for hover
+
+	// Tag is the backtick-delimited metadata written after the field's type,
+	// stored verbatim. The compiler never reads it: an annotation such as
+	// #[owned] is a directive that changes what is emitted, whereas a tag is
+	// data for a library, reached at runtime through reflect.fieldTag. Keeping
+	// the two apart is what lets annotations stay a closed, checked set.
+	Tag string
 }
 
 type StructDef struct {
@@ -533,6 +542,9 @@ type CallExpr struct {
 	// expression rather than a plain variable name, as in parsed[0].asInt().
 	// When it is nil the receiver, if any, is named by Module.
 	Recv Expr
+	// ResolvedKey is the tag key db.fill() reads, set by the checker. A struct
+	// read by two projections gets a filler per key.
+	ResolvedKey string
 }
 
 type ArrayLitExpr struct {
@@ -733,3 +745,132 @@ func IsReflected(name string) bool {
 func ReflectedStructCount() int {
 	return len(reflectedStructs)
 }
+
+// StmtPos returns the source position of a statement. The Stmt interface
+// deliberately carries no methods, so the position lives in a field that only a
+// type switch can reach; diagnostics and the debug memory checker both need it
+// generically.
+func StmtPos(stmt Stmt) Pos {
+	switch s := stmt.(type) {
+	case *LetStmt:
+		return s.Pos
+	case *ReturnStmt:
+		return s.Pos
+	case *ExprStmt:
+		return s.Pos
+	case *IfStmt:
+		return s.Pos
+	case *WhileStmt:
+		return s.Pos
+	case *BlockStmt:
+		return s.Pos
+	case *AssignStmt:
+		return s.Pos
+	case *IndexAssignStmt:
+		return s.Pos
+	case *FieldAssignStmt:
+		return s.Pos
+	case *BreakStmt:
+		return s.Pos
+	case *ContinueStmt:
+		return s.Pos
+	case *ForStmt:
+		return s.Pos
+	case *ForeachStmt:
+		return s.Pos
+	case *IncrementStmt:
+		return s.Pos
+	case *DecrementStmt:
+		return s.Pos
+	case *CompoundAssignStmt:
+		return s.Pos
+	case *SendStmt:
+		return s.Pos
+	case *TryCatchStmt:
+		return s.Pos
+	case *ThrowStmt:
+		return s.Pos
+	case *SwitchStmt:
+		return s.Pos
+	case *DeferStmt:
+		return s.Pos
+	case *DestructureLetStmt:
+		return s.Pos
+	}
+	return Pos{}
+}
+
+// TagValue returns the value a field tag gives for one key, and whether the key
+// was present at all — which is distinct from a key whose value is empty.
+//
+// The format is the one Go uses: space-separated `key:"value"` pairs, so one
+// tag can carry several namespaces. Values are verbatim; a tag is raw text, so
+// a value cannot itself contain a double quote.
+//
+// The compiler does not interpret any key — that is a library's business — but
+// it does need to *read* one: db.fill has to know which fields a `db:"-"`
+// leaves out of a projection, or the columns after such a field would be read
+// one position out.
+func TagValue(tag, key string) (string, bool) {
+	i := 0
+	for i < len(tag) {
+		for i < len(tag) && (tag[i] == ' ' || tag[i] == '\t') {
+			i++
+		}
+		if i >= len(tag) {
+			break
+		}
+		keyStart := i
+		for i < len(tag) && tag[i] != ':' && tag[i] != ' ' {
+			i++
+		}
+		found := tag[keyStart:i]
+		if i+1 >= len(tag) || tag[i] != ':' || tag[i+1] != '"' {
+			// Not a well-formed pair; skip to the next space rather than
+			// guessing what was meant. The checker reports the malformed tag.
+			for i < len(tag) && tag[i] != ' ' {
+				i++
+			}
+			continue
+		}
+		i += 2 // consume :"
+		valStart := i
+		for i < len(tag) && tag[i] != '"' {
+			i++
+		}
+		val := tag[valStart:i]
+		if i < len(tag) {
+			i++ // consume closing quote
+		}
+		if found == key {
+			return val, true
+		}
+	}
+	return "", false
+}
+
+
+// Row fillers are emitted per struct *and* per tag key, because a struct can
+// be read by more than one projection — db.fill(out, rows, "fleet") skips the
+// fields that key marks with "-", which are not the ones "db" marks.
+var dbFillKeys = map[string]map[string]bool{}
+
+func MarkDbFilled(structName, key string) {
+	if dbFillKeys[structName] == nil {
+		dbFillKeys[structName] = map[string]bool{}
+	}
+	dbFillKeys[structName][key] = true
+}
+
+// DbFillKeys lists the tag keys a struct is filled by, in a stable order so the
+// generated C does not churn between builds.
+func DbFillKeys(structName string) []string {
+	keys := make([]string, 0, len(dbFillKeys[structName]))
+	for k := range dbFillKeys[structName] {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func ResetDbFillKeys() { dbFillKeys = map[string]map[string]bool{} }

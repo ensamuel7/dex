@@ -32,6 +32,10 @@ const (
 	TokenInt
 	TokenFloat
 	TokenString
+	// TokenTag is a backtick-delimited field tag: opaque metadata the compiler
+	// stores and never interprets. Raw — no escape sequences — so a tag can hold
+	// the quotes and backslashes an SQL expression needs.
+	TokenTag
 	TokenPercent
 	TokenPlus
 	TokenMinus
@@ -161,6 +165,8 @@ func (k TokenKind) String() string {
 		return "float literal"
 	case TokenString:
 		return "string literal"
+	case TokenTag:
+		return "field tag"
 	case TokenPercent:
 		return "%"
 	case TokenPlus:

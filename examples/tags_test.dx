@@ -1,0 +1,167 @@
+// Field tags: metadata written after a field's type, stored verbatim and never
+// interpreted by the compiler. A library decides what its own keys mean; the
+// compiler only checks that the pairs are well formed.
+import "fmt"
+import "reflect"
+import "str"
+
+struct Book {
+    id: long
+    pages: int
+    authorName: string `db:"COALESCE(a.name, '')"`
+    releasedOn: string `db:"b.released_on::text"`
+    priceMinor: long `db:"b.price_minor" json:"price"`
+    note: string
+}
+
+// A struct with no tags at all answers "" for every key.
+struct Point {
+    x: int
+    y: int
+}
+
+// camelCase -> snake_case, the default when a field carries no db tag.
+fn snake(field: string): string {
+    let sb = StringBuilder()
+    let i: int = 0
+    while (i < field.len()) {
+        let ch: string = field.substring(i, i + 1)
+        let lower: string = ch.toLower()
+        if (ch != lower) {
+            sb.append("_")
+        }
+        sb.append(lower)
+        i = i + 1
+    }
+    return sb.toString()
+}
+
+// The whole projection, derived from the struct rather than written beside it.
+fn columnsFor(bk: Book, alias: string): string[] {
+    let out: string[] = []
+    let i: int = 0
+    while (i < reflect.fieldCount(bk)) {
+        let name: string = reflect.fieldName(bk, i)
+        let tagged: string = reflect.fieldTag(bk, i, "db")
+        if (tagged.isEmpty()) {
+            out.push(alias + "." + snake(name) + " AS " + name)
+        } else {
+            out.push(tagged + " AS " + name)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn main(): void {
+    let bk: Book = Book { id: 1, pages: 2, authorName: "a",
+                          releasedOn: "r", priceMinor: 5, note: "n" }
+
+    // A tagged field reports its tag; an untagged one reports "".
+    assert(reflect.fieldTag(bk, 2, "db") == "COALESCE(a.name, '')")
+    assert(reflect.fieldTag(bk, 0, "db") == "")
+
+    // Several namespaces on one field, each read independently.
+    assert(reflect.fieldTag(bk, 4, "db") == "b.price_minor")
+    assert(reflect.fieldTag(bk, 4, "json") == "price")
+
+    // A key the tag does not define, and a struct with no tags at all.
+    assert(reflect.fieldTag(bk, 4, "nope") == "")
+    let p: Point = Point { x: 1, y: 2 }
+    assert(reflect.fieldTag(p, 0, "db") == "")
+
+    // An index computed out of range is "" rather than a read off the end of
+    // the table. A literal out-of-range index is a compile error instead.
+    let past: int = reflect.fieldCount(p) + 50
+    assert(reflect.fieldTag(p, past, "db") == "")
+
+    let cols: string[] = columnsFor(bk, "b")
+    assert(cols.len() == 6)
+    fmt.println(cols[0])
+    fmt.println(cols[2])
+    fmt.println(cols[4])
+
+    // A key chosen at runtime works too.
+    let key: string = "js" + "on"
+    assert(reflect.fieldTag(bk, 4, key) == "price")
+
+    // Repeated reads, so a minted string that is never released would show up
+    // in a leak check rather than passing unnoticed.
+    let total: int = 0
+    let r: int = 0
+    while (r < 2000) {
+        let f: int = 0
+        while (f < reflect.fieldCount(bk)) {
+            total = total + reflect.fieldTag(bk, f, "db").len()
+            f = f + 1
+        }
+        r = r + 1
+    }
+    fmt.println(total)
+    fmt.println(str.fromInt(cols.len()))
+
+    checkFieldTags()
+}
+
+// fieldTags: the whole table at once, which is what lets the generic half of a
+// metadata-driven library be an ordinary function. A function cannot take "any
+// struct", but it can take two string arrays.
+fn projection(names: string[], tags: string[], alias: string): string[] {
+    let out: string[] = []
+    let i: int = 0
+    while (i < names.len()) {
+        let tag: string = tags[i]
+        if (tag == "-") {
+            // A convention of this function, not of the compiler.
+        } else if (tag.isEmpty()) {
+            out.push(alias + "." + snake(names[i]))
+        } else {
+            out.push(tag)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+struct Skipped {
+    id: long
+    name: string
+    internal: string `db:"-"`
+}
+
+fn checkFieldTags(): void {
+    let bk: Book = Book { id: 1, pages: 2, authorName: "a",
+                          releasedOn: "r", priceMinor: 5, note: "n" }
+
+    let tags: string[] = reflect.fieldTags(bk, "db")
+    assert(tags.len() == 6)
+    assert(tags[0] == "")
+    assert(tags[2] == "COALESCE(a.name, '')")
+    assert(tags[4] == "b.price_minor")
+    // A key no field defines gives "" for every one of them.
+    assert(reflect.fieldTags(bk, "nope")[2] == "")
+    // A key chosen at runtime, evaluated once however many fields there are.
+    let key: string = "js" + "on"
+    assert(reflect.fieldTags(bk, key)[4] == "price")
+
+    // The struct named once, the rule written once.
+    let cols: string[] = projection(reflect.fields(bk), tags, "b")
+    assert(cols.len() == 6)
+    assert(cols[0] == "b.id")
+    assert(cols[2] == "COALESCE(a.name, '')")
+    assert(cols[4] == "b.price_minor")
+
+    let sk: Skipped = Skipped { id: 1, name: "n", internal: "x" }
+    let skCols: string[] = projection(reflect.fields(sk), reflect.fieldTags(sk, "db"), "s")
+    assert(skCols.len() == 2)
+    assert(skCols[1] == "s.name")
+
+    // Repeated, so a minted tag never released would show in a leak check.
+    let r: int = 0
+    let total: int = 0
+    while (r < 500) {
+        total = total + reflect.fieldTags(bk, "db").len()
+        r = r + 1
+    }
+    assert(total == 3000)
+}

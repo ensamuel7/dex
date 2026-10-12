@@ -523,25 +523,16 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 	case *ast.ThrowStmt:
 		// Emit deferred calls before throwing
 		g.emitDeferredCalls(out, prefix)
-		// Extract message from Exception constructor: Exception("msg") -> _dex_throw(msg)
-		out.WriteString(fmt.Sprintf("%s_dex_throw(", prefix))
+		// A literal message is static storage and can be thrown directly.
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Name == "Exception" && len(call.Args) == 1 {
-			// Direct constructor call: extract message arg
-			if strLit, ok := call.Args[0].(*ast.StringLit); ok {
-				out.WriteString(fmt.Sprintf("%q", strLit.Value))
-			} else {
-				// Expression that produces a DexString — extract ->data
-				out.WriteString("(")
-				g.genExpr(out, call.Args[0])
-				out.WriteString(")->data")
+			if strLit, isLit := call.Args[0].(*ast.StringLit); isLit {
+				out.WriteString(fmt.Sprintf("%s_dex_throw(%q);\n", prefix, strLit.Value))
+				break
 			}
-		} else {
-			// General expression that produces an Exception struct — extract .message->data
-			out.WriteString("(")
-			g.genExpr(out, s.Value)
-			out.WriteString(").message->data")
+			g.genThrowMessage(out, prefix, call.Args[0], false)
+			break
 		}
-		out.WriteString(");\n")
+		g.genThrowMessage(out, prefix, s.Value, true)
 
 	case *ast.TryCatchStmt:
 		id := g.tryCatchCounter
@@ -648,4 +639,38 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			}
 		}
 	}
+}
+
+// genThrowMessage emits a throw whose message is built at runtime.
+//
+// The message text is staged into the exception runtime first, then the string
+// that produced it is released, and only then does the throw longjmp. The order
+// is forced: longjmp skips every release the unwound frames would have run, so
+// a message built for the throw — `throw Exception("no " + name)` — had nothing
+// left to own it and leaked one string per throw.
+//
+// A message that was only borrowed is not released, on the usual terms.
+func (g *Generator) genThrowMessage(out *strings.Builder, prefix string, msg ast.Expr, fromStruct bool) {
+	field := ""
+	if fromStruct {
+		field = ".message"
+	}
+	tmp := g.nextTemp()
+	typ := ast.TypeString
+	if fromStruct {
+		typ = g.typeOfExpr(msg)
+	}
+	out.WriteString(fmt.Sprintf("%s{ %s %s = ", prefix, g.cType(typ), tmp))
+	g.genExpr(out, msg)
+	out.WriteString(fmt.Sprintf("; _dex_exc_stage(%s%s->data);", tmp, field))
+	if fromStruct {
+		if ast.NeedsRelease(typ) {
+			var rel strings.Builder
+			g.emitReleaseVar(&rel, "", tmp, typ)
+			out.WriteString(" " + strings.ReplaceAll(strings.TrimRight(rel.String(), "\n"), "\n", " "))
+		}
+	} else if g.isNewAlloc(msg) {
+		out.WriteString(fmt.Sprintf(" dex_release(%s);", tmp))
+	}
+	out.WriteString(" _dex_throw_staged(); }\n")
 }

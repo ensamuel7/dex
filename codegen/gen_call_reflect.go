@@ -35,7 +35,7 @@ func (g *Generator) genReflectCall(out *strings.Builder, e *ast.CallExpr) bool {
 	// reflection's.
 	if _, isIdent := e.Args[0].(*ast.Ident); !isIdent {
 		switch e.Name {
-		case "typeName", "fieldCount", "fields", "fieldName", "fieldKind", "indexOf", "has":
+		case "typeName", "fieldCount", "fields", "fieldName", "fieldKind", "fieldTag", "fieldTags", "indexOf", "has":
 			out.WriteString("(((void)(")
 			g.genExpr(out, e.Args[0])
 			out.WriteString(")), ")
@@ -101,9 +101,45 @@ func (g *Generator) genReflectCallBody(out *strings.Builder, e *ast.CallExpr) bo
 		g.genExpr(out, e.Args[1])
 		out.WriteString(")")
 		return true
+	case "fieldTag":
+		out.WriteString(fmt.Sprintf("_dex_refl_tag_%s(", def.Name))
+		g.genExpr(out, e.Args[1])
+		out.WriteString(", ")
+		// The key is read only, so a minted one is released after the statement.
+		if lit, isLit := e.Args[2].(*ast.StringLit); isLit {
+			out.WriteString(fmt.Sprintf("%q", lit.Value))
+		} else {
+			out.WriteString("(")
+			g.genBorrowed(out, e.Args[2])
+			out.WriteString(")->data")
+		}
+		out.WriteString(")")
+		return true
 
 	case "fields":
 		g.genReflectFields(out, def)
+		return true
+	case "fieldTags":
+		g.genReflectFieldTags(out, def, e.Args[1])
+		return true
+	}
+
+	// --- Typed writers ------------------------------------------------------
+	if suffix := reflectSetterSuffix(e.Name); suffix != "" {
+		out.WriteString(fmt.Sprintf("_dex_refl_set_%s_%s(", suffix, def.Name))
+		g.genReflectMutableSubject(out, subject)
+		out.WriteString(", ")
+		g.genExpr(out, e.Args[1])
+		out.WriteString(", ")
+		if e.Name == "setString" {
+			// The setter takes its own reference, so a value built for the call
+			// is released after the statement rather than being handed over —
+			// the same convention dex_array_string_push follows.
+			g.genBorrowed(out, e.Args[2])
+		} else {
+			g.genExpr(out, e.Args[2])
+		}
+		out.WriteString(")")
 		return true
 	}
 
@@ -159,6 +195,41 @@ func (g *Generator) genReflectSubject(out *strings.Builder, subject ast.Expr) {
 	out.WriteString(")")
 }
 
+// genReflectMutableSubject emits a setter's subject as a writable pointer.
+//
+// It is genReflectSubject without the indexed-element case, which copies the
+// element and addresses the copy: a read can do that safely because it only
+// reads shared pointers, but a write would land in the copy and be discarded.
+// The checker rejects an element subject for a setter so that path is
+// unreachable here rather than silently wrong.
+func (g *Generator) genReflectMutableSubject(out *strings.Builder, subject ast.Expr) {
+	if ast.IsRefType(g.typeOfExpr(subject)) {
+		g.genExpr(out, subject)
+		return
+	}
+	out.WriteString("&(")
+	g.genExpr(out, subject)
+	out.WriteString(")")
+}
+
+// reflectSetterSuffix is the accessor suffix a set* function writes through, or
+// "" for anything that is not a setter.
+func reflectSetterSuffix(name string) string {
+	switch name {
+	case "setInt":
+		return "int"
+	case "setLong":
+		return "long"
+	case "setDouble":
+		return "dbl"
+	case "setBool":
+		return "bool"
+	case "setString":
+		return "str"
+	}
+	return ""
+}
+
 // genReflectFields builds the field-name array. The names are literals, so this
 // is a fixed sequence of pushes rather than a loop over the table.
 func (g *Generator) genReflectFields(out *strings.Builder, def *ast.StructDef) {
@@ -170,6 +241,40 @@ func (g *Generator) genReflectFields(out *strings.Builder, def *ast.StructDef) {
 		out.WriteString(fmt.Sprintf("{ DexString* _e = dex_string_from_lit(%q); dex_array_string_push(%s, _e); dex_release(_e); } ", f.Name, tmp))
 	}
 	out.WriteString(fmt.Sprintf("%s; })", tmp))
+}
+
+// genReflectFieldTags builds the array of every field's tag value for one key.
+//
+// This is the piece that lets a library be written against struct metadata
+// without the language having generics. A function cannot take "any struct" as
+// a parameter, so the generic half of such a library cannot live in a user
+// module at all — but reflect.fields() and reflect.fieldTags() hand it two
+// plain string arrays, and a function over two string arrays needs no
+// polymorphism. The caller names the struct once, at the only place that knows
+// which struct it is.
+//
+// The key is read once into a local rather than re-emitted per field: it may be
+// an expression, and a tag table of thirty fields would otherwise evaluate it
+// thirty times.
+func (g *Generator) genReflectFieldTags(out *strings.Builder, def *ast.StructDef, key ast.Expr) {
+	arr := g.nextTemp()
+	keyVar := g.nextTemp()
+	out.WriteString("({ const char* " + keyVar + " = ")
+	if lit, isLit := key.(*ast.StringLit); isLit {
+		out.WriteString(fmt.Sprintf("%q", lit.Value))
+	} else {
+		out.WriteString("(")
+		g.genBorrowed(out, key)
+		out.WriteString(")->data")
+	}
+	out.WriteString(fmt.Sprintf("; DexArrayString* %s = dex_array_string_new(); ", arr))
+	for i := range def.Fields {
+		// push retains what it is handed and the lookup minted a reference, so
+		// the lookup's reference is released afterwards.
+		out.WriteString(fmt.Sprintf("{ DexString* _e = _dex_refl_tag_%s(%d, %s); dex_array_string_push(%s, _e); dex_release(_e); } ",
+			def.Name, i, keyVar, arr))
+	}
+	out.WriteString(fmt.Sprintf("%s; })", arr))
 }
 
 // reflectFieldIndex is the declaration-order position of a named field, or -1.

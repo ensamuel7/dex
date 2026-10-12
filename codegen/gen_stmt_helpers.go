@@ -134,6 +134,12 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 	}
 	switch expr.(type) {
 	case *ast.Ident:
+		// Naming a top-level function where a value is expected mints a fresh
+		// closure over no environment, so it is an allocation despite reading
+		// like a variable.
+		if g.isFuncValueIdent(expr) {
+			return true
+		}
 		return false // borrowed reference
 	case *ast.FieldAccessExpr:
 		// Reading a field borrows it, but naming a method builds a fresh closure
@@ -357,4 +363,57 @@ func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit *ast.Stru
 		}
 	}
 	return false
+}
+
+// emitRetainPushedStructFields takes the array's own reference to the heap
+// fields of a struct being copied into it.
+//
+// dex_array_struct_push is a memcpy and cannot retain what it copies — only
+// the element type's cleanup function knows the layout — but the array's
+// destructor runs that cleanup over every slot. So the reference has to be
+// taken here, at the push, or the array and the struct's original owner each
+// release the same strings and the second release is a double free.
+//
+// Which fields depends on where the struct came from, exactly as it does for a
+// struct copied out of an array:
+//
+//   - a borrowed struct (a variable, an element, a field) is still owned by
+//     whoever it came from, so every heap field needs a reference;
+//   - a literal built on the spot needs one only for the fields initialised
+//     from something borrowed;
+//   - a struct an expression just produced — the result of a call — already
+//     owns its fields and that ownership moves into the array. Retaining would
+//     leave every field one reference above zero forever.
+//
+// target is the C lvalue holding the struct at the push site.
+func (g *Generator) emitRetainPushedStructFields(out *strings.Builder, target string, elemType ast.Type, elem ast.Expr) {
+	if !ast.NeedsRelease(elemType) {
+		return
+	}
+	var retains strings.Builder
+	if lit, ok := elem.(*ast.StructLitExpr); ok {
+		g.emitRetainStructLitFields(&retains, "", target, elemType, lit)
+	} else if g.borrowsHeapValue(elem) {
+		g.emitRetainBorrowedStructFields(&retains, "", target, elemType)
+	}
+	if retains.Len() == 0 {
+		return
+	}
+	out.WriteString(strings.ReplaceAll(strings.TrimRight(retains.String(), "\n"), "\n", " "))
+	out.WriteString(" ")
+}
+
+// genStructArrayLitElem pushes one element of a struct-array literal, taking
+// the array's reference to whatever heap fields it does not already own.
+//
+// The three struct-array literal sites — a let, a global let, and a literal in
+// expression position — all go through here for the same reason the
+// value-array sites go through genArrayLitElem: the one that did not caused
+// `[unit]` to free the strings still held by `unit`.
+func (g *Generator) genStructArrayLitElem(out *strings.Builder, arrVar string, elemType ast.Type, elem ast.Expr) {
+	out.WriteString(fmt.Sprintf("{ %s _el = ", g.cType(elemType)))
+	g.genExpr(out, elem)
+	out.WriteString("; ")
+	g.emitRetainPushedStructFields(out, "_el", elemType, elem)
+	out.WriteString(fmt.Sprintf("dex_array_struct_push(%s, &_el); }", arrVar))
 }

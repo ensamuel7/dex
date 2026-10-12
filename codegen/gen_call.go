@@ -194,6 +194,26 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
+	// db.fill(into, rows) — polymorphic in the struct, like the reflect calls.
+	if e.Module == "db" && e.Name == "fill" {
+		subjectType := g.typeOfExpr(e.Args[0])
+		if ast.IsRefType(subjectType) {
+			subjectType = ast.RefInnerType(subjectType)
+		}
+		if def := ast.GetStructDef(subjectType); def != nil {
+			key := e.ResolvedKey
+			if key == "" {
+				key = "db"
+			}
+			out.WriteString(dbFillerName(def.Name, key) + "(")
+			g.genReflectMutableSubject(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString(")")
+			return
+		}
+	}
+
 	// db.col(rows, col) — polymorphic: dispatch by resolved return type
 	if e.Module == "db" && e.Name == "col" {
 		var fn string
@@ -204,6 +224,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			fn = "dex_db_col_bool"
 		case ast.TypeDouble:
 			fn = "dex_db_col_double"
+		case ast.TypeLong:
+			// dex_db_col_int truncates past 2^31, which an id column on a
+			// long-running table will reach.
+			fn = "dex_db_col_long"
 		default:
 			fn = "dex_db_col_int"
 		}
@@ -591,41 +615,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					out.WriteString(fmt.Sprintf("{ %s _push_tmp = ", elemCType))
 					g.genExpr(out, e.Args[0])
 					out.WriteString("; ")
-					// Retain heap fields before push — but only borrowed ones.
-					// New allocations (string literals, function calls) already have
-					// refcount=1 which transfers to the array via memcpy.
-					def := ast.GetStructDef(elemType)
-					if def != nil {
-						if structLit, ok := e.Args[0].(*ast.StructLitExpr); ok {
-							// Struct literal: check each field individually
-							fieldValueMap := make(map[string]ast.Expr, len(structLit.FieldNames))
-							for i, fn := range structLit.FieldNames {
-								fieldValueMap[fn] = structLit.FieldValues[i]
-							}
-							for _, f := range def.Fields {
-								if ast.IsHeapType(f.Type) {
-									if valExpr, found := fieldValueMap[f.Name]; found {
-										if !g.isNewAlloc(valExpr) {
-											out.WriteString(fmt.Sprintf("dex_retain(_push_tmp.%s); ", f.Name))
-										}
-									}
-								}
-							}
-						} else if !g.isNewAlloc(e.Args[0]) {
-							// A borrowed struct — a variable, or a field of one —
-							// is still owned by whoever it came from, so the array
-							// takes its own reference to each heap field.
-							for _, f := range def.Fields {
-								if ast.IsHeapType(f.Type) {
-									out.WriteString(fmt.Sprintf("dex_retain(_push_tmp.%s); ", f.Name))
-								}
-							}
-						}
-						// A struct the expression just produced — the result of a
-						// call, say — already owns its fields, and that ownership
-						// transfers to the array. Retaining here would leave every
-						// field one reference above zero forever.
-					}
+					g.emitRetainPushedStructFields(out, "_push_tmp", elemType, e.Args[0])
 					out.WriteString(fmt.Sprintf("dex_array_struct_push(%s, &_push_tmp); }", e.Module))
 					return
 				case "len":
@@ -646,9 +636,16 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			} else {
 				switch e.Name {
 				case "push":
+					// A container owns its elements: push retains what it is
+					// handed and the array's destructor releases every slot, so
+					// an argument that minted a reference has to give it back.
+					// genBorrowed hoists the minted value and releases it once
+					// the statement ends, leaving the array holding the only
+					// reference. Without this, arr.push("x") and
+					// arr.push(a + b) each leaked one string per call.
 					pushFn := g.arrayPushFunc(arrType)
 					out.WriteString(fmt.Sprintf("%s(%s, ", pushFn, e.Module))
-					g.genExpr(out, e.Args[0])
+					g.genBorrowed(out, e.Args[0])
 					out.WriteString(")")
 					return
 				case "len":
@@ -900,17 +897,25 @@ func (g *Generator) genStringArg(out *strings.Builder, arg ast.Expr) {
 
 // genStrMethodWithArgs generates a string method call, wrapping any string literal
 // arguments in a statement-expression that releases the temp after the call.
+// genStrMethodWithArgs emits a string method that only *reads* its arguments —
+// contains, startsWith, endsWith, indexOf, split.
+//
+// Which arguments have to be released is isNewAlloc's question, not "is it a
+// literal". Keying off literals covered `s.indexOf("x")` and leaked every other
+// way of producing a string: `s.indexOf(" " + table + " ")` minted a
+// concatenation that nothing ever released, one per call.
+//
+// The releases go in a statement expression rather than through genBorrowed
+// because these methods are emitted from expression position where the
+// statement prelude may not be available.
 func (g *Generator) genStrMethodWithArgs(out *strings.Builder, cFunc, receiver string, args []ast.Expr) {
-	// Check if any arg is a string literal (produces +1 ref that would leak)
-	hasLitArg := false
-	for _, arg := range args {
-		if _, ok := arg.(*ast.StringLit); ok {
-			hasLitArg = true
-			break
-		}
+	owned := make([]bool, len(args))
+	anyOwned := false
+	for i, arg := range args {
+		owned[i] = g.typeOfExpr(arg) == ast.TypeString && g.isNewAlloc(arg)
+		anyOwned = anyOwned || owned[i]
 	}
-	if !hasLitArg {
-		// No string literal temps — emit directly
+	if !anyOwned {
 		out.WriteString(fmt.Sprintf("%s(%s", cFunc, receiver))
 		for _, arg := range args {
 			out.WriteString(", ")
@@ -919,18 +924,11 @@ func (g *Generator) genStrMethodWithArgs(out *strings.Builder, cFunc, receiver s
 		out.WriteString(")")
 		return
 	}
-	// Wrap in statement-expression to release string literal temps
 	out.WriteString("({ ")
-	var tmpNames []string
-	for _, arg := range args {
-		tmp := g.nextTemp()
-		tmpNames = append(tmpNames, tmp)
-		if _, ok := arg.(*ast.StringLit); ok {
-			out.WriteString(fmt.Sprintf("DexString* %s = ", tmp))
-		} else {
-			// Non-literal args: capture the type from the expression
-			out.WriteString(fmt.Sprintf("DexString* %s = ", tmp))
-		}
+	tmpNames := make([]string, len(args))
+	for i, arg := range args {
+		tmpNames[i] = g.nextTemp()
+		out.WriteString(fmt.Sprintf("%s %s = ", g.cType(g.typeOfExpr(arg)), tmpNames[i]))
 		g.genExpr(out, arg)
 		out.WriteString("; ")
 	}
@@ -940,9 +938,8 @@ func (g *Generator) genStrMethodWithArgs(out *strings.Builder, cFunc, receiver s
 		out.WriteString(fmt.Sprintf(", %s", tmp))
 	}
 	out.WriteString("); ")
-	// Release only the string literal temps
-	for i, arg := range args {
-		if _, ok := arg.(*ast.StringLit); ok {
+	for i := range args {
+		if owned[i] {
 			out.WriteString(fmt.Sprintf("dex_release(%s); ", tmpNames[i]))
 		}
 	}

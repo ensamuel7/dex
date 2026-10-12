@@ -55,6 +55,12 @@ func (g *Generator) Generate(program *ast.Program) string {
 		if imp.Path == "http" {
 			g.usesMap = true // HttpRequest.params is map[string,string]
 		}
+		if imp.Path == "db" {
+			// dex_db_query_params and dex_db_exec_params take a DexArrayString,
+			// so the db runtime does not compile without the array runtime —
+			// even for a program that never writes an array itself.
+			g.usesArray = true
+		}
 	}
 
 	// String methods need both string and array runtimes (split returns DexArrayString)
@@ -185,7 +191,15 @@ func (g *Generator) Generate(program *ast.Program) string {
 		if !g.usesConcurrency {
 			out.WriteString("#define DEX_SINGLE_THREADED\n")
 		}
+		if g.memCheck {
+			out.WriteString("#define DEX_MEM_CHECK 1\n")
+		}
 		out.WriteString(RefcountRuntime)
+		// The checker needs DexObjHeader, so it follows the refcount runtime,
+		// which forward-declares the four hooks it calls into.
+		if g.memCheck {
+			out.WriteString(MemCheckRuntime)
+		}
 	}
 
 	// Emit closure runtime (needs the refcount header, nothing else)
@@ -311,9 +325,15 @@ func (g *Generator) Generate(program *ast.Program) string {
 		if hasHeapFields {
 			out.WriteString(fmt.Sprintf("static void dex_cleanup_%s(void* ptr) {\n", sd.Name))
 			out.WriteString(fmt.Sprintf("    Dex_%s* s = (Dex_%s*)ptr;\n", sd.Name, sd.Name))
+			// Through emitReleaseVar, so an element of a struct array is torn
+			// down exactly as a local of the same type is. Releasing only the
+			// top-level heap fields here left a struct's nested struct fields
+			// and its heap-backed optionals alive — and the gate above counts
+			// those as heap fields, so a struct whose only releasable field was
+			// a nested one got an empty cleanup function.
 			for _, f := range sd.Fields {
-				if ast.IsHeapType(f.Type) {
-					out.WriteString(fmt.Sprintf("    dex_release(s->%s);\n", f.Name))
+				if ast.NeedsRelease(f.Type) {
+					g.emitReleaseVar(&out, "    ", "s->"+f.Name, f.Type)
 				}
 			}
 			out.WriteString("}\n")
@@ -371,6 +391,16 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit C runtime from imported modules
 	for _, mod := range g.importedModules {
 		if mod.CRuntime != "" {
+			out.WriteString(mod.CRuntime)
+		}
+	}
+
+	// The reflect runtime, for a program that has reflected structs without
+	// importing reflect. db.fill marks the struct it fills exactly as a
+	// reflect.* call does, so the tag and name lookups get emitted for it — and
+	// those call into this runtime.
+	if g.importedModules["reflect"] == nil && len(g.reflectedStructDefs(program)) > 0 {
+		if mod := stdlib.Lookup("reflect"); mod != nil {
 			out.WriteString(mod.CRuntime)
 		}
 	}

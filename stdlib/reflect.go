@@ -29,6 +29,12 @@ var reflectRuntime string
 // type-checks every case, so asLong on a string field cannot reinterpret a
 // pointer as an integer — the field is simply not a case in that switch, and the
 // call returns a zero value.
+//
+// The set* functions are the same switch with the assignment the other way
+// round, and they carry the one extra obligation a read does not: a struct owns
+// its string fields, so writing one releases what the field held and retains
+// what replaced it. That is also why the checker is stricter about a setter's
+// subject than a getter's — see checkReflectCall.
 func init() {
 	Register(&Module{
 		Name:     "reflect",
@@ -68,6 +74,20 @@ func init() {
 				ReturnType: ast.TypeString,
 				CName:      "",
 				Doc:        "Type of the field at this index as a string: \"int\", \"long\", \"double\", \"bool\", \"string\", \"char\", \"struct\", \"array\", or \"other\" for a field reflection cannot read; \"\" if the index is out of range. Compare it to pick which as* accessor to call.",
+			},
+			"fieldTags": {
+				Params:     nil,
+				ParamNames: []string{"value", "key"},
+				ReturnType: ast.TypeArrayString,
+				CName:      "",
+				Doc:        "Every field's tag value for this key, in declaration order, with \"\" where a field has no tag or no such key. The array form of fieldTag(), and the piece that lets a metadata-driven library be written without generics: reflect.fields() and reflect.fieldTags() together hand a plain function everything it needs to describe a struct it has no type for.",
+			},
+			"fieldTag": {
+				Params:     nil,
+				ParamNames: []string{"value", "index", "key"},
+				ReturnType: ast.TypeString,
+				CName:      "",
+				Doc:        "The value a field's tag gives for this key, or \"\" if the field has no tag or no such key. A tag is the backtick metadata after a field's type — `db:\"i.total_minor\" json:\"total\"` — stored verbatim and never interpreted by the compiler, so a library decides what its own keys mean.",
 			},
 			"indexOf": {
 				Params:     nil,
@@ -124,6 +144,41 @@ func init() {
 				ReturnType: ast.TypeString,
 				CName:      "",
 				Doc:        "Render the field at this index as text whatever its type — an int as its digits, a bool as \"true\" or \"false\", a string as itself. Returns \"\" for an out-of-range index, and for a struct or array field, which have no single-line rendering; use json.encode for those.",
+			},
+			"setInt": {
+				Params:     nil,
+				ParamNames: []string{"value", "index", "to"},
+				ReturnType: ast.TypeBool,
+				CName:      "",
+				Doc:        "Write an int field by index. Returns false without writing if the index is out of range or names a field of another type, so a caller that has not already checked fieldKind() can tell. The subject must be a &Struct or a local variable, never a by-value parameter.",
+			},
+			"setLong": {
+				Params:     nil,
+				ParamNames: []string{"value", "index", "to"},
+				ReturnType: ast.TypeBool,
+				CName:      "",
+				Doc:        "Write a long field by index. Returns false without writing if the index is out of range or names a field of another type. The subject must be a &Struct or a local variable, never a by-value parameter.",
+			},
+			"setDouble": {
+				Params:     nil,
+				ParamNames: []string{"value", "index", "to"},
+				ReturnType: ast.TypeBool,
+				CName:      "",
+				Doc:        "Write a double field by index. Returns false without writing if the index is out of range or names a field of another type. The subject must be a &Struct or a local variable, never a by-value parameter.",
+			},
+			"setBool": {
+				Params:     nil,
+				ParamNames: []string{"value", "index", "to"},
+				ReturnType: ast.TypeBool,
+				CName:      "",
+				Doc:        "Write a bool field by index. Returns false without writing if the index is out of range or names a field of another type. The subject must be a &Struct or a local variable, never a by-value parameter.",
+			},
+			"setString": {
+				Params:     nil,
+				ParamNames: []string{"value", "index", "to"},
+				ReturnType: ast.TypeBool,
+				CName:      "",
+				Doc:        "Write a string field by index. The struct takes its own reference and releases whatever the field held before, so the value may be borrowed or freshly built. Returns false without writing if the index is out of range or names a field of another type. The subject must be a &Struct or a local variable, never a by-value parameter.",
 			},
 		},
 	})

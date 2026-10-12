@@ -54,4 +54,38 @@ fn main(): void {
     assert(empty.len() == 0)
     assert(empty.contains("") == true)
     assert(empty.trim() == "")
+
+    // A reading method's argument is released when the expression minted it.
+    // Only a literal argument used to be, so every other way of producing one
+    // leaked a reference per call. Looped so a missed release shows up here.
+    let hay: string = "a-b-c"
+    let mid: string = "b"
+    let i: int = 0
+    while (i < 2000) {
+        assert(hay.indexOf("-" + mid + "-") == 1)
+        assert(hay.startsWith(mid) == false)
+        assert(hay.startsWith("a" + "-") == true)
+        assert(hay.contains(hay.substring(0, 1)) == true)
+        assert(hay.split("-" + "" ).len() == 3)
+        // A plain variable is borrowed, and must not be released.
+        assert(hay.indexOf(mid) == 2)
+        i = i + 1
+    }
+
+    // A method whose receiver is an expression, used as a condition. An if or
+    // while condition has no statement prelude to hoist the receiver into, and
+    // this did not compile at all until the receiver was bound inline.
+    let pieces: string[] = ["", "ab"]
+    let seen: int = 0
+    let k: int = 0
+    while (k < 2000) {
+        if (pieces[k % 2].isEmpty()) {
+            seen = seen + 1
+        }
+        if (pieces[1].len() == 2) {
+            seen = seen + 1
+        }
+        k = k + 1
+    }
+    assert(seen == 3000)
 }

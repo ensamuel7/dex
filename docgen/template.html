@@ -1090,6 +1090,28 @@ let size: int = csv.split(",")[2].len()
 let shouted: string = "  mixed  ".trim().toUpper()</code></pre>
 <p>A string, array, map or <code>StringBuilder</code> is a receiver whether it is a named variable, a literal, or the result of the call before it. Each link's receiver is evaluated <strong>once</strong> and released if that link produced it, so <code>csv.split(",")[2].len()</code> splits once and frees the array at the end of the statement. A receiver that is simply a variable is used directly, with no temporary.</p>
 
+<h3>Field tags</h3>
+<p>A field may carry a <strong>tag</strong>: backtick-delimited metadata written after its type.</p>
+<pre><code>struct Book {
+    id: long
+    pages: int
+    authorName: string `db:"COALESCE(a.name, '')"`
+    releasedOn: string `db:"b.released_on::text"`
+    priceMinor: long `db:"b.price_minor" json:"price"`
+    note: string
+}</code></pre>
+<p>The format is space-separated <code>key:"value"</code> pairs, so one field can carry several namespaces at once. A tag is <strong>raw</strong> &mdash; no escapes, no interpolation &mdash; which is what lets an SQL fragment like <code>COALESCE(a.name, '')</code> be written exactly as it will be used.</p>
+<p>Tags are read back through <code>reflect.fieldTag</code>:</p>
+<pre><code>reflect.fieldTag(bk, 2, "db")      // "COALESCE(a.name, '')"
+reflect.fieldTag(bk, 4, "json")    // "price"
+reflect.fieldTag(bk, 0, "db")      // "" &mdash; that field has no tag</code></pre>
+<p><strong>A tag is data, not a directive.</strong> The compiler stores it and never interprets it: nothing in the language knows what <code>db</code> or <code>json</code> means. That is the difference from an annotation &mdash; <code>#[owned]</code> changes what the compiler emits, so the valid set is closed and an unknown one is an error, whereas any tag key is allowed. What the compiler does check is that the pairs are well formed, which catches the typo that would otherwise make a key silently invisible:</p>
+<pre><code>f: string `db:x`             // error: tag key 'db' must have a quoted value
+f: string `db`               // error: tag key 'db' is missing its ':"value"'
+f: string `db:"a" db:"b"`    // error: tag repeats key 'db'
+f: string `db:"a"json:"b"`   // error: needs a space between keys</code></pre>
+<p>Any struct may carry tags &mdash; there is no separate kind of struct for it. The key is the discriminator: a type that means nothing to a database layer simply has no <code>db</code> key, and <code>fieldTag</code> reports <code>""</code>.</p>
+
 <h3>Zero Values</h3>
 <p>Omitted fields in struct literals are initialized to their zero value:</p>
 <table>
@@ -2455,6 +2477,7 @@ active (bool) = true</code></pre>
 <div class="func-card"><div class="sig"><span class="module">reflect</span>.fields(<span class="ptype">value: struct|&amp;struct</span>) <span class="ret">-&gt; string[]</span></div><p class="doc">Field names in declaration order. Allocates an array; prefer <code>fieldName</code> in a loop.</p></div>
 <div class="func-card"><div class="sig"><span class="module">reflect</span>.fieldName(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; string</span></div><p class="doc">Name of the field at this index, or "" if the index is out of range.</p></div>
 <div class="func-card"><div class="sig"><span class="module">reflect</span>.fieldKind(<span class="ptype">value: struct|&amp;struct, index: int</span>) <span class="ret">-&gt; string</span></div><p class="doc">"int", "long", "double", "bool", "string", "char", "struct", "array", or "other" for a field reflection cannot read (a map, a json.Value, an enum); "" if the index is out of range.</p></div>
+<div class="func-card"><div class="sig"><span class="module">reflect</span>.fieldTag(<span class="ptype">value: struct|&amp;struct, index: int, key: string</span>) <span class="ret">-&gt; string</span></div><p class="doc">The value this field's tag gives for key, or "" if the field has no tag or no such key. Tags are stored verbatim and never interpreted by the compiler.</p></div>
 <div class="func-card"><div class="sig"><span class="module">reflect</span>.indexOf(<span class="ptype">value: struct|&amp;struct, name: string</span>) <span class="ret">-&gt; int</span></div><p class="doc">Index of the named field, or -1 if absent. Folded to a constant when the name is a string literal.</p></div>
 <div class="func-card"><div class="sig"><span class="module">reflect</span>.has(<span class="ptype">value: struct|&amp;struct, name: string</span>) <span class="ret">-&gt; bool</span></div><p class="doc">Whether the struct declares that field. Folded to a constant when the name is a string literal.</p></div>
 
@@ -2482,7 +2505,7 @@ active (bool) = true</code></pre>
 }
 
 reflect.asString(unit.detail, 0)    // a nested struct field
-reflect.asString(fleet[0], 1)       // an array element</code></pre>
+reflect.asString(people[0], 1)     // an array element</code></pre>
 
 <h3>What it costs</h3>
 <p>Reflection here is not the usual trade of speed for flexibility, because the metadata is <strong>generated rather than discovered</strong>.</p>

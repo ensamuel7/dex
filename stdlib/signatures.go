@@ -46,6 +46,10 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 			return "value: struct|&struct", "string[]", true
 		case "fieldName", "fieldKind":
 			return "value: struct|&struct, index: int", "string", true
+		case "fieldTag":
+			return "value: struct|&struct, index: int, key: string", "string", true
+		case "fieldTags":
+			return "value: struct|&struct, key: string", "string[]", true
 		case "indexOf":
 			return "value: struct|&struct, name: string", "int", true
 		case "has":
@@ -60,12 +64,26 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 			return "value: struct|&struct, index: int", "bool", true
 		case "asString", "toString":
 			return "value: struct|&struct, index: int", "string", true
+		// A setter's subject has to be writable, so a by-value struct parameter
+		// is not one of the forms it accepts — see checkReflectSetterSubject.
+		case "setInt":
+			return "value: struct|&struct, index: int, to: int", "bool", true
+		case "setLong":
+			return "value: struct|&struct, index: int, to: long", "bool", true
+		case "setDouble":
+			return "value: struct|&struct, index: int, to: double", "bool", true
+		case "setBool":
+			return "value: struct|&struct, index: int, to: bool", "bool", true
+		case "setString":
+			return "value: struct|&struct, index: int, to: string", "bool", true
 		}
 
 	case "db":
 		switch funcName {
 		case "col":
-			return "int, int", "int|string|double|bool", true
+			return "int, int", "int|long|string|double|bool", true
+		case "fill":
+			return "into: struct|&struct, result: int", "void", true
 		}
 
 	case "http":

@@ -99,6 +99,13 @@ func init() {
 				CName:      "",
 				Doc:        "Get a column value from the current row by index.",
 			},
+			"fill": {
+				Params:     nil, // polymorphic — the subject is any struct
+				ParamNames: []string{"into", "result"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Fill a struct from the current row, reading column i into field i. The subject must be a &Struct or a local variable, never a by-value parameter. Field order is column order, so the projection must select one column per field in declaration order — query a struct's own field list to build it. A field reflection cannot read (an array, a map, a nested struct) is skipped but still consumes its column position, so the fields after it stay aligned.",
+			},
 			"free": {
 				Params:     []ast.Type{ast.TypeInt},
 				ParamNames: []string{"result"},

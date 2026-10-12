@@ -32,6 +32,12 @@ type Generator struct {
 	usesEventLoop     bool
 	usesStringBuilder bool
 
+	// memCheck emits the debug memory checker: a widened object header, a live
+	// object registry, and a DEX_AT marker ahead of every statement so an
+	// allocation can be attributed to the .dx line that made it. Set from
+	// DEX_MEM_CHECK=1, off in every normal build.
+	memCheck bool
+
 	tryCatchCounter int
 	switchCounter   int
 
@@ -163,3 +169,9 @@ func (g *Generator) CompilerFlags() []string {
 	}
 	return flags
 }
+
+// EnableMemCheck turns on the debug memory checker for this generation: the
+// object header grows bookkeeping fields, every allocation is registered, and
+// each statement is preceded by a marker naming its .dx source position so a
+// leak or a double release can be reported against it.
+func (g *Generator) EnableMemCheck() { g.memCheck = true }

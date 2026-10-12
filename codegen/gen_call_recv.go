@@ -48,10 +48,25 @@ func (g *Generator) genExprReceiverCall(out *strings.Builder, e *ast.CallExpr) b
 	}
 	tmp, ok := g.hoistReceiver(e.Recv, declType)
 	if !ok {
-		return false
+		// Nowhere to hoist a declaration to — an if or while condition, which
+		// is generated outside any statement prelude. Without this the call
+		// fell through to the named-receiver path with an empty receiver and
+		// emitted `isEmpty()`, a call to a function that does not exist, so
+		// `if (tags[i].isEmpty())` did not compile at all while the same
+		// expression in a `let` did.
+		//
+		// A statement expression needs no prelude, and unlike hoisting it is
+		// also correct in a while condition, which re-evaluates every iteration.
+		return g.genExprReceiverCallInline(out, e, declType, kindType)
 	}
-	// Register the temporary under the maps the named-receiver path consults, so
-	// it recognises the temp as a string, array, map, builder or struct.
+	g.registerReceiverTemp(tmp, declType, kindType)
+	g.genCallExpr(out, g.forwardedReceiverCall(e, tmp))
+	return true
+}
+
+// registerReceiverTemp puts the temporary into the maps the named-receiver path
+// consults, so it recognises it as a string, array, map, builder or struct.
+func (g *Generator) registerReceiverTemp(tmp string, declType, kindType ast.Type) {
 	g.varTypes[tmp] = declType
 	switch {
 	case kindType == ast.TypeString:
@@ -63,7 +78,10 @@ func (g *Generator) genExprReceiverCall(out *strings.Builder, e *ast.CallExpr) b
 	case ast.IsMapType(kindType):
 		g.mapVars[tmp] = kindType
 	}
-	g.genCallExpr(out, &ast.CallExpr{
+}
+
+func (g *Generator) forwardedReceiverCall(e *ast.CallExpr, tmp string) *ast.CallExpr {
+	return &ast.CallExpr{
 		Pos:      e.Pos,
 		Module:   tmp,
 		Name:     e.Name,
@@ -74,7 +92,51 @@ func (g *Generator) genExprReceiverCall(out *strings.Builder, e *ast.CallExpr) b
 		IsMethodCall: e.IsMethodCall,
 		StructType:   e.StructType,
 		ResolvedType: e.ResolvedType,
-	})
+	}
+}
+
+// genExprReceiverCallInline is genExprReceiverCall where no statement prelude
+// exists to hold the receiver's declaration, so the declaration, the call and
+// the release live in a statement expression instead.
+func (g *Generator) genExprReceiverCallInline(out *strings.Builder, e *ast.CallExpr, declType, kindType ast.Type) bool {
+	tmp := g.nextTemp()
+	g.registerReceiverTemp(tmp, declType, kindType)
+
+	// Asked of the forwarded call, not of e: typeOfExpr cannot resolve a method
+	// through Recv, and reading void there discarded the result of every
+	// value-returning method in a condition.
+	fwd := g.forwardedReceiverCall(e, tmp)
+	var call strings.Builder
+	g.genCallExpr(&call, fwd)
+	retType := g.typeOfExpr(fwd)
+
+	var owned bool
+	switch {
+	case ast.IsHeapType(declType):
+		owned = g.isNewAlloc(e.Recv)
+	case ast.IsStructType(declType) && ast.NeedsRelease(declType):
+		owned = !g.borrowsHeapValue(e.Recv)
+	}
+
+	out.WriteString(fmt.Sprintf("({ %s %s = ", g.cType(declType), tmp))
+	g.genExpr(out, e.Recv)
+	out.WriteString("; ")
+	// A void method has no value to bind, and __auto_type cannot name void.
+	if retType == ast.TypeVoid {
+		out.WriteString(call.String())
+		out.WriteString("; ")
+		if owned {
+			out.WriteString(fmt.Sprintf("dex_release(%s); ", tmp))
+		}
+		out.WriteString("})")
+		return true
+	}
+	res := g.nextTemp()
+	out.WriteString(fmt.Sprintf("__auto_type %s = %s; ", res, call.String()))
+	if owned {
+		out.WriteString(fmt.Sprintf("dex_release(%s); ", tmp))
+	}
+	out.WriteString(fmt.Sprintf("%s; })", res))
 	return true
 }
 

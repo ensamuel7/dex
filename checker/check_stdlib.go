@@ -133,6 +133,12 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return ast.TypeString, true, nil
 	}
 
+	// Special case: db.fill(into, rows) — polymorphic in the struct it fills.
+	if e.Module == "db" && e.Name == "fill" {
+		t, err := c.checkDbFillCall(e)
+		return t, true, err
+	}
+
 	// Special case: db.col(rows, col) — return type resolved from context
 	if e.Module == "db" && e.Name == "col" {
 		if len(e.Args) != 2 {

@@ -1038,3 +1038,60 @@ func TestRegisterExceptionType(t *testing.T) {
 		t.Errorf("After two RegisterExceptionType calls, found %d Exception entries, want 1", count)
 	}
 }
+
+// StmtPos is a type switch over every statement node, so the thing worth
+// testing is that none of them was left out: a statement whose position comes
+// back zero silently loses its attribution in a diagnostic.
+func TestStmtPosCoversEveryStatement(t *testing.T) {
+	at := Pos{File: "a.dx", Line: 7, Col: 3}
+	stmts := []Stmt{
+		&LetStmt{Pos: at}, &ReturnStmt{Pos: at}, &ExprStmt{Pos: at},
+		&IfStmt{Pos: at}, &WhileStmt{Pos: at}, &BlockStmt{Pos: at},
+		&AssignStmt{Pos: at}, &IndexAssignStmt{Pos: at}, &FieldAssignStmt{Pos: at},
+		&BreakStmt{Pos: at}, &ContinueStmt{Pos: at}, &ForStmt{Pos: at},
+		&ForeachStmt{Pos: at}, &IncrementStmt{Pos: at}, &DecrementStmt{Pos: at},
+		&CompoundAssignStmt{Pos: at}, &SendStmt{Pos: at}, &TryCatchStmt{Pos: at},
+		&ThrowStmt{Pos: at}, &SwitchStmt{Pos: at}, &DeferStmt{Pos: at},
+		&DestructureLetStmt{Pos: at},
+	}
+	for _, s := range stmts {
+		if got := StmtPos(s); got != at {
+			t.Errorf("StmtPos(%T) = %+v, want %+v", s, got, at)
+		}
+	}
+}
+
+// TagValue is the compiler reading a tag's value rather than only checking its
+// syntax — db.fill needs it to know which fields a projection leaves out.
+func TestTagValue(t *testing.T) {
+	const tag = `db:"i.total_minor" json:"total" empty:""`
+	cases := []struct {
+		key   string
+		want  string
+		found bool
+	}{
+		{"db", "i.total_minor", true},
+		{"json", "total", true},
+		{"empty", "", true}, // present with an empty value
+		{"nope", "", false}, // absent — distinct from the above
+	}
+	for _, c := range cases {
+		got, found := TagValue(tag, c.key)
+		if got != c.want || found != c.found {
+			t.Errorf("TagValue(%q) = (%q, %v), want (%q, %v)", c.key, got, found, c.want, c.found)
+		}
+	}
+	if got, found := TagValue("", "db"); got != "" || found {
+		t.Errorf("an untagged field must report nothing, got (%q, %v)", got, found)
+	}
+	if got, _ := TagValue(`db:"-"`, "db"); got != "-" {
+		t.Errorf(`db:"-" should read back as "-", got %q`, got)
+	}
+	// A malformed pair is skipped rather than guessed at; the checker reports it.
+	if _, found := TagValue(`db json:"total"`, "db"); found {
+		t.Error("a key with no value must not be reported as present")
+	}
+	if got, _ := TagValue(`db json:"total"`, "json"); got != "total" {
+		t.Errorf("a well-formed pair after a malformed one must still be found, got %q", got)
+	}
+}

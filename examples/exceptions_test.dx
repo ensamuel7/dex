@@ -1,0 +1,112 @@
+// Throwing, catching, and who owns the message.
+//
+// A thrown message is the one string nothing can own across the throw: longjmp
+// skips every release the unwound frames would have run, and the catch site
+// only reads the text. So the text is copied into the exception runtime first,
+// the string that produced it is released, and the throw happens last — and
+// the order of those three is the whole of it.
+//
+// Every case loops, because the symptom was one leaked string per throw: a
+// single pass showed nothing at all.
+import "fmt"
+import "str"
+
+fn builtMessage(n: int): void {
+    throw Exception("built " + str.fromInt(n))
+}
+
+// The caller still owns this one, and must still have it afterwards.
+fn borrowedMessage(m: string): void {
+    throw Exception(m)
+}
+
+fn literalMessage(): void {
+    throw Exception("literal")
+}
+
+// Thrown as a struct rather than built in the throw.
+fn structForm(n: int): void {
+    let e: Exception = Exception("struct " + str.fromInt(n))
+    throw e
+}
+
+fn divide(a: int, b: int): int {
+    if (b == 0) {
+        throw Exception("division by zero for " + str.fromInt(a))
+    }
+    return a / b
+}
+
+fn main(): void {
+    let held: string = "borrowed message"
+    let caught: int = 0
+
+    let i: int = 0
+    while (i < 500) {
+        try {
+            builtMessage(i)
+        } catch (e: Exception) {
+            assert(e.message.startsWith("built "))
+            caught = caught + 1
+        }
+
+        try {
+            borrowedMessage(held)
+        } catch (e: Exception) {
+            assert(e.message == "borrowed message")
+            caught = caught + 1
+        }
+
+        try {
+            literalMessage()
+        } catch (e: Exception) {
+            assert(e.message == "literal")
+            caught = caught + 1
+        }
+
+        try {
+            structForm(i)
+        } catch (e: Exception) {
+            assert(e.message.startsWith("struct "))
+            caught = caught + 1
+        }
+
+        i = i + 1
+    }
+    assert(caught == 2000)
+
+    // The borrowed message was never the throw's to release.
+    assert(held == "borrowed message")
+
+    // A throw that does not happen costs nothing, and the value comes back.
+    let ok: int = 0
+    let j: int = 0
+    while (j < 500) {
+        try {
+            ok = ok + divide(10, 2)
+        } catch (e: Exception) {
+            assert(false)
+        }
+        j = j + 1
+    }
+    assert(ok == 2500)
+
+    // finally runs on both paths.
+    let ran: int = 0
+    let k: int = 0
+    while (k < 200) {
+        try {
+            if (k % 2 == 0) {
+                throw Exception("even " + str.fromInt(k))
+            }
+        } catch (e: Exception) {
+            assert(e.message.startsWith("even "))
+        } finally {
+            ran = ran + 1
+        }
+        k = k + 1
+    }
+    assert(ran == 200)
+
+    fmt.println(str.fromInt(caught) + " caught, " + str.fromInt(ran) + " finally")
+}

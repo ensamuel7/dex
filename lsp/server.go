@@ -964,6 +964,11 @@ func seedParserModuleTypes(p *parser.Parser, tokens []token.Token, sourceDir str
 		}
 	}
 	p.AddStructName("Exception") // built-in Exception type
+	// Telling the parser the name exists is not the same as registering the
+	// type: a lookup in the global registry is how hover and completion find a
+	// struct's fields, and the build pipeline does both. Registering is
+	// idempotent, so every path that seeds a parser can do it.
+	ast.RegisterExceptionType()
 }
 
 // pathToURI converts a local file path to a file:// URI.

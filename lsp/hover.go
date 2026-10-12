@@ -167,11 +167,10 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 		}
 	}
 
-	// Check if it's a user-defined struct name
-	for i := range program.Structs {
-		if program.Structs[i].Name == name {
-			return formatStructHover(&program.Structs[i])
-		}
+	// Check if it's a struct name — the program's own, or a built-in such as
+	// Exception.
+	if def := structDeclByName(program, name); def != nil {
+		return formatStructHover(def)
 	}
 
 	// Check if it's a user-defined enum name
@@ -338,8 +337,21 @@ func formatFunctionHover(fn *ast.Function) string {
 	for _, p := range fn.Params {
 		params = append(params, fmt.Sprintf("%s: %s", p.Name, typeName(p.Type)))
 	}
-	sig := fmt.Sprintf("fn %s(%s): %s", fn.Name, strings.Join(params, ", "), typeName(fn.ReturnType))
+	sig := fmt.Sprintf("fn %s(%s): %s%s", fn.Name, strings.Join(params, ", "), typeName(fn.ReturnType), throwsClause(fn))
 	return fmt.Sprintf("```dex\n%s\n```\n\nUser-defined function.", sig)
+}
+
+// throwsClause renders the `throws` part of a signature, which is the whole
+// reason it is written: a caller reading the signature is told an exception may
+// escape, and which kinds when the declaration names them.
+func throwsClause(fn *ast.Function) string {
+	if !fn.Throws {
+		return ""
+	}
+	if len(fn.ThrowsTypes) == 0 {
+		return " throws"
+	}
+	return " throws " + strings.Join(fn.ThrowsTypes, ", ")
 }
 
 func formatModuleHover(path string) string {
@@ -452,7 +464,7 @@ func methodSignature(m *ast.Function) string {
 		}
 		params = append(params, fmt.Sprintf("%s: %s", p.Name, typeName(p.Type)))
 	}
-	sig := fmt.Sprintf("fn %s(%s): %s", m.Name, strings.Join(params, ", "), typeName(m.ReturnType))
+	sig := fmt.Sprintf("fn %s(%s): %s%s", m.Name, strings.Join(params, ", "), typeName(m.ReturnType), throwsClause(m))
 	if m.IsPrivate {
 		sig = "private " + sig
 	}
@@ -512,13 +524,22 @@ func (s *Server) hoverFieldAccess(program *ast.Program, objName, fieldName strin
 	return ""
 }
 
+// structDeclByName finds a struct's declaration. The program is asked first,
+// since its declarations carry methods and doc comments, and the global type
+// registry second — `Exception` is registered there rather than declared in any
+// file, as are the struct types the stdlib modules provide, so a lookup that
+// only walked the program found nothing to say about either.
 func structDeclByName(program *ast.Program, name string) *ast.StructDef {
-	if program == nil {
-		return nil
+	if program != nil {
+		for i := range program.Structs {
+			if program.Structs[i].Name == name {
+				return &program.Structs[i]
+			}
+		}
 	}
-	for i := range program.Structs {
-		if program.Structs[i].Name == name {
-			return &program.Structs[i]
+	if t, ok := ast.LookupStructType(name); ok {
+		if def := ast.GetStructDef(t); def != nil && def.Name == name {
+			return def
 		}
 	}
 	return nil

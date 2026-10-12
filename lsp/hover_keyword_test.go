@@ -117,3 +117,128 @@ func TestHoverDeferKeywordSaysWhenItRuns(t *testing.T) {
 		t.Errorf("hover over defer still says enclosing scope:\n%s", got)
 	}
 }
+
+// `Exception` is registered in the global type registry rather than declared in
+// any file, so a hover that only walked the program's own structs found nothing
+// to say about the one type every catch clause names. The stdlib modules'
+// struct types arrive the same way.
+const builtinHoverSource = `fn risky(): void throws {
+    throw Exception("x")
+}
+
+fn main(): void {
+    try {
+        risky()
+    } catch (err: Exception) {
+        let m = err.message
+    }
+}
+`
+
+func builtinHoverServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "b.dx")
+	if err := os.WriteFile(path, []byte(builtinHoverSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uri := pathToURI(path)
+	return &Server{documents: map[string]string{uri: builtinHoverSource}}, uri
+}
+
+func hoverIn(t *testing.T, s *Server, uri, source, needle, word string) string {
+	t.Helper()
+	for i, line := range strings.Split(source, "\n") {
+		if !strings.Contains(line, needle) {
+			continue
+		}
+		c := strings.Index(line, word)
+		if c < 0 {
+			t.Fatalf("%q not on the line holding %q", word, needle)
+		}
+		return s.hoverAt(uri, source, Position{Line: i, Character: c + 1})
+	}
+	t.Fatalf("no line holds %q", needle)
+	return ""
+}
+
+func TestHoverBuiltinExceptionType(t *testing.T) {
+	s, uri := builtinHoverServer(t)
+
+	for _, where := range []struct{ label, needle string }{
+		{"a catch clause", "} catch (err: Exception)"},
+		{"a throw", "throw Exception"},
+	} {
+		got := hoverIn(t, s, uri, builtinHoverSource, where.needle, "Exception")
+		if got == "" {
+			t.Fatalf("hover over Exception in %s shows nothing", where.label)
+		}
+		for _, want := range []string{"struct Exception", "message: string", "Built-in exception type"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("hover over Exception in %s missing %q:\n%s", where.label, want, got)
+			}
+		}
+	}
+}
+
+func TestHoverFieldOfABuiltinType(t *testing.T) {
+	s, uri := builtinHoverServer(t)
+	got := hoverIn(t, s, uri, builtinHoverSource, "let m = err.message", "message")
+	if !strings.Contains(got, "Exception.message: string") {
+		t.Errorf("hover over a built-in type's field:\n%s", got)
+	}
+}
+
+// A signature is where a caller looks for what escapes, so hovering a call has
+// to show the throws clause — it was dropped, which made the declaration
+// invisible exactly where it is meant to be read.
+const throwsSigSource = `struct ParseError(message: string, line: int) {}
+struct IOError(message: string) {}
+
+fn load(path: string): int throws ParseError, IOError {
+    throw IOError("x")
+}
+
+fn bare(): void throws {
+    throw Exception("x")
+}
+
+fn plain(): int {
+    return 1
+}
+
+fn main(): void {
+    try {
+        let n = load("a")
+        bare()
+        let p = plain()
+    } catch (e: Exception) {
+        let m = e.message
+    }
+}
+`
+
+func TestHoverShowsTheThrowsClause(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.dx")
+	if err := os.WriteFile(path, []byte(throwsSigSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uri := pathToURI(path)
+	s := &Server{documents: map[string]string{uri: throwsSigSource}}
+
+	typed := hoverIn(t, s, uri, throwsSigSource, "let n = load", "load")
+	if !strings.Contains(typed, "fn load(path: string): int throws ParseError, IOError") {
+		t.Errorf("a typed throws clause belongs in the signature:\n%s", typed)
+	}
+
+	bare := hoverIn(t, s, uri, throwsSigSource, "        bare()", "bare")
+	if !strings.Contains(bare, "fn bare(): void throws") {
+		t.Errorf("a bare throws belongs in the signature:\n%s", bare)
+	}
+
+	plain := hoverIn(t, s, uri, throwsSigSource, "let p = plain", "plain")
+	if strings.Contains(plain, "throws") {
+		t.Errorf("a function that cannot throw must not claim it does:\n%s", plain)
+	}
+}

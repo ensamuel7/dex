@@ -290,7 +290,6 @@ func Generate(projectRoot string) (string, error) {
 	return buf.String(), nil
 }
 
-
 // jsonValueDoc describes json.Value and its methods. It is written out here
 // rather than derived from the stdlib registry because json.Value is a language
 // type with methods, not a set of module functions.

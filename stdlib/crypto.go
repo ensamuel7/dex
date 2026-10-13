@@ -131,9 +131,9 @@ func init() {
 				// Both sides come through as DexString* so the compare can use
 				// the stored length — a hex digest has no interior NUL, but a
 				// token compared by strlen would stop at one.
-				RawParams:  []int{0, 1},
-				Doc:        "Compares two strings in time that does not depend on how much of a prefix matched. For signatures and tokens, where == leaks a prefix an attacker can walk.",
-			},		},
+				RawParams: []int{0, 1},
+				Doc:       "Compares two strings in time that does not depend on how much of a prefix matched. For signatures and tokens, where == leaks a prefix an attacker can walk.",
+			}},
 		CFlags:   detectCryptoFlags(),
 		CRuntime: cryptoRuntime,
 	})

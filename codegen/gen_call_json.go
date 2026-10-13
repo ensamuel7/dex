@@ -295,7 +295,7 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 	if !ast.IsArrayType(arrType) {
 		// Not something this function knows how to encode; the checker rejects
 		// these, so emitting an empty document keeps the output valid C.
-		out.WriteString("dex_string_from_lit(\"null\")")
+		out.WriteString(g.litRef("null"))
 		return
 	}
 

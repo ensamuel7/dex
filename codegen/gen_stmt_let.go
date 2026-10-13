@@ -122,7 +122,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 			return
 		}
 		if strLit, ok := s.Value.(*ast.StringLit); ok {
-			out.WriteString(fmt.Sprintf("%sDexString* %s = dex_string_from_lit(%q);\n", prefix, s.Name, strLit.Value))
+			out.WriteString(fmt.Sprintf("%sDexString* %s = %s;\n", prefix, s.Name, g.litRef(strLit.Value)))
 		} else {
 			out.WriteString(fmt.Sprintf("%sDexString* %s = ", prefix, s.Name))
 			g.genExpr(out, s.Value)
@@ -195,7 +195,7 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 			} else if inner == ast.TypeString {
 				// Handle string optional like regular string init
 				if strLit, ok := s.Value.(*ast.StringLit); ok {
-					out.WriteString(fmt.Sprintf("%s%s %s = dex_string_from_lit(%q);\n", prefix, ctyp, s.Name, strLit.Value))
+					out.WriteString(fmt.Sprintf("%s%s %s = %s;\n", prefix, ctyp, s.Name, g.litRef(strLit.Value)))
 				} else {
 					out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
 					g.genExpr(out, s.Value)

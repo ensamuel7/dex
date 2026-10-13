@@ -102,6 +102,12 @@ func (g *Generator) Generate(program *ast.Program) string {
 	}
 	g.usesRefcount = g.usesString || g.usesArray || g.usesConcurrency || g.usesClosure
 
+	// Guarded on usesString because the pool's definitions and the macro behind
+	// them come from the string runtime, which is emitted only under that flag.
+	if g.usesString {
+		g.collectStringLiterals(program)
+	}
+
 	var out strings.Builder
 
 	// Collect and deduplicate includes from imported modules
@@ -215,6 +221,9 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit string runtime (language-level feature for + on strings)
 	if g.usesString {
 		out.WriteString(StringRuntime)
+		// Immediately after, so the definitions precede every use and can see
+		// DEX_LIT_DEF. Nothing is emitted for a program with no literals.
+		g.emitStringLitPool(&out)
 	}
 
 	// Emit StringBuilder runtime (must come after string runtime, before array)

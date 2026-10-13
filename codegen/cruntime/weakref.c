@@ -30,6 +30,18 @@ static inline DexWeakRef* dex_weak_new(void* target) {
 
 // dex_weak_deref returns the target if still alive (rc > 0), or NULL.
 // Does NOT retain — caller gets a borrowed reference.
+//
+// UNFINISHED, and not reachable: codegen never emits a call to this, and
+// `weak<T>` has no dereference syntax. Do not wire one up without replacing
+// the check below, which reads the count out of an object that may already be
+// freed. That was merely undefined while a freed block sat in malloc's own
+// free list with a zeroed count; with the object pool in refcount.c the block
+// is handed straight back out and its count reset to 1, so a dead target now
+// reads as alive and this returns a pointer to whatever took its place. The
+// fix is state that cannot be recycled into agreement — a generation counter
+// in DexObjHeader, bumped on reuse and compared here (sclass already shows
+// there is room beside it), or a registry of weak references that destroy
+// walks and nulls.
 static inline void* dex_weak_deref(DexWeakRef* w) {
     if (!w || !w->target || !w->target_rc) return NULL;
     int rc = atomic_load_explicit(w->target_rc, memory_order_acquire);

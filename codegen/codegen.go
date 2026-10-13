@@ -145,6 +145,13 @@ type Generator struct {
 	// declaration, so main() does not try to assign them again.
 	inlinedConsts map[string]bool
 	globalVars    map[string]ast.Type // global variable name -> type
+
+	// String literals emitted once as immortal statics rather than allocated
+	// at every evaluation. litPool maps the literal's value to its C symbol;
+	// litOrder keeps the definitions in discovery order so output is stable.
+	// See gen_litpool.go.
+	litPool  map[string]string
+	litOrder []string
 }
 
 func New() *Generator {
@@ -169,6 +176,7 @@ func New() *Generator {
 		narrowedTypes:   make(map[string]ast.Type),
 		globalVars:      make(map[string]ast.Type),
 		inlinedConsts:   make(map[string]bool),
+		litPool:         make(map[string]string),
 	}
 }
 
@@ -191,6 +199,11 @@ func (g *Generator) CompilerFlags() []string {
 		"-Wformat", "-Wformat-security",
 		// Suppress expected noise from static runtime functions
 		"-Wno-unused-function",
+		// Same, for the string literal pool: a literal whose only use is a
+		// comparison compiles to raw bytes rather than an object, so its
+		// pooled static is emitted and then never referenced. Both are
+		// dead-stripped by the linker flags below.
+		"-Wno-unused-variable",
 	}
 	if runtime.GOOS == "darwin" {
 		flags = append(flags, "-Wl,-dead_strip")

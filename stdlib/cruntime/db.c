@@ -19,6 +19,16 @@
 #define DEX_DB_MAX_STMTS 64
 #define DEX_DB_POOL_SIZE 16
 
+// A query result and a prepared statement are both row sources, and db.col and
+// db.fill read a row from either, so the two share one handle space with a
+// disjoint range each: a handle at or above DEX_DB_STMT_BASE names
+// dex_db_stmts[handle - DEX_DB_STMT_BASE], and anything below it names
+// dex_db_results[handle]. The alternative was a second set of column readers,
+// which would have meant every projection in a program had to know which of the
+// two produced its row — and a struct filled by db.fill would have needed two
+// spellings of the same read.
+#define DEX_DB_STMT_BASE 4096
+
 #define DEX_DB_DRIVER_NONE 0
 #define DEX_DB_DRIVER_SQLITE 1
 #define DEX_DB_DRIVER_POSTGRES 2
@@ -89,6 +99,11 @@ typedef struct {
     int driver;
     int conn_slot; // which connection this stmt belongs to
     sqlite3_stmt* sqlite_stmt;
+    // Stepping a SQLite statement again after it has returned SQLITE_DONE is
+    // documented misuse, and a `while (db.next(stmt))` loop does exactly that
+    // on its last iteration. The flag makes the step after the last row answer
+    // false instead, the same way a result's does; db.reset clears it.
+    int sqlite_done;
 #ifdef DEX_HAS_POSTGRES
     // Which pool connections carry this statement, and at which generation. 0
     // means "not prepared there"; a generation mismatch means the socket was
@@ -113,6 +128,81 @@ static DexDbConn dex_db_conns[DEX_DB_MAX_CONNS];
 static DexDbResult dex_db_results[DEX_DB_MAX_RESULTS];
 static DexDbStmt dex_db_stmts[DEX_DB_MAX_STMTS];
 static pthread_mutex_t dex_db_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// ==========================================================================
+// A row, whichever table it came from
+//
+// Everything a column read needs, resolved from a handle once so that the six
+// readers below are the same code for a result and for a prepared statement.
+// driver is DEX_DB_DRIVER_NONE when the handle names nothing live, which is
+// every reader's "return the zero value" case.
+// ==========================================================================
+typedef struct {
+    int driver;
+    sqlite3_stmt* sqlite_stmt;
+#ifdef DEX_HAS_POSTGRES
+    PGresult* pg_result;
+    int       pg_row;
+#endif
+#ifdef DEX_HAS_MYSQL
+    MYSQL_ROW mysql_row;
+#endif
+#ifdef DEX_HAS_MONGO
+    const bson_t* mongo_doc;
+#endif
+} DexDbRow;
+
+// Defined with the rest of the statement API, below; next() and free() route
+// a statement handle to them.
+_Bool dex_db_step(int stmt_id);
+void dex_db_finalize(int stmt_id);
+
+// A statement handle back to its slot, or -1 if the handle is not one.
+static int dex_db_stmt_slot(int handle) {
+    int slot = handle - DEX_DB_STMT_BASE;
+    if (slot < 0 || slot >= DEX_DB_MAX_STMTS) return -1;
+    return slot;
+}
+
+static DexDbRow dex_db_row(int handle) {
+    DexDbRow row;
+    memset(&row, 0, sizeof(row));
+
+    if (handle >= DEX_DB_STMT_BASE) {
+        int slot = dex_db_stmt_slot(handle);
+        if (slot < 0) return row;
+        DexDbStmt* s = &dex_db_stmts[slot];
+        // -1 is a slot reserved by a prepare still in flight, 0 is a free one.
+        if (s->driver <= 0) return row;
+        row.driver = s->driver;
+        row.sqlite_stmt = s->sqlite_stmt;
+#ifdef DEX_HAS_POSTGRES
+        row.pg_result = s->pg_result;
+        // dex_db_step advances the cursor past the row it is about to hand
+        // over, so the current row is the one behind it — the opposite of a
+        // result's pg_row, which a reader indexes directly.
+        row.pg_row = s->pg_current_row - 1;
+#endif
+        return row;
+    }
+
+    if (handle < 0 || handle >= DEX_DB_MAX_RESULTS) return row;
+    DexDbResult* r = &dex_db_results[handle];
+    if (r->driver <= 0) return row;
+    row.driver = r->driver;
+    row.sqlite_stmt = r->sqlite_stmt;
+#ifdef DEX_HAS_POSTGRES
+    row.pg_result = r->pg_result;
+    row.pg_row = r->pg_row;
+#endif
+#ifdef DEX_HAS_MYSQL
+    row.mysql_row = r->mysql_row;
+#endif
+#ifdef DEX_HAS_MONGO
+    row.mongo_doc = r->mongo_doc;
+#endif
+    return row;
+}
 
 #ifdef DEX_HAS_POSTGRES
 // Names are never reused, even after a statement slot is recycled: a stale
@@ -630,6 +720,11 @@ int dex_db_query(int conn, const char* sql) {
 // dex_db_next
 // ==========================================================================
 _Bool dex_db_next(int rows) {
+    // A prepared statement advances with step, not with a cursor into stored
+    // rows, so next() on one is step(). Both spellings exist because both read
+    // naturally — `while (db.next(rows))` over a query, `db.step(stmt)` for a
+    // statement run once — and a caller should not have to pick by handle kind.
+    if (rows >= DEX_DB_STMT_BASE) return dex_db_step(rows);
     if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) return 0;
     DexDbResult* r = &dex_db_results[rows];
 
@@ -664,8 +759,8 @@ _Bool dex_db_next(int rows) {
 // dex_db_col_int
 // ==========================================================================
 int dex_db_col_int(int rows, int col) {
-    if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) return 0;
-    DexDbResult* r = &dex_db_results[rows];
+    DexDbRow _row = dex_db_row(rows);
+    DexDbRow* r = &_row;
 
     if (r->driver == DEX_DB_DRIVER_SQLITE) {
         return sqlite3_column_int(r->sqlite_stmt, col);
@@ -705,8 +800,8 @@ int dex_db_col_int(int rows, int col) {
 // field goes through here rather than through the int reader.
 // ==========================================================================
 long dex_db_col_long(int rows, int col) {
-    if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) return 0;
-    DexDbResult* r = &dex_db_results[rows];
+    DexDbRow _row = dex_db_row(rows);
+    DexDbRow* r = &_row;
 
     if (r->driver == DEX_DB_DRIVER_SQLITE) {
         return (long)sqlite3_column_int64(r->sqlite_stmt, col);
@@ -742,13 +837,8 @@ long dex_db_col_long(int rows, int col) {
 // dex_db_col_str
 // ==========================================================================
 const char* dex_db_col_str(int rows, int col) {
-    if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) {
-        char* empty = (char*)malloc(1);
-        if (!empty) return strdup("");
-        empty[0] = '\0';
-        return empty;
-    }
-    DexDbResult* r = &dex_db_results[rows];
+    DexDbRow _row = dex_db_row(rows);
+    DexDbRow* r = &_row;
 
     if (r->driver == DEX_DB_DRIVER_SQLITE) {
         const unsigned char* text = sqlite3_column_text(r->sqlite_stmt, col);
@@ -846,10 +936,8 @@ const char* dex_db_col_str(int rows, int col) {
 // dex_db_col_dexstr — return DexString* directly (single alloc, single copy)
 // ==========================================================================
 DexString* dex_db_col_dexstr(int rows, int col) {
-    if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) {
-        return dex_string_new("", 0);
-    }
-    DexDbResult* r = &dex_db_results[rows];
+    DexDbRow _row = dex_db_row(rows);
+    DexDbRow* r = &_row;
 
     if (r->driver == DEX_DB_DRIVER_SQLITE) {
         const unsigned char* text = sqlite3_column_text(r->sqlite_stmt, col);
@@ -907,8 +995,8 @@ DexString* dex_db_col_dexstr(int rows, int col) {
 // dex_db_col_double
 // ==========================================================================
 double dex_db_col_double(int rows, int col) {
-    if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) return 0.0;
-    DexDbResult* r = &dex_db_results[rows];
+    DexDbRow _row = dex_db_row(rows);
+    DexDbRow* r = &_row;
 
     if (r->driver == DEX_DB_DRIVER_SQLITE) {
         return sqlite3_column_double(r->sqlite_stmt, col);
@@ -944,8 +1032,8 @@ double dex_db_col_double(int rows, int col) {
 // dex_db_col_bool
 // ==========================================================================
 _Bool dex_db_col_bool(int rows, int col) {
-    if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) return 0;
-    DexDbResult* r = &dex_db_results[rows];
+    DexDbRow _row = dex_db_row(rows);
+    DexDbRow* r = &_row;
 
     if (r->driver == DEX_DB_DRIVER_SQLITE) {
         return sqlite3_column_int(r->sqlite_stmt, col) != 0;
@@ -983,6 +1071,9 @@ _Bool dex_db_col_bool(int rows, int col) {
 // dex_db_free
 // ==========================================================================
 void dex_db_free(int rows) {
+    // Freeing a statement is finalizing it. Routing rather than rejecting means
+    // a handle obtained from either place is released by the same call.
+    if (rows >= DEX_DB_STMT_BASE) { dex_db_finalize(rows); return; }
     if (rows < 0 || rows >= DEX_DB_MAX_RESULTS) return;
     DexDbResult* r = &dex_db_results[rows];
 
@@ -1078,7 +1169,7 @@ int dex_db_prepare(int conn, const char* sql) {
         dex_db_stmts[slot].conn_slot = conn;
         dex_db_stmts[slot].sqlite_stmt = stmt;
         pthread_mutex_unlock(&dex_db_mutex);
-        return slot;
+        return DEX_DB_STMT_BASE + slot;
 
 #ifdef DEX_HAS_POSTGRES
     } else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
@@ -1129,7 +1220,7 @@ int dex_db_prepare(int conn, const char* sql) {
         dex_db_stmts[slot].pg_current_row = 0;
         dex_db_stmts[slot].pg_num_rows = 0;
         pthread_mutex_unlock(&dex_db_mutex);
-        return slot;
+        return DEX_DB_STMT_BASE + slot;
 #endif
 
 #ifdef DEX_HAS_MYSQL
@@ -1153,7 +1244,7 @@ int dex_db_prepare(int conn, const char* sql) {
         dex_db_stmts[slot].conn_slot = conn;
         dex_db_stmts[slot].mysql_stmt = stmt;
         pthread_mutex_unlock(&dex_db_mutex);
-        return slot;
+        return DEX_DB_STMT_BASE + slot;
 #endif
     }
 
@@ -1168,8 +1259,9 @@ int dex_db_prepare(int conn, const char* sql) {
 // dex_db_bind_int
 // ==========================================================================
 void dex_db_bind_int(int stmt_id, int idx, int val) {
-    if (stmt_id < 0 || stmt_id >= DEX_DB_MAX_STMTS) return;
-    DexDbStmt* s = &dex_db_stmts[stmt_id];
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return;
+    DexDbStmt* s = &dex_db_stmts[_slot];
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_bind_int(s->sqlite_stmt, idx, val);
@@ -1199,8 +1291,9 @@ void dex_db_bind_int(int stmt_id, int idx, int val) {
 // dex_db_bind_double
 // ==========================================================================
 void dex_db_bind_double(int stmt_id, int idx, double val) {
-    if (stmt_id < 0 || stmt_id >= DEX_DB_MAX_STMTS) return;
-    DexDbStmt* s = &dex_db_stmts[stmt_id];
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return;
+    DexDbStmt* s = &dex_db_stmts[_slot];
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_bind_double(s->sqlite_stmt, idx, val);
@@ -1226,8 +1319,9 @@ void dex_db_bind_double(int stmt_id, int idx, double val) {
 // dex_db_bind_str
 // ==========================================================================
 void dex_db_bind_str(int stmt_id, int idx, const char* val) {
-    if (stmt_id < 0 || stmt_id >= DEX_DB_MAX_STMTS) return;
-    DexDbStmt* s = &dex_db_stmts[stmt_id];
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return;
+    DexDbStmt* s = &dex_db_stmts[_slot];
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_bind_text(s->sqlite_stmt, idx, val, -1, SQLITE_TRANSIENT);
@@ -1252,12 +1346,16 @@ void dex_db_bind_str(int stmt_id, int idx, const char* val) {
 // Returns 1 if a row is available (SQLITE_ROW), 0 otherwise (SQLITE_DONE)
 // ==========================================================================
 _Bool dex_db_step(int stmt_id) {
-    if (stmt_id < 0 || stmt_id >= DEX_DB_MAX_STMTS) return 0;
-    DexDbStmt* s = &dex_db_stmts[stmt_id];
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return 0;
+    DexDbStmt* s = &dex_db_stmts[_slot];
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
+        if (s->sqlite_done) return 0;
         int rc = sqlite3_step(s->sqlite_stmt);
-        return rc == SQLITE_ROW;
+        if (rc == SQLITE_ROW) return 1;
+        s->sqlite_done = 1;
+        return 0;
 #ifdef DEX_HAS_POSTGRES
     } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
         // First call after bind: execute the prepared statement. The connection
@@ -1333,12 +1431,14 @@ _Bool dex_db_step(int stmt_id) {
 // dex_db_reset — reset a prepared statement for re-execution with new bindings
 // ==========================================================================
 void dex_db_reset(int stmt_id) {
-    if (stmt_id < 0 || stmt_id >= DEX_DB_MAX_STMTS) return;
-    DexDbStmt* s = &dex_db_stmts[stmt_id];
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return;
+    DexDbStmt* s = &dex_db_stmts[_slot];
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_reset(s->sqlite_stmt);
         sqlite3_clear_bindings(s->sqlite_stmt);
+        s->sqlite_done = 0;
 #ifdef DEX_HAS_POSTGRES
     } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
         if (s->pg_result) {
@@ -1360,8 +1460,9 @@ void dex_db_reset(int stmt_id) {
 // dex_db_finalize — destroy a prepared statement and release the slot
 // ==========================================================================
 void dex_db_finalize(int stmt_id) {
-    if (stmt_id < 0 || stmt_id >= DEX_DB_MAX_STMTS) return;
-    DexDbStmt* s = &dex_db_stmts[stmt_id];
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return;
+    DexDbStmt* s = &dex_db_stmts[_slot];
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         if (s->sqlite_stmt) sqlite3_finalize(s->sqlite_stmt);

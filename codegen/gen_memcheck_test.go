@@ -65,8 +65,21 @@ func TestMemCheckOffByDefault(t *testing.T) {
 	assertNotContains(t, out, "#define DEX_MEM_CHECK 1")
 	assertNotContains(t, out, "DEX_AT(\"")
 	assertNotContains(t, out, "dex_mc_init();")
-	// The hooks still compile away to nothing.
-	assertContains(t, out, "#define dex_mc_on_free(ptr) free(ptr)")
+	// The hooks still compile away to the ordinary free path, which is the
+	// object pool rather than malloc's free — and the pool is on precisely
+	// because the checker is not. See TestObjectPoolDisabledUnderMemCheck.
+	assertContains(t, out, "#define dex_mc_on_free(ptr) _dex_obj_free(ptr)")
+	assertContains(t, out, "#define DEX_USE_POOL 1")
+}
+
+// Recycling a freed block is the one thing the two memory debuggers exist to
+// catch, so the pool must be compiled out whenever either is on — otherwise a
+// use-after-free reads as a successful allocation and the tools go quiet.
+func TestObjectPoolDisabledUnderMemCheck(t *testing.T) {
+	out := generateWith(t, memCheckProgram, withMemCheck)
+	assertContains(t, out, "#define DEX_MEM_CHECK 1")
+	assertContains(t, out, "#if defined(DEX_MEM_CHECK)")
+	assertContains(t, out, "#define DEX_USE_POOL 0")
 }
 
 // A borrowed struct copied into an array literal: the array's destructor runs

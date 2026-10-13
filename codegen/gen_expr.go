@@ -46,7 +46,7 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		}
 
 	case *ast.StringLit:
-		out.WriteString(fmt.Sprintf("dex_string_from_lit(%q)", e.Value))
+		out.WriteString(g.litRef(e.Value))
 
 	case *ast.NullLit:
 		out.WriteString("NULL")

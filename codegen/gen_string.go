@@ -590,7 +590,7 @@ func (g *Generator) genZeroValue(out *strings.Builder, typ ast.Type) {
 	case ast.TypeBool:
 		out.WriteString("0")
 	case ast.TypeString:
-		out.WriteString("dex_string_from_lit(\"\")")
+		out.WriteString(g.litRef(""))
 	case ast.TypeMutex:
 		out.WriteString("PTHREAD_MUTEX_INITIALIZER")
 	case ast.TypeJsonValue:

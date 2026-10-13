@@ -233,6 +233,80 @@ A bare reference still reaches a module imported only indirectly, as it always
 could. Narrowing that to direct imports would be defensible but would break
 code that reads perfectly well.
 
+## Where a heap value comes from, and whether it dies
+
+Two things sit underneath the ownership rules, and both are about allocation
+rather than ownership. Neither changes when an object dies — only where its
+memory came from — which is why neither needs escape analysis to be safe.
+
+**A string literal is immortal.** It is the same bytes at every evaluation, so
+codegen emits it once as a `static const` object (`DEX_LIT_DEF` in `strings.c`)
+and references it with `DEX_LIT`, instead of calling `dex_string_from_lit` and
+paying a `malloc`, a `strlen` and a `memcpy` per evaluation. Its count is a
+sentinel, `DEX_RC_IMMORTAL`, and `dex_retain`, `dex_release` and
+`dex_owned_free` all return early on it. Four things hold it together:
+
+- **Ownership is deliberately untouched.** `isNewAlloc` still answers true for a
+  `StringLit`, so every retain and release that was emitted before is still
+  emitted — they are simply no-ops. That is what made this safe to add without
+  revisiting one ownership decision: a literal that is over-released frees
+  nothing and one that is under-released leaks nothing.
+- **The count must not be decremented, not merely spared the free.** Release
+  outnumbers retain on a literal by one per evaluation, so a counter that
+  drifted would reach zero after ~2^31 of them and free a static.
+- **The immortal test precedes `dex_mc_check`.** A static is absent from the
+  memory checker's registry by construction, and the checker reports a release
+  of something it does not know as an error.
+- **`const` is load-bearing.** It puts the literal in read-only memory, so the
+  guard failing open would fault rather than quietly corrupt a shared string —
+  and it tells the optimiser the bytes never change, which is what lets a
+  concat of two literals still fold to its result the way it did when both
+  sides were allocating calls on known contents. Dropping it costs about 25% on
+  a loop that concatenates literals.
+
+A literal holding a NUL byte is not pooled: `strlen` truncates it on the
+allocating path, `sizeof` would not, and that is a different string.
+`poolLiteral` keeps that case allocating. `\0` is not one of the four escapes
+the lexer accepts, but a raw NUL in a source file reaches it.
+
+**A small object is recycled, not returned to malloc.** `dex_obj_alloc` takes
+freed blocks from a bounded free list (`DexPoolLane` in `refcount.c`) before
+asking `malloc`. On an allocation-heavy loop `malloc` and `free` dominated by
+an order of magnitude over the reference counting around them. An object is
+still individually owned, released, and destroyed exactly when its count
+reaches zero — only the source of its memory differs, which is the whole
+difference between this and a region. Three constraints shape it:
+
+- **Only a `dex_obj_alloc` block may be freed into it.** `_dex_obj_free` reads
+  the size class back out of the header, so anything else is filed under a size
+  it does not have and later handed out for an object that does not fit. The
+  only two callers are `dex_release` and `dex_owned_free`; a managed object that
+  was never malloc'd is immortal and returns before reaching either.
+- **The lanes are plain globals, not thread-locals.** A pooled block is freed to
+  the program but still malloc'd to the system, so it has to stay *reachable* or
+  a leak checker reports it. `leaks` roots at thread stacks, registers and the
+  global data segment — not at thread-local storage — so a thread-local pool
+  made every block sitting in it at exit a reported leak, which is how
+  `concurrency_test` caught this. One lane per thread in a global array keeps
+  them reachable and needs no drain at thread exit at all.
+- **It is off under both memory debuggers.** Recycling hands a freed block
+  straight back out, which is exactly the state the checker's quarantine and
+  ASan's redzones exist to detect; leaving it on would make a use-after-free
+  read as a successful allocation. `DEX_USE_POOL` is 0 under `DEX_MEM_CHECK` and
+  under ASan, so the two tools still see every free.
+
+The size class rides in the four bytes of padding `DexObjHeader` already had
+between `rc` and `destroy`, so the header is still 16 bytes on LP64.
+
+`#[region]` is the third thing of this kind and the one that is *not* safe. It
+does change when memory dies, so it needs to know that no value outlives the
+region — and its checks cover only three escape routes (`return` of a bare
+identifier, `spawn` capture, closure capture), while storing a region value
+into a returned struct, a caller's array, or a global is unguarded. `arena.c`
+is also stale against `DexString` and fails C compilation, and a computed RHS
+allocates while the release is suppressed, which leaks. It is unusable today;
+completing it is an escape analysis, not a repair.
+
 ## Memory ownership rules
 
 These are the invariants the codegen maintains. Breaking one produces either a leak

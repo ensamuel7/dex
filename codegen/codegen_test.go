@@ -236,7 +236,57 @@ func TestCodegenLetBool(t *testing.T) {
 
 func TestCodegenLetString(t *testing.T) {
 	out := generate(t, `fn main(): void { let s: string = "hi" }`)
-	assertContains(t, out, `DexString* s = dex_string_from_lit("hi");`)
+	assertContains(t, out, "DexString* s = DEX_LIT(")
+}
+
+// A literal is emitted once as an immortal static instead of being allocated at
+// every evaluation. Three properties hold that together, and each is a bug if
+// it goes: the count is the sentinel retain and release test for, the object is
+// const so a write would fault rather than corrupt a shared string, and the
+// same value appearing twice resolves to one definition.
+func TestCodegenStringLiteralPool(t *testing.T) {
+	out := generate(t, `fn main(): void {
+		let a: string = "dup"
+		let b: string = "dup"
+		let c: string = "other"
+	}`)
+	assertContains(t, out, `DEX_LIT_DEF(_dex_lit_0, "dup");`)
+	assertContains(t, out, `DEX_LIT_DEF(_dex_lit_1, "other");`)
+	assertNotContains(t, out, `DEX_LIT_DEF(_dex_lit_2`)
+	// Both names reach the one definition.
+	assertContains(t, out, "DexString* a = DEX_LIT(_dex_lit_0)")
+	assertContains(t, out, "DexString* b = DEX_LIT(_dex_lit_0)")
+	// No literal is allocated any more.
+	assertNotContains(t, out, `dex_string_from_lit("dup")`)
+	// The two halves of immortality, in the runtime the pool depends on.
+	assertContains(t, out, "static const struct { DexObjHeader hdr;")
+	assertContains(t, out, ".rc = DEX_RC_IMMORTAL")
+	assertContains(t, out, "if (DEX_IS_IMMORTAL(obj)) return;")
+}
+
+// Ownership is deliberately unchanged: a literal still counts as a new
+// allocation, so every retain and release codegen emitted before is still
+// emitted. They are no-ops at runtime rather than absent, which is what makes
+// the pool safe to add without revisiting an ownership decision.
+func TestCodegenStringLiteralKeepsOwnershipShape(t *testing.T) {
+	out := generate(t, `fn take(s: string): int { return s.len() }
+fn main(): void {
+	let n: int = take("needle")
+}`)
+	assertContains(t, out, "DEX_LIT(")
+	assertContains(t, out, "dex_release(_dex_tmp_")
+}
+
+// A literal holding a NUL is measured by strlen on the allocating path, which
+// truncates it there. The pool takes its length from sizeof and would keep the
+// whole string — a different value — so that case stays on the old path rather
+// than quietly changing what the program means. \0 is not one of the four
+// escapes the lexer accepts, but a raw NUL byte in a source file is copied into
+// the literal verbatim, which is how one gets here.
+func TestCodegenStringLiteralWithNulNotPooled(t *testing.T) {
+	out := generate(t, "fn main(): void { let s: string = \"a\x00b\" }")
+	assertContains(t, out, `dex_string_from_lit("a\x00b")`)
+	assertNotContains(t, out, "DEX_LIT_DEF(_dex_lit")
 }
 
 func TestCodegenLetLong(t *testing.T) {
@@ -276,8 +326,9 @@ func TestCodegenArrayLitRetainsBorrowedString(t *testing.T) {
 	}`)
 	// push retains, so a borrowed element is pushed and *not* released...
 	assertContains(t, out, "dex_array_string_push(argv,")
-	// ...while a literal minted its own reference and hands it back.
-	assertContains(t, out, "dex_string_from_lit(\"find\")")
+	// ...while a literal is a pooled immortal static, so push's retain and the
+	// release that follows it are both no-ops on it.
+	assertContains(t, out, "DEX_LIT(")
 	assertNotContains(t, out, "argv->data[1] = dir;")
 }
 
@@ -681,9 +732,11 @@ func TestCodegenArrayIndexOf(t *testing.T) {
 	}`)
 	// The needle is hoisted rather than inlined. indexOf only reads it, so a
 	// literal argument minted a reference nobody owned; this assertion used to
-	// require that leaking shape.
+	// require that leaking shape. The hoist is still what matters — the literal
+	// being a pooled static is what makes the release below free rather than
+	// necessary.
 	assertContains(t, out, `dex_array_string_indexOf(a, _dex_tmp_`)
-	assertContains(t, out, `_dex_tmp_2 = dex_string_from_lit("b")`)
+	assertContains(t, out, `_dex_tmp_2 = DEX_LIT(`)
 	assertContains(t, out, `dex_release(_dex_tmp_2)`)
 }
 
@@ -866,7 +919,7 @@ func TestCodegenTypeInferenceString(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let x = "hello"
 	}`)
-	assertContains(t, out, `DexString* x = dex_string_from_lit("hello");`)
+	assertContains(t, out, "DexString* x = DEX_LIT(")
 }
 
 func TestCodegenTypeInferenceBool(t *testing.T) {

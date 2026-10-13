@@ -11,6 +11,43 @@ static void dex_string_destroy(void* ptr) {
     (void)ptr; // data[] is part of the struct, freed with it
 }
 
+// A string literal is the same bytes at every evaluation, so it is emitted once
+// into the binary instead of being malloc'd and copied each time. The object is
+// immortal (see DEX_RC_IMMORTAL), which is what lets it be shared freely and
+// released by ordinary codegen without ever being freed.
+//
+// The definition cannot simply be a DexString: data[] is a flexible array
+// member, so it has no storage in a static initialiser, and a struct holding
+// one cannot be nested inside another. Each literal therefore gets its own
+// struct with a sized data[] and the same prefix, and is reached through a
+// cast. The assertions below are what make that cast safe rather than assumed —
+// if DexObjHeader is ever widened or reordered out of agreement, this fails to
+// compile rather than handing out strings with a garbage length.
+typedef struct { DexObjHeader hdr; size_t len; char data[1]; } DexStringLitLayout;
+_Static_assert(offsetof(DexStringLitLayout, len) == offsetof(DexString, len),
+               "string literal layout diverged from DexString");
+_Static_assert(offsetof(DexStringLitLayout, data) == offsetof(DexString, data),
+               "string literal layout diverged from DexString");
+
+// sizeof a string literal counts its NUL, which is the terminator data[] is
+// expected to carry and which len excludes.
+// const is load-bearing twice over. It puts the literal in read-only memory,
+// so the immortal guard failing open would fault rather than quietly corrupt a
+// shared string; and it tells the optimiser the bytes never change, which is
+// what lets a concat of two literals still fold to its result the way it did
+// when both sides were allocating calls on known contents. Dropping it costs
+// about 25% on a loop that concatenates literals.
+//
+// The cast discards const because DexString* is the one pointer type the rest
+// of the runtime speaks. Only a write through it would be undefined, and the
+// immortal guard in dex_retain and dex_release is what guarantees there is
+// none: a literal is never retained, released, or freed.
+#define DEX_LIT_DEF(name, s)                                                  \
+    static const struct { DexObjHeader hdr; size_t len; char data[sizeof(s)]; }\
+        name = { .hdr = { .rc = DEX_RC_IMMORTAL }, .len = sizeof(s) - 1,      \
+                 .data = s }
+#define DEX_LIT(name) ((DexString*)(void*)&name)
+
 static DexString* dex_string_new(const char* s, size_t len) {
     DexString* ds = (DexString*)dex_obj_alloc(sizeof(DexString) + len + 1, dex_string_destroy);
     ds->len = len;

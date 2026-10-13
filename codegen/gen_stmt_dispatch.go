@@ -255,7 +255,7 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 	switch {
 	case gl.Type == ast.TypeString:
 		if strLit, ok := gl.Value.(*ast.StringLit); ok {
-			out.WriteString(fmt.Sprintf("%s%s = dex_string_from_lit(%q);\n", prefix, name, strLit.Value))
+			out.WriteString(fmt.Sprintf("%s%s = %s;\n", prefix, name, g.litRef(strLit.Value)))
 		} else {
 			out.WriteString(fmt.Sprintf("%s%s = ", prefix, name))
 			g.genExpr(out, gl.Value)

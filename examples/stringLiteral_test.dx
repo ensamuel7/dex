@@ -1,0 +1,97 @@
+// A string literal is emitted once as an immortal static rather than allocated
+// at every evaluation, so retain and release are no-ops on it. This pins the
+// consequence: every path that used to receive a freshly minted literal still
+// reads the right bytes, and nothing frees a literal however many times the
+// ownership rules say it was released.
+
+const greeting: string = "hello"
+
+struct Label {
+    text: string
+    note: string
+}
+
+// The auto-constructor spelling, which reaches the same initialiser through a
+// different retain site.
+struct Pair(first: string, second: string) {}
+
+fn echo(s: string): string {
+    return s
+}
+
+fn build(n: int): string {
+    let acc = ""
+    let i = 0
+    // The literal is released once per iteration. A counter that drifted, or a
+    // free that actually ran, would break on the next read rather than here.
+    while (i < n) {
+        acc = acc + "x"
+        i = i + 1
+    }
+    return acc
+}
+
+fn main(): void {
+    // A plain let, and a global const, both of which codegen initialises from
+    // the literal directly rather than through the expression path.
+    let a = "alpha"
+    assert(a == "alpha")
+    assert(greeting == "hello")
+    assert(greeting.len() == 5)
+
+    // Reassignment: the old value is released and the new one retained. Both
+    // sides being literals is the case where either op firing for real would
+    // corrupt a static.
+    let b = "one"
+    b = "two"
+    b = "one"
+    assert(b == "one")
+
+    // Borrowed into a call that only reads, and returned back out.
+    assert(echo("borrowed") == "borrowed")
+    assert(echo(a) == "alpha")
+
+    // A struct owns its heap fields, so a literal stored in one is retained at
+    // the literal and released when the struct dies.
+    let l = Label { text: "t", note: "n" }
+    assert(l.text == "t")
+    assert(l.note == "n")
+    let p = Pair("t", "n")
+    assert(p.first == l.text)
+    assert(p.second == "n")
+
+    // A container owns its elements: push retains, the destructor releases.
+    let arr: string[] = ["first", "second", a]
+    assert(arr.len() == 3)
+    assert(arr[0] == "first")
+    assert(arr[2] == "alpha")
+    assert(arr.indexOf("second") == 1)
+
+    // A map key is read-only, a map value is owned.
+    let m: map[string, int] = {}
+    m["k"] = 1
+    assert(m["k"] == 1)
+    assert(m.has("k"))
+
+    // The same literal used many times resolves to one static; evaluating it
+    // repeatedly must not accumulate or lose references.
+    assert(build(0) == "")
+    assert(build(1) == "x")
+    assert(build(5) == "xxxxx")
+
+    // Interpolation and concatenation mix a literal with an allocated string.
+    let joined = "pre-" + a + "-post"
+    assert(joined == "pre-alpha-post")
+    assert(("" + a) == "alpha")
+
+    // A string optional initialised from a literal takes its own codegen path.
+    let opt: string? = "present"
+    assert(opt != null)
+
+    // Empty literals are pooled too, and "" is what codegen also uses for a
+    // string zero value.
+    let empty = ""
+    assert(empty == "")
+    assert(empty.len() == 0)
+    assert(empty.isEmpty())
+}

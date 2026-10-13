@@ -716,32 +716,99 @@ func (g *Generator) genStructFieldDescs(out *strings.Builder, structType ast.Typ
 		if i > 0 {
 			out.WriteString(", ")
 		}
+		tag := f.JSONTagOf()
+		// #[json("-")] drops the field from the wire in both directions. Kind 7
+		// is the existing "no codec" marker, which encode and decode both skip.
+		if tag.Skip {
+			out.WriteString(fmt.Sprintf("{\"%s\", 0, 7, 0, NULL, NULL, NULL, 0}", f.Name))
+			continue
+		}
+		wireName := f.JSONFieldName()
+		flags := jsonFieldFlags(f)
 		fieldOffset := fmt.Sprintf("offsetof(%s, %s)", cType, f.Name)
 		if ast.IsStructType(f.Type) && depth < maxJSONStructDepth {
 			sub := ast.GetStructDef(f.Type)
-			out.WriteString(fmt.Sprintf("{\"%s\", %s, 5, %d, ", f.Name, fieldOffset, len(sub.Fields)))
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 5, %d, ", wireName, fieldOffset, len(sub.Fields)))
 			g.genStructFieldDescs(out, f.Type, depth+1)
-			out.WriteString(", NULL, NULL}")
+			out.WriteString(fmt.Sprintf(", NULL, NULL, %d}", flags))
 			continue
 		}
 		if encFn, decFn, ok := jsonArrayCodecNames(f.Type); ok {
-			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s}", f.Name, fieldOffset, encFn, decFn))
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s, %d}", wireName, fieldOffset, encFn, decFn, flags))
 			continue
 		}
 		if ast.IsStructArrayType(f.Type) && depth < maxJSONStructDepth {
 			encFn, decFn := jsonStructArrayCodecNames(f.Type)
-			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s}", f.Name, fieldOffset, encFn, decFn))
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s, %d}", wireName, fieldOffset, encFn, decFn, flags))
 			continue
 		}
 		if ast.IsArrayType(f.Type) {
 			// No codec available — kind 7 is skipped by encode and decode rather
 			// than being misread as an int.
-			out.WriteString(fmt.Sprintf("{\"%s\", %s, 7, 0, NULL, NULL, NULL}", f.Name, fieldOffset))
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 7, 0, NULL, NULL, NULL, 0}", wireName, fieldOffset))
 			continue
 		}
-		out.WriteString(fmt.Sprintf("{\"%s\", %s, %s, 0, NULL, NULL, NULL}", f.Name, fieldOffset, g.jsonFieldKind(f.Type)))
+		out.WriteString(fmt.Sprintf("{\"%s\", %s, %s, 0, NULL, NULL, NULL, %d}", wireName, fieldOffset, g.jsonFieldKind(f.Type), flags))
 	}
 	out.WriteString(" }")
+}
+
+// JSON field flag bits, mirroring the DEX_JSON_F_* macros in the C runtime.
+const (
+	jsonFlagOmitEmpty = 1
+	jsonFlagRaw       = 2
+	jsonFlagSubTuple  = 4
+)
+
+// jsonFieldFlags folds a field's #[json(...)] options, plus the #[tuple]-ness of
+// a nested struct field's type, into the flag word the runtime reads.
+func jsonFieldFlags(f ast.StructField) int {
+	tag := f.JSONTagOf()
+	flags := 0
+	if tag.OmitEmpty {
+		flags |= jsonFlagOmitEmpty
+	}
+	if tag.Raw && f.Type == ast.TypeString {
+		flags |= jsonFlagRaw
+	}
+	if ast.IsStructType(f.Type) && ast.IsTupleStruct(f.Type) {
+		flags |= jsonFlagSubTuple
+	}
+	return flags
+}
+
+// jsonEncodeFn picks the runtime encoder for a struct type: positional for
+// #[tuple], keyed otherwise.
+func jsonEncodeFn(structType ast.Type) string {
+	if ast.IsTupleStruct(structType) {
+		return "dex_json_encode_tuple"
+	}
+	return "dex_json_encode_struct"
+}
+
+// jsonDecodeFn picks the runtime decoder for a struct type.
+func jsonDecodeFn(structType ast.Type) string {
+	if ast.IsTupleStruct(structType) {
+		return "dex_json_decode_tuple"
+	}
+	return "dex_json_decode_struct"
+}
+
+// jsonDecodeCheckedFn picks the validating decoder for a struct type, used when
+// the target is optional.
+func jsonDecodeCheckedFn(structType ast.Type) string {
+	if ast.IsTupleStruct(structType) {
+		return "dex_json_decode_tuple_checked"
+	}
+	return "dex_json_decode_struct_checked"
+}
+
+// cBoolInt renders a Go bool as the 0/1 literal the C runtime expects.
+func cBoolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func (g *Generator) cBinOp(op ast.BinOp) string {
@@ -851,7 +918,7 @@ func (g *Generator) emitArrayFieldCodecs(out *strings.Builder, program *ast.Prog
 		out.WriteString("    if (!_a) return NULL;\n")
 		out.WriteString(fmt.Sprintf("    return dex_json_stringify_struct_arr(_a, sizeof(%s), %d, ", elemCType, len(def.Fields)))
 		g.genStructFieldDescs(out, elemType, 0)
-		out.WriteString(");\n}\n")
+		out.WriteString(fmt.Sprintf(", %d);\n}\n", cBoolInt(ast.IsTupleStruct(elemType))))
 
 		out.WriteString(fmt.Sprintf("static void %s(const char* _json, void* _field) {\n", decName))
 		out.WriteString(fmt.Sprintf("    DexArrayStruct* _a = dex_array_struct_new(sizeof(%s), %s);\n", elemCType, cleanupFn))
@@ -859,7 +926,7 @@ func (g *Generator) emitArrayFieldCodecs(out *strings.Builder, program *ast.Prog
 		out.WriteString("    for (int _i = 0; _i < _n; _i++) {\n")
 		out.WriteString("        const char* _el = dex_json_array_get_raw(_json, _i);\n")
 		out.WriteString(fmt.Sprintf("        %s _t; memset(&_t, 0, sizeof(%s));\n", elemCType, elemCType))
-		out.WriteString(fmt.Sprintf("        dex_json_decode_struct(_el, &_t, %d, ", len(def.Fields)))
+		out.WriteString(fmt.Sprintf("        %s(_el, &_t, %d, ", jsonDecodeFn(elemType), len(def.Fields)))
 		g.genStructFieldDescs(out, elemType, 0)
 		out.WriteString(");\n")
 		out.WriteString("        dex_array_struct_push(_a, &_t);\n")

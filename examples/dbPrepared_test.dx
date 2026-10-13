@@ -1,0 +1,111 @@
+// Reading rows from a prepared statement.
+//
+// A prepared statement is a row source, the same as a query result, so the
+// column readers work on either: db.col and db.fill take the handle db.prepare
+// returned exactly as they take the one db.query returned. They used to index
+// two different tables, so a column read against a statement handle returned
+// whatever a result slot of the same number happened to hold.
+//
+// Binding is what the statement is for. The value travels beside the SQL, so
+// the quote and the statement terminator in the name below are data and cannot
+// become syntax — and the plan is compiled once and reused across resets,
+// which is the other half of why a hot path prepares instead of querying.
+//
+// sqlite needs no server, so this runs anywhere sqlite is linked.
+//
+//   go run . run examples/dbPrepared_test.dx
+
+import "fmt"
+import "db"
+import "str"
+
+struct Person {
+    id: long
+    name: string
+    age: int
+}
+
+fn main(): void {
+    let conn: int = db.open("sqlite", "/tmp/dexprepared.db")
+    assert(conn != -1)
+
+    db.exec(conn, "DROP TABLE IF EXISTS people")
+    db.exec(conn, "CREATE TABLE people (id INTEGER, name TEXT, age INTEGER, score REAL, active INTEGER)")
+
+    // A bound value is data: the quote and the semicolon stay part of the name.
+    let ins: int = db.prepare(conn, "INSERT INTO people VALUES (?, ?, ?, ?, ?)")
+    assert(ins != -1)
+    db.bindInt(ins, 1, 1)
+    db.bindStr(ins, 2, "O'Brien; DROP TABLE people; --")
+    db.bindInt(ins, 3, 44)
+    db.bindDouble(ins, 4, 1.5)
+    db.bindInt(ins, 5, 1)
+    db.step(ins)
+    db.finalize(ins)
+
+    // The same statement, reset and rebound, writes the second row. One plan,
+    // two executions.
+    let ins2: int = db.prepare(conn, "INSERT INTO people VALUES (?, ?, ?, ?, ?)")
+    let i: int = 2
+    while (i <= 4) {
+        db.reset(ins2)
+        db.bindInt(ins2, 1, i)
+        db.bindStr(ins2, 2, "p" + str.fromInt(i))
+        db.bindInt(ins2, 3, 30 + i)
+        db.bindDouble(ins2, 4, 0.5)
+        db.bindInt(ins2, 5, 0)
+        db.step(ins2)
+        i = i + 1
+    }
+    db.finalize(ins2)
+
+    // Every reader, against a statement handle.
+    let one: int = db.prepare(conn, "SELECT id, name, age, score, active FROM people WHERE id = ?")
+    db.bindInt(one, 1, 1)
+    assert(db.step(one))
+    let id: long = db.col(one, 0)
+    let name: string = db.col(one, 1)
+    let age: int = db.col(one, 2)
+    let score: double = db.col(one, 3)
+    let active: bool = db.col(one, 4)
+    assert(id == 1)
+    assert(name == "O'Brien; DROP TABLE people; --")
+    assert(age == 44)
+    assert(score == 1.5)
+    assert(active)
+
+    // Stepping past the last row answers false rather than re-running the
+    // statement, so a loop over a statement terminates.
+    assert(!db.step(one))
+    assert(!db.step(one))
+    db.finalize(one)
+
+    // db.fill reads a statement's row the same way it reads a result's.
+    let sel: int = db.prepare(conn, "SELECT id, name, age FROM people WHERE age > ? ORDER BY id")
+    db.bindInt(sel, 1, 31)
+    let seen: int = 0
+    // next() on a statement is step(), so either spelling drives the loop.
+    while (db.next(sel)) {
+        let p: Person = Person { id: 0, name: "seed", age: 0 }
+        db.fill(p, sel)
+        seen = seen + 1
+        assert(p.id > 0)
+        assert(p.age > 31)
+        assert(!p.name.isEmpty())
+    }
+    // ages 44, 32, 33, 34 — every row is over 31
+    assert(seen == 4)
+    // free() on a statement handle finalizes it.
+    db.free(sel)
+
+    // A statement slot is recycled, and a reader against a dead handle is the
+    // zero value rather than a read of whatever took the slot.
+    let gone: int = db.prepare(conn, "SELECT 7")
+    db.finalize(gone)
+    assert(db.col(gone, 0) == 0)
+    assert(!db.step(gone))
+
+    db.exec(conn, "DROP TABLE people")
+    db.close(conn)
+    fmt.println("prepared statements read their rows")
+}

@@ -147,7 +147,11 @@ func (c *Checker) Check(program *ast.Program) []error {
 			continue
 		}
 		seen[sd.Name] = true
+		for _, err := range validateStructAnnotations(sd) {
+			c.addError(err)
+		}
 		fieldNames := map[string]bool{}
+		wireNames := map[string]string{}
 		for _, f := range sd.Fields {
 			if fieldNames[f.Name] {
 				c.addError(fmt.Errorf("duplicate field '%s' in struct '%s'", f.Name, sd.Name))
@@ -156,6 +160,16 @@ func (c *Checker) Check(program *ast.Program) []error {
 			fieldNames[f.Name] = true
 			if !isValidFieldType(f.Type) {
 				c.addError(fmt.Errorf("invalid type for field '%s' in struct '%s'", f.Name, sd.Name))
+			}
+			// Two fields sharing a wire key would silently lose one of them on
+			// encode and read the same value into both on decode.
+			tag := f.JSONTagOf()
+			if !tag.Skip && !ast.HasAnnotation(sd.Annotations, ast.AnnotTuple) {
+				wire := f.JSONFieldName()
+				if prev, dup := wireNames[wire]; dup {
+					c.addError(fmt.Errorf("fields '%s' and '%s' in struct '%s' both map to JSON key '%s'", prev, f.Name, sd.Name, wire))
+				}
+				wireNames[wire] = f.Name
 			}
 		}
 	}

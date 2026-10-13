@@ -1,8 +1,12 @@
 package ast
 
 import (
+<<<<<<< Updated upstream
 	"fmt"
 	"sort"
+=======
+	"regexp"
+>>>>>>> Stashed changes
 	"strings"
 )
 
@@ -106,6 +110,7 @@ type StructDef struct {
 	Fields            []StructField
 	Methods           []Function    // methods declared inside the struct body
 	ConstructorParams []StructField // auto-constructor params: struct Foo(x: int) { ... }
+	Annotations       []string      // struct-level annotations, e.g. #[tuple]
 	Doc               string        // documentation string for hover
 }
 
@@ -845,6 +850,7 @@ const (
 	AnnotRegion      = "region"
 	AnnotNoEscape    = "noEscape"
 	AnnotDebugCycles = "debug(cycles)"
+<<<<<<< Updated upstream
 	// AnnotAllowPrefix introduces a lint suppression: #[allow(unused-var)].
 	// Unlike the others it is not a directive to the compiler — it says what
 	// not to report — so the checker lets it through untouched and lint is
@@ -859,6 +865,112 @@ func ParseAllowAnnotation(annotation string) (string, bool) {
 		return "", false
 	}
 	return annotation[len(AnnotAllowPrefix) : len(annotation)-1], true
+=======
+	// AnnotTuple marks a struct as positionally encoded: json.encode produces a
+	// JSON array of the field values in declaration order rather than an object,
+	// and json.decode reads one back. Field names are not written to the wire.
+	AnnotTuple = "tuple"
+)
+
+// JSONTag is the decoded form of a #[json(...)] field annotation.
+type JSONTag struct {
+	Name      string // wire key; empty means "use the field name"
+	OmitEmpty bool   // skip the field on encode when it holds its zero value
+	Raw       bool   // string field holding pre-formed JSON, spliced verbatim
+	Skip      bool   // #[json("-")]: never encoded, never decoded
+}
+
+// jsonTagRe matches the annotation body `json(...)`. The lexer hands annotations
+// over with the surrounding `#[` `]` already stripped.
+var jsonTagRe = regexp.MustCompile(`^json\((.*)\)$`)
+
+// ParseJSONTag pulls the #[json(...)] annotation out of a field's annotation
+// list. ok is false when the field carries no json annotation, in which case the
+// field encodes under its own name with default behaviour.
+//
+// Accepted forms, in any combination separated by commas:
+//
+//	#[json("wire_name")]   rename the key
+//	#[json(omitempty)]     omit when zero
+//	#[json(raw)]           splice a string field's contents as raw JSON
+//	#[json("-")]           skip the field entirely
+//	#[json("id", omitempty)]
+func ParseJSONTag(annotations []string) (JSONTag, bool) {
+	var tag JSONTag
+	found := false
+	for _, a := range annotations {
+		m := jsonTagRe.FindStringSubmatch(strings.TrimSpace(a))
+		if m == nil {
+			continue
+		}
+		found = true
+		for _, part := range splitTagParts(m[1]) {
+			switch {
+			case part == "":
+			case part == "omitempty":
+				tag.OmitEmpty = true
+			case part == "raw":
+				tag.Raw = true
+			case len(part) >= 2 && part[0] == '"' && part[len(part)-1] == '"':
+				name := part[1 : len(part)-1]
+				if name == "-" {
+					tag.Skip = true
+				} else {
+					tag.Name = name
+				}
+			default:
+				// An unquoted word that is not a known option is treated as a
+				// rename, so #[json(chargerTag)] works like Go's struct tags.
+				tag.Name = part
+			}
+		}
+	}
+	return tag, found
+}
+
+// splitTagParts splits a tag body on commas that sit outside quotes.
+func splitTagParts(body string) []string {
+	var parts []string
+	var cur strings.Builder
+	inQuote := false
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		switch {
+		case c == '"':
+			inQuote = !inQuote
+			cur.WriteByte(c)
+		case c == ',' && !inQuote:
+			parts = append(parts, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	parts = append(parts, strings.TrimSpace(cur.String()))
+	return parts
+}
+
+// JSONFieldName returns the wire key for a field: its #[json("...")] rename if
+// it has one, otherwise the field name as declared.
+func (f StructField) JSONFieldName() string {
+	if tag, ok := ParseJSONTag(f.Annotations); ok && tag.Name != "" {
+		return tag.Name
+	}
+	return f.Name
+}
+
+// JSONTagOf returns the field's decoded json tag, zero-valued when absent.
+func (f StructField) JSONTagOf() JSONTag {
+	tag, _ := ParseJSONTag(f.Annotations)
+	return tag
+}
+
+// IsTupleStruct reports whether a struct type is #[tuple]-annotated and so
+// serializes positionally.
+func IsTupleStruct(t Type) bool {
+	def := GetStructDef(t)
+	return def != nil && HasAnnotation(def.Annotations, AnnotTuple)
+>>>>>>> Stashed changes
 }
 
 // HasAnnotation checks if the given annotation is present in the list.

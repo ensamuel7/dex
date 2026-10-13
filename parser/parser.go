@@ -229,13 +229,12 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 
 		case p.isStructDefAhead():
 			annotations := p.collectAnnotations()
-			sd, err := p.parseStructDef()
+			sd, err := p.parseStructDef(annotations)
 			if err != nil {
 				p.recordError(err)
 				p.synchronize()
 				continue
 			}
-			_ = annotations // struct-level annotations reserved for future use
 			program.Structs = append(program.Structs, *sd)
 
 		case p.isGlobalLetAhead():
@@ -434,7 +433,9 @@ func (p *Parser) parseEnumDef() (*ast.EnumDef, error) {
 	return &ast.EnumDef{Name: flatName, Module: p.module, Variants: variants}, nil
 }
 
-func (p *Parser) parseStructDef() (*ast.StructDef, error) {
+// parseStructDef parses a struct definition. structAnnotations are the
+// struct-level annotations already consumed by the caller (e.g. #[tuple]).
+func (p *Parser) parseStructDef(structAnnotations []string) (*ast.StructDef, error) {
 	// Consume optional access modifier (ignored on struct itself for now)
 	if p.check(token.TokenPublic) || p.check(token.TokenPrivate) {
 		p.advance()
@@ -550,9 +551,15 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 
 	p.structNames[flatName] = true
 	// Register in the global struct registry so parseType can resolve the type ID
+<<<<<<< Updated upstream
 	ast.RegisterStructType(ast.StructDef{Name: flatName, Module: p.module, Fields: fields, ConstructorParams: constructorParams})
 
 	return &ast.StructDef{Name: flatName, Module: p.module, Fields: fields, Methods: methods, ConstructorParams: constructorParams}, nil
+=======
+	ast.RegisterStructType(ast.StructDef{Name: name, Fields: fields, ConstructorParams: constructorParams, Annotations: structAnnotations})
+
+	return &ast.StructDef{Name: name, Fields: fields, Methods: methods, ConstructorParams: constructorParams, Annotations: structAnnotations}, nil
+>>>>>>> Stashed changes
 }
 
 func (p *Parser) parseFunction() (*ast.Function, error) {

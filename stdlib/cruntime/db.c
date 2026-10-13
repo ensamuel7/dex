@@ -1288,6 +1288,38 @@ void dex_db_bind_int(int stmt_id, int idx, int val) {
 }
 
 // ==========================================================================
+// dex_db_bind_long
+//
+// The 64-bit bind. dex_db_bind_int truncates past 2^31, and an id read back
+// through db.col arrives as a long for exactly that reason — binding one as an
+// int would silently match a different row rather than no row.
+// ==========================================================================
+void dex_db_bind_long(int stmt_id, int idx, long val) {
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return;
+    DexDbStmt* s = &dex_db_stmts[_slot];
+
+    if (s->driver == DEX_DB_DRIVER_SQLITE) {
+        sqlite3_bind_int64(s->sqlite_stmt, idx, (sqlite3_int64)val);
+#ifdef DEX_HAS_POSTGRES
+    } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        int pidx = idx - 1;
+        while (pidx >= s->pg_param_cap) {
+            s->pg_param_cap *= 2;
+            s->pg_param_values = (char**)realloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
+            s->pg_param_lengths = (int*)realloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
+        }
+        if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%ld", val);
+        free(s->pg_param_values[pidx]);
+        s->pg_param_values[pidx] = strdup(buf);
+        s->pg_param_lengths[pidx] = (int)strlen(buf);
+#endif
+    }
+}
+
+// ==========================================================================
 // dex_db_bind_double
 // ==========================================================================
 void dex_db_bind_double(int stmt_id, int idx, double val) {

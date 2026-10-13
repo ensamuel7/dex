@@ -210,6 +210,18 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return ast.TypeString, true, nil
 	}
 
+	// Special case: http.notFound(handler) — the fallback is a route handler
+	// with no pattern, so it goes through the same handler rule.
+	if e.Module == "http" && e.Name == "notFound" {
+		if len(e.Args) != 1 {
+			return 0, true, c.errAt(e.Pos, "http.notFound() takes exactly 1 argument, got %d", len(e.Args))
+		}
+		if err := c.checkHTTPHandler(e, 0, "http.notFound()"); err != nil {
+			return 0, true, err
+		}
+		return ast.TypeVoid, true, nil
+	}
+
 	// Special case: http.route handler validation (before generic arg check)
 	if e.Module == "http" && e.Name == "route" {
 		if len(e.Args) != 3 {
@@ -225,47 +237,8 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 				return 0, true, c.errAt(e.Pos, "http.route() argument %d must be string, got %s", i+1, typeName(argType))
 			}
 		}
-		// The handler is any function value: a plain function named
-		// directly, or a method bound to the struct holding its
-		// dependencies. A string literal still names a function, kept for
-		// the older spelling.
-		var params []ast.Type
-		var retType ast.Type
-		describe := "handler"
-
-		if lit, isStr := e.Args[2].(*ast.StringLit); isStr {
-			name := lit.Value
-			sig, ok := c.funcs[name]
-			if !ok {
-				return 0, true, c.errAt(e.Pos, "http.route() handler '%s' is not a defined function", name)
-			}
-			params, retType, describe = sig.Params, sig.ReturnType, "'"+name+"'"
-		} else {
-			handlerType, err := c.checkExpr(e.Args[2])
-			if err != nil {
-				return 0, true, err
-			}
-			if !ast.IsFuncType(handlerType) {
-				return 0, true, c.errAt(e.Pos, "http.route() handler (argument 3) must be a function value, got %s", typeName(handlerType))
-			}
-			params = ast.FuncTypeParams(handlerType)
-			retType = ast.FuncTypeReturn(handlerType)
-		}
-
-		// A handler either takes the request or takes nothing.
-		if len(params) == 1 {
-			httpReqType, hasReq := ast.LookupStructType("HttpRequest")
-			if !hasReq {
-				return 0, true, c.errAt(e.Pos, "HttpRequest type not registered (internal error)")
-			}
-			if params[0] != httpReqType {
-				return 0, true, c.errAt(e.Pos, "http.route() handler %s parameter must be http.HttpRequest, got %s", describe, typeName(params[0]))
-			}
-		} else if len(params) > 1 {
-			return 0, true, c.errAt(e.Pos, "http.route() handler %s must take 0 or 1 parameter (http.HttpRequest)", describe)
-		}
-		if retType == ast.TypeVoid {
-			return 0, true, c.errAt(e.Pos, "http.route() handler %s must have a return type", describe)
+		if err := c.checkHTTPHandler(e, 2, "http.route()"); err != nil {
+			return 0, true, err
 		}
 		return ast.TypeVoid, true, nil
 	}
@@ -610,6 +583,30 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 	}
 
 	// Special case: http.listen(port) or http.listen(port, workers)
+	// http.listenOn(host, port[, workers]) — listen() with the interface named.
+	if e.Module == "http" && e.Name == "listenOn" {
+		if len(e.Args) < 2 || len(e.Args) > 3 {
+			return 0, true, c.errAt(e.Pos, "http.listenOn() takes 2-3 arguments, got %d", len(e.Args))
+		}
+		hostType, err := c.checkExpr(e.Args[0])
+		if err != nil {
+			return 0, true, err
+		}
+		if hostType != ast.TypeString {
+			return 0, true, c.errAt(e.Pos, "http.listenOn() argument 1 must be string, got %s", typeName(hostType))
+		}
+		for i := 1; i < len(e.Args); i++ {
+			argType, err := c.checkExpr(e.Args[i])
+			if err != nil {
+				return 0, true, err
+			}
+			if argType != ast.TypeInt {
+				return 0, true, c.errAt(e.Pos, "http.listenOn() argument %d must be int, got %s", i+1, typeName(argType))
+			}
+		}
+		return ast.TypeVoid, true, nil
+	}
+
 	if e.Module == "http" && e.Name == "listen" {
 		if len(e.Args) < 1 || len(e.Args) > 2 {
 			return 0, true, c.errAt(e.Pos, "http.listen() takes 1-2 arguments, got %d", len(e.Args))
@@ -664,4 +661,54 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 	}
 
 	return 0, false, nil
+}
+
+// checkHTTPHandler applies the one rule for what an HTTP handler is, shared by
+// http.route() and http.notFound(): any function value — a plain function named
+// directly, or a method bound to the struct holding its dependencies — taking
+// either the request or nothing, and returning something. A string literal
+// still names a function, kept for the older spelling. The two callers had a
+// copy each, and a copy is how the fallback's rule drifts from the router's.
+func (c *Checker) checkHTTPHandler(e *ast.CallExpr, argIdx int, callName string) error {
+	var params []ast.Type
+	var retType ast.Type
+	// The name when there is one, so a message reads "handler 'foo'" rather
+	// than "handler handler".
+	describe := ""
+
+	if lit, isStr := e.Args[argIdx].(*ast.StringLit); isStr {
+		name := lit.Value
+		sig, ok := c.funcs[name]
+		if !ok {
+			return c.errAt(e.Pos, "%s handler '%s' is not a defined function", callName, name)
+		}
+		params, retType, describe = sig.Params, sig.ReturnType, " '"+name+"'"
+	} else {
+		handlerType, err := c.checkExpr(e.Args[argIdx])
+		if err != nil {
+			return err
+		}
+		if !ast.IsFuncType(handlerType) {
+			return c.errAt(e.Pos, "%s handler (argument %d) must be a function value, got %s", callName, argIdx+1, typeName(handlerType))
+		}
+		params = ast.FuncTypeParams(handlerType)
+		retType = ast.FuncTypeReturn(handlerType)
+	}
+
+	// A handler either takes the request or takes nothing.
+	if len(params) == 1 {
+		httpReqType, hasReq := ast.LookupStructType("HttpRequest")
+		if !hasReq {
+			return c.errAt(e.Pos, "HttpRequest type not registered (internal error)")
+		}
+		if params[0] != httpReqType {
+			return c.errAt(e.Pos, "%s handler%s parameter must be http.HttpRequest, got %s", callName, describe, typeName(params[0]))
+		}
+	} else if len(params) > 1 {
+		return c.errAt(e.Pos, "%s handler%s must take 0 or 1 parameter (http.HttpRequest)", callName, describe)
+	}
+	if retType == ast.TypeVoid {
+		return c.errAt(e.Pos, "%s handler%s must have a return type", callName, describe)
+	}
+	return nil
 }

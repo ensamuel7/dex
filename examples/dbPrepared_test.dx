@@ -59,6 +59,27 @@ fn main(): void {
     }
     db.finalize(ins2)
 
+    // A 64-bit id binds without truncating. bindInt would have turned this
+    // into 1 and matched the first row.
+    let big: int = db.prepare(conn, "INSERT INTO people VALUES (?, ?, ?, ?, ?)")
+    db.bindLong(big, 1, 9007199254740993)
+    db.bindStr(big, 2, "huge")
+    db.bindInt(big, 3, 50)
+    db.bindDouble(big, 4, 0.0)
+    db.bindInt(big, 5, 0)
+    db.step(big)
+    db.finalize(big)
+
+    let lookup: int = db.prepare(conn, "SELECT id, name FROM people WHERE id = ?")
+    db.bindLong(lookup, 1, 9007199254740993)
+    assert(db.step(lookup))
+    let bigId: long = db.col(lookup, 0)
+    let bigName: string = db.col(lookup, 1)
+    assert(bigId == 9007199254740993)
+    assert(bigName == "huge")
+    db.finalize(lookup)
+    db.exec(conn, "DELETE FROM people WHERE id = 9007199254740993")
+
     // Every reader, against a statement handle.
     let one: int = db.prepare(conn, "SELECT id, name, age, score, active FROM people WHERE id = ?")
     db.bindInt(one, 1, 1)

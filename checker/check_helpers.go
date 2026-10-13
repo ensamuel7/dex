@@ -78,6 +78,19 @@ func isPrimitiveType(t ast.Type) bool {
 
 // isIntLiteral returns true if the expression is an integer literal.
 func isIntLiteral(expr ast.Expr) bool {
+	// A negated literal is still a literal. The parser spells -1 as a unary
+	// minus over IntLit, so without seeing through it `let x: long = 1`
+	// compiled and `let x: long = -1` did not — and the widening is about the
+	// value being written down in the source, which negation does not change.
+	// Only negation unwraps: anything else is a computed int, which
+	// deliberately does not widen (see TestCannotAssignIntVarToLong).
+	for {
+		u, ok := expr.(*ast.UnaryExpr)
+		if !ok || u.Op != ast.UnaryNeg {
+			break
+		}
+		expr = u.Operand
+	}
 	_, ok := expr.(*ast.IntLit)
 	return ok
 }

@@ -104,6 +104,15 @@ func init() {
 				RawReturn:  true,
 				Doc:        "HMAC-SHA-256, as lowercase hex. Needs OpenSSL.",
 			},
+			"hmacSha256B64Url": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeString},
+				ParamNames: []string{"key", "message"},
+				ReturnType: ast.TypeString,
+				CName:      "dex_crypto_hmac_sha256_b64url",
+				RawParams:  []int{0, 1},
+				RawReturn:  true,
+				Doc:        "HMAC-SHA-256, as unpadded base64url. The encoding a JWS signature is written in, so an HS256 token's third segment compares against this directly — no decoding on the verify path. Compare with crypto.secureEquals. Needs OpenSSL.",
+			},
 
 			"hmacSha512Hex": {
 				Params:     []ast.Type{ast.TypeString, ast.TypeString},

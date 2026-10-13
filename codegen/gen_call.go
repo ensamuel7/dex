@@ -421,6 +421,21 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString(")")
 			}
 			return
+		case "listenOn":
+			// A named interface always goes through the multi entry, which
+			// handles a worker count of one by not forking at all.
+			out.WriteString("dex_listen_host(")
+			g.genStringArg(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString(", ")
+			if len(e.Args) == 3 {
+				g.genExpr(out, e.Args[2])
+			} else {
+				out.WriteString("1")
+			}
+			out.WriteString(")")
+			return
 		case "listen":
 			if len(e.Args) == 2 {
 				out.WriteString("dex_listen_multi(")

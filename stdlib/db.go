@@ -148,6 +148,13 @@ func init() {
 				CName:      "dex_db_bind_int",
 				Doc:        "Bind an integer value to a prepared statement parameter by index (1-based).",
 			},
+			"bindLong": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeInt, ast.TypeLong},
+				ParamNames: []string{"stmt", "index", "value"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_db_bind_long",
+				Doc:        "Bind a 64-bit integer to a prepared statement parameter by index (1-based). bindInt truncates past 2^31, which an id column reaches; db.col hands ids back as long for the same reason.",
+			},
 			"bindDouble": {
 				Params:     []ast.Type{ast.TypeInt, ast.TypeInt, ast.TypeDouble},
 				ParamNames: []string{"stmt", "index", "value"},

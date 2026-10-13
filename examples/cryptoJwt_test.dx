@@ -1,0 +1,52 @@
+// HMAC-SHA-256 in the encoding a JWT carries it in.
+//
+// Verifying an HS256 token means recomputing the MAC over "<header>.<payload>"
+// and checking it against the token's third segment. That segment is unpadded
+// base64url, so producing the MAC in that encoding is one string compare —
+// where the hex spelling would mean base64url-decoding the signature on the
+// hot path of every authenticated request to reach a value this returns
+// directly.
+//
+// The expected values below come from `openssl dgst -sha256 -hmac`, piped
+// through `tr '+/' '-_' | tr -d '='`.
+//
+//   go run . run examples/cryptoJwt_test.dx
+
+import "crypto"
+import "fmt"
+
+fn main(): void {
+    let secret: string = "twelve-dollar-challenge"
+
+    // A real token's signing input: the first two segments of an HS256 JWT.
+    let signingInput: string =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+        "eyJzdWIiOiIxIiwidXNlcm5hbWUiOiJnb2xkZW5fZW1iZXJfMSIsImlhdCI6MTc2MDAwMDAwMCwiZXhwIjoxNzYwMDAzNjAwfQ"
+    let sig: string = crypto.hmacSha256B64Url(secret, signingInput)
+    assert(sig == "cwzJrot3uVQhgRkwF46jBFVRM-zpa81nzYTlZDRQ5aA")
+
+    // 32 bytes of MAC is 43 base64url characters, and none of them is padding.
+    assert(sig.len() == 43)
+    assert(!sig.contains("="))
+    assert(!sig.contains("+"))
+    assert(!sig.contains("/"))
+
+    // The message length mod 3 decides whether the last group is short, which
+    // is where an encoder gets the tail wrong. The MAC is always 32 bytes, so
+    // these cover the input side rather than the output's tail — the tail is
+    // pinned by the length check above.
+    assert(crypto.hmacSha256B64Url(secret, "") == "4c-vGtC3uElckIDV8bzLapV1uqN5e1y5u0A_KZLdMa0")
+    assert(crypto.hmacSha256B64Url(secret, "a") == "U_SHc6P11l95fQU_vNu15l5-Dt8YgwmBGk6su74bm_o")
+    assert(crypto.hmacSha256B64Url(secret, "ab") == "FY62fNPz7KiI3qCbAUnERFO5Kbc3hmMCdh8k7EVzdaA")
+    assert(crypto.hmacSha256B64Url(secret, "abc") == "cKcSs_wlTuxW_AV8_3UC3JnAieYpHy93QzBhPUTTKlU")
+    assert(crypto.hmacSha256B64Url(secret, "hello world") == "EqWg7k_REJB-gy4BDDnWmDFjRQrHhfaI0eTIOW-Sizs")
+
+    // The key matters as much as the message.
+    assert(crypto.hmacSha256B64Url("other-secret", signingInput) != sig)
+
+    // A verify compares without leaking how long a prefix matched.
+    assert(crypto.secureEquals(sig, "cwzJrot3uVQhgRkwF46jBFVRM-zpa81nzYTlZDRQ5aA"))
+    assert(!crypto.secureEquals(sig, "cwzJrot3uVQhgRkwF46jBFVRM-zpa81nzYTlZDRQ5aB"))
+
+    fmt.println("HS256 signatures verify in the encoding the token uses")
+}

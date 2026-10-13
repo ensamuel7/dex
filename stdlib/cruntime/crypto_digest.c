@@ -94,6 +94,31 @@ static DexString* dex_hex_string(const unsigned char* raw, size_t n) {
     return out;
 }
 
+/* base64url with no padding, which is the only spelling a JWS uses. A token's
+   signature segment is compared against the recomputed MAC directly, so the
+   encoding has to come out byte for byte the same as the token's rather than be
+   converted on the way — which is why this is not base64Encode plus a
+   character swap and a strip. */
+static DexString* dex_b64url_string(const unsigned char* raw, size_t n) {
+    static const char* b64url =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    size_t out_len = (n * 8 + 5) / 6;   /* ceil(n*8/6): the padding is dropped */
+    DexString* out = (DexString*)dex_obj_alloc(sizeof(DexString) + out_len + 1, dex_string_destroy);
+    out->len = out_len;
+    size_t j = 0;
+    for (size_t i = 0; i < n; i += 3) {
+        unsigned v = (unsigned)raw[i] << 16;
+        if (i + 1 < n) v |= (unsigned)raw[i + 1] << 8;
+        if (i + 2 < n) v |= (unsigned)raw[i + 2];
+        out->data[j++] = b64url[(v >> 18) & 0x3F];
+        out->data[j++] = b64url[(v >> 12) & 0x3F];
+        if (i + 1 < n) out->data[j++] = b64url[(v >> 6) & 0x3F];
+        if (i + 2 < n) out->data[j++] = b64url[v & 0x3F];
+    }
+    out->data[out_len] = '\0';
+    return out;
+}
+
 DexString* dex_crypto_sha256_hex(DexString* in) {
     unsigned char digest[SHA256_DIGEST_LENGTH];
     const void* data = in ? (const void*)in->data : (const void*)"";
@@ -111,6 +136,21 @@ DexString* dex_crypto_hmac_sha256_hex(DexString* key, DexString* msg) {
     size_t mlen = msg ? msg->len : 0;
     HMAC(EVP_sha256(), kdata, klen, mdata, mlen, digest, &dlen);
     return dex_hex_string(digest, dlen);
+}
+
+/* The same MAC as hmacSha256Hex, in the encoding a JWT carries it in. Verifying
+   HS256 with the hex one means decoding the token's signature from base64url to
+   compare — base64url decoding in the hot path of every authenticated request,
+   to reach a value this produces directly. */
+DexString* dex_crypto_hmac_sha256_b64url(DexString* key, DexString* msg) {
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int dlen = 0;
+    const void* kdata = key ? (const void*)key->data : (const void*)"";
+    int klen = key ? (int)key->len : 0;
+    const unsigned char* mdata = msg ? (const unsigned char*)msg->data : (const unsigned char*)"";
+    size_t mlen = msg ? msg->len : 0;
+    HMAC(EVP_sha256(), kdata, klen, mdata, mlen, digest, &dlen);
+    return dex_b64url_string(digest, dlen);
 }
 
 /* SHA-512 as well as SHA-256, because payment providers do not agree on which
@@ -158,6 +198,12 @@ DexString* dex_crypto_sha256_hex(DexString* in) {
 DexString* dex_crypto_hmac_sha256_hex(DexString* key, DexString* msg) {
     (void)key; (void)msg;
     fprintf(stderr, "[crypto] hmacSha256Hex needs OpenSSL; this build has none\n");
+    return dex_string_new("", 0);
+}
+
+DexString* dex_crypto_hmac_sha256_b64url(DexString* key, DexString* msg) {
+    (void)key; (void)msg;
+    fprintf(stderr, "[crypto] hmacSha256B64Url needs OpenSSL; this build has none\n");
     return dex_string_new("", 0);
 }
 

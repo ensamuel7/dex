@@ -20,6 +20,27 @@ func init() {
 				CName:      "", // special codegen: function pointer resolution
 				Doc:        "Register a route handler for the given HTTP method and path.",
 			},
+			"listenOn": {
+				Params:     nil, // special-cased in checker: (string, int) or (string, int, int)
+				ParamNames: []string{"host", "port", "workers"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Start the HTTP server bound to one interface. http.listen() binds every interface; this one names the address, for a service behind a proxy that should not also be reachable directly. The host must be an IPv4 address — \"127.0.0.1\", or \"0.0.0.0\" for every interface. Optional third argument is the worker process count (0 = one per CPU).",
+			},
+			"threads": {
+				Params:     []ast.Type{ast.TypeInt},
+				ParamNames: []string{"count"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_http_set_threads",
+				Doc:        "How many threads run handlers. Call before listen. 0, the default, sizes the pool from the CPU count with a floor of four — the right hedge when a handler might block on a database or an outbound request. Set it lower when handlers are CPU-bound and serialised behind a lock on a small box, where extra threads only add context switches to work that cannot overlap.",
+			},
+			"notFound": {
+				Params:     nil, // special codegen: function value, like route
+				ParamNames: []string{"handler"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Answer requests no route matched. The handler takes the same shapes http.route() accepts, so a program can give its 404 its own body and content type instead of the built-in one. Registering twice replaces the first.",
+			},
 			"listen": {
 				Params:     nil, // special-cased in checker: 1-2 int args
 				ParamNames: []string{"port", "workers"},

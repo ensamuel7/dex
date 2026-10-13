@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
@@ -43,6 +44,26 @@ typedef struct {
  * inherit a finished table. */
 static dex_route_entry* dex_routes = NULL;
 static int dex_route_count = 0;
+
+/* How many threads run handlers. 0 leaves the pool to size itself from the CPU
+ * count, with a floor of four — which is the right hedge in general, because a
+ * handler that blocks on a database or an outbound request would stall a
+ * one-thread pool. It is the wrong number when handlers are CPU-bound and
+ * serialised behind a lock on a one-core box, where four threads only add
+ * context switches to work that cannot overlap. Only the program knows which
+ * of those it is, so it is the program that says. */
+static int dex_http_thread_count = 0;
+
+void dex_http_set_threads(int n) {
+    dex_http_thread_count = n;
+}
+
+/* Answers when no route matched. NULL leaves the built-in 404 in place, which
+ * is the right default for a program that has not said otherwise — but a
+ * program that has an error shape of its own needs the body and content type to
+ * be its own, and a wildcard route cannot express "no pattern matched" because
+ * route matching is per-segment. */
+static DexClosure* dex_route_fallback = NULL;
 static int dex_route_capacity = 0;
 
 #define DEX_ROUTES_INITIAL 16
@@ -397,6 +418,34 @@ static inline void dex_http_build_response(DexHttpConn* conn, const char* status
     dex_http_build_response_len(conn, status, body, (int)strlen(body), content_type);
 }
 
+/* Build the wire response from what a handler returned, taking over the
+ * references it handed back. Three callers: the two route-matching paths and
+ * the not-found fallback. */
+static inline void dex_http_apply_response(DexHttpConn* conn, Dex_HttpResponse resp) {
+    const char* status = dex_http_status_text(resp.statusCode);
+    const char* ct = "application/json";
+    if (resp.contentType && resp.contentType->data[0] != '\0') {
+        ct = resp.contentType->data;
+    }
+    const char* extra = resp.headers ? resp.headers->data : NULL;
+    dex_http_build_response_full(conn, status, resp.body->data, (int)resp.body->len, ct, extra);
+    if (resp.contentType) dex_release(resp.contentType);
+    if (resp.headers) dex_release(resp.headers);
+    dex_release(resp.body);
+}
+
+/* Register the fallback. The handler arrives owned — genRouteHandler mints the
+ * reference for this call, the same convention ws.handleMessage follows — so
+ * retaining it here would be one reference more than there is an owner for, and
+ * the closure a replaced registration dropped would never reach zero.
+ * Replacing releases the reference the previous registration held, so
+ * registering twice does not strand the first and whatever it captured. */
+void dex_route_not_found(DexClosure* handler) {
+    DexClosure* prev = dex_route_fallback;
+    dex_route_fallback = handler;
+    if (prev) dex_release(prev);
+}
+
 /* Worker function: run handler, build response, enqueue for event loop */
 static void dex_http_worker_func(void* arg) {
     DexHttpConn* conn = (DexHttpConn*)arg;
@@ -456,17 +505,7 @@ static void dex_http_worker_func(void* arg) {
         /* Fast path: no params, use exact string match */
         if (r->param_count == 0) {
             if (strcmp(conn->path, r->pattern) == 0) {
-                Dex_HttpResponse resp = DEX_CALL_HANDLER(r->handler, req);
-                const char* status = dex_http_status_text(resp.statusCode);
-                const char* ct = "application/json";
-                if (resp.contentType && resp.contentType->data[0] != '\0') {
-                    ct = resp.contentType->data;
-                }
-                const char* extra = resp.headers ? resp.headers->data : NULL;
-                dex_http_build_response_full(conn, status, resp.body->data, (int)resp.body->len, ct, extra);
-                if (resp.contentType) dex_release(resp.contentType);
-                if (resp.headers) dex_release(resp.headers);
-                dex_release(resp.body);
+                dex_http_apply_response(conn, DEX_CALL_HANDLER(r->handler, req));
                 matched = 1;
                 break;
             }
@@ -497,20 +536,18 @@ static void dex_http_worker_func(void* arg) {
                 dex_release(val);
             }
 
-            Dex_HttpResponse resp = DEX_CALL_HANDLER(r->handler, req);
-            const char* status = dex_http_status_text(resp.statusCode);
-            const char* ct = "application/json";
-            if (resp.contentType && resp.contentType->data[0] != '\0') {
-                ct = resp.contentType->data;
-            }
-            const char* extra = resp.headers ? resp.headers->data : NULL;
-            dex_http_build_response_full(conn, status, resp.body->data, (int)resp.body->len, ct, extra);
-            if (resp.contentType) dex_release(resp.contentType);
-            if (resp.headers) dex_release(resp.headers);
-            dex_release(resp.body);
+            dex_http_apply_response(conn, DEX_CALL_HANDLER(r->handler, req));
             matched = 1;
             break;
         }
+    }
+
+    /* No route matched. A registered fallback answers instead of the built-in
+     * 404, and reading the request is the whole point of it — so this runs
+     * before the request strings are released, not beside the default below. */
+    if (!matched && dex_route_fallback) {
+        dex_http_apply_response(conn, DEX_CALL_HANDLER(dex_route_fallback, req));
+        matched = 1;
     }
 
     /* Release request strings and params map */
@@ -557,7 +594,11 @@ static void dex_shutdown_handler(int sig) {
     _exit(0);
 }
 
-void dex_listen(int port) {
+/* The event loop. host is the interface to bind: NULL or "" is every one, and
+ * anything else must be a dotted-quad, which is refused rather than widened —
+ * binding wider than asked is how a service meant for localhost ends up
+ * answering the internet. */
+static void dex_listen_on(const char* host, int port) {
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, dex_shutdown_handler);
     signal(SIGTERM, dex_shutdown_handler);
@@ -581,9 +622,16 @@ void dex_listen(int port) {
 #endif
 
     struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
+    if (!host || !*host || strcmp(host, "0.0.0.0") == 0) {
+        addr.sin_addr.s_addr = INADDR_ANY;
+    } else if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        fprintf(stderr, "[http] not an IPv4 address to bind: %s\n", host);
+        close(server_fd);
+        return;
+    }
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("bind"); close(server_fd); return;
@@ -597,7 +645,7 @@ void dex_listen(int port) {
 
     /* Initialize event loop, thread pool, and notify pipe */
     dex_http_loop = dex_ev_create(1024);
-    dex_http_pool = dex_pool_create(0); /* auto-size */
+    dex_http_pool = dex_pool_create(dex_http_thread_count);
     dex_notify_pipe_init(&dex_http_notify);
     memset(dex_http_conn_table, 0, sizeof(dex_http_conn_table));
 
@@ -754,14 +802,14 @@ static void dex_multi_shutdown_handler(int sig) {
     _exit(0);
 }
 
-void dex_listen_multi(int port, int num_workers) {
+static void dex_listen_multi_on(const char* host, int port, int num_workers) {
     if (num_workers <= 0) {
         num_workers = (int)sysconf(_SC_NPROCESSORS_ONLN);
         if (num_workers < 1) num_workers = 1;
         if (num_workers > DEX_MAX_WORKERS) num_workers = DEX_MAX_WORKERS;
     }
     if (num_workers == 1) {
-        dex_listen(port);
+        dex_listen_on(host, port);
         return;
     }
     if (num_workers > DEX_MAX_WORKERS) num_workers = DEX_MAX_WORKERS;
@@ -781,7 +829,7 @@ void dex_listen_multi(int port, int num_workers) {
         }
         if (pid == 0) {
             /* Child: run event loop (SO_REUSEPORT allows multiple binds) */
-            dex_listen(port);
+            dex_listen_on(host, port);
             _exit(0);
         }
         dex_worker_pids[i] = pid;
@@ -792,8 +840,25 @@ void dex_listen_multi(int port, int num_workers) {
     signal(SIGTERM, dex_multi_shutdown_handler);
 
     /* Parent becomes the last worker */
-    dex_listen(port);
+    dex_listen_on(host, port);
 }
+
+/* The three spellings the language exposes. http.listen(port[, workers]) binds
+ * every interface, which is what a service with nothing in front of it wants;
+ * http.listenOn(host, port[, workers]) names one, for a service behind a proxy
+ * that should not also be reachable directly. */
+void dex_listen(int port) {
+    dex_listen_on(NULL, port);
+}
+
+void dex_listen_multi(int port, int num_workers) {
+    dex_listen_multi_on(NULL, port, num_workers);
+}
+
+void dex_listen_host(const char* host, int port, int num_workers) {
+    dex_listen_multi_on(host, port, num_workers);
+}
+
 
 // --- HTTP Client (libcurl) ---
 // Dex_HttpResponse typedef is emitted by codegen from module Types.

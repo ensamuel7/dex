@@ -1997,6 +1997,9 @@ http.listen(8080)
 |------------|----------------------------------------------------------------|------------------------------------|
 | `route`    | `route(method: string, path: string, handler): void`           | Register a route handler. Path supports `:param` segments for dynamic routes (e.g. `"/users/:id"`). |
 | `listen`   | `listen(port: int, workers?: int): void`                       | Start the server on a port. Optional `workers` forks multiple processes sharing it via `SO_REUSEPORT` (0 = auto-detect CPU cores). With a single worker the port is **not** shared, so starting a second instance fails with `Address already in use` rather than silently binding alongside the first. |
+| `listenOn` | `listenOn(host: string, port: int, workers?: int): void`        | `listen` with the interface named: `"127.0.0.1"` binds loopback only, `"0.0.0.0"` every interface. For a service behind a proxy that should not also answer directly. A host that is not an IPv4 address is refused rather than widened to every interface. |
+| `notFound` | `notFound(handler): void`                                      | Answer requests no route matched, instead of the built-in 404 body. The handler takes the shapes `route` accepts. Registering twice replaces the first. |
+| `threads`  | `threads(count: int): void`                                    | How many threads run handlers; call before `listen`. `0`, the default, sizes the pool from the CPU count with a floor of four — the right hedge when a handler might block. Set it lower when handlers are CPU-bound and serialised behind a lock on a small box, where extra threads only add context switches. |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
 | `responseWith` | `responseWith(statusCode: int, body: string, contentType: string, headers: string): HttpResponse` | The same, carrying extra response headers |
 
@@ -2517,10 +2520,10 @@ freshly-read one moves in, so filling the same struct in a loop does not leak.
 | `open`   | `open(driver: string, dsn: string): int`      | Open a connection, returns handle        |
 | `exec`   | `exec(conn: int, sql: string): int`           | Execute a statement, returns affected rows |
 | `query`  | `query(conn: int, sql: string): int`          | Execute a query, returns result handle   |
-| `next`   | `next(rows: int): bool`                       | Advance to next row                      |
+| `next`   | `next(rows: int): bool`                       | Advance to next row (a result or a prepared statement) |
 | `col`    | `col(rows: int, index: int): int\|long\|string\|double\|bool` | Read a column value (type from context) |
 | `fill`   | `fill(into: struct\|&struct, rows: int): void` | Fill a struct from the current row, column `i` into field `i` |
-| `free`   | `free(rows: int): void`                       | Free a result set                        |
+| `free`   | `free(rows: int): void`                       | Free a result set, or finalize a statement |
 | `close`  | `close(conn: int): void`                      | Close a connection                       |
 
 #### Bound parameters
@@ -2573,12 +2576,61 @@ let sql: string = "UPDATE people SET manager_id = NULL WHERE id = $1"
 Both functions are **PostgreSQL only**. SQLite and MySQL spell placeholders
 differently, and silently accepting a statement written for one dialect on
 another is how a query that looks bound stops being bound; against those drivers
-these return `-1` and say so on stderr.
+these return `-1` and say so on stderr. Use
+[`prepare`](#prepared-statements) there, whose placeholder is `?`.
 
-> The older `prepare` / `bindInt` / `bindStr` / `step` family predates this and
-> is not equivalent: there is no way to read a column from a stepped statement,
-> because `col` indexes result handles and `step` produces none. Use
-> `queryParams` and `execParams`.
+#### Prepared statements
+
+`queryParams` compiles its SQL on every call. A statement on a hot path can be
+compiled once and re-run instead, which is what `prepare` is for: it returns a
+handle you bind values into, step, and reset. It is the only bound-parameter
+path for SQLite and MySQL, whose placeholder is `?`, positional from one.
+
+```dex
+let st: int = db.prepare(conn, "SELECT id, name FROM people WHERE age > ?")
+db.bindInt(st, 1, 40)
+while (db.next(st)) {
+    let id: long = db.col(st, 0)
+    let name: string = db.col(st, 1)
+}
+
+// Same plan, new values.
+db.reset(st)
+db.bindInt(st, 1, 60)
+while (db.next(st)) {
+    let name: string = db.col(st, 1)
+}
+db.finalize(st)
+```
+
+**A prepared statement is a row source, the same as a result.** `col`, `fill`,
+`next` and `free` take either handle, so a projection does not have to know
+which of the two produced its row — and `db.fill` works against a statement
+exactly as it does against a query. `step` and `next` are the same operation on
+a statement, and `free` and `finalize` are the same release; both spellings
+exist because both read naturally at their own call sites.
+
+Stepping past the last row answers `false` rather than re-running the statement,
+so `while (db.next(st))` terminates. `reset` rewinds it and clears its
+bindings, so every parameter has to be bound again.
+
+| Function     | Signature                                            | Description                                 |
+|--------------|------------------------------------------------------|---------------------------------------------|
+| `prepare`    | `prepare(conn: int, sql: string): int`               | Compile a statement; returns a handle, `-1` on error |
+| `bindInt`    | `bindInt(stmt: int, index: int, value: int): void`   | Bind an int (1-based index)                 |
+| `bindLong`   | `bindLong(stmt: int, index: int, value: long): void` | Bind a 64-bit integer                       |
+| `bindDouble` | `bindDouble(stmt: int, index: int, value: double): void` | Bind a double                           |
+| `bindStr`    | `bindStr(stmt: int, index: int, value: string): void`| Bind a string                               |
+| `step`       | `step(stmt: int): bool`                              | Run one step; true if a row is available    |
+| `reset`      | `reset(stmt: int): void`                             | Rewind and clear bindings for a re-run      |
+| `finalize`   | `finalize(stmt: int): void`                          | Destroy the statement                       |
+
+`bindInt` truncates past 2^31, which an id column reaches, so bind one with
+`bindLong` — the reason `db.col` hands ids back as `long` is the same.
+
+A statement is not safe to step from two threads at once. Guard it with a
+[`mutex`](#mutex) covering the column reads as well as the step, because a
+column is only readable while the statement sits on its row.
 
 `col` returns the type declared in the assignment — the compiler dispatches to the correct column reader:
 
@@ -2989,6 +3041,7 @@ let id: string = crypto.uuid()
 | `base64UrlDecode` | `base64UrlDecode(encoded: string): string` | Decode base64url — the `-`/`_` alphabet, padding optional. Binary-safe |
 | `sha256Hex` | `sha256Hex(data: string): string` | SHA-256, lowercase hex |
 | `hmacSha256Hex` | `hmacSha256Hex(key: string, message: string): string` | HMAC-SHA-256, lowercase hex |
+| `hmacSha256B64Url` | `hmacSha256B64Url(key: string, message: string): string` | HMAC-SHA-256, unpadded base64url — the encoding a JWS signature is written in |
 | `verifyRs256` | `verifyRs256(message: string, signature: string, modulus: string, exponent: string): bool` | Verify an RS256 signature against an RSA public key given as its two numbers |
 
 #### Verifying what somebody else signed
@@ -3048,7 +3101,7 @@ which is right for text and wrong for bytes. Where it matters, the table says
 
 #### OpenSSL
 
-`sha256Hex` and `hmacSha256Hex` need OpenSSL, found with `pkg-config` the same
+`sha256Hex`, `hmacSha256Hex` and `hmacSha256B64Url` need OpenSSL, found with `pkg-config` the same
 way `wss://` finds it. Without it the module still builds and every call to
 those two returns an empty string after saying so on stderr — so a program that
 only mentions a digest on a path it never takes still runs.

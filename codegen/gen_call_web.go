@@ -28,6 +28,15 @@ func (g *Generator) genWebCall(out *strings.Builder, e *ast.CallExpr) bool {
 		return true
 	}
 
+	// http.notFound(handler) — the fallback for an unmatched path. The handler
+	// goes through the same adapter as a route's, so it accepts the same shapes.
+	if e.Module == "http" && e.Name == "notFound" {
+		out.WriteString("dex_route_not_found(")
+		g.genRouteHandler(out, e.Args[0])
+		out.WriteString(")")
+		return true
+	}
+
 	// http.response(statusCode, body, contentType) and
 	// http.responseWith(..., headers) -> HttpResponse struct literal.
 	// Retain borrowed string refs for ownership transfer to the worker thread.
@@ -254,6 +263,21 @@ func (g *Generator) genWebCall(out *strings.Builder, e *ast.CallExpr) bool {
 				g.genStringArg(out, e.Args[1])
 				out.WriteString(")")
 			}
+			return true
+		case "listenOn":
+			// A named interface always goes through the multi entry, which
+			// handles a worker count of one by not forking at all.
+			out.WriteString("dex_listen_host(")
+			g.genStringArg(out, e.Args[0])
+			out.WriteString(", ")
+			g.genExpr(out, e.Args[1])
+			out.WriteString(", ")
+			if len(e.Args) == 3 {
+				g.genExpr(out, e.Args[2])
+			} else {
+				out.WriteString("1")
+			}
+			out.WriteString(")")
 			return true
 		case "listen":
 			if len(e.Args) == 2 {

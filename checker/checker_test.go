@@ -2131,6 +2131,23 @@ func TestCanAssignCharLiteralToDouble(t *testing.T) {
 	}`)
 }
 
+func TestCanAssignNegatedIntLiteralToLong(t *testing.T) {
+	// A negated literal is still a literal: the parser spells -1 as a unary
+	// minus over IntLit, and the widening is about what is written down.
+	mustCheck(t, `fn main(): void {
+		let a: long = -1
+		let b: double = -2
+	}`)
+}
+
+func TestCannotAssignNegatedIntVarToLong(t *testing.T) {
+	// Negation does not make a computed int into a literal.
+	mustFail(t, `fn main(): void {
+		let a: int = 42
+		let b: long = -a
+	}`, "type mismatch in let: expected long, got int")
+}
+
 func TestCannotAssignIntVarToLong(t *testing.T) {
 	mustFail(t, `fn main(): void {
 		let a: int = 42

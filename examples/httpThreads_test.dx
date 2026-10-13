@@ -1,0 +1,33 @@
+// How many threads run handlers.
+//
+// The pool sizes itself from the CPU count with a floor of four, which is the
+// right hedge in general: a handler that blocks on a database or an outbound
+// request would stall a one-thread pool, and three idle threads cost almost
+// nothing. It is the wrong number when handlers are CPU-bound and serialised
+// behind a lock on a one-core box — four threads then add context switches to
+// work that cannot overlap. Only the program knows which of those it is.
+//
+// Set it before listen; afterwards the pool already exists.
+//
+//   go run . run examples/httpThreads_test.dx
+
+import "http"
+import "fmt"
+
+fn feed(req: http.HttpRequest): http.HttpResponse {
+    return http.response(200, "{\"posts\":[]}", "application/json")
+}
+
+fn main(): void {
+    // One core, one lock, no blocking in a handler: two is plenty.
+    http.threads(2)
+
+    // 0 is the default, and says "size it yourself" — so passing it explicitly
+    // is the same as not calling this at all.
+    http.threads(0)
+
+    http.threads(2)
+    http.route("GET", "/feed", feed)
+
+    fmt.println("handler thread count set")
+}

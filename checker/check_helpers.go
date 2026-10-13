@@ -558,7 +558,6 @@ func alwaysExits(stmts []ast.Stmt) bool {
 	return false
 }
 
-<<<<<<< Updated upstream
 // isJsonEncodable reports whether a value of type t can appear inside a
 // json.Value literal. Everything with a JSON representation qualifies; channels,
 // functions, mutexes and the like do not.
@@ -723,45 +722,4 @@ func (c *Checker) checkIdentifierName(name string, kind string, pos ast.Pos) err
 		return c.errAt(pos, "%s name '%s' is reserved and cannot be used as an identifier", kind, name)
 	}
 	return nil
-=======
-// validateStructAnnotations checks the struct-level and field-level annotations
-// on a struct definition. These are reported together rather than at first
-// failure so a struct with several bad tags surfaces all of them in one pass.
-func validateStructAnnotations(sd ast.StructDef) []error {
-	var errs []error
-
-	for _, a := range sd.Annotations {
-		if a != ast.AnnotTuple {
-			errs = append(errs, fmt.Errorf("unknown annotation '#[%s]' on struct '%s'", a, sd.Name))
-		}
-	}
-	isTuple := ast.HasAnnotation(sd.Annotations, ast.AnnotTuple)
-
-	for _, f := range sd.Fields {
-		tag, hasTag := ast.ParseJSONTag(f.Annotations)
-		for _, a := range f.Annotations {
-			if !strings.HasPrefix(a, "json(") {
-				errs = append(errs, fmt.Errorf("unknown annotation '#[%s]' on field '%s' of struct '%s'", a, f.Name, sd.Name))
-			}
-		}
-		if !hasTag {
-			continue
-		}
-		if tag.Raw && f.Type != ast.TypeString {
-			errs = append(errs, fmt.Errorf("#[json(raw)] on field '%s' of struct '%s' requires a string field, got %s", f.Name, sd.Name, typeName(f.Type)))
-		}
-		// In a tuple every position is written, so a rename has nothing to name
-		// and omitting a field would shift the ones after it.
-		if isTuple && tag.Name != "" {
-			errs = append(errs, fmt.Errorf("#[json(\"%s\")] on field '%s': renaming has no effect in #[tuple] struct '%s', where fields are positional", tag.Name, f.Name, sd.Name))
-		}
-		if isTuple && tag.OmitEmpty {
-			errs = append(errs, fmt.Errorf("#[json(omitempty)] on field '%s': omitting a field would shift every later position in #[tuple] struct '%s'", f.Name, sd.Name))
-		}
-		if isTuple && tag.Skip {
-			errs = append(errs, fmt.Errorf("#[json(\"-\")] on field '%s': skipping a field would shift every later position in #[tuple] struct '%s'", f.Name, sd.Name))
-		}
-	}
-	return errs
->>>>>>> Stashed changes
 }

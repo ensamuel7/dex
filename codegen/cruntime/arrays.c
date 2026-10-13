@@ -701,14 +701,8 @@ DexArrayStruct* dex_array_struct_slice(DexArrayStruct* a, int start, int end) {
 }
 
 // === Struct array JSON serialization ===
-// Emitted only when the json module is imported: everything below bridges the
-// array runtime to the json runtime, which is emitted after this file.
-#ifdef DEX_HAVE_JSON
-
-// Field descriptor for generic struct-to-JSON serialization.
-// kind: 0=int, 1=bool, 2=string, 3=long, 4=double, 5=nested struct, 6=array,
-//       7=unsupported
-// flags: see DEX_JSON_F_* below.
+// Field descriptor for generic struct-to-JSON serialization
+// kind: 0=int, 1=bool, 2=string, 3=long, 4=double, 5=nested struct
 #ifndef DEX_STRUCT_FIELD_DESC_DEFINED
 #define DEX_STRUCT_FIELD_DESC_DEFINED
 typedef struct DexStructFieldDesc {
@@ -719,11 +713,9 @@ typedef struct DexStructFieldDesc {
     struct DexStructFieldDesc* sub;  // kind 5: descriptors for the nested struct
     const char* (*enc_arr)(void* field);   // kind 6
     void (*dec_arr)(const char* json, void* field);
-    int flags;                       // #[json(...)] / #[tuple] modifiers
 } DexStructFieldDesc;
 #endif
 
-<<<<<<< Updated upstream
 // Encodes one struct instance as a JSON object from field descriptors, recursing
 // into nested struct fields (kind 5).
 //
@@ -823,32 +815,8 @@ static char* dex_arr_encode_struct(void* elem, int num_fields, DexStructFieldDes
     buf[pos] = '\0';
     return buf;
 }
-=======
-// Field modifiers carried from #[json(...)] annotations, plus #[tuple] on a
-// nested struct type.
-#ifndef DEX_JSON_FLAGS_DEFINED
-#define DEX_JSON_FLAGS_DEFINED
-#define DEX_JSON_F_OMITEMPTY 1  // skip on encode when the field holds its zero value
-#define DEX_JSON_F_RAW       2  // string field spliced verbatim, not quoted
-#define DEX_JSON_F_SUBTUPLE  4  // kind 5 nested struct is #[tuple]-encoded
-#endif
->>>>>>> Stashed changes
 
-// Defined in the json module runtime, which is emitted after this file. Declared
-// here so the struct-array codecs below share one encoder rather than carrying a
-// second copy that could drift.
-const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDesc* fields);
-const char* dex_json_encode_tuple(void* data, int num_fields, DexStructFieldDesc* fields);
-void dex_json_decode_struct(const char* json, void* out, int num_fields, DexStructFieldDesc* fields);
-void dex_json_decode_tuple(const char* json, void* out, int num_fields, DexStructFieldDesc* fields);
-int dex_json_decode_struct_checked(const char* json, void* out, int num_fields, DexStructFieldDesc* fields);
-int dex_json_decode_tuple_checked(const char* json, void* out, int num_fields, DexStructFieldDesc* fields);
-int dex_json_array_len(const char* json);
-const char* dex_json_array_get_raw(const char* json, int index);
-const char* dex_json_array_get(const char* json, int index);
-
-
-const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields, int is_tuple) {
+const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields) {
     // Build JSON array of objects
     size_t cap = 1024;
     char* buf = (char*)malloc(cap);
@@ -857,19 +825,18 @@ const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArraySt
     for (int i = 0; i < arr->len; i++) {
         if (i > 0) { buf[pos++] = ','; }
         void* elem = (char*)arr->data + (size_t)i * elem_size;
-        const char* obj_str = is_tuple ? dex_json_encode_tuple(elem, num_fields, fields)
-                                       : dex_json_encode_struct(elem, num_fields, fields);
-        const char* objs = obj_str ? obj_str : (is_tuple ? "[]" : "{}");
+        char* obj_str = dex_arr_encode_struct(elem, num_fields, fields);
+        const char* objs = obj_str ? obj_str : "{}";
         size_t objlen = strlen(objs);
         while ((size_t)pos + objlen + 8 > cap) {
             cap *= 2;
             char* t = (char*)realloc(buf, cap);
-            if (!t) { free((void*)obj_str); buf[pos] = '\0'; return buf; }
+            if (!t) { free(obj_str); buf[pos] = '\0'; return buf; }
             buf = t;
         }
         memcpy(buf + pos, objs, objlen);
         pos += (int)objlen;
-        free((void*)obj_str);
+        free(obj_str);
     }
     buf[pos++] = ']';
     buf[pos] = '\0';
@@ -890,7 +857,7 @@ const char* dex_json_set_struct_arr(const char* obj, const char* key, DexArraySt
     return result;
 }
 
-const char* dex_json_stringify_struct_arr(DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields, int is_tuple) {
+const char* dex_json_stringify_struct_arr(DexArrayStruct* arr, size_t elem_size, int num_fields, DexStructFieldDesc* fields) {
     // Build JSON array of objects — returns just [...] without wrapping in an object
     size_t cap = 1024;
     char* buf = (char*)malloc(cap);
@@ -899,19 +866,18 @@ const char* dex_json_stringify_struct_arr(DexArrayStruct* arr, size_t elem_size,
     for (int i = 0; i < arr->len; i++) {
         if (i > 0) { buf[pos++] = ','; }
         void* elem = (char*)arr->data + (size_t)i * elem_size;
-        const char* obj_str = is_tuple ? dex_json_encode_tuple(elem, num_fields, fields)
-                                       : dex_json_encode_struct(elem, num_fields, fields);
-        const char* objs = obj_str ? obj_str : (is_tuple ? "[]" : "{}");
+        char* obj_str = dex_arr_encode_struct(elem, num_fields, fields);
+        const char* objs = obj_str ? obj_str : "{}";
         size_t objlen = strlen(objs);
         while ((size_t)pos + objlen + 8 > cap) {
             cap *= 2;
             char* t = (char*)realloc(buf, cap);
-            if (!t) { free((void*)obj_str); buf[pos] = '\0'; return buf; }
+            if (!t) { free(obj_str); buf[pos] = '\0'; return buf; }
             buf = t;
         }
         memcpy(buf + pos, objs, objlen);
         pos += (int)objlen;
-        free((void*)obj_str);
+        free(obj_str);
     }
     buf[pos++] = ']';
     buf[pos] = '\0';
@@ -1136,6 +1102,3 @@ const char* dex_json_set_arr_char(const char* obj, const char* key, DexArrayChar
     free((void*)arrStr);
     return result;
 }
-
-
-#endif // DEX_HAVE_JSON

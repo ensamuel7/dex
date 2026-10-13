@@ -444,230 +444,17 @@ typedef struct DexStructFieldDesc {
     // has to link against the array runtime, which is emitted conditionally.
     const char* (*enc_arr)(void* field);
     void (*dec_arr)(const char* json, void* field);
-    int flags;                       // #[json(...)] / #[tuple] modifiers
 } DexStructFieldDesc;
 #endif
-
-#ifndef DEX_JSON_FLAGS_DEFINED
-#define DEX_JSON_FLAGS_DEFINED
-#define DEX_JSON_F_OMITEMPTY 1  // skip on encode when the field holds its zero value
-#define DEX_JSON_F_RAW       2  // string field spliced verbatim, not quoted
-#define DEX_JSON_F_SUBTUPLE  4  // kind 5 nested struct is #[tuple]-encoded
-#endif
-
-// dex_json_field_is_empty reports whether a field currently holds its zero value,
-// which is what #[json(omitempty)] suppresses. Arrays are empty when their codec
-// yields "[]"; nested structs are never considered empty, matching Go, where a
-// struct value has no meaningful emptiness.
-static int dex_json_field_is_empty(void* data, DexStructFieldDesc* fd) {
-    void* p = (char*)data + fd->offset;
-    switch (fd->kind) {
-    case 0: return *(int*)p == 0;
-    case 1: return *(_Bool*)p == 0;
-    case 2: { DexString* s = *(DexString**)p; return !s || !s->data || s->data[0] == '\0'; }
-    case 3: return *(long*)p == 0;
-    case 4: return *(double*)p == 0.0;
-    case 6: {
-        if (!fd->enc_arr) return 1;
-        const char* enc = fd->enc_arr(p);
-        int empty = !enc || enc[0] == '\0' || (enc[0] == '[' && enc[1] == ']');
-        free((void*)enc);
-        return empty;
-    }
-    default: return 0;
-    }
-}
-
-// dex_json_encode_field_value writes just the value half of a field — no key, no
-// separator — growing *buf as needed. Shared by the object and tuple encoders so
-// the two never disagree about how a value is rendered. Returns the new position.
-static int dex_json_encode_field_value(char** buf, size_t* cap, int pos,
-                                       void* data, DexStructFieldDesc* fd);
-
-const char* dex_json_encode_tuple(void* data, int num_fields, DexStructFieldDesc* fields);
-void dex_json_decode_tuple(const char* json, void* out, int num_fields, DexStructFieldDesc* fields);
-
-// dex_json_unquote turns the verbatim JSON text of a string value into its
-// decoded contents, resolving backslash escapes. A value that is not a quoted
-// string is copied through unchanged, so a caller that guessed wrong about the
-// shape gets the raw text rather than an empty result.
-static char* dex_json_unquote(const char* raw) {
-    if (!raw) return strdup("");
-    if (*raw != '"') return strdup(raw);
-    const char* p = raw + 1;
-    size_t cap = strlen(raw) + 1;
-    char* out = (char*)malloc(cap);
-    if (!out) return strdup("");
-    size_t n = 0;
-    while (*p && *p != '"') {
-        if (*p == '\\' && p[1]) {
-            p++;
-            switch (*p) {
-            case 'n': out[n++] = '\n'; break;
-            case 't': out[n++] = '\t'; break;
-            case 'r': out[n++] = '\r'; break;
-            case 'b': out[n++] = '\b'; break;
-            case 'f': out[n++] = '\f'; break;
-            case '/': out[n++] = '/'; break;
-            case '"': out[n++] = '"'; break;
-            case '\\': out[n++] = '\\'; break;
-            case 'u': {
-                // \uXXXX — decoded to UTF-8. Surrogate pairs are combined so
-                // characters outside the BMP survive the round trip.
-                unsigned int cp = 0;
-                int digits = 0;
-                for (int i = 1; i <= 4 && p[i]; i++) {
-                    char c = p[i];
-                    int v;
-                    if (c >= '0' && c <= '9') v = c - '0';
-                    else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
-                    else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
-                    else break;
-                    cp = (cp << 4) | (unsigned)v;
-                    digits++;
-                }
-                if (digits < 4) { out[n++] = 'u'; break; }
-                p += 4;
-                if (cp >= 0xD800 && cp <= 0xDBFF && p[1] == '\\' && p[2] == 'u') {
-                    unsigned int lo = 0;
-                    int ld = 0;
-                    for (int i = 3; i <= 6 && p[i]; i++) {
-                        char c = p[i];
-                        int v;
-                        if (c >= '0' && c <= '9') v = c - '0';
-                        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
-                        else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
-                        else break;
-                        lo = (lo << 4) | (unsigned)v;
-                        ld++;
-                    }
-                    if (ld == 4 && lo >= 0xDC00 && lo <= 0xDFFF) {
-                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                        p += 6;
-                    }
-                }
-                if (cp < 0x80) {
-                    out[n++] = (char)cp;
-                } else if (cp < 0x800) {
-                    out[n++] = (char)(0xC0 | (cp >> 6));
-                    out[n++] = (char)(0x80 | (cp & 0x3F));
-                } else if (cp < 0x10000) {
-                    out[n++] = (char)(0xE0 | (cp >> 12));
-                    out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                    out[n++] = (char)(0x80 | (cp & 0x3F));
-                } else {
-                    out[n++] = (char)(0xF0 | (cp >> 18));
-                    out[n++] = (char)(0x80 | ((cp >> 12) & 0x3F));
-                    out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                    out[n++] = (char)(0x80 | (cp & 0x3F));
-                }
-                break;
-            }
-            default: out[n++] = *p; break;
-            }
-            p++;
-            continue;
-        }
-        out[n++] = *p++;
-    }
-    out[n] = '\0';
-    return out;
-}
-
-// dex_json_grow ensures at least `need` free bytes past pos. Returns 0 on
-// allocation failure, in which case the caller terminates the buffer as-is.
-static int dex_json_grow(char** buf, size_t* cap, int pos, size_t need) {
-    while ((size_t)pos + need + 2 > *cap) {
-        size_t next = *cap * 2;
-        char* tmp = (char*)realloc(*buf, next);
-        if (!tmp) return 0;
-        *buf = tmp;
-        *cap = next;
-    }
-    return 1;
-}
-
-static int dex_json_encode_field_value(char** buf, size_t* cap, int pos,
-                                       void* data, DexStructFieldDesc* fd) {
-    void* p = (char*)data + fd->offset;
-    switch (fd->kind) {
-    case 0: // int
-        if (!dex_json_grow(buf, cap, pos, 32)) return pos;
-        return pos + snprintf(*buf + pos, *cap - pos, "%d", *(int*)p);
-    case 1: // bool
-        if (!dex_json_grow(buf, cap, pos, 8)) return pos;
-        return pos + snprintf(*buf + pos, *cap - pos, "%s", (*(_Bool*)p) ? "true" : "false");
-    case 3: // long
-        if (!dex_json_grow(buf, cap, pos, 32)) return pos;
-        return pos + snprintf(*buf + pos, *cap - pos, "%ld", *(long*)p);
-    case 4: // double
-        if (!dex_json_grow(buf, cap, pos, 40)) return pos;
-        return pos + snprintf(*buf + pos, *cap - pos, "%g", *(double*)p);
-    case 2: { // string — quoted and escaped, or spliced verbatim under #[json(raw)]
-        DexString* s = *(DexString**)p;
-        const char* sdata = (s && s->data) ? s->data : "";
-        if (fd->flags & DEX_JSON_F_RAW) {
-            // A raw field carries pre-formed JSON. An empty one would produce
-            // invalid output spliced bare, so it degrades to null.
-            const char* src = sdata[0] ? sdata : "null";
-            size_t len = strlen(src);
-            if (!dex_json_grow(buf, cap, pos, len)) return pos;
-            memcpy(*buf + pos, src, len);
-            return pos + (int)len;
-        }
-        if (!dex_json_grow(buf, cap, pos, dex_json_escaped_len(sdata) + 4)) return pos;
-        (*buf)[pos++] = '"';
-        pos += (int)dex_json_escape(*buf + pos, sdata);
-        (*buf)[pos++] = '"';
-        return pos;
-    }
-    case 5: { // nested struct — encode recursively and splice in
-        const char* sub = (fd->flags & DEX_JSON_F_SUBTUPLE)
-                              ? dex_json_encode_tuple(p, fd->num_sub, fd->sub)
-                              : dex_json_encode_struct(p, fd->num_sub, fd->sub);
-        const char* subs = sub ? sub : "{}";
-        size_t len = strlen(subs);
-        if (!dex_json_grow(buf, cap, pos, len)) { free((void*)sub); return pos; }
-        memcpy(*buf + pos, subs, len);
-        pos += (int)len;
-        free((void*)sub);
-        return pos;
-    }
-    case 6: { // array — encoded by a codegen-supplied codec
-        const char* sub = fd->enc_arr ? fd->enc_arr(p) : NULL;
-        const char* subs = sub ? sub : "[]";
-        size_t len = strlen(subs);
-        if (!dex_json_grow(buf, cap, pos, len)) { free((void*)sub); return pos; }
-        memcpy(*buf + pos, subs, len);
-        pos += (int)len;
-        free((void*)sub);
-        return pos;
-    }
-    default: // kind 7 — no codec; callers skip these before getting here
-        if (!dex_json_grow(buf, cap, pos, 8)) return pos;
-        memcpy(*buf + pos, "null", 4);
-        return pos + 4;
-    }
-}
-
-// dex_json_field_skipped reports whether a field is left out of the encoded
-// object entirely: either it has no codec, or #[json(omitempty)] applies and the
-// field currently holds its zero value.
-static int dex_json_field_skipped(void* data, DexStructFieldDesc* fd) {
-    if (fd->kind == 7) return 1;
-    if ((fd->flags & DEX_JSON_F_OMITEMPTY) && dex_json_field_is_empty(data, fd)) return 1;
-    return 0;
-}
 
 const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDesc* fields) {
     size_t cap = 256;
     char* buf = (char*)malloc(cap);
-    if (!buf) return strdup("{}");
+    if (!buf) return strdup("");
     int pos = 0;
     buf[pos++] = '{';
     int wrote = 0;
     for (int f = 0; f < num_fields; f++) {
-<<<<<<< Updated upstream
         if (fields[f].kind == 7) continue; // no codec — omit rather than emit garbage
         if (wrote) { buf[pos++] = ','; }
         wrote = 1;
@@ -762,122 +549,51 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
             if (!tmp) { buf[pos] = '\0'; return buf; }
             buf = tmp;
         }
-=======
-        if (dex_json_field_skipped(data, &fields[f])) continue;
-        if (!dex_json_grow(&buf, &cap, pos, dex_json_escaped_len(fields[f].name) + 8)) break;
-        if (wrote) { buf[pos++] = ','; buf[pos++] = ' '; }
-        wrote = 1;
-        buf[pos++] = '"';
-        pos += (int)dex_json_escape(buf + pos, fields[f].name);
-        buf[pos++] = '"';
-        buf[pos++] = ':';
-        buf[pos++] = ' ';
-        pos = dex_json_encode_field_value(&buf, &cap, pos, data, &fields[f]);
->>>>>>> Stashed changes
     }
-    if (!dex_json_grow(&buf, &cap, pos, 2)) { buf[pos] = '\0'; return buf; }
     buf[pos++] = '}';
     buf[pos] = '\0';
     return buf;
 }
 
-// dex_json_encode_tuple renders a #[tuple] struct as a positional JSON array.
-// Field names never reach the wire, so #[json("name")] is inert here; the field
-// order in the source is the array order. #[json(omitempty)] is ignored too —
-// dropping an element would shift every position after it.
-const char* dex_json_encode_tuple(void* data, int num_fields, DexStructFieldDesc* fields) {
-    size_t cap = 256;
-    char* buf = (char*)malloc(cap);
-    if (!buf) return strdup("[]");
-    int pos = 0;
-    buf[pos++] = '[';
-    for (int f = 0; f < num_fields; f++) {
-        if (f > 0) {
-            if (!dex_json_grow(&buf, &cap, pos, 2)) break;
-            buf[pos++] = ',';
-        }
-        pos = dex_json_encode_field_value(&buf, &cap, pos, data, &fields[f]);
-    }
-    if (!dex_json_grow(&buf, &cap, pos, 2)) { buf[pos] = '\0'; return buf; }
-    buf[pos++] = ']';
-    buf[pos] = '\0';
-    return buf;
-}
-
-// dex_json_decode_field_value reads one already-extracted JSON value `raw` into a
-// field. `raw` is the verbatim JSON text of the value, quotes included for
-// strings. Shared by the object and tuple decoders.
-static void dex_json_decode_field_value(const char* raw, void* out, DexStructFieldDesc* fd) {
-    void* p = (char*)out + fd->offset;
-    int is_null = (!raw || strncmp(raw, "null", 4) == 0);
-    switch (fd->kind) {
-    case 0: *(int*)p = is_null ? 0 : atoi(raw); break;
-    case 1: *(_Bool*)p = (!is_null && strncmp(raw, "true", 4) == 0); break;
-    case 3: *(long*)p = is_null ? 0 : atol(raw); break;
-    case 4: *(double*)p = is_null ? 0.0 : atof(raw); break;
-    case 2: { // string
-        if (fd->flags & DEX_JSON_F_RAW) {
-            // Raw fields keep the JSON text exactly as it appeared, so an object
-            // or array payload survives a decode/encode round trip untouched.
-            *(DexString**)p = dex_string_from_cstr(strdup(is_null ? "" : raw));
-        } else if (is_null) {
-            *(DexString**)p = dex_string_from_cstr(strdup(""));
-        } else {
-            *(DexString**)p = dex_string_from_cstr(dex_json_unquote(raw));
-        }
-        break;
-    }
-    case 5: { // nested struct
-        const char* sub = is_null ? "{}" : raw;
-        if (fd->flags & DEX_JSON_F_SUBTUPLE) {
-            dex_json_decode_tuple(sub, p, fd->num_sub, fd->sub);
-        } else {
-            dex_json_decode_struct(sub, p, fd->num_sub, fd->sub);
-        }
-        break;
-    }
-    case 6: // array
-        if (fd->dec_arr) fd->dec_arr(is_null ? "[]" : raw, p);
-        break;
-    }
-}
-
-// dex_json_extract_value returns a freshly allocated copy of the verbatim JSON
-// text for `key`, or NULL when the key is absent.
-static char* dex_json_extract_value(const char* json, const char* key) {
-    const char* val = dex_json_find_value(json, key);
-    if (!val) return NULL;
-    const char* end = dex_json_skip_value(val);
-    size_t len = (size_t)(end - val);
-    char* result = (char*)malloc(len + 1);
-    if (!result) return NULL;
-    memcpy(result, val, len);
-    result[len] = '\0';
-    return result;
-}
-
 void dex_json_decode_struct(const char* json, void* out, int num_fields, DexStructFieldDesc* fields) {
     for (int f = 0; f < num_fields; f++) {
-        if (fields[f].kind == 7) continue;
-        char* raw = dex_json_extract_value(json, fields[f].name);
-        // An absent key leaves the field at its zero value, matching Go. Passing
-        // NULL through still initialises strings and arrays, which must not be
-        // left as null pointers.
-        dex_json_decode_field_value(raw, out, &fields[f]);
-        free(raw);
-    }
-}
-
-// dex_json_decode_tuple reads a positional JSON array into a #[tuple] struct.
-// Element i fills field i; a short array leaves the remaining fields zeroed.
-void dex_json_decode_tuple(const char* json, void* out, int num_fields, DexStructFieldDesc* fields) {
-    int len = dex_json_array_len(json);
-    for (int f = 0; f < num_fields; f++) {
-        if (fields[f].kind == 7) continue;
-        char* raw = NULL;
-        if (f < len) raw = (char*)dex_json_array_get_raw(json, f);
-        dex_json_decode_field_value(raw, out, &fields[f]);
-        free(raw);
+        switch (fields[f].kind) {
+        case 0: // int
+            *(int*)((char*)out + fields[f].offset) = dex_json_get_int(json, fields[f].name);
+            break;
+        case 1: // bool
+            *(_Bool*)((char*)out + fields[f].offset) = dex_json_get_bool(json, fields[f].name);
+            break;
+        case 2: // string
+            { const char* raw = dex_json_find_value(json, fields[f].name);
+              if (raw && strncmp(raw, "null", 4) == 0) {
+                  // JSON null decodes to the empty string, not the text "null"
+                  *(DexString**)((char*)out + fields[f].offset) = dex_string_from_cstr(strdup(""));
+              } else {
+                  const char* val = dex_json_get(json, fields[f].name);
+                  *(DexString**)((char*)out + fields[f].offset) = dex_string_from_cstr(val);
+              } }
+            break;
+        case 3: // long
+            *(long*)((char*)out + fields[f].offset) = dex_json_get_long(json, fields[f].name);
+            break;
+        case 4: // double
+            *(double*)((char*)out + fields[f].offset) = dex_json_get_double(json, fields[f].name);
+            break;
+        case 6: // array — decoded by a codegen-supplied codec
+            { if (fields[f].dec_arr) {
+                  const char* raw = dex_json_get(json, fields[f].name);
+                  fields[f].dec_arr(raw, (char*)out + fields[f].offset);
+                  free((void*)raw);
+              } }
+            break;
+        case 5: // nested struct — decode the raw sub-object recursively
+            { const char* sub_json = dex_json_get(json, fields[f].name);
+              dex_json_decode_struct(sub_json, (char*)out + fields[f].offset,
+                                     fields[f].num_sub, fields[f].sub);
+              free((void*)sub_json); }
+            break;
+        }
     }
 }
 
@@ -978,9 +694,6 @@ int dex_json_is_array(const char* json) {
 // Does the raw value at v plausibly fit a field of this descriptor kind?
 // Kind 2 (string) also accepts a raw object/array so that raw-JSON passthrough
 // into a string field keeps working.
-static int dex_json_check_fields(const char* json, int num_fields, DexStructFieldDesc* fields);
-static int dex_json_check_tuple_fields(const char* json, int num_fields, DexStructFieldDesc* fields);
-
 static int dex_json_kind_ok(const char* v, int kind) {
     switch (kind) {
     case 0: case 3: case 4: return (*v == '-' || (*v >= '0' && *v <= '9'));
@@ -995,44 +708,18 @@ static int dex_json_kind_ok(const char* v, int kind) {
 // A key that is absent, or explicitly null, is fine — the field keeps its zero
 // value, matching what encoding/json does for missing keys. A key that is
 // present with an incompatible type is a decode failure.
-// dex_json_check_field validates one already-located value against a field
-// descriptor. Shared by the object and tuple checkers.
-static int dex_json_check_field(const char* v, DexStructFieldDesc* fd) {
-    if (!v) return 1;
-    if (strncmp(v, "null", 4) == 0) return 1;
-    // A #[json(raw)] field is a passthrough for arbitrary JSON, so any
-    // well-formed value fits it.
-    if ((fd->flags & DEX_JSON_F_RAW) && fd->kind == 2) return 1;
-    if (fd->kind == 5 && (fd->flags & DEX_JSON_F_SUBTUPLE)) {
-        if (*v != '[') return 0;
-        return dex_json_check_tuple_fields(v, fd->num_sub, fd->sub);
-    }
-    if (!dex_json_kind_ok(v, fd->kind)) return 0;
-    if (fd->kind == 5) return dex_json_check_fields(v, fd->num_sub, fd->sub);
-    return 1;
-}
-
 static int dex_json_check_fields(const char* json, int num_fields, DexStructFieldDesc* fields) {
     for (int f = 0; f < num_fields; f++) {
-        if (fields[f].kind == 7) continue;
         const char* v = dex_json_find_value(json, fields[f].name);
-        if (!dex_json_check_field(v, &fields[f])) return 0;
-    }
-    return 1;
-}
-
-// dex_json_check_tuple_fields validates a positional array against a #[tuple]
-// struct: each present element must fit the field in the same position. A short
-// array is accepted — the trailing fields simply keep their zero values, which
-// is how an optional trailing element in a wire frame behaves.
-static int dex_json_check_tuple_fields(const char* json, int num_fields, DexStructFieldDesc* fields) {
-    int len = dex_json_array_len(json);
-    for (int f = 0; f < num_fields && f < len; f++) {
-        if (fields[f].kind == 7) continue;
-        char* v = (char*)dex_json_array_get_raw(json, f);
-        int ok = dex_json_check_field(v, &fields[f]);
-        free(v);
-        if (!ok) return 0;
+        if (!v) continue;
+        if (strncmp(v, "null", 4) == 0) continue;
+        if (!dex_json_kind_ok(v, fields[f].kind)) return 0;
+        if (fields[f].kind == 5) {
+            const char* subj = dex_json_get(json, fields[f].name);
+            int ok = dex_json_check_fields(subj, fields[f].num_sub, fields[f].sub);
+            free((void*)subj);
+            if (!ok) return 0;
+        }
     }
     return 1;
 }
@@ -1046,18 +733,6 @@ int dex_json_decode_struct_checked(const char* json, void* out, int num_fields, 
     if (*p != '{') return 0;
     if (!dex_json_check_fields(json, num_fields, fields)) return 0;
     dex_json_decode_struct(json, out, num_fields, fields);
-    return 1;
-}
-
-// dex_json_decode_tuple_checked is the #[tuple] counterpart: the payload must be
-// a well-formed JSON array whose elements fit the fields positionally.
-int dex_json_decode_tuple_checked(const char* json, void* out, int num_fields, DexStructFieldDesc* fields) {
-    if (!dex_json_valid(json)) return 0;
-    const char* p = json;
-    DEX_JSON_SKIP_WS(p);
-    if (*p != '[') return 0;
-    if (!dex_json_check_tuple_fields(json, num_fields, fields)) return 0;
-    dex_json_decode_tuple(json, out, num_fields, fields);
     return 1;
 }
 

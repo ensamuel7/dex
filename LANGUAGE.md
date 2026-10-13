@@ -3429,6 +3429,48 @@ See [Concurrency](#concurrency) section.
 
 ---
 
+## Module-Scoped Types
+
+A type declared in a user module belongs to that module, the way a function
+does. Two modules can each declare a `Response`, and they are two types:
+
+```dex
+// model/charging.dx
+struct Response(ok: bool) {}
+
+// model/billing.dx
+struct Response(code: int) {}
+```
+
+```dex
+import "model/charging"
+import "model/billing"
+
+let a: charging.Response = charging.make()
+let b: billing.Response = billing.make(404)
+```
+
+A reference resolves in this order:
+
+1. **Qualified** — `charging.Response` always names that module's type.
+2. **Its own module's** — inside `charging`, a bare `Response` is charging's,
+   even if an imported module declares one too. The same rule a function
+   follows: inside a module you call `make()`, not `charging.make()`.
+3. **Unqualified, one declarer** — a bare `Response` resolves when exactly one
+   module in scope declares it. This is why existing code needs no changes.
+4. **Unqualified, several declarers** — an error naming them:
+
+```
+app.dx:6:21: ambiguous type 'Response': declared by 'charging.Response' and
+'billing.Response' — qualify it, as in charging.Response
+```
+
+Diagnostics and editor hovers show the qualified spelling, so a type reads the
+way it was written rather than by the flat name it registers under.
+
+The struct types a stdlib module provides — `http.HttpRequest`, `ws.Conn` — are
+not module-scoped and keep working under either spelling.
+
 ## Linting
 
 Lint reports what compiles but is probably not what was meant. It is off by

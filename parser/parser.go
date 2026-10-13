@@ -2,6 +2,8 @@ package parser
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/token"
@@ -20,10 +22,111 @@ type Parser struct {
 	errors         []error
 	maxErrors      int
 	lastArgNames   []string // set by parseArgs when named arguments are used
+	// module is the user module this file declares, empty for the main program.
+	// A type declared here registers under it, so two modules can each declare
+	// a `Response` — the same way each can declare a `make`.
+	module string
+	// candidates maps a bare type name to the flat names visible in this file:
+	// its own module's, and one per import that declares it. A bare name with
+	// several candidates is ambiguous and says so, rather than silently
+	// resolving to whichever registered last.
+	candidates map[string][]string
 }
 
 func New(tokens []token.Token) *Parser {
-	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool), enumNames: make(map[string]bool), interfaceNames: make(map[string]bool), maxErrors: 20}
+	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool), enumNames: make(map[string]bool), interfaceNames: make(map[string]bool), maxErrors: 20, candidates: make(map[string][]string)}
+}
+
+// SetModule names the user module this file declares. Its types register under
+// that name, and a bare reference inside it resolves to its own first.
+func (p *Parser) SetModule(name string) {
+	p.module = name
+}
+
+// AddModuleType records that `module` declares a type called `bare`, so a
+// reference to it from this file resolves — qualified as `module.bare`, or
+// unqualified when nothing else in scope declares that name.
+func (p *Parser) AddModuleType(module, bare string, isEnum bool) {
+	flat := ast.QualifiedStructName(module, bare)
+	if isEnum {
+		p.enumNames[flat] = true
+	} else {
+		p.structNames[flat] = true
+	}
+	for _, existing := range p.candidates[bare] {
+		if existing == flat {
+			return
+		}
+	}
+	p.candidates[bare] = append(p.candidates[bare], flat)
+}
+
+// resolveTypeName turns a type name as written into the flat name it refers to.
+//
+// Its own module's type wins, the way a local wins over an imported module's
+// name: inside `alpha` a bare `Response` is alpha's, even if an import also
+// declares one. Otherwise exactly one candidate resolves, several is an error
+// that names them, and none falls through to the bare name — which is how the
+// main program's own types and the struct types a stdlib module provides are
+// still found.
+func (p *Parser) resolveTypeName(name string) (string, error) {
+	if p.module != "" {
+		own := ast.QualifiedStructName(p.module, name)
+		if p.structNames[own] || p.enumNames[own] {
+			return own, nil
+		}
+	}
+	switch cands := p.candidates[name]; len(cands) {
+	case 0:
+		return name, nil
+	case 1:
+		return cands[0], nil
+	default:
+		return "", p.errorf("ambiguous type '%s': declared by %s — qualify it, as in %s",
+			name, modulesOf(cands), ast.DisplayStructName(cands[0]))
+	}
+}
+
+// modulesOf lists the modules a set of candidates came from, for the message.
+func modulesOf(flats []string) string {
+	names := make([]string, 0, len(flats))
+	for _, flat := range flats {
+		names = append(names, "'"+ast.DisplayStructName(flat)+"'")
+	}
+	sort.Strings(names)
+	return strings.Join(names, " and ")
+}
+
+// knownEnumName is knownTypeName restricted to enums, for the syntax that only
+// an enum can start: EnumName.Variant.
+func (p *Parser) knownEnumName(name string) bool {
+	if p.enumNames[name] {
+		return true
+	}
+	if p.module != "" && p.enumNames[ast.QualifiedStructName(p.module, name)] {
+		return true
+	}
+	for _, flat := range p.candidates[name] {
+		if p.enumNames[flat] {
+			return true
+		}
+	}
+	return false
+}
+
+// knownTypeName reports whether a name refers to a type at all, under either
+// spelling, which is what the literal and reference-type syntax checks ask.
+func (p *Parser) knownTypeName(name string) bool {
+	if p.structNames[name] || p.enumNames[name] {
+		return true
+	}
+	if p.module != "" {
+		own := ast.QualifiedStructName(p.module, name)
+		if p.structNames[own] || p.enumNames[own] {
+			return true
+		}
+	}
+	return len(p.candidates[name]) > 0
 }
 
 // recordError appends an error and panics with maxParseErrors if the limit is reached.
@@ -320,10 +423,15 @@ func (p *Parser) parseEnumDef() (*ast.EnumDef, error) {
 		return nil, p.errorf("enum '%s' must have at least one variant", name)
 	}
 
-	p.enumNames[name] = true
-	ast.RegisterEnumType(ast.EnumDef{Name: name, Variants: variants})
+	// Registered under the module that declares it; for the main program that
+	// is the bare name. Keeping a bare entry as well sent a reference inside
+	// the module down the unqualified path, which then looked up a name the
+	// registry does not hold.
+	flatName := ast.QualifiedStructName(p.module, name)
+	p.enumNames[flatName] = true
+	ast.RegisterEnumType(ast.EnumDef{Name: flatName, Module: p.module, Variants: variants})
 
-	return &ast.EnumDef{Name: name, Variants: variants}, nil
+	return &ast.EnumDef{Name: flatName, Module: p.module, Variants: variants}, nil
 }
 
 func (p *Parser) parseStructDef() (*ast.StructDef, error) {
@@ -371,8 +479,9 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 	// struct it belongs to — `fn limit(n: int): &Query` within struct Query.
 	// RegisterStructType updates an existing entry, so the call after the body
 	// fills in the real fields over this placeholder.
-	p.structNames[name] = true
-	ast.RegisterStructType(ast.StructDef{Name: name, ConstructorParams: constructorParams})
+	flatName := ast.QualifiedStructName(p.module, name)
+	p.structNames[flatName] = true
+	ast.RegisterStructType(ast.StructDef{Name: flatName, Module: p.module, ConstructorParams: constructorParams})
 
 	if err := p.expect(token.TokenLBrace); err != nil {
 		return nil, err
@@ -439,11 +548,11 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 		return nil, err
 	}
 
-	p.structNames[name] = true
+	p.structNames[flatName] = true
 	// Register in the global struct registry so parseType can resolve the type ID
-	ast.RegisterStructType(ast.StructDef{Name: name, Fields: fields, ConstructorParams: constructorParams})
+	ast.RegisterStructType(ast.StructDef{Name: flatName, Module: p.module, Fields: fields, ConstructorParams: constructorParams})
 
-	return &ast.StructDef{Name: name, Fields: fields, Methods: methods, ConstructorParams: constructorParams}, nil
+	return &ast.StructDef{Name: flatName, Module: p.module, Fields: fields, Methods: methods, ConstructorParams: constructorParams}, nil
 }
 
 func (p *Parser) parseFunction() (*ast.Function, error) {
@@ -622,11 +731,15 @@ func (p *Parser) parseType() (ast.Type, error) {
 			return 0, p.errorf("reference types (&) are only allowed on struct or primitive types")
 		}
 		name := p.current().Value
-		if !p.structNames[name] {
+		if !p.knownTypeName(name) {
 			return 0, p.errorf("reference types (&) are only allowed on struct or primitive types, got '%s'", name)
 		}
 		p.advance()
-		t, ok := ast.LookupStructType(name)
+		flat, err := p.resolveTypeName(name)
+		if err != nil {
+			return 0, err
+		}
+		t, ok := ast.LookupStructType(flat)
 		if !ok {
 			return 0, p.errorf("unknown struct type '%s'", name)
 		}
@@ -734,13 +847,19 @@ func (p *Parser) parseType() (ast.Type, error) {
 		if name == "StringBuilder" {
 			p.advance()
 			base = ast.TypeStringBuilder
-		} else if p.structNames[name] {
+		} else if p.knownTypeName(name) && !p.enumNames[name] && !p.interfaceNames[name] {
 			p.advance()
-			t, ok := ast.LookupStructType(name)
-			if !ok {
+			flat, err := p.resolveTypeName(name)
+			if err != nil {
+				return 0, err
+			}
+			if t, ok := ast.LookupStructType(flat); ok {
+				base = t
+			} else if t, ok := ast.LookupEnumType(flat); ok {
+				base = t
+			} else {
 				return 0, p.errorf("unknown struct type '%s'", name)
 			}
-			base = t
 		} else if p.enumNames[name] {
 			p.advance()
 			t, ok := ast.LookupEnumType(name)
@@ -765,7 +884,21 @@ func (p *Parser) parseType() (ast.Type, error) {
 				p.advance()
 				p.advance()
 				base = ast.TypeJsonValue
+			} else if flat := ast.QualifiedStructName(name, qualifiedName); p.structNames[flat] || p.enumNames[flat] {
+				// A user module's type, named by the module that declares it.
+				p.advance() // consume module name
+				p.advance() // consume '.'
+				p.advance() // consume type name
+				if t, ok := ast.LookupStructType(flat); ok {
+					base = t
+				} else if t, ok := ast.LookupEnumType(flat); ok {
+					base = t
+				} else {
+					return 0, p.errorf("unknown type '%s.%s'", name, qualifiedName)
+				}
 			} else if p.structNames[qualifiedName] {
+				// A struct type a stdlib module provides, registered under its
+				// bare name: http.HttpRequest, ws.Conn.
 				p.advance() // consume module name
 				p.advance() // consume '.'
 				p.advance() // consume type name

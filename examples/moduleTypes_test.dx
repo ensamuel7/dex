@@ -1,0 +1,31 @@
+// A type declared in a module belongs to that module, so two modules can each
+// declare a `Response` and a `Kind` — which is what two modules could already
+// do with a function called `make`.
+//
+// Before this, a struct name was global: the second declaration was rejected
+// outright with "duplicate struct type", and a qualified reference had its
+// qualifier thrown away. The qualifier means something now.
+import "modules/alphaTypes"
+import "modules/betaTypes"
+
+fn main(): void {
+    // Qualified, and they are different types with different fields.
+    let a: alphaTypes.Response = alphaTypes.make("first")
+    let b: betaTypes.Response = betaTypes.make(404)
+    assert(a.ok)
+    assert(a.label == "first")
+    assert(b.code == 404)
+
+    // Each module's own `make` and its own `Kind`, told apart by the qualifier.
+    assert(alphaTypes.kindOf(a) == alphaTypes.Kind.Fast)
+    assert(betaTypes.kindOf(b) == betaTypes.Kind.Red)
+
+    // A constructor reached through its module.
+    let direct: betaTypes.Response = betaTypes.Response(500)
+    assert(direct.code == 500)
+
+    // A struct literal, qualified.
+    let lit: alphaTypes.Response = alphaTypes.Response { ok: false, label: "lit" }
+    assert(!lit.ok)
+    assert(lit.label == "lit")
+}

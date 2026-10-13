@@ -939,10 +939,10 @@ func typeName(t ast.Type) string {
 			return ast.StructName(elemType) + "[]"
 		}
 		if ast.IsStructType(t) {
-			return ast.StructName(t)
+			return ast.DisplayStructName(ast.StructName(t))
 		}
 		if ast.IsEnumType(t) {
-			return ast.EnumName(t)
+			return ast.DisplayStructName(ast.EnumName(t))
 		}
 		if ast.IsMapType(t) {
 			return "map[" + typeName(ast.MapKeyType(t)) + ", " + typeName(ast.MapValueType(t)) + "]"
@@ -965,12 +965,8 @@ func seedParserModuleTypes(p *parser.Parser, tokens []token.Token, sourceDir str
 		p.AddStructName(name)
 	}
 	if sourceDir != "" {
-		userStructs, userEnums := resolve.PreRegisterUserStructs(importPaths, sourceDir)
-		for _, name := range userStructs {
-			p.AddStructName(name)
-		}
-		for _, name := range userEnums {
-			p.AddEnumName(name)
+		for _, mt := range resolve.PreRegisterUserStructs(resolve.ExtractImports(tokens), sourceDir) {
+			p.AddModuleType(mt.Module, mt.Name, mt.IsEnum)
 		}
 	}
 	p.AddStructName("Exception") // built-in Exception type

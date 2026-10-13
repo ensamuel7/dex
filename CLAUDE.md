@@ -201,6 +201,38 @@ be gone. The consequence is that arguments are evaluated at the `defer` rather
 than at the exit, which is also what Go does. `examples/defer_test.dx` pins all
 of it.
 
+## A module's types belong to it
+
+A type declared in a user module registers under that module — `alpha_Response`
+— the way a function declared there becomes `alpha_make`. Two modules can each
+declare a `Response`; before this a struct name was global and the second
+declaration was rejected outright, while a qualified reference had its qualifier
+discarded by the parser.
+
+The identity is the flat name, so codegen's `Dex_alpha_Response` falls out with
+no codegen change at all. What carries the work is resolution, in the parser,
+which is the only place that knows which file it is reading:
+
+- `Parser.module` is the module being parsed, and `SetModule` is called by
+  `resolveModuleFile`. A type declared there registers qualified.
+- `Parser.candidates` maps a bare name to the flat names in scope.
+  `resolveTypeName` prefers the file's own module, then resolves a single
+  candidate, then reports an ambiguity naming the alternatives, and finally
+  falls through to the bare name — which is how the main program's own types
+  and the struct types a stdlib module provides are still found.
+- Every site that reads a type name goes through it: annotations, `&refs`,
+  struct literals in both spellings, bare and qualified enum variants, and
+  constructor calls, which the parser now resolves because only it knows the
+  module.
+- `StructDef.Module` and `EnumDef.Module` exist for diagnostics.
+  `ast.DisplayStructName` turns the flat name back into `alpha.Response`, and
+  both `typeName` renderers — the checker's and the LSP's — use it. Codegen must
+  not: it needs the flat name.
+
+A bare reference still reaches a module imported only indirectly, as it always
+could. Narrowing that to direct imports would be defensible but would break
+code that reads perfectly well.
+
 ## Memory ownership rules
 
 These are the invariants the codegen maintains. Breaking one produces either a leak

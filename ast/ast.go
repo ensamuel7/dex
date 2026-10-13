@@ -93,11 +93,45 @@ type StructField struct {
 }
 
 type StructDef struct {
-	Name              string
+	// Name is the flat name the type is registered under. A type declared in a
+	// user module carries its module: `alpha_Response`, the way a function
+	// declared there becomes `alpha_make`. That is what lets two modules each
+	// declare a `Response` — they are two types, not one — and what makes the
+	// generated C name unique without any further work.
+	Name string
+	// Module is the module that declared it, empty for the main program and for
+	// the struct types a stdlib module provides. Diagnostics read it so a
+	// reader is shown `alpha.Response` rather than the flat spelling.
+	Module            string
 	Fields            []StructField
 	Methods           []Function    // methods declared inside the struct body
 	ConstructorParams []StructField // auto-constructor params: struct Foo(x: int) { ... }
 	Doc               string        // documentation string for hover
+}
+
+// QualifiedStructName is the flat name a module's type is registered under.
+func QualifiedStructName(module, name string) string {
+	if module == "" {
+		return name
+	}
+	return module + "_" + name
+}
+
+// DisplayStructName turns a flat name back into what a reader wrote:
+// `alpha_Response` is `alpha.Response`. Anything not declared by a module is
+// returned unchanged.
+func DisplayStructName(flat string) string {
+	if t, ok := LookupStructType(flat); ok {
+		if def := GetStructDef(t); def != nil && def.Module != "" {
+			return def.Module + "." + strings.TrimPrefix(def.Name, def.Module+"_")
+		}
+	}
+	if t, ok := LookupEnumType(flat); ok {
+		if def := GetEnumDef(t); def != nil && def.Module != "" {
+			return def.Module + "." + strings.TrimPrefix(def.Name, def.Module+"_")
+		}
+	}
+	return flat
 }
 
 // Global struct registry

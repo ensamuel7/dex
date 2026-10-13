@@ -306,22 +306,28 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			return &ast.ChannelExpr{Pos: pos, ElemType: elemType}, nil
 		}
 
-		// Check for enum access: EnumName.Variant (before advance)
-		if p.enumNames[name] && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenDot {
+		// Check for enum access: EnumName.Variant (before advance). Unqualified,
+		// so the name resolves the way a type annotation's does — its own
+		// module's first, then the one import that declares it.
+		if p.knownEnumName(name) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenDot {
 			p.advance() // consume enum name
 			p.advance() // consume '.'
 			variant, err := p.expectIdent()
 			if err != nil {
 				return nil, err
 			}
-			enumType, _ := ast.LookupEnumType(name)
-			return &ast.EnumAccessExpr{Pos: pos, EnumName: name, Variant: variant, EnumType: enumType}, nil
+			flat, err := p.resolveTypeName(name)
+			if err != nil {
+				return nil, err
+			}
+			enumType, _ := ast.LookupEnumType(flat)
+			return &ast.EnumAccessExpr{Pos: pos, EnumName: flat, Variant: variant, EnumType: enumType}, nil
 		}
 
 		p.advance()
 
 		// Check for struct literal: StructName { field: value, ... }
-		if p.structNames[name] && p.check(token.TokenLBrace) {
+		if p.knownTypeName(name) && p.check(token.TokenLBrace) {
 			p.advance() // consume '{'
 			var fieldNames []string
 			var fieldValues []ast.Expr
@@ -348,7 +354,11 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRBrace); err != nil {
 				return nil, err
 			}
-			return &ast.StructLitExpr{Pos: pos, Name: name, FieldNames: fieldNames, FieldValues: fieldValues}, nil
+			flat, err := p.resolveTypeName(name)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.StructLitExpr{Pos: pos, Name: flat, FieldNames: fieldNames, FieldValues: fieldValues}, nil
 		}
 
 		// Check for qualified call or field access: ident.something
@@ -396,17 +406,29 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			}
 
 			// Check for a module-qualified enum variant: module.Enum.Variant.
-			// An enum name is global once registered, so the module segment is
-			// dropped here exactly as it is for a module-qualified struct
-			// literal below. Two members is the only shape this can take; a
-			// longer chain is a field access.
-			if len(members) == 2 && p.enumNames[members[0]] {
-				enumType, _ := ast.LookupEnumType(members[0])
-				return &ast.EnumAccessExpr{Pos: pos, EnumName: members[0], Variant: members[1], EnumType: enumType}, nil
+			// An enum declared in a module registers under it, so the module
+			// segment is what distinguishes two modules' `Kind` — and a stdlib
+			// module's enums, registered bare, are accepted either way. Two
+			// members is the only shape this can take; a longer chain is a
+			// field access.
+			if len(members) == 2 {
+				enumName := ast.QualifiedStructName(name, members[0])
+				if !p.enumNames[enumName] {
+					enumName = members[0]
+				}
+				if p.enumNames[enumName] {
+					enumType, _ := ast.LookupEnumType(enumName)
+					return &ast.EnumAccessExpr{Pos: pos, EnumName: enumName, Variant: members[1], EnumType: enumType}, nil
+				}
 			}
 
 			// Check for module-qualified struct literal: module.StructName { field: value, ... }
-			if len(members) == 1 && p.structNames[memberName] && p.check(token.TokenLBrace) {
+			qualifiedLit := ast.QualifiedStructName(name, memberName)
+			if !p.structNames[qualifiedLit] {
+				// Not a user module's type; a stdlib module's are bare.
+				qualifiedLit = memberName
+			}
+			if len(members) == 1 && p.structNames[qualifiedLit] && p.check(token.TokenLBrace) {
 				p.advance() // consume '{'
 				var fieldNames []string
 				var fieldValues []ast.Expr
@@ -433,7 +455,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				if err := p.expect(token.TokenRBrace); err != nil {
 					return nil, err
 				}
-				return &ast.StructLitExpr{Pos: pos, Name: memberName, FieldNames: fieldNames, FieldValues: fieldValues}, nil
+				return &ast.StructLitExpr{Pos: pos, Name: qualifiedLit, FieldNames: fieldNames, FieldValues: fieldValues}, nil
 			}
 
 			// If followed by '(', it's a method/qualified call
@@ -518,7 +540,17 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			if err := p.expect(token.TokenRParen); err != nil {
 				return nil, err
 			}
-			callExpr := &ast.CallExpr{Pos: pos, Name: name, Args: args}
+			// A call to a type's name is its auto-constructor, so it resolves
+			// the way the type does — its own module's first. Without this a
+			// module's `Response(true)` looked for a function of that name,
+			// while the type was registered under the module.
+			callName := name
+			if p.knownTypeName(name) {
+				if flat, err := p.resolveTypeName(name); err == nil {
+					callName = flat
+				}
+			}
+			callExpr := &ast.CallExpr{Pos: pos, Name: callName, Args: args}
 			if p.lastArgNames != nil {
 				callExpr.ArgNames = p.lastArgNames
 				p.lastArgNames = nil

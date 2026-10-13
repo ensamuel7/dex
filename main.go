@@ -415,18 +415,15 @@ func frontend(filename string) (*ast.Program, error) {
 		sourceDir = "."
 	}
 	absSourceDir, _ := filepath.Abs(sourceDir)
-	userStructNames, userEnumNames := resolve.PreRegisterUserStructs(importPaths, absSourceDir)
+	moduleTypes := resolve.PreRegisterUserStructs(resolve.ExtractImports(tokens), absSourceDir)
 
 	// Parse
 	p := parser.New(tokens)
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
-	for _, name := range userStructNames {
-		p.AddStructName(name)
-	}
-	for _, name := range userEnumNames {
-		p.AddEnumName(name)
+	for _, mt := range moduleTypes {
+		p.AddModuleType(mt.Module, mt.Name, mt.IsEnum)
 	}
 	p.AddStructName("Exception") // built-in Exception type
 	program, parseErrs := p.Parse()

@@ -1,0 +1,18 @@
+// The other `Response`, with different fields entirely.
+struct Response(code: int) {}
+
+enum Kind {
+    Red
+    Green
+}
+
+fn make(code: int): Response {
+    return Response(code)
+}
+
+fn kindOf(r: Response): Kind {
+    if (r.code == 0) {
+        return Kind.Green
+    }
+    return Kind.Red
+}

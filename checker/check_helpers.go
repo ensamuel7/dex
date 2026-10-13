@@ -504,7 +504,7 @@ func typeName(t ast.Type) string {
 			return ast.StructName(elemType) + "[]"
 		}
 		if ast.IsStructType(t) {
-			return ast.StructName(t)
+			return ast.DisplayStructName(ast.StructName(t))
 		}
 		if ast.IsChanType(t) {
 			return "chan " + typeName(ast.ChanElemType(t))
@@ -529,7 +529,7 @@ func typeName(t ast.Type) string {
 			return "weak<" + typeName(ast.WeakInnerType(t)) + ">"
 		}
 		if ast.IsEnumType(t) {
-			return ast.EnumName(t)
+			return ast.DisplayStructName(ast.EnumName(t))
 		}
 		if ast.IsMapType(t) {
 			return "map[" + typeName(ast.MapKeyType(t)) + ", " + typeName(ast.MapValueType(t)) + "]"

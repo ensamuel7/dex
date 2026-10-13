@@ -69,7 +69,9 @@ fn main(): void {
 
 	s := &Server{}
 	got := s.hoverAt(pathToURI(mainPath), text, Position{Line: line, Character: col + 1})
-	if !strings.Contains(got, "fn wireMessage.parseMessage(raw: string): WireMessage") {
+	// The return type is shown the way the file writes it: a type declared in a
+	// module carries that module, now that two modules may each declare one.
+	if !strings.Contains(got, "fn wireMessage.parseMessage(raw: string): wireMessage.WireMessage") {
 		t.Fatalf("expected function signature in hover, got:\n%s", got)
 	}
 }

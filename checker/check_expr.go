@@ -809,13 +809,20 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 			}
 
-			// Constructor call from user module: module.StructName(args)
+			// Constructor call from user module: module.StructName(args). The
+			// type is registered under the module that declares it, so that
+			// spelling is tried first; a stdlib module's are registered bare.
 			if c.userModules[e.Module] {
-				if ctorParams, ok := c.structConstructors[e.Name]; ok {
+				ctorName := ast.QualifiedStructName(e.Module, e.Name)
+				if _, known := c.structConstructors[ctorName]; !known {
+					ctorName = e.Name
+				}
+				if ctorParams, ok := c.structConstructors[ctorName]; ok {
 					e.IsConstructor = true
-					structType, stOk := ast.LookupStructType(e.Name)
+					e.Name = ctorName
+					structType, stOk := ast.LookupStructType(ctorName)
 					if !stOk {
-						return 0, c.errAt(e.Pos, "unknown struct type '%s'", e.Name)
+						return 0, c.errAt(e.Pos, "unknown struct type '%s'", ast.DisplayStructName(ctorName))
 					}
 					e.StructType = structType
 					if len(e.Args) != len(ctorParams) {

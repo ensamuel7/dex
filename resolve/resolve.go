@@ -64,26 +64,49 @@ func own(owners map[string]string, flatName, absPath, moduleName string) error {
 	return nil
 }
 
+// A ModuleType is a type a user module declares: the module that declares it,
+// and the name as written there. A parser is told about these so a reference
+// resolves — qualified, or unqualified when nothing else in scope declares the
+// same name.
+type ModuleType struct {
+	Module string
+	Name   string
+	IsEnum bool
+}
+
 // Registers struct and enum declarations from user modules globally so the main
 // file's parser recognizes their literal and type-annotation syntax.
 //
-// The two kinds are returned separately because the parser keeps separate
-// registries for them, and feeding an enum name to AddStructName is what made
-// `module.Enum` fail as an unknown struct type.
-func PreRegisterUserStructs(importPaths []string, sourceDir string) ([]string, []string) {
-	var structNames []string
-	var enumNames []string
+// Each registers under the module that declares it — `alpha_Response` — the way
+// a function declared there becomes `alpha_make`. That is what lets two modules
+// each declare a `Response`: they are two types, and the generated C names
+// differ without any further work.
+//
+// The walk is transitive, and so is the set it returns: a file has always been
+// able to name a type from a module it reaches only indirectly, and restricting
+// that now would break code that reads perfectly well.
+func PreRegisterUserStructs(imports []ImportRef, sourceDir string) []ModuleType {
+	var found []ModuleType
 	visited := map[string]bool{}
-	for _, path := range importPaths {
-		if stdlib.Lookup(path) != nil {
+	for _, ref := range imports {
+		if stdlib.Lookup(ref.Path) != nil {
 			continue
 		}
-		preRegisterStructsFromFile(filepath.Join(sourceDir, path+".dx"), visited, &structNames, &enumNames)
+		preRegisterStructsFromFile(filepath.Join(sourceDir, ref.Path+".dx"), moduleNameFor(ref), visited, &found)
 	}
-	return structNames, enumNames
+	return found
 }
 
-func preRegisterStructsFromFile(filePath string, visited map[string]bool, structNames *[]string, enumNames *[]string) {
+// moduleNameFor is the name an import is known by: its alias, or its file's
+// base name.
+func moduleNameFor(ref ImportRef) string {
+	if ref.Alias != "" {
+		return ref.Alias
+	}
+	return filepath.Base(ref.Path)
+}
+
+func preRegisterStructsFromFile(filePath, module string, visited map[string]bool, found *[]ModuleType) {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil || visited[absPath] {
 		return
@@ -106,24 +129,59 @@ func preRegisterStructsFromFile(filePath string, visited map[string]bool, struct
 	for i := 0; i < len(tokens)-1; i++ {
 		if tokens[i].Kind == token.TokenStruct && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
-			*structNames = append(*structNames, name)
-			ast.RegisterStructType(ast.StructDef{Name: name})
+			*found = append(*found, ModuleType{Module: module, Name: name})
+			ast.RegisterStructType(ast.StructDef{Name: ast.QualifiedStructName(module, name), Module: module})
 		}
 		if tokens[i].Kind == token.TokenEnum && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
-			*enumNames = append(*enumNames, name)
-			ast.RegisterEnumType(ast.EnumDef{Name: name})
+			*found = append(*found, ModuleType{Module: module, Name: name, IsEnum: true})
+			ast.RegisterEnumType(ast.EnumDef{Name: ast.QualifiedStructName(module, name), Module: module})
 		}
 	}
 
-	subPaths := ExtractImportPaths(tokens)
 	modDir := filepath.Dir(absPath)
-	for _, subPath := range subPaths {
-		if stdlib.Lookup(subPath) != nil {
+	for _, ref := range ExtractImports(tokens) {
+		if stdlib.Lookup(ref.Path) != nil {
 			continue
 		}
-		preRegisterStructsFromFile(filepath.Join(modDir, subPath+".dx"), visited, structNames, enumNames)
+		preRegisterStructsFromFile(filepath.Join(modDir, ref.Path+".dx"), moduleNameFor(ref), visited, found)
 	}
+}
+
+// SeedParserTypes tells a parser about every type registered so far, each under
+// the module that declared it. A type with no module — the main program's own,
+// and the struct types a stdlib module provides — is seeded by its bare name.
+func SeedParserTypes(p *parser.Parser) {
+	for _, name := range ast.AllStructNames() {
+		seedOne(p, name, false)
+	}
+	for _, name := range ast.AllEnumNames() {
+		seedOne(p, name, true)
+	}
+}
+
+func seedOne(p *parser.Parser, flat string, isEnum bool) {
+	module := ""
+	if isEnum {
+		if t, ok := ast.LookupEnumType(flat); ok {
+			if def := ast.GetEnumDef(t); def != nil {
+				module = def.Module
+			}
+		}
+	} else if t, ok := ast.LookupStructType(flat); ok {
+		if def := ast.GetStructDef(t); def != nil {
+			module = def.Module
+		}
+	}
+	if module == "" {
+		if isEnum {
+			p.AddEnumName(flat)
+		} else {
+			p.AddStructName(flat)
+		}
+		return
+	}
+	p.AddModuleType(module, strings.TrimPrefix(flat, module+"_"), isEnum)
 }
 
 // ResolveUserModules finds non-stdlib imports, parses their .dx files,
@@ -161,14 +219,14 @@ func resolveQualifiedGlobals(program *ast.Program) {
 	}
 
 	// rewrite returns the replacement for one expression, or nil to keep it.
-	var rewrite func(expr ast.Expr) ast.Expr
-	rewrite = func(expr ast.Expr) ast.Expr {
+	// visible is the set of module names not shadowed where the expression is.
+	rewrite := func(visible map[string]bool, expr ast.Expr) ast.Expr {
 		fa, ok := expr.(*ast.FieldAccessExpr)
 		if !ok {
 			return nil
 		}
 		ident, ok := fa.Object.(*ast.Ident)
-		if !ok || !modules[ident.Name] {
+		if !ok || !visible[ident.Name] {
 			return nil
 		}
 		flat := ident.Name + "_" + fa.Field
@@ -180,9 +238,32 @@ func resolveQualifiedGlobals(program *ast.Program) {
 		return &ast.Ident{Pos: fa.Pos, Name: flat}
 	}
 
-	walkProgramExprs(program, func(expr ast.Expr) ast.Expr {
-		return rewrite(expr)
-	})
+	// **A local takes the name.** Checking only whether the module has a
+	// matching global got this backwards the moment it did: in a file importing
+	// a module called `outcome`,
+	//
+	//	let outcome: gateway.Outcome = gateway.charge(...)
+	//	if (!outcome.ok) { ... }
+	//
+	// rewrote `outcome.ok` to the module's `ok` function — so a field read
+	// became a function value, and the condition stopped being a bool. The
+	// module is unreachable by that name inside such a function, which is what
+	// shadowing means everywhere else.
+	for i := range program.Functions {
+		fn := &program.Functions[i]
+		visible := withoutShadowed(modules, fn)
+		if len(visible) == 0 {
+			continue
+		}
+		walkStmts(fn.Body, func(expr ast.Expr) ast.Expr {
+			return rewrite(visible, expr)
+		})
+	}
+	for i := range program.GlobalLets {
+		program.GlobalLets[i].Value = walkExpr(program.GlobalLets[i].Value, func(expr ast.Expr) ast.Expr {
+			return rewrite(modules, expr)
+		})
+	}
 }
 
 func resolveImports(program *ast.Program, sourceDir string, visited, processing map[string]bool, owners map[string]string) error {
@@ -284,15 +365,13 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 
 	typeNames := stdlib.ModuleTypesForImports(importPaths)
 	p := parser.New(tokens)
+	// This file declares `moduleName`, so its own types register under it and a
+	// bare reference inside it resolves to its own first.
+	p.SetModule(moduleName)
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
-	for _, name := range ast.AllStructNames() {
-		p.AddStructName(name)
-	}
-	for _, name := range ast.AllEnumNames() {
-		p.AddEnumName(name)
-	}
+	SeedParserTypes(p)
 	modProgram, errs := p.Parse()
 	if len(errs) > 0 {
 		return errs[0]

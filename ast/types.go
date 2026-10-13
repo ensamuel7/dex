@@ -170,7 +170,7 @@ func (e *ReceiveExpr) exprNode() {}
 
 // Weak reference type registry
 var (
-	weakTypes  []Type        // inner type for each weak type ID
+	weakTypes   []Type        // inner type for each weak type ID
 	weakByInner map[Type]Type // inner type → weak type ID
 )
 
@@ -389,7 +389,11 @@ func (e *MapLitExpr) exprNode() {}
 
 // Enum type registry
 type EnumDef struct {
-	Name     string
+	// Name is flat, and carries the declaring module the way a struct's does:
+	// see StructDef.Name.
+	Name string
+	// Module is the module that declared it, empty for the main program.
+	Module   string
 	Variants []string
 }
 

@@ -202,6 +202,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
         <a onclick="show('access-modifiers')">Access Modifiers</a>
         <a onclick="show('concurrency')">Concurrency</a>
         <a onclick="show('error-handling')">Error Handling</a>
+        <a onclick="show('module-types')">Module-Scoped Types</a>
         <a onclick="show('linting')">Linting</a>
       </div>
     </div>
@@ -1747,6 +1748,34 @@ fn main(): void {
 <p>If an exception is not caught, the program prints <code>Unhandled &lt;Type&gt;: &lt;message&gt;</code> to stderr and exits with code 1.</p>
 </section>
 
+<!-- Module-Scoped Types -->
+<section id="module-types" class="page-section">
+<h2>Module-Scoped Types</h2>
+
+<p>A type declared in a user module belongs to that module, the way a function does. Two modules can each declare a <code>Response</code>, and they are two types:</p>
+<pre><code>// model/charging.dx
+struct Response(ok: bool) {}
+
+// model/billing.dx
+struct Response(code: int) {}</code></pre>
+<pre><code>import "model/charging"
+import "model/billing"
+
+let a: charging.Response = charging.make()
+let b: billing.Response = billing.make(404)</code></pre>
+
+<h3>How a Reference Resolves</h3>
+<ol>
+<li><strong>Qualified</strong> — <code>charging.Response</code> always names that module's type.</li>
+<li><strong>Its own module's</strong> — inside <code>charging</code>, a bare <code>Response</code> is charging's, even if an import declares one too. The same rule a function follows: inside a module you call <code>make()</code>, not <code>charging.make()</code>.</li>
+<li><strong>Unqualified, one declarer</strong> — a bare <code>Response</code> resolves when exactly one module in scope declares it, which is why existing code needs no changes.</li>
+<li><strong>Unqualified, several declarers</strong> — an error naming them.</li>
+</ol>
+<pre><code>app.dx:6:21: ambiguous type 'Response': declared by 'charging.Response'
+and 'billing.Response' — qualify it, as in charging.Response</code></pre>
+<p>Diagnostics and editor hovers show the qualified spelling, so a type reads the way it was written rather than by the flat name it registers under. The struct types a stdlib module provides &mdash; <code>http.HttpRequest</code>, <code>ws.Conn</code> &mdash; are not module-scoped and keep working under either spelling.</p>
+</section>
+
 <!-- Linting -->
 <section id="linting" class="page-section">
 <h2>Linting</h2>
@@ -2942,6 +2971,7 @@ var sectionNames = {
   'access-modifiers': 'Access Modifiers',
   'concurrency': 'Concurrency',
   'error-handling': 'Error Handling',
+  'module-types': 'Module-Scoped Types',
   'linting': 'Linting',
   'arrays': 'Arrays',
   'structs': 'Structs',

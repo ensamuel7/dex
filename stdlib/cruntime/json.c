@@ -447,6 +447,46 @@ typedef struct DexStructFieldDesc {
 } DexStructFieldDesc;
 #endif
 
+// Writing an integer with snprintf spends most of the call in the format
+// parser rather than on the digits, and a struct encode writes one per numeric
+// field. -(v + 1) + 1 is how LONG_MIN, whose positive is unrepresentable,
+// still converts.
+static int dex_json_write_long(char* out, long v) {
+    char digits[24];
+    int i = 0;
+    unsigned long u;
+    int neg = 0;
+    if (v < 0) {
+        neg = 1;
+        u = (unsigned long)(-(v + 1)) + 1UL;
+    } else {
+        u = (unsigned long)v;
+    }
+    do {
+        digits[i++] = (char)('0' + (u % 10));
+        u /= 10;
+    } while (u);
+    int n = 0;
+    if (neg) out[n++] = '-';
+    while (i > 0) out[n++] = digits[--i];
+    return n;
+}
+
+// Writes "key":<digits> and returns the bytes written. The key is a struct
+// field name, which the surrounding encoder already treats as needing no
+// escaping.
+static int dex_json_write_num_field(char* out, const char* key, long v) {
+    int n = 0;
+    out[n++] = '"';
+    size_t klen = strlen(key);
+    memcpy(out + n, key, klen);
+    n += (int)klen;
+    out[n++] = '"';
+    out[n++] = ':';
+    n += dex_json_write_long(out + n, v);
+    return n;
+}
+
 const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDesc* fields) {
     size_t cap = 256;
     char* buf = (char*)malloc(cap);
@@ -467,7 +507,7 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
         int n = 0;
         switch (fields[f].kind) {
         case 0: // int
-            n = snprintf(buf + pos, cap - pos, "\"%s\":%d", fields[f].name, *(int*)((char*)data + fields[f].offset));
+            n = dex_json_write_num_field(buf + pos, fields[f].name, (long)*(int*)((char*)data + fields[f].offset));
             break;
         case 1: // bool
             n = snprintf(buf + pos, cap - pos, "\"%s\":%s", fields[f].name, (*(_Bool*)((char*)data + fields[f].offset)) ? "true" : "false");
@@ -494,7 +534,7 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
               n = 0; }
             break;
         case 3: // long
-            n = snprintf(buf + pos, cap - pos, "\"%s\":%ld", fields[f].name, *(long*)((char*)data + fields[f].offset));
+            n = dex_json_write_num_field(buf + pos, fields[f].name, *(long*)((char*)data + fields[f].offset));
             break;
         case 4: // double
             n = snprintf(buf + pos, cap - pos, "\"%s\":%g", fields[f].name, *(double*)((char*)data + fields[f].offset));

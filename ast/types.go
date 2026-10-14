@@ -469,6 +469,7 @@ var (
 
 func init() {
 	ResetInterfaceTypes()
+	ResetTypeParams()
 }
 
 func ResetInterfaceTypes() {
@@ -504,7 +505,49 @@ func GetInterfaceDef(t Type) *InterfaceDef {
 }
 
 func IsInterfaceType(t Type) bool {
-	return t >= TypeInterfaceBase
+	return t >= TypeInterfaceBase && t < TypeParamBase
+}
+
+// Type parameter registry.
+//
+// Parameters are interned by name, so `T` in one generic declaration and `T` in
+// another are the same Type. That is harmless because a parameter only ever
+// appears while its own declaration is being parsed or re-parsed, and the
+// substitution map that binds it is per-instantiation.
+var (
+	typeParamNames  []string
+	typeParamByName map[string]Type
+)
+
+func init() {
+	ResetTypeParams()
+}
+
+func ResetTypeParams() {
+	typeParamNames = nil
+	typeParamByName = make(map[string]Type)
+}
+
+func RegisterTypeParam(name string) Type {
+	if id, ok := typeParamByName[name]; ok {
+		return id
+	}
+	id := TypeParamBase + Type(len(typeParamNames))
+	typeParamByName[name] = id
+	typeParamNames = append(typeParamNames, name)
+	return id
+}
+
+func IsTypeParamType(t Type) bool {
+	return t >= TypeParamBase
+}
+
+func TypeParamName(t Type) string {
+	idx := int(t - TypeParamBase)
+	if idx < 0 || idx >= len(typeParamNames) {
+		return "unknown"
+	}
+	return typeParamNames[idx]
 }
 
 func InterfaceName(t Type) string {

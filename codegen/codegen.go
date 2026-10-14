@@ -192,6 +192,11 @@ func (g *Generator) nextTemp() string {
 func (g *Generator) CompilerFlags() []string {
 	flags := []string{
 		"-O3", "-flto",
+		// Signed overflow wraps instead of being undefined. Without this the
+		// optimiser is entitled to assume it never happens, so an overflow
+		// check written in .dx — x + 1 < x — folds to false at -O3 while the
+		// addition itself wraps. Two answers for one expression.
+		"-fwrapv",
 		// Security hardening
 		"-fstack-protector-strong",
 		"-D_FORTIFY_SOURCE=2",
@@ -212,6 +217,9 @@ func (g *Generator) CompilerFlags() []string {
 			"-Wl,--gc-sections",
 			// Position-independent executable (default on macOS, explicit on Linux)
 			"-fPIE", "-pie",
+			// Relocations read-only and bound at load, so a write through a
+			// stray pointer cannot redirect a later library call.
+			"-Wl,-z,relro", "-Wl,-z,now",
 		)
 	}
 	if g.usesConcurrency {

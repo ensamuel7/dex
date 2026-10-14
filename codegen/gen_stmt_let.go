@@ -52,6 +52,20 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 	if s.Type == ast.TypeStringBuilder {
 		g.sbVars[s.Name] = true
 	}
+	// Interface target: the right-hand side is a struct and the declaration
+	// takes the vtable pair built from it.
+	if ast.IsInterfaceType(s.Type) {
+		g.beginStmtHoist()
+		var body strings.Builder
+		body.WriteString(fmt.Sprintf("%s %s = ", g.cType(s.Type), s.Name))
+		g.genInterfaceValue(&body, s.Value, s.Type)
+		body.WriteString(";\n")
+		g.emitWithHoists(out, prefix, body.String())
+		// The declaration owns the box the coercion minted, so it is released
+		// at scope exit like any other owning local.
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
+		return
+	}
 	// json.Value target: every literal form on the right builds a JSON
 	// document, so it is handled before the map/array literal cases below.
 	if s.Type == ast.TypeJsonValue {

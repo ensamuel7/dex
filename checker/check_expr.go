@@ -625,6 +625,16 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 				e.ResolvedType = ret
 				return ret, nil
+			case ast.IsInterfaceType(recvType):
+				// An interface read out of a container or returned by a call —
+				// gs[0].greet(). The receiver names the only methods it can
+				// have, so there is nothing to fall through to.
+				ret, err := c.checkInterfaceMethodCall(e, recvType, exprName)
+				if err != nil {
+					return 0, err
+				}
+				e.ResolvedType = ret
+				return ret, nil
 			case ast.IsStructType(recvType) && !ast.IsArrayType(recvType):
 				// A method on the struct a previous link returned — the fluent
 				// case, q.table("x").limit(25).
@@ -809,6 +819,14 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				}
 			}
 
+			// Interface method call: dispatched through the value's vtable.
+			// Without this a method call on an interface-typed parameter fell
+			// through to the module-qualified path and was reported as an
+			// unimported module named after the variable.
+			if isVar && ast.IsInterfaceType(varType) {
+				return c.checkInterfaceMethodCall(e, varType, e.Module)
+			}
+
 			// Constructor call from user module: module.StructName(args). The
 			// type is registered under the module that declares it, so that
 			// spelling is tried first; a stdlib module's are registered bare.
@@ -938,7 +956,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 					return 0, err
 				}
 				if argType != fnParams[i] {
-					return 0, c.errAt(e.Pos, "argument %d of '%s': expected %s, got %s", i+1, e.Name, typeName(fnParams[i]), typeName(argType))
+					return 0, c.errAt(e.Pos, "argument %d of '%s': expected %s, got %s%s", i+1, e.Name, typeName(fnParams[i]), typeName(argType), explainMismatch(fnParams[i], argType))
 				}
 			}
 			return fnReturn, nil
@@ -975,6 +993,17 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			return structType, nil
 		}
 
+		// A call to a generic function: the type arguments are inferred from
+		// the arguments here and the call is rewritten to name the
+		// instantiation, so everything below sees an ordinary function.
+		//
+		// Tested before c.funcs: a template registers no signature, and a
+		// previous instantiation registered one under its mangled name rather
+		// than under the template's.
+		if c.isGenericFunc(e.Name) {
+			return c.checkGenericCall(e)
+		}
+
 		// Unqualified call: user-defined function
 		sig, ok := c.funcs[e.Name]
 		if !ok {
@@ -1001,7 +1030,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return 0, err
 			}
 			if argType != sig.Params[i] && !canAssign(sig.Params[i], argType, arg) {
-				return 0, c.errAt(e.Pos, "argument %d of '%s': expected %s, got %s", i+1, e.Name, typeName(sig.Params[i]), typeName(argType))
+				return 0, c.errAt(e.Pos, "argument %d of '%s': expected %s, got %s%s", i+1, e.Name, typeName(sig.Params[i]), typeName(argType), explainMismatch(sig.Params[i], argType))
 			}
 		}
 		return sig.ReturnType, nil

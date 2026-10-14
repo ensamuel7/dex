@@ -47,6 +47,26 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 
 	case *ast.AssignStmt:
 		varType := g.varTypes[s.Name]
+		if ast.IsInterfaceType(varType) {
+			// The old box is released after the new value is in place, so
+			// assigning a variable from a borrowed read of itself cannot free
+			// what it is about to hold.
+			alreadyIface := ast.IsInterfaceType(g.typeOfExpr(s.Value))
+			out.WriteString(fmt.Sprintf("%s{ void* _dex_old = %s._obj; %s = ", prefix, s.Name, s.Name))
+			if alreadyIface {
+				g.genExpr(out, s.Value)
+			} else {
+				g.genInterfaceValue(out, s.Value, varType)
+			}
+			out.WriteString(";")
+			if alreadyIface {
+				// Forwarded rather than minted: the source still owns it.
+				out.WriteString(fmt.Sprintf(" dex_retain(%s._obj);", s.Name))
+			}
+			out.WriteString(" if (_dex_old) { dex_release(_dex_old); } }\n")
+			g.emitUnwindSlotUpdate(out, prefix, s.Name)
+			break
+		}
 		if isPrimitiveRef(varType) {
 			out.WriteString(fmt.Sprintf("%s(*%s) = ", prefix, s.Name))
 			g.genExpr(out, s.Value)

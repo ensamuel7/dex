@@ -31,10 +31,30 @@ type Parser struct {
 	// several candidates is ambiguous and says so, rather than silently
 	// resolving to whichever registered last.
 	candidates map[string][]string
+	// Generic templates captured as tokens, by name, and the substitution in
+	// force while one is being re-parsed for an instantiation. Both are shared
+	// with a child parser so a template can instantiate another one.
+	genericStructs map[string]*ast.GenericDecl
+	genericFuncs   map[string]*ast.GenericDecl
+	subst          genericSubst
+	// instantiatedStructs collects the struct definitions built by parse-time
+	// instantiation, so Parse can append them to the program.
+	instantiatedStructs *[]ast.StructDef
 }
 
 func New(tokens []token.Token) *Parser {
-	return &Parser{tokens: tokens, pos: 0, structNames: make(map[string]bool), enumNames: make(map[string]bool), interfaceNames: make(map[string]bool), maxErrors: 20, candidates: make(map[string][]string)}
+	return &Parser{
+		tokens:              tokens,
+		pos:                 0,
+		structNames:         make(map[string]bool),
+		enumNames:           make(map[string]bool),
+		interfaceNames:      make(map[string]bool),
+		maxErrors:           20,
+		candidates:          make(map[string][]string),
+		genericStructs:      make(map[string]*ast.GenericDecl),
+		genericFuncs:        make(map[string]*ast.GenericDecl),
+		instantiatedStructs: &[]ast.StructDef{},
+	}
 }
 
 // SetModule names the user module this file declares. Its types register under
@@ -70,6 +90,16 @@ func (p *Parser) AddModuleType(module, bare string, isEnum bool) {
 // main program's own types and the struct types a stdlib module provides are
 // still found.
 func (p *Parser) resolveTypeName(name string) (string, error) {
+	// Inside a template being re-parsed, the template's own name means this
+	// instantiation — so `Box { value: v }` in struct Box<T> resolves to
+	// Box_int. This is the one hook every name-reading site shares, which is
+	// why the rename lives here rather than at each of them.
+	if alias, ok := p.subst.names[name]; ok {
+		if p.module != "" {
+			return ast.QualifiedStructName(p.module, alias), nil
+		}
+		return alias, nil
+	}
 	if p.module != "" {
 		own := ast.QualifiedStructName(p.module, name)
 		if p.structNames[own] || p.enumNames[own] {
@@ -209,6 +239,31 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 	// forced below it, and nothing about the grammar requires the separation.
 	for !p.atEnd() {
 		switch {
+		// Captured before the ordinary cases, because a generic declaration is
+		// not parsed where it is written — it is re-parsed per instantiation.
+		case p.isGenericDeclAheadAny():
+			isFunc, _ := p.isGenericDeclAhead()
+			decl, err := p.captureGenericDecl()
+			if err != nil {
+				p.recordError(err)
+				p.synchronize()
+				continue
+			}
+			if isFunc {
+				params, ret, sigErr := p.parseGenericSignature(decl)
+				if sigErr != nil {
+					p.recordError(sigErr)
+					continue
+				}
+				decl.Params = params
+				decl.ReturnType = ret
+				p.genericFuncs[decl.Name] = decl
+				program.GenericFuncs = append(program.GenericFuncs, *decl)
+			} else {
+				p.genericStructs[decl.Name] = decl
+				program.GenericStructs = append(program.GenericStructs, *decl)
+			}
+
 		case p.isInterfaceDefAhead():
 			ifaceDef, err := p.parseInterfaceDef()
 			if err != nil {
@@ -270,6 +325,10 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 			program.Functions = append(program.Functions, *fn)
 		}
 	}
+
+	// A generic struct instantiated from a type position produced a real struct
+	// definition; it joins the program as though it had been written out.
+	program.Structs = append(program.Structs, *p.instantiatedStructs...)
 
 	return program, p.errors
 }
@@ -446,6 +505,10 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 	if err != nil {
 		return nil, err
 	}
+	name, err = p.applyGenericDeclName(name)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check for auto-constructor syntax: struct Foo(x: int, y: string) { ... }
 	var constructorParams []ast.StructField
@@ -549,8 +612,10 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 	}
 
 	p.structNames[flatName] = true
-	// Register in the global struct registry so parseType can resolve the type ID
-	ast.RegisterStructType(ast.StructDef{Name: flatName, Module: p.module, Fields: fields, ConstructorParams: constructorParams})
+	// Methods go into the registry too, not only onto the returned def:
+	// interface satisfaction is decided from the registered type, and without
+	// them every struct was found to be missing every method.
+	ast.RegisterStructType(ast.StructDef{Name: flatName, Module: p.module, Fields: fields, Methods: methods, ConstructorParams: constructorParams})
 
 	return &ast.StructDef{Name: flatName, Module: p.module, Fields: fields, Methods: methods, ConstructorParams: constructorParams}, nil
 }
@@ -573,6 +638,10 @@ func (p *Parser) parseFunction() (*ast.Function, error) {
 	p.advance()
 
 	name, err := p.expectDeclName("a function name")
+	if err != nil {
+		return nil, err
+	}
+	name, err = p.applyGenericDeclName(name)
 	if err != nil {
 		return nil, err
 	}
@@ -831,6 +900,9 @@ func (p *Parser) parseType() (ast.Type, error) {
 		if err != nil {
 			return 0, err
 		}
+		if !mapKeyTypeSupported(keyType) {
+			return 0, p.errorf("a map key must be string or int, not %s", describeType(keyType))
+		}
 		if err := p.expect(token.TokenComma); err != nil {
 			return 0, p.errorf("expected ',' in map type")
 		}
@@ -838,13 +910,38 @@ func (p *Parser) parseType() (ast.Type, error) {
 		if err != nil {
 			return 0, err
 		}
+		if !mapValueTypeSupported(valType) {
+			return 0, p.errorf("a map value must be int, bool, string, long, double or char, not %s", describeType(valType))
+		}
 		if err := p.expect(token.TokenRBracket); err != nil {
 			return 0, p.errorf("expected ']' after map value type")
 		}
 		return ast.MapTypeOf(keyType, valType), nil
 	case token.TokenIdent:
 		name := tok.Value
-		if name == "StringBuilder" {
+		// A type parameter of the template currently being re-parsed. Checked
+		// first: a parameter named like a struct in scope still means the
+		// parameter inside its own declaration.
+		if t, ok := p.subst.types[name]; ok {
+			p.advance()
+			base = t
+		} else if _, isGeneric := p.genericStructs[name]; isGeneric {
+			// `Box<int>` in a type position: the instantiation is built here
+			// and from now on it is an ordinary struct type.
+			p.advance()
+			if !p.check(token.TokenLt) {
+				return 0, p.errorf("generic struct %s needs type arguments, as %s<...>", name, name)
+			}
+			args, err := p.parseTypeArgList()
+			if err != nil {
+				return 0, err
+			}
+			t, err := p.instantiateStruct(name, args)
+			if err != nil {
+				return 0, err
+			}
+			base = t
+		} else if name == "StringBuilder" {
 			p.advance()
 			base = ast.TypeStringBuilder
 		} else if p.knownTypeName(name) && !p.enumNames[name] && !p.interfaceNames[name] {
@@ -930,13 +1027,29 @@ func (p *Parser) parseType() (ast.Type, error) {
 	if p.check(token.TokenLBracket) && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenRBracket {
 		p.advance() // consume '['
 		p.advance() // consume ']'
-		base = ast.ArrayTypeOf(base)
+		arr := ast.ArrayTypeOf(base)
+		// ArrayTypeOf answers void for an element type it has no array for,
+		// which silently turned an unsupported element into a void parameter
+		// and reported the mistake several statements later as a method call
+		// on something that is not a container.
+		if arr == ast.TypeVoid {
+			return 0, p.errorf("cannot make an array of this type")
+		}
+		base = arr
 	}
 
 	// Check for ? suffix to make optional type
 	if p.check(token.TokenQuestion) {
 		if ast.IsOptionalType(base) {
 			return 0, p.errorf("double-optional types are not allowed")
+		}
+		// An interface value is a vtable pair, not a pointer, so it has no
+		// spelling for absent. Supporting this needs the present-flag layout a
+		// value-type optional uses, and a release through the flag; until then
+		// it is refused here rather than compiled into a comparison against
+		// NULL that C rejects.
+		if ast.IsInterfaceType(base) {
+			return 0, p.errorf("cannot make the interface %s optional: an interface value is a vtable pair rather than a pointer, so it has no null. Hold the concrete struct type, or an array", ast.InterfaceName(base))
 		}
 		p.advance() // consume '?'
 		return ast.OptionalTypeOf(base), nil
@@ -1053,4 +1166,57 @@ func (p *Parser) errorf(format string, args ...interface{}) error {
 func (p *Parser) nodePos() ast.Pos {
 	tok := p.current()
 	return ast.Pos{File: tok.File, Line: tok.Line, Col: tok.Col}
+}
+
+// The map runtime is generated per key/value suffix pair, and only these have
+// one. An unsupported type used to fall through to the "int" suffix, which
+// silently truncated a long key and produced a C error about Dex_Person and int
+// for a struct value — a diagnostic about the generated code rather than about
+// the program. Rejecting the type where it is built says what is wrong instead.
+func mapKeyTypeSupported(t ast.Type) bool {
+	return t == ast.TypeString || t == ast.TypeInt
+}
+
+func mapValueTypeSupported(t ast.Type) bool {
+	switch t {
+	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar:
+		return true
+	}
+	return false
+}
+
+// describeType names a type for a parse-time message. The checker's renderer is
+// richer but lives downstream of here.
+func describeType(t ast.Type) string {
+	switch t {
+	case ast.TypeInt:
+		return "int"
+	case ast.TypeBool:
+		return "bool"
+	case ast.TypeString:
+		return "string"
+	case ast.TypeLong:
+		return "long"
+	case ast.TypeDouble:
+		return "double"
+	case ast.TypeChar:
+		return "char"
+	case ast.TypeVoid:
+		return "void"
+	}
+	switch {
+	case ast.IsInterfaceType(t):
+		return "the interface " + ast.InterfaceName(t)
+	case ast.IsStructType(t):
+		return "the struct " + ast.DisplayStructName(ast.StructName(t))
+	case ast.IsEnumType(t):
+		return "the enum " + ast.EnumName(t)
+	case ast.IsArrayType(t):
+		return "an array"
+	case ast.IsMapType(t):
+		return "a map"
+	case ast.IsOptionalType(t):
+		return "an optional"
+	}
+	return "that type"
 }

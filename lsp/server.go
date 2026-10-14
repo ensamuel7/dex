@@ -674,8 +674,11 @@ func (s *Server) diagnose(uri string, text string) {
 		return
 	}
 
-	// Type check
+	// Type check. The parser doubles as the instantiator for generics, exactly
+	// as in the compiler driver: without this a call to a generic function has
+	// no signature registered and the editor reports it as undefined.
 	ch := checker.New()
+	ch.SetGenerics(program.GenericFuncs, p)
 	checkErrs := ch.Check(program)
 
 	// Warnings are advisory — deprecated calls still compile — so they are

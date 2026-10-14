@@ -134,7 +134,8 @@ func (g *Generator) Generate(program *ast.Program) string {
 
 	// string.h is needed by many runtimes (time, string ops, etc.)
 	// stddef.h is needed for offsetof in struct encoding
-	for _, inc := range []string{"#include <string.h>", "#include <stddef.h>"} {
+	// stdio.h is unconditional: main always calls setvbuf.
+	for _, inc := range []string{"#include <string.h>", "#include <stddef.h>", "#include <stdio.h>"} {
 		if !emittedIncludes[inc] {
 			emittedIncludes[inc] = true
 			out.WriteString(inc + "\n")
@@ -306,6 +307,26 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString(fmt.Sprintf(" } Dex_%s;\n", ed.Name))
 	}
 
+	// Emit interface typedef structs (vtable-based)
+	for _, ifaceDef := range program.Interfaces {
+		out.WriteString(fmt.Sprintf("typedef struct {\n"))
+		out.WriteString("    void* _data;\n")
+		out.WriteString("    void* _obj;\n")
+		out.WriteString("    struct {\n")
+		for _, m := range ifaceDef.Methods {
+			out.WriteString(fmt.Sprintf("        %s (*%s)(void*", g.cType(m.ReturnType), m.Name))
+			for _, pt := range m.Params {
+				out.WriteString(fmt.Sprintf(", %s", g.cType(pt)))
+			}
+			out.WriteString(");\n")
+		}
+		out.WriteString("    } _vtable;\n")
+		out.WriteString(fmt.Sprintf("} Dex_%s;\n", ifaceDef.Name))
+	}
+	if len(program.Interfaces) > 0 {
+		out.WriteString("\n")
+	}
+
 	// Emit struct typedefs (module-provided types first, then user-defined)
 	for _, mod := range g.importedModules {
 		for _, sd := range mod.Types {
@@ -377,22 +398,6 @@ func (g *Generator) Generate(program *ast.Program) string {
 	}
 	if len(program.GlobalLets) > 0 {
 		out.WriteString("\n")
-	}
-
-	// Emit interface typedef structs (vtable-based)
-	for _, ifaceDef := range program.Interfaces {
-		out.WriteString(fmt.Sprintf("typedef struct {\n"))
-		out.WriteString("    void* _data;\n")
-		out.WriteString("    struct {\n")
-		for _, m := range ifaceDef.Methods {
-			out.WriteString(fmt.Sprintf("        %s (*%s)(void*", g.cType(m.ReturnType), m.Name))
-			for _, pt := range m.Params {
-				out.WriteString(fmt.Sprintf(", %s", g.cType(pt)))
-			}
-			out.WriteString(");\n")
-		}
-		out.WriteString("    } _vtable;\n")
-		out.WriteString(fmt.Sprintf("} Dex_%s;\n", ifaceDef.Name))
 	}
 
 	// Emit event loop runtime (must come before HTTP/WS module runtimes)
@@ -557,6 +562,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 		out.WriteString("\n")
 	}
+
+	// The box constructors reference the flattened method functions by name, so
+	// they are written after those forward declarations rather than beside the
+	// interface typedefs.
+	g.emitInterfaceBoxes(&out, program)
 
 	// First pass: generate functions to collect spawn wrappers
 	var funcBuf strings.Builder

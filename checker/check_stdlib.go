@@ -683,6 +683,10 @@ func (c *Checker) checkHTTPHandler(e *ast.CallExpr, argIdx int, callName string)
 			return c.errAt(e.Pos, "%s handler '%s' is not a defined function", callName, name)
 		}
 		params, retType, describe = sig.Params, sig.ReturnType, " '"+name+"'"
+		// Desugared to the identifier form so codegen has one handler shape to
+		// deal with. Left as a string it reached genRouteHandler as a
+		// DexString, which built a closure out of the literal's bytes.
+		e.Args[argIdx] = &ast.Ident{Pos: lit.Pos, Name: name}
 	} else {
 		handlerType, err := c.checkExpr(e.Args[argIdx])
 		if err != nil {

@@ -115,6 +115,36 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 		}
 		return
 	}
+	// Returning an interface: the value handed back owns a box, so the coercion
+	// mints one here and the scope cleanup below releases only the locals. A
+	// value that is already an interface is retained instead — the local that
+	// held it is about to be released, and the caller needs a live reference.
+	if ast.IsInterfaceType(retType) {
+		savedPrelude := g.stmtPrelude
+		g.stmtPrelude = &strings.Builder{}
+		var body strings.Builder
+		alreadyIface := ast.IsInterfaceType(g.typeOfExpr(s.Value))
+		if alreadyIface {
+			g.genExpr(&body, s.Value)
+		} else {
+			g.genInterfaceValue(&body, s.Value, retType)
+		}
+		prelude := g.stmtPrelude.String()
+		g.stmtPrelude = savedPrelude
+
+		if prelude != "" {
+			out.WriteString(prefix + prelude + "\n")
+		}
+		out.WriteString(fmt.Sprintf("%s%s _ret_tmp = %s;\n", prefix, g.cType(retType), body.String()))
+		if alreadyIface {
+			out.WriteString(fmt.Sprintf("%sdex_retain(_ret_tmp._obj);\n", prefix))
+		}
+		g.emitHoistReleases(out, prefix)
+		g.emitDeferredCalls(out, prefix)
+		g.emitCleanupAll(out, prefix, "")
+		g.emitReturn(out, prefix, "_ret_tmp")
+		return
+	}
 	if ast.IsHeapType(retType) {
 		// Retain the return value, clean up everything else, then return
 		if ident, ok := s.Value.(*ast.Ident); ok {

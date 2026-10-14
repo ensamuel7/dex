@@ -68,6 +68,12 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
+	// Interface method call: through the vtable the value carries.
+	if e.IsInterfaceCall {
+		g.genInterfaceCall(out, e)
+		return
+	}
+
 	// Method call: emit flattened function with instance as first arg
 	if e.IsMethodCall {
 		structDef := ast.GetStructDef(e.StructType)
@@ -93,8 +99,19 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		} else {
 			out.WriteString(e.Module) // the instance variable name
 		}
-		for _, arg := range e.Args {
+		var methodParams []ast.Param
+		for i := range structDef.Methods {
+			if structDef.Methods[i].Name == e.Name {
+				methodParams = structDef.Methods[i].Params
+				break
+			}
+		}
+		for i, arg := range e.Args {
 			out.WriteString(", ")
+			if i < len(methodParams) &&
+				g.genArgMaybeInterface(out, arg, methodParams[i].Type) {
+				continue
+			}
 			// A method borrows its arguments just as a free function does, so an
 			// argument built on the spot is released once the statement ends.
 			g.genBorrowed(out, arg)
@@ -116,7 +133,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			if i > 0 {
 				out.WriteString(", ")
 			}
-			if hasModFn && i < len(modFn.Params) && ast.IsRefType(modFn.Params[i].Type) {
+			if hasModFn && i < len(modFn.Params) &&
+				g.genArgMaybeInterface(out, arg, modFn.Params[i].Type) {
+				continue
+			} else if hasModFn && i < len(modFn.Params) && ast.IsRefType(modFn.Params[i].Type) {
 				argType := g.typeOfExpr(arg)
 				if !ast.IsRefType(argType) {
 					out.WriteString("&")
@@ -461,10 +481,22 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	}
 
 	// Built-in: assert(condition)
+	//
+	// The .dx position and the source text of the condition are baked in. A
+	// test file is a main() full of asserts, so "assert failed" with nothing
+	// else meant bisecting by hand to find which one.
 	if e.Module == "" && e.Name == "assert" {
+		where := e.Pos.File
+		if where == "" {
+			where = "?"
+		}
 		out.WriteString("if (!(")
 		g.genExpr(out, e.Args[0])
-		out.WriteString(")) { fprintf(stderr, \"FAIL: assert failed\\n\"); exit(1); }")
+		// The rendered condition is passed as an argument, not as the format:
+		// `assert(n % 2 == 0)` would otherwise put a conversion specifier in
+		// the format string with nothing to consume it.
+		out.WriteString(fmt.Sprintf(")) { fprintf(stderr, \"FAIL: %%s:%%d: assert(%%s)\\n\", \"%s\", %d, \"%s\"); exit(1); }",
+			cEscape(where), e.Pos.Line, cEscape(exprSource(e.Args[0]))))
 		return
 	}
 
@@ -825,7 +857,9 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			out.WriteString(", ")
 		}
 		// Wrap argument for optional parameters if needed
-		if hasFn && i < len(fn.Params) && ast.IsOptionalType(fn.Params[i].Type) {
+		if hasFn && i < len(fn.Params) && g.genArgMaybeInterface(out, arg, fn.Params[i].Type) {
+			continue
+		} else if hasFn && i < len(fn.Params) && ast.IsOptionalType(fn.Params[i].Type) {
 			g.genOptionalArg(out, arg, fn.Params[i].Type)
 		} else if hasFn && i < len(fn.Params) && ast.IsRefType(fn.Params[i].Type) {
 			// Insert & when passing value to ref-typed param

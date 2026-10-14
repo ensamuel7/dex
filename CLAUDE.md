@@ -307,6 +307,132 @@ is also stale against `DexString` and fails C compilation, and a computed RHS
 allocates while the release is suppressed, which leaks. It is unusable today;
 completing it is an escape analysis, not a repair.
 
+## Generics are monomorphised by re-parsing, not by substitution
+
+A generic declaration is captured as the **tokens it was written as** and
+skipped rather than parsed (`captureGenericDecl`). Instantiating it re-parses
+those tokens with its type parameters bound to concrete types and its own name
+mangled — `Box_int`, `max_int` — and what comes out is an ordinary function or
+struct. Codegen therefore knows nothing about generics: `Dex_Box_int` falls out
+of the existing struct path with no codegen change at all.
+
+Re-parsing is what makes this tractable here. The parser is where a type name
+becomes an `ast.Type`, so binding `T` to `int` is one lookup in
+`Parser.subst.types`. Substituting over a parsed body instead would mean
+deep-copying and type-remapping all forty-nine expression and statement kinds,
+and every kind missed is a node that silently keeps the type parameter.
+
+The two halves instantiate in different places, for one reason:
+
+- **A struct instantiates in the parser**, because its type arguments are
+  written — `Box<int>` names them. `instantiateStruct` re-parses the template
+  and appends the definition to `Parser.instantiatedStructs`, which `Parse`
+  folds into `program.Structs`. The language's existing declare-before-use rule
+  is what makes this legal: `Box<int>` can only be written below `struct
+  Box<T>`, so the template is always captured by the time a use site needs it.
+- **A function instantiates in the checker**, because its type arguments are
+  inferred and only the checker knows that `1` is an int. They meet at
+  `checker.Instantiator`, which the parser implements and `main.go` wires up
+  via `SetGenerics`. The checker infers, asks for the instantiation, registers
+  the signature, appends to `program.Functions`, and rewrites the call's `Name`
+  to the mangled one.
+
+Four things hold it together:
+
+- **`resolveTypeName` is the single rename hook.** Inside a template being
+  re-parsed, the template's own name means *this* instantiation, so `Box {
+  value: v }` written in `struct Box<T>` resolves to `Box_int`. Putting the
+  rename there rather than at each name-reading site is what makes struct
+  literals in both spellings, constructor calls, and annotations all follow.
+- **The body-checking pass is indexed, not ranged.** Checking a body can
+  instantiate a generic, which appends to `program.Functions`; a `range` would
+  have captured the slice first and never reached it. The indexed loop reaches
+  an appended function and checks it like any other — including one instantiated
+  by an instantiation.
+- **An instantiation is marked before its body is checked.** A recursive generic
+  calls itself with the same type arguments, and marking afterwards would
+  instantiate forever. `TestGenericRecursion` pins it.
+- **A type parameter must never reach codegen.** It has no C representation, so
+  one that survived is a hole in instantiation rather than a program error.
+  `Checker.rejectTypeParams` says so plainly instead of letting `cType` emit
+  `void`. `ArrayTypeOf` does register an entry for `T[]`, but only so inference
+  can read the element back out; the instantiation re-parses with `T` bound and
+  produces a real array type.
+
+Deliberately not supported, each with its own reason rather than a shared
+"unimplemented": a user module cannot declare a generic (the template lives in
+the parser that read it, and a module is read after the main program was
+parsed — `resolveModuleFile` rejects it by name); there are no type parameter
+bounds; and a generic struct cannot appear in a generic function's signature,
+which would need structural unification through an instantiation.
+
+## An interface value owns a copy, and that is why it can be stored
+
+An interface value is `{ void* _data; void* _obj; struct { ... } _vtable; }`:
+a refcounted box holding a **copy** of the struct, a pointer into that box, and
+the concrete type's method table filled at the coercion site. Dispatch is one
+indirect call with no lookup and no type metadata, exactly as when `_data`
+borrowed the caller's struct.
+
+Owning rather than borrowing is the whole feature. A borrowed interface could
+not be returned, stored in a field, or held in a container — those are the
+positions that outlive the frame it pointed into, and all four were compile
+errors. A box survives all of them, so the restrictions are gone and
+`checkInterfacePositions`, `checkInterfaceBinding` and the parser's array
+refusal went with them.
+
+Four things hold it together:
+
+- **The constructor retains, the caller borrows.** `dex_iface_<Iface>_from_<Struct>`
+  memcpys the struct in and then retains each heap field of the *copy*, because
+  a shallow copy shares the original's pointers and the box's destructor will
+  release them. Callers pass through `genBorrowed`, the same convention
+  `dex_array_string_push` follows: a struct built in the argument position is
+  hoisted to a statement-scoped temporary and released at the end of the
+  statement, and the retain here is what keeps the box's copy alive past it.
+- **An argument is the one position that does not own.** A parameter is
+  borrowed, so the box minted for a coercion at a call site has no owner in the
+  callee. `genArgMaybeInterface` hoists it into a statement temp; every other
+  position — return, let, field, array element — takes the bare mint and owns
+  it. Forwarding a value that is *already* an interface mints nothing and
+  retains instead.
+- **The release goes through `_obj`, never through the value.** The value is
+  three words passed by value, so `ast.IsHeapType` is deliberately false for an
+  interface and `ast.NeedsRelease` deliberately true. Every site that emits a
+  release or a retain special-cases it: `emitReleaseVar`,
+  `emitRetainBorrowedStructFields`, `emitRetainStructLitFields`,
+  `emitUnwindSlotUpdate`, and the cleanup-stack push in `registerScopeVar`,
+  which registers `name._obj` because the cleanup stack holds pointers and
+  cannot read a dead frame's multi-word local.
+- **Typedef order is load-bearing.** The interface struct is void pointers and
+  function pointers only, so it depends on no struct and is emitted *before*
+  every struct typedef — a struct holding one would not compile otherwise. The
+  box constructors reference the flattened method functions by name, so they
+  are emitted *after* those forward declarations, not beside the typedefs.
+
+The cost is one pooled allocation per coercion and one real semantic change:
+mutation through an interface reaches the box, not the original. `Tally` in
+`examples/interface_test.dx` pins that, and Go makes the same trade for the
+same reason.
+
+A by-value container reuses the struct-array machinery — `ArrayTypeOf` routes
+an interface element to `StructArrayTypeOf` — with `dex_cleanup_iface_<Iface>`
+as the element destructor, because the array owns the element memory and the
+element owns its box. Two containers still refuse one and say why: a map holds
+only the six scalar value types (a struct value is refused identically), and an
+optional has no spelling for absent because an interface value is not a pointer.
+
+## Maps reject what they cannot represent
+
+The map runtime is generated per key/value suffix pair, and `mapKeySuffix` /
+`mapValSuffix` fall through to `"int"` for anything without one. That silently
+truncated a `long` key and turned a struct value into a C error about
+`Dex_Person` and `int` — a diagnostic about the generated code rather than
+about the program. `mapKeyTypeSupported` and `mapValueTypeSupported` reject the
+type where it is built instead, naming it through `describeType`. The supported
+sets are exactly what `LANGUAGE.md` documents: string or int keys, and int,
+bool, string, long, double or char values.
+
 ## Memory ownership rules
 
 These are the invariants the codegen maintains. Breaking one produces either a leak

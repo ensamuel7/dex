@@ -90,8 +90,11 @@ func (g *Generator) forwardedReceiverCall(e *ast.CallExpr, tmp string) *ast.Call
 		// Carried over, or a struct method would be emitted as a bare call to a
 		// function named after the method with no receiver at all.
 		IsMethodCall: e.IsMethodCall,
-		StructType:   e.StructType,
-		ResolvedType: e.ResolvedType,
+		// Likewise for an interface receiver: without it the call is emitted as
+		// a struct method on a value that is a vtable pair.
+		IsInterfaceCall: e.IsInterfaceCall,
+		StructType:      e.StructType,
+		ResolvedType:    e.ResolvedType,
 	}
 }
 
@@ -165,6 +168,10 @@ func (g *Generator) hoistReceiver(expr ast.Expr, recvType ast.Type) (string, boo
 	switch {
 	case ast.IsHeapType(recvType):
 		owned = g.isNewAlloc(expr)
+	case ast.IsInterfaceType(recvType):
+		// Read out of an array or a field it borrows; returned by a call it
+		// owns, and the box has to be released once the statement is done.
+		owned = !g.borrowsHeapValue(expr)
 	case ast.IsStructType(recvType) && ast.NeedsRelease(recvType):
 		owned = !g.borrowsHeapValue(expr)
 	}

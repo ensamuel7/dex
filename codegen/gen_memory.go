@@ -46,6 +46,18 @@ func (g *Generator) registerScopeVar(out *strings.Builder, prefix, name string, 
 	sv := scopeVar{name: name, typ: typ}
 
 	switch {
+	// An interface local owns the box in its _obj field, so that is what the
+	// unwind entry has to name — the value itself is a multi-word struct the
+	// cleanup stack cannot hold, and reading it back out of a dead frame is the
+	// use-after-free the stack exists to avoid.
+	case g.usesExceptions && ast.IsInterfaceType(typ):
+		g.markScopeForUnwind(out, prefix, idx)
+		if g.isReassigned(name) {
+			sv.slot = g.nextCleanupSlot()
+			out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_push(%s._obj);\n", prefix, sv.slot, name))
+		} else {
+			out.WriteString(fmt.Sprintf("%s_dex_cleanup_push(%s._obj);\n", prefix, name))
+		}
 	case g.unwindTrackable(typ):
 		g.markScopeForUnwind(out, prefix, idx)
 		if g.isReassigned(name) {
@@ -123,7 +135,12 @@ func (g *Generator) emitUnwindSlotUpdate(out *strings.Builder, prefix, name stri
 		return
 	}
 	if sv.slot != "" {
-		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s);\n", prefix, sv.slot, name))
+		// An interface local's entry names the box it owns, not the value.
+		held := name
+		if ast.IsInterfaceType(sv.typ) {
+			held = name + "._obj"
+		}
+		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s);\n", prefix, sv.slot, held))
 	}
 	// Assigning a struct replaces every field at once, so every field's entry
 	// moves with it. Sorted, because a map's order would churn the output.
@@ -336,6 +353,13 @@ func (g *Generator) emitReleaseVar(out *strings.Builder, prefix, name string, ty
 			}
 			return
 		}
+		return
+	}
+	// An interface value is two pointers and a table passed by value; the
+	// reference it owns is the box in _obj, so the release goes through that
+	// field rather than through the value itself.
+	if ast.IsInterfaceType(typ) {
+		out.WriteString(fmt.Sprintf("%sdex_release(%s._obj);\n", prefix, name))
 		return
 	}
 	if ast.IsHeapType(typ) {
@@ -559,6 +583,13 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 		switch {
 		case ast.IsHeapType(ft):
 			out.WriteString(fmt.Sprintf("%sdex_retain(%s.%s);\n", prefix, target, name))
+		case ast.IsInterfaceType(ft):
+			// A struct coerced into the field minted its own box and needs no
+			// retain. A value that was already an interface is borrowed from
+			// whoever still holds it, so the struct takes its own reference.
+			if ast.IsInterfaceType(g.typeOfExpr(val)) {
+				out.WriteString(fmt.Sprintf("%sdex_retain(%s.%s._obj);\n", prefix, target, name))
+			}
 		case ast.IsStructType(ft):
 			// A nested struct is a value, not a heap type, so it is not
 			// retained — but its own heap fields are, because emitReleaseVar
@@ -609,6 +640,8 @@ func (g *Generator) emitRetainBorrowedStructFields(out *strings.Builder, prefix,
 			}
 		case ast.IsHeapType(f.Type):
 			out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, field))
+		case ast.IsInterfaceType(f.Type):
+			out.WriteString(fmt.Sprintf("%sdex_retain(%s._obj);\n", prefix, field))
 		case ast.IsStructType(f.Type):
 			g.emitRetainBorrowedStructFields(out, prefix, field, f.Type)
 		}

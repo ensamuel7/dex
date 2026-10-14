@@ -738,7 +738,8 @@ struct Person {
 
 ### Using interfaces as types
 
-Interface types can be used as function parameters. Any struct that satisfies the interface can be passed:
+An interface type can be a function parameter, a local, a return type, a struct
+field, or an array element. Start with the parameter, which is the common case. Any struct that satisfies the interface can be passed:
 
 ```dex
 fn printGreeting(g: Greeter): void {
@@ -747,6 +748,22 @@ fn printGreeting(g: Greeter): void {
 
 let p = Person{name: "Alice"}
 printGreeting(p)    // "Hello, I'm Alice"
+```
+
+It can also be a local, bound to a struct that is already named:
+
+```dex
+let p = Person{name: "Alice"}
+let g: Greeter = p
+fmt.println(g.greet())    // "Hello, I'm Alice"
+```
+
+Assigning a different concrete type to the same local is fine — the vtable is
+rebuilt with it:
+
+```dex
+let who: Greeter = p
+who = r    // a Robot, also a Greeter
 ```
 
 ### Multiple methods
@@ -791,13 +808,83 @@ fn show(s: Stringer): void {}
 
 fn main(): void {
     let e = Empty{x: 1}
-    show(e)    // compile error: expected Stringer, got Empty
+    show(e)
 }
 ```
 
+```
+argument 1 of 'show': expected Stringer, got Empty (missing fn toString(): string)
+```
+
+The error names what is absent rather than only that the types differ. A method
+present under the right name but the wrong signature is reported as a mismatch
+instead, which is the case a bare "missing" would mislead on.
+
+### An interface value owns its data
+
+An interface value is a refcounted box holding a **copy** of the struct it was
+built from, plus that struct's method table. Because it owns the copy rather
+than pointing at someone else's struct, it can go anywhere a value can go:
+
+```dex
+fn greeterFor(robot: bool): Greeter {   // returned
+    let p = Person{name: "Eve"}
+    return p
+}
+
+struct Entry {
+    key: string
+    who: Greeter                        // stored in a field
+}
+
+let crowd: Greeter[] = [p, r]           // held in an array, mixed types
+assert(crowd[0].greet() == "Hi Ada")    // dispatched through an element
+```
+
+Coercion costs one pooled allocation, and the struct's heap fields are retained
+rather than copied, so a string in the original and a string in the box are the
+same bytes with one more reference.
+
+The consequence of copying is that **mutation through an interface does not
+reach the original**:
+
+```dex
+let t = Tally{n: 0}
+let counts: Counter = t
+assert(counts.bump(3) == 3)
+assert(counts.total() == 3)
+assert(t.n == 0)        // the box was mutated, not t
+```
+
+Go behaves the same way for the same reason. To mutate the original, call the
+method on the struct directly rather than through an interface.
+
+### Where an interface still does not fit
+
+Two containers refuse one, each for a reason of its own:
+
+```dex
+fn each(m: map[string, Greeter]): void {}   // compile error
+fn maybe(g: Greeter?): void {}              // compile error
+```
+
+```
+a map value must be int, bool, string, long, double or char, not the interface
+Greeter
+
+cannot make the interface Greeter optional: an interface value is a vtable pair
+rather than a pointer, so it has no null. Hold the concrete struct type, or an
+array
+```
+
+A map holds only the six scalar value types, interface or not — a struct value
+is refused the same way. An optional needs a spelling for absent, and an
+interface value is a vtable pair rather than a pointer, so it has none; an array
+is the way to hold a varying number of them.
+
 ### How it works
 
-Interfaces compile to C vtable structs. Each interface value holds a pointer to the underlying data (`_data`) and a table of function pointers (`_vtable`). The compiler wires up the vtable at the call site based on the concrete struct type. All dispatch is resolved at compile time: an interface call carries no type metadata and no lookup.
+Interfaces compile to C vtable structs. An interface value holds a pointer to the copy it owns (`_data`), the refcounted box that copy lives in (`_obj`), and a table of function pointers (`_vtable`). The compiler fills the table from the concrete struct type, which it knows at every coercion site, so all dispatch is resolved at compile time: an interface call costs one indirect call and carries no type metadata and no lookup. The box is released when the value goes out of scope, is overwritten, or is dropped by an exception unwinding past its frame.
 
 Struct *fields* can be read by position at runtime through the [`reflect`](#reflect) module, but that is a separate, opt-in mechanism — the compiler emits a name table and typed accessors for the structs some `reflect` call names, and nothing for the rest. Interface dispatch does not use it.
 
@@ -1290,6 +1377,181 @@ struct Api {
 let api: Api = Api { greeting: "hi" }
 http.route("GET", "/hello", api.hello)
 ```
+
+## Generics
+
+A generic declaration takes type parameters in angle brackets. It is a
+**template**, not code: each distinct set of type arguments produces one
+concrete function or struct, named after them. There is no boxing, no type
+metadata, and no runtime dispatch — an instantiation is indistinguishable from
+the same code written out by hand.
+
+### Generic functions
+
+```dex
+fn identity<T>(x: T): T {
+    return x
+}
+
+fn pick<T>(a: T, b: T, first: bool): T {
+    if (first) {
+        return a
+    }
+    return b
+}
+```
+
+Type arguments are **inferred from the call**, so a generic function is called
+like any other:
+
+```dex
+identity(42)        // T = int
+identity("hi")      // T = string
+pick(1, 2, true)    // T = int
+```
+
+Several parameters may share a type parameter, and they have to agree:
+
+```dex
+pick(1, "a", true)
+```
+
+```
+pick() binds T to int from an earlier argument, but argument 2 is string
+```
+
+Type parameters are independent of one another:
+
+```dex
+fn firstOfTwo<A, B>(a: A, b: B): A {
+    return a
+}
+
+firstOfTwo(7, "ignored")    // A = int, B = string
+```
+
+Inference descends into a container, so the element type pins the parameter:
+
+```dex
+fn firstElem<T>(xs: T[]): T {
+    return xs[0]
+}
+
+let nums: int[] = [10, 20]
+firstElem(nums)    // T = int
+```
+
+A type parameter that appears in no parameter's type has nothing to be inferred
+from, and the compiler says so rather than guessing:
+
+```dex
+fn makeDefault<T>(n: int): int { return n }
+```
+
+```
+cannot infer type parameter T of makeDefault() from the arguments; it appears in
+no parameter's type
+```
+
+A generic may call a generic, including itself:
+
+```dex
+fn twice<T>(x: T): T {
+    return identity(identity(x))
+}
+```
+
+### Generic structs
+
+```dex
+struct Box<T> {
+    value: T
+
+    fn get(): T {
+        return value
+    }
+
+    fn replace(v: T): T {
+        self.value = v
+        return self.value
+    }
+}
+
+struct Pair<K, V> {
+    key: K
+    value: V
+}
+```
+
+A struct's type arguments are **written, not inferred** — a struct type has no
+arguments to infer them from. Both the type and the literal name them:
+
+```dex
+let bi: Box<int> = Box<int> { value: 42 }
+assert(bi.get() == 42)
+
+let bs: Box<string> = Box<string> { value: "held" }
+let pr: Pair<string, int> = Pair<string, int> { key: "a", value: 2 }
+```
+
+Two mentions of `Box<int>` are the **same type**, not two — the instantiation is
+built once and reused.
+
+Leaving the type arguments off names a template where a type is expected:
+
+```dex
+let b: Box = Box { value: 1 }
+```
+
+```
+generic struct Box needs type arguments, as Box<...>
+```
+
+An instantiation is an ordinary struct, so everything that applies to one
+applies to it: a heap-typed field is owned and released the same way, methods
+work the same way, and it can be returned, nested, and held in an array.
+
+### Declaration order
+
+A generic struct must be declared **above** the code that instantiates it, the
+same rule every type in DexLang follows.
+
+### What is not supported yet
+
+- **A user module cannot declare a generic.** The template lives in the parser
+  that read it, and instantiating one needs that parser; a generic struct is
+  harder still, because its instantiation happens while a file is parsed and a
+  module is read after the main program already was. Declaring one is a clear
+  error rather than a silent omission:
+
+  ```
+  helper.dx: 'gid' is generic, and a user module cannot declare a generic yet —
+  move it into the main program
+  ```
+
+- **No type parameter bounds.** `fn show<T: Stringer>(x: T)` does not parse. A
+  generic body may only do what every type supports, so an operation the type
+  argument does not have is reported against the instantiation.
+- **A generic struct cannot appear in a generic signature.** `fn unwrap<T>(b:
+  Box<T>): T` is not supported: inference would have to match a type argument
+  structurally through an instantiation.
+
+### How it works
+
+Generics are monomorphised by **re-parsing**. A generic declaration is captured
+as the tokens it was written as and skipped rather than parsed; instantiating it
+re-parses those tokens with its type parameters bound to concrete types and its
+own name mangled to `Box_int` or `max_int`. What comes out is an ordinary
+function or struct, which is why the code generator needs no knowledge of
+generics at all — `Dex_Box_int` falls out of the existing struct path.
+
+A struct's instantiation happens in the parser, where the type arguments are
+written. A function's happens in the type checker, because inferring them needs
+the argument types and only the checker has those; the checker asks the parser
+to re-parse, registers the result, and appends it to the program, where the
+body-checking pass reaches it like any other function.
+
+---
 
 ## Operators
 
@@ -2000,6 +2262,7 @@ http.listen(8080)
 | `listenOn` | `listenOn(host: string, port: int, workers?: int): void`        | `listen` with the interface named: `"127.0.0.1"` binds loopback only, `"0.0.0.0"` every interface. For a service behind a proxy that should not also answer directly. A host that is not an IPv4 address is refused rather than widened to every interface. |
 | `notFound` | `notFound(handler): void`                                      | Answer requests no route matched, instead of the built-in 404 body. The handler takes the shapes `route` accepts. Registering twice replaces the first. |
 | `threads`  | `threads(count: int): void`                                    | How many threads run handlers; call before `listen`. `0`, the default, sizes the pool from the CPU count with a floor of four — the right hedge when a handler might block. Set it lower when handlers are CPU-bound and serialised behind a lock on a small box, where extra threads only add context switches. |
+| `limits`   | `limits(maxBodyBytes: int, idleTimeoutSecs: int, maxConnections: int): void` | Bound what one client can cost the server; call before `listen`. Defaults are 8 MB, 30 seconds and 8192 connections, and a `0` for any argument keeps that default — so raising the body limit for uploads does not mean restating the others. The header block is capped at 32 KB and is not adjustable. A body over the limit is answered `413`, headers that never terminate `431`, and a connection that stops making progress for the idle timeout is closed. |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
 | `responseWith` | `responseWith(statusCode: int, body: string, contentType: string, headers: string): HttpResponse` | The same, carrying extra response headers |
 
@@ -3325,7 +3588,8 @@ A nested struct field and an array element are each subjects in their own right:
 
 #### Describing a struct to a function that has no type for it
 
-A function cannot take "any struct" as a parameter — DexLang has no generics —
+A function cannot take "any struct" as a parameter — a type parameter binds to
+one concrete type per instantiation, not to "any struct" —
 so the generic half of a metadata-driven library cannot be written as an
 ordinary function. `fields()` and `fieldTags()` close that gap: together they
 hand a plain function over two `string[]` everything it needs, and a function
@@ -3474,6 +3738,12 @@ If the condition is `false`, prints a failure message to stderr and exits with c
 ```dex
 assert(1 == 1)        // passes
 assert(x > 0)         // passes if x > 0
+```
+
+The message carries the file, the line, and the condition as it was written, because a test file is a `main()` full of asserts and "assert failed" on its own meant bisecting by hand to find which one:
+
+```
+FAIL: examples/generics_test.dx:84: assert(identity(42) == 42)
 ```
 
 ### send, receive, channel, close

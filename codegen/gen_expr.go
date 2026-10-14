@@ -303,8 +303,14 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 					break
 				}
 			}
-			_ = fieldType
-			g.genExpr(out, e.FieldValues[i])
+			// An interface-typed field takes a box the struct then owns, so
+			// the coercion happens here and the struct's cleanup releases it.
+			if ast.IsInterfaceType(fieldType) &&
+				!ast.IsInterfaceType(g.typeOfExpr(e.FieldValues[i])) {
+				g.genInterfaceValue(out, e.FieldValues[i], fieldType)
+			} else {
+				g.genExpr(out, e.FieldValues[i])
+			}
 		}
 		// Emit zero values for missing fields
 		if structDef != nil {

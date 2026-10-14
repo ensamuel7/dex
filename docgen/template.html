@@ -212,6 +212,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
         <a onclick="show('arrays')">Arrays</a>
         <a onclick="show('structs')">Structs</a>
         <a onclick="show('interfaces')">Interfaces</a>
+        <a onclick="show('generics')">Generics</a>
         <a onclick="show('enums')">Enums</a>
         <a onclick="show('maps')">Maps</a>
         <a onclick="show('string-methods')">String Methods</a>
@@ -548,7 +549,8 @@ import "json"</code></pre>
 </table>
 
 <h3>Built-in Functions</h3>
-<p><code>assert(condition: bool)</code> — if the condition is <code>false</code>, prints a failure message to stderr and exits with code 1. Used for testing.</p>
+<p><code>assert(condition: bool)</code> — if the condition is <code>false</code>, prints a failure message to stderr and exits with code 1. Used for testing. The message carries the file, the line and the condition as it was written, because a test file is a <code>main()</code> full of asserts and &quot;assert failed&quot; on its own meant bisecting by hand to find which one:</p>
+<pre><code>FAIL: examples/generics_test.dx:84: assert(identity(42) == 42)</code></pre>
 <pre><code>assert(1 + 1 == 2)
 assert(x &gt; 0)</code></pre>
 
@@ -1239,13 +1241,42 @@ struct Person {
 // Person satisfies Greeter because it has greet(): string</code></pre>
 
 <h3>Using Interfaces as Types</h3>
-<p>Interface types can be used as function parameters. Any struct that satisfies the interface can be passed:</p>
+<p>An interface type can be a function parameter, a local, a return type, a struct field, or an array element. The parameter is the common case:</p>
 <pre><code>fn printGreeting(g: Greeter): void {
     fmt.println(g.greet())
 }
 
 let p = Person{name: "Alice"}
 printGreeting(p)    // "Hello, I'm Alice"</code></pre>
+
+<h3>An Interface Value Owns Its Data</h3>
+<p>An interface value is a refcounted box holding a <strong>copy</strong> of the struct it was built from, plus that struct's method table. Because it owns the copy rather than pointing at someone else's struct, it goes anywhere a value can go:</p>
+<pre><code>fn greeterFor(robot: bool): Greeter {   // returned
+    let p = Person{name: "Eve"}
+    return p
+}
+
+struct Entry {
+    key: string
+    who: Greeter                        // stored in a field
+}
+
+let crowd: Greeter[] = [p, r]           // held in an array, mixed types
+assert(crowd[0].greet() == "Hi Ada")    // dispatched through an element</code></pre>
+<p>Coercion costs one pooled allocation, and the struct's heap fields are retained rather than copied — a string in the original and a string in the box are the same bytes with one more reference.</p>
+<p>The consequence of copying is that <strong>mutation through an interface does not reach the original</strong>:</p>
+<pre><code>let t = Tally{n: 0}
+let counts: Counter = t
+assert(counts.bump(3) == 3)
+assert(counts.total() == 3)
+assert(t.n == 0)        // the box was mutated, not t</code></pre>
+<p>Go behaves the same way for the same reason. To mutate the original, call the method on the struct directly rather than through an interface.</p>
+
+<h3>Where an Interface Does Not Fit</h3>
+<p>Two containers refuse one, each for a reason of its own. A map holds only the six scalar value types — a struct value is refused identically — and an optional needs a spelling for absent, which a vtable pair does not have:</p>
+<pre><code>fn each(m: map[string, Greeter]): void {}   // compile error
+fn maybe(g: Greeter?): void {}              // compile error</code></pre>
+<p>An array is the way to hold a varying number of them.</p>
 
 <h3>Multiple Methods</h3>
 <p>Interfaces can require multiple methods. All must be present with matching parameter and return types:</p>
@@ -1282,14 +1313,113 @@ fn show(s: Stringer): void {}
 
 fn main(): void {
     let e = Empty{x: 1}
-    show(e)    // compile error: expected Stringer, got Empty
+    show(e)
 }</code></pre>
+<pre><code>argument 1 of 'show': expected Stringer, got Empty (missing fn toString(): string)</code></pre>
+<p>The error names what is absent rather than only that the types differ. A method present under the right name but the wrong signature is reported as a mismatch instead.</p>
 
 <h3>How It Works</h3>
-<p>Interfaces compile to C vtable structs. Each interface value holds a pointer to the underlying data and a table of function pointers. The compiler wires up the vtable at the call site based on the concrete struct type. All dispatch is resolved at compile time — there is no runtime type metadata or reflection.</p>
+<p>Interfaces compile to C vtable structs. An interface value holds a pointer to the copy it owns, the refcounted box that copy lives in, and a table of function pointers. The compiler fills the table from the concrete struct type, which it knows at every coercion site, so all dispatch is resolved at compile time: one indirect call, no type metadata, no lookup. The box is released when the value goes out of scope, is overwritten, or is dropped by an exception unwinding past its frame.</p>
 
 <h4>Why no <code>instanceof</code> or <code>typeof</code>?</h4>
 <p>DexLang is statically typed. The compiler knows every variable's type at compile time, so there is no runtime type ambiguity to resolve. Languages that need <code>instanceof</code> typically have class inheritance hierarchies (Java, C#) where a parent-typed variable could hold different child types at runtime, or dynamic typing (JavaScript, Python) where types aren't known until execution. DexLang has neither — interfaces use structural typing resolved entirely at compile time.</p>
+</section>
+
+<!-- Generics -->
+<section id="generics" class="page-section">
+<h2>Generics</h2>
+<p>A generic declaration takes type parameters in angle brackets. It is a <strong>template</strong>, not code: each distinct set of type arguments produces one concrete function or struct, named after them. There is no boxing, no type metadata, and no runtime dispatch — an instantiation is indistinguishable from the same code written out by hand.</p>
+
+<h3>Generic Functions</h3>
+<pre><code>fn identity&lt;T&gt;(x: T): T {
+    return x
+}
+
+fn pick&lt;T&gt;(a: T, b: T, first: bool): T {
+    if (first) {
+        return a
+    }
+    return b
+}</code></pre>
+<p>Type arguments are <strong>inferred from the call</strong>, so a generic function is called like any other:</p>
+<pre><code>identity(42)        // T = int
+identity("hi")      // T = string
+pick(1, 2, true)    // T = int</code></pre>
+
+<h3>Shared and Independent Type Parameters</h3>
+<p>Several parameters may share a type parameter, and they have to agree:</p>
+<pre><code>pick(1, "a", true)</code></pre>
+<pre><code>pick() binds T to int from an earlier argument, but argument 2 is string</code></pre>
+<p>Type parameters are independent of one another:</p>
+<pre><code>fn describeTwo&lt;A, B&gt;(a: A, b: B): string {
+    return "" + a + "/" + b
+}
+
+describeTwo(7, "s")      // A = int, B = string
+describeTwo("s", 9)      // A = string, B = int</code></pre>
+
+<h3>Inference Through Containers</h3>
+<p>Inference descends into a container, so the element type pins the parameter:</p>
+<pre><code>fn firstElem&lt;T&gt;(xs: T[]): T {
+    return xs[0]
+}
+
+let nums: int[] = [10, 20]
+firstElem(nums)    // T = int</code></pre>
+<p>A type parameter that appears in no parameter's type has nothing to be inferred from, and the compiler says so rather than guessing:</p>
+<pre><code>cannot infer type parameter T of makeDefault() from the arguments; it appears in no parameter's type</code></pre>
+<p>A generic may call a generic, including itself:</p>
+<pre><code>fn twice&lt;T&gt;(x: T): T {
+    return identity(identity(x))
+}</code></pre>
+
+<h3>Generic Structs</h3>
+<pre><code>struct Box&lt;T&gt; {
+    value: T
+
+    fn get(): T {
+        return value
+    }
+
+    fn replace(v: T): T {
+        self.value = v
+        return self.value
+    }
+}
+
+struct Pair&lt;K, V&gt; {
+    key: K
+    value: V
+}</code></pre>
+<p>A struct's type arguments are <strong>written, not inferred</strong> — a struct type has no arguments to infer them from. Both the type and the literal name them:</p>
+<pre><code>let bi: Box&lt;int&gt; = Box&lt;int&gt; { value: 42 }
+assert(bi.get() == 42)
+
+let bs: Box&lt;string&gt; = Box&lt;string&gt; { value: "held" }
+let pr: Pair&lt;string, int&gt; = Pair&lt;string, int&gt; { key: "a", value: 2 }</code></pre>
+<p>Two mentions of <code>Box&lt;int&gt;</code> are the <strong>same type</strong>, not two — the instantiation is built once and reused. Leaving the type arguments off names a template where a type is expected:</p>
+<pre><code>generic struct Box needs type arguments, as Box&lt;...&gt;</code></pre>
+<p>An instantiation is an ordinary struct, so everything that applies to one applies to it: a heap-typed field is owned and released the same way, methods work the same way, and it can be returned, nested, and held in an array.</p>
+<pre><code>fn boxed(n: int): Box&lt;int&gt; {
+    return Box&lt;int&gt; { value: n }
+}
+
+let outer: Box&lt;Box&lt;int&gt;&gt; = Box&lt;Box&lt;int&gt;&gt; { value: inner }
+let many: Box&lt;int&gt;[] = [inner, boxed(4)]</code></pre>
+
+<h3>Declaration Order</h3>
+<p>A generic struct must be declared <strong>above</strong> the code that instantiates it, the same rule every type in DexLang follows.</p>
+
+<h3>Not Supported Yet</h3>
+<ul>
+<li><strong>A user module cannot declare a generic.</strong> The template lives in the parser that read it, and instantiating one needs that parser; a generic struct is harder still, because its instantiation happens while a file is parsed and a module is read after the main program already was. Declaring one is a clear error rather than a silent omission.</li>
+<li><strong>No type parameter bounds.</strong> <code>fn show&lt;T: Stringer&gt;(x: T)</code> does not parse. A generic body may only do what every type supports, so an operation the type argument does not have is reported against the instantiation.</li>
+<li><strong>A generic struct cannot appear in a generic signature.</strong> <code>fn unwrap&lt;T&gt;(b: Box&lt;T&gt;): T</code> is not supported: inference would have to match a type argument structurally through an instantiation.</li>
+</ul>
+
+<h3>How It Works</h3>
+<p>Generics are monomorphised by <strong>re-parsing</strong>. A generic declaration is captured as the tokens it was written as and skipped rather than parsed; instantiating it re-parses those tokens with its type parameters bound to concrete types and its own name mangled to <code>Box_int</code> or <code>max_int</code>. What comes out is an ordinary function or struct, which is why the code generator needs no knowledge of generics at all.</p>
+<p>A struct's instantiation happens in the parser, where the type arguments are written. A function's happens in the type checker, because inferring them needs the argument types and only the checker has those; the checker asks the parser to re-parse, registers the result, and appends it to the program, where the body-checking pass reaches it like any other function.</p>
 </section>
 
 <!-- Standard Library -->

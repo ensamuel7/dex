@@ -326,6 +326,20 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 
 		p.advance()
 
+		// `Box<int> { ... }` or `Box<int>(...)`: the instantiation is built
+		// here, and from this point the literal or constructor call that
+		// follows names an ordinary struct.
+		if _, isGeneric := p.genericStructs[name]; isGeneric && p.check(token.TokenLt) {
+			args, err := p.parseTypeArgList()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.instantiateStruct(name, args); err != nil {
+				return nil, err
+			}
+			name = ast.QualifiedStructName(p.module, MangleGenericName(name, args))
+		}
+
 		// Check for struct literal: StructName { field: value, ... }
 		if p.knownTypeName(name) && p.check(token.TokenLBrace) {
 			p.advance() // consume '{'

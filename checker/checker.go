@@ -36,6 +36,18 @@ type Checker struct {
 	structMethods      map[string]map[string]funcSig // structName -> methodName -> sig
 	structConstructors map[string][]ast.Type         // structName -> constructor param types
 	structModule       map[string]string             // structName -> moduleName (for cross-module structs)
+
+	// Generic function templates, the parser that can realise one, and the
+	// instantiations already built. All three are nil for a program with no
+	// generics, which is what makes the generic path free for everything else.
+	genericFuncs map[string]*ast.GenericDecl
+	instantiator Instantiator
+	instantiated map[string]bool
+	// Functions and structs produced by instantiation during body checking.
+	// They are drained into the program so the second pass reaches them and
+	// codegen emits them.
+	pending        []ast.Function
+	pendingStructs []ast.StructDef
 }
 
 // addError records a checker error.
@@ -253,8 +265,16 @@ func (c *Checker) Check(program *ast.Program) []error {
 		}
 	}
 
-	// Second pass: check function bodies (global scope remains so functions can resolve globals)
-	for _, fn := range program.Functions {
+	// Second pass: check function bodies (global scope remains so functions can
+	// resolve globals).
+	//
+	// Indexed rather than ranged: checking a body can instantiate a generic,
+	// which appends to program.Functions, and a range would have captured the
+	// slice before that. The appended function is reached by this same loop and
+	// checked like any other, including one instantiated by an instantiation.
+	for i := 0; i < len(program.Functions); i++ {
+		fn := program.Functions[i]
+		c.rejectTypeParams(fn)
 		if err := c.checkThrowsDeclaration(fn); err != nil {
 			c.addError(err)
 		}
@@ -278,6 +298,11 @@ func (c *Checker) Check(program *ast.Program) []error {
 
 		c.popScope()
 
+		// Drained after the body rather than inside it: appending to
+		// program.Functions while checkStmt walks the same program is the kind
+		// of aliasing that is fine here only because the loop is indexed.
+		c.drainPending(program)
+
 		if len(c.errors) >= c.maxErrors {
 			break
 		}
@@ -286,6 +311,21 @@ func (c *Checker) Check(program *ast.Program) []error {
 	c.popScope() // pop global scope
 
 	return c.errors
+}
+
+// drainPending moves instantiated functions and structs into the program.
+func (c *Checker) drainPending(program *ast.Program) {
+	if len(c.pending) > 0 {
+		program.Functions = append(program.Functions, c.pending...)
+		c.pending = nil
+	}
+	if len(c.pendingStructs) > 0 {
+		program.Structs = append(program.Structs, c.pendingStructs...)
+		for _, sd := range c.pendingStructs {
+			c.registerStructDef(sd)
+		}
+		c.pendingStructs = nil
+	}
 }
 
 // checkThrowsDeclaration validates the types named after `throws`. The

@@ -1,0 +1,213 @@
+// Interfaces: structural typing, vtable dispatch, owning values.
+//
+// A struct satisfies an interface by having its methods — there is no
+// `implements`. An interface value is a refcounted box owning a copy of the
+// struct plus a table of its methods, so dispatch is one indirect call with no
+// lookup and no type metadata, and the value can be returned, stored in a
+// field, and held in a container.
+
+import "fmt"
+
+interface Greeter {
+    fn greet(): string
+}
+
+interface Shape {
+    fn area(): double
+    fn scaleBy(factor: double): double
+}
+
+interface Counter {
+    fn bump(by: int): int
+    fn total(): int
+}
+
+struct Person {
+    name: string
+
+    fn greet(): string {
+        return "Hi " + name
+    }
+}
+
+struct Robot {
+    id: int
+
+    fn greet(): string {
+        return "UNIT-" + id
+    }
+}
+
+struct Circle {
+    radius: double
+
+    fn area(): double {
+        return 3.14159 * radius * radius
+    }
+
+    fn scaleBy(factor: double): double {
+        return radius * factor
+    }
+}
+
+struct Square {
+    side: double
+
+    fn area(): double {
+        return side * side
+    }
+
+    fn scaleBy(factor: double): double {
+        return side * factor
+    }
+}
+
+struct Tally {
+    n: int
+
+    fn bump(by: int): int {
+        self.n = self.n + by
+        return self.n
+    }
+
+    fn total(): int {
+        return self.n
+    }
+}
+
+fn greetingOf(g: Greeter): string {
+    return g.greet()
+}
+
+fn areaOf(s: Shape): double {
+    return s.area()
+}
+
+fn scaledArea(s: Shape, factor: double): double {
+    return s.scaleBy(factor)
+}
+
+// Two interface parameters in one signature, and a non-interface one between
+// them: the coercion is per parameter, not per call.
+fn describe(g: Greeter, times: int, s: Shape): string {
+    let out: string = g.greet() + " x" + times + " area " + s.area()
+    return out
+}
+
+// An interface value passed straight on to another function must not be
+// re-wrapped — it is already a vtable pair.
+fn forwarded(g: Greeter): string {
+    return greetingOf(g)
+}
+
+struct Service {
+    label: string
+
+    fn announce(g: Greeter): string {
+        return label + ": " + g.greet()
+    }
+}
+
+// An interface can be returned: the value owns a box, so it outlives the frame
+// that built it where a pointer into that frame could not.
+fn greeterFor(robot: bool): Greeter {
+    if (robot) {
+        let r = Robot { id: 3 }
+        return r
+    }
+    let p = Person { name: "Eve" }
+    return p
+}
+
+// Returning an interface the frame received rather than one it built: a
+// reference is taken, not a second box.
+fn passThrough(g: Greeter): Greeter {
+    return g
+}
+
+// A struct may hold one, and owns it: the field is released with the struct.
+struct Entry {
+    key: string
+    who: Greeter
+}
+
+fn main(): void {
+    let p = Person { name: "Ada" }
+    let r = Robot { id: 7 }
+
+    // Dispatch reaches the right concrete method.
+    assert(greetingOf(p) == "Hi Ada")
+    assert(greetingOf(r) == "UNIT-7")
+
+    // A local of interface type, bound to a struct in the same scope.
+    let g: Greeter = p
+    assert(g.greet() == "Hi Ada")
+    let g2: Greeter = r
+    assert(g2.greet() == "UNIT-7")
+
+    // Methods with parameters and non-void returns.
+    let c = Circle { radius: 2.0 }
+    let sq = Square { side: 3.0 }
+    assert(areaOf(sq) == 9.0)
+    assert(scaledArea(sq, 2.0) == 6.0)
+    assert(areaOf(c) > 12.0)
+    assert(areaOf(c) < 12.6)
+
+    // The interface owns a copy, so mutation through it accumulates in the box
+    // and leaves the original alone. Go behaves the same way.
+    let t = Tally { n: 0 }
+    let counts: Counter = t
+    assert(counts.bump(3) == 3)
+    assert(counts.bump(4) == 7)
+    assert(counts.total() == 7)
+    assert(t.n == 0)
+
+    // Several interface parameters in one call.
+    assert(describe(p, 2, sq) == "Hi Ada x2 area 9")
+
+    // Forwarding an interface value rather than a struct.
+    assert(forwarded(p) == "Hi Ada")
+
+    // An interface parameter on a struct method.
+    let svc = Service { label: "svc" }
+    assert(svc.announce(p) == "svc: Hi Ada")
+    assert(svc.announce(r) == "svc: UNIT-7")
+
+    // A struct built in the argument position: the temporary it is hoisted
+    // into is what the interface points at, and its heap field is released
+    // after the statement rather than leaked.
+    assert(greetingOf(Person { name: "Grace" }) == "Hi Grace")
+
+    // Reassigning the interface to a different concrete type.
+    let who: Greeter = p
+    assert(who.greet() == "Hi Ada")
+    who = r
+    assert(who.greet() == "UNIT-7")
+
+    // Returned from a function — the position a borrowing interface could not
+    // take at all.
+    let made = greeterFor(false)
+    assert(made.greet() == "Hi Eve")
+    let madeBot = greeterFor(true)
+    assert(madeBot.greet() == "UNIT-3")
+    assert(passThrough(p).greet() == "Hi Ada")
+
+    // Held in a struct field, beside a heap field of the struct's own.
+    let e = Entry { key: "first", who: p }
+    assert(e.key == "first")
+    assert(e.who.greet() == "Hi Ada")
+
+    // Held in an array, with two different concrete types in the same one, and
+    // dispatched through an element rather than through a named variable.
+    let crowd: Greeter[] = [p, r]
+    assert(crowd.len() == 2)
+    assert(crowd[0].greet() == "Hi Ada")
+    assert(crowd[1].greet() == "UNIT-7")
+
+    // An interface built from a temporary survives being stored, because the
+    // box copied the struct rather than pointing at it.
+    let kept: Greeter[] = [Person { name: "Hopper" }]
+    assert(kept[0].greet() == "Hi Hopper")
+
+    fmt.println("interfaces ok")
+}

@@ -525,6 +525,21 @@ func (g *Generator) emitRetainPushedStructFields(out *strings.Builder, target st
 // `[unit]` to free the strings still held by `unit`.
 func (g *Generator) genStructArrayLitElem(out *strings.Builder, arrVar string, elemType ast.Type, elem ast.Expr) {
 	out.WriteString(fmt.Sprintf("{ %s _el = ", g.cType(elemType)))
+	// An interface element is built from a struct here; the array owns the box
+	// and its cleanup releases it. A value that is already an interface is
+	// borrowed from whoever holds it, so the array takes its own reference.
+	if ast.IsInterfaceType(elemType) {
+		alreadyIface := ast.IsInterfaceType(g.typeOfExpr(elem))
+		if alreadyIface {
+			g.genExpr(out, elem)
+			out.WriteString("; dex_retain(_el._obj); ")
+		} else {
+			g.genInterfaceValue(out, elem, elemType)
+			out.WriteString("; ")
+		}
+		out.WriteString(fmt.Sprintf("dex_array_struct_push(%s, &_el); }", arrVar))
+		return
+	}
 	g.genExpr(out, elem)
 	out.WriteString("; ")
 	g.emitRetainPushedStructFields(out, "_el", elemType, elem)

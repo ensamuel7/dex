@@ -377,6 +377,23 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		return errs[0]
 	}
 
+	// A generic declared in a user module would be dropped here: its template
+	// lives in this file's parser, and instantiating one needs that parser —
+	// the main program's has no way to reach it. A generic struct is worse
+	// still, because its instantiation happens while a file is parsed and this
+	// module is read after the main program already was. Said plainly rather
+	// than merged into nothing, which reported the call as an undefined
+	// function and named no reason.
+	if len(modProgram.GenericFuncs) > 0 || len(modProgram.GenericStructs) > 0 {
+		name := ""
+		if len(modProgram.GenericFuncs) > 0 {
+			name = modProgram.GenericFuncs[0].Name
+		} else {
+			name = modProgram.GenericStructs[0].Name
+		}
+		return fmt.Errorf("%s: '%s' is generic, and a user module cannot declare a generic yet — move it into the main program", filePath, name)
+	}
+
 	FlattenStructMethods(modProgram)
 
 	delete(processing, absPath)

@@ -77,6 +77,15 @@ const TypeEnumBase Type = 10000
 // Interface type system: dynamic IDs starting at 11000
 const TypeInterfaceBase Type = 11000
 
+// Type parameter system: dynamic IDs starting at 12000.
+//
+// A type parameter is a real registered type while a generic declaration is
+// being parsed, which is what lets `fn max<T>(a: T, b: T): T` parse with the
+// ordinary type machinery. It never survives into a checked program: every use
+// is monomorphised to a concrete instantiation first, so reaching codegen with
+// one is a compiler bug rather than a language feature.
+const TypeParamBase Type = 12000
+
 type StructField struct {
 	Name        string
 	Type        Type
@@ -219,6 +228,13 @@ func NeedsRelease(t Type) bool {
 	if IsHeapType(t) {
 		return true
 	}
+	// An interface value owns the box holding the struct it was built from. It
+	// is not IsHeapType: the value is two pointers and a table passed by value,
+	// so the release goes through its _obj field rather than through the value
+	// itself, and every site that emits one special-cases it.
+	if IsInterfaceType(t) {
+		return true
+	}
 	if IsStructType(t) {
 		def := GetStructDef(t)
 		if def != nil {
@@ -279,6 +295,20 @@ func ArrayTypeOf(elem Type) Type {
 		if IsEnumType(elem) {
 			return StructArrayTypeOf(elem)
 		}
+		// An interface value is a multi-word value like a struct, so it rides
+		// the same by-value array: the element is memcpy'd and the array's
+		// cleanup releases the box each one owns.
+		if IsInterfaceType(elem) {
+			return StructArrayTypeOf(elem)
+		}
+		// `T[]` in a generic signature. The entry exists only so inference can
+		// read the element back out and match it against the argument's; the
+		// instantiation re-parses with T bound, which produces a real array
+		// type. One reaching codegen would be a hole in instantiation, which
+		// is what Checker.rejectTypeParams is for.
+		if IsTypeParamType(elem) {
+			return StructArrayTypeOf(elem)
+		}
 		return TypeVoid
 	}
 }
@@ -325,6 +355,42 @@ type Program struct {
 	Interfaces   []InterfaceDef
 	UserModules  []string          // module names (last path segment) of resolved user imports
 	StructModule map[string]string // structName -> moduleName (for cross-module structs)
+	// Generic declarations are kept as the tokens they were written as rather
+	// than as a parsed AST, because instantiating one means re-parsing it with
+	// its type parameters bound to concrete types. Substituting over a parsed
+	// body would mean a deep copy and a type remap of all forty-nine node
+	// kinds; re-parsing reuses the type resolution the parser already does.
+	GenericFuncs   []GenericDecl
+	GenericStructs []GenericDecl
+}
+
+// GenericDecl is a generic declaration held as tokens, with the names of its
+// type parameters and the identifier it declares.
+type GenericDecl struct {
+	Pos        Pos
+	Name       string
+	TypeParams []string
+	Tokens     []TokenLike
+	// Module is the user module the declaration was read from, so an
+	// instantiation registers where the template did.
+	Module string
+	// Params and ReturnType are the signature with its type parameters left
+	// standing, parsed once at capture. Inference needs it: a call site knows
+	// the argument types and has to learn which parameter each one binds.
+	// The body is not parsed here — only this signature is.
+	Params     []Param
+	ReturnType Type
+}
+
+// TokenLike is the token shape a GenericDecl carries. The ast package cannot
+// import the token package without a cycle, so the fields the re-parse needs
+// are mirrored here and converted back by the parser.
+type TokenLike struct {
+	Kind  int
+	Value string
+	Line  int
+	Col   int
+	File  string
 }
 
 type Function struct {
@@ -679,6 +745,10 @@ type CallExpr struct {
 	IsMethodCall  bool     // set by checker: instance.method() call
 	IsConstructor bool     // set by checker: StructName(args) constructor call
 	StructType    Type     // set by checker: the struct type for method/constructor calls
+	// IsInterfaceCall marks a call dispatched through an interface value's
+	// vtable rather than to a known struct's flattened method. StructType holds
+	// the interface type in that case.
+	IsInterfaceCall bool
 	// Recv is the receiver of a method call whose receiver is an arbitrary
 	// expression rather than a plain variable name, as in parsed[0].asInt().
 	// When it is nil the receiver, if any, is named by Module.

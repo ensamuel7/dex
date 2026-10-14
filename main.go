@@ -439,8 +439,12 @@ func frontend(filename string) (*ast.Program, error) {
 		return nil, err
 	}
 
-	// Type check
+	// Type check. The parser is handed over as the instantiator for generics:
+	// inferring a generic call's type arguments needs the argument types, which
+	// only the checker has, while re-parsing the template with them bound is
+	// something only the parser can do.
 	ch := checker.New()
+	ch.SetGenerics(program.GenericFuncs, p)
 	checkErrs := ch.Check(program)
 	printWarnings(ch.Warnings())
 	if len(checkErrs) > 0 {

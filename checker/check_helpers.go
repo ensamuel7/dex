@@ -44,7 +44,7 @@ func isValidFieldType(t ast.Type) bool {
 	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar, ast.TypeMutex, ast.TypeJsonValue:
 		return true
 	default:
-		return ast.IsStructType(t) || ast.IsEnumType(t) || ast.IsMapType(t) || ast.IsArrayType(t)
+		return ast.IsStructType(t) || ast.IsEnumType(t) || ast.IsMapType(t) || ast.IsArrayType(t) || ast.IsInterfaceType(t)
 	}
 }
 

@@ -295,6 +295,11 @@ func (g *Generator) arraySortDescFunc(t ast.Type) string {
 
 // structArrayCleanupFunc returns the cleanup function name for a struct type, or "NULL" if no cleanup needed.
 func (g *Generator) structArrayCleanupFunc(elemType ast.Type) string {
+	// An interface element always needs one: it owns a box whatever the
+	// concrete struct behind it turns out to be.
+	if ast.IsInterfaceType(elemType) {
+		return interfaceElemCleanupName(ast.InterfaceName(elemType))
+	}
 	def := ast.GetStructDef(elemType)
 	if def == nil {
 		return "NULL"
@@ -486,6 +491,17 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		// Constructor call returns the struct type
 		if e.IsConstructor {
 			return e.StructType
+		}
+		// Interface call: the return type comes from the interface's signature,
+		// which is the only thing known about the callee here.
+		if e.IsInterfaceCall {
+			if def := ast.GetInterfaceDef(e.StructType); def != nil {
+				for _, m := range def.Methods {
+					if m.Name == e.Name {
+						return m.ReturnType
+					}
+				}
+			}
 		}
 		// Method call: look up flattened function return type
 		if e.IsMethodCall {

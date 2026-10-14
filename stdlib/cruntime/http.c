@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
+#include <time.h>
 #include <curl/curl.h>
 
 // A route handler is a function value: code plus whatever state it carries, so a
@@ -56,6 +57,32 @@ static int dex_http_thread_count = 0;
 
 void dex_http_set_threads(int n) {
     dex_http_thread_count = n;
+}
+
+/* Limits on what one connection may cost us. Without them a listener on the
+ * open internet is trivially taken down: a client that opens a socket and
+ * sends one byte is never reaped, and one that announces a two-gigabyte body
+ * is buffered toward it.
+ *
+ * The header cap is separate from the body cap because they bound different
+ * things — a request line and headers that never terminate, versus a body
+ * whose length was declared up front and is checked before a byte is read. */
+#define DEX_HTTP_MAX_HEADER_BYTES 32768
+#define DEX_HTTP_DEFAULT_MAX_BODY (8 * 1024 * 1024)
+#define DEX_HTTP_DEFAULT_IDLE_SECS 30
+#define DEX_HTTP_DEFAULT_MAX_CONNS 8192
+
+static int dex_http_max_body  = DEX_HTTP_DEFAULT_MAX_BODY;
+static int dex_http_idle_secs = DEX_HTTP_DEFAULT_IDLE_SECS;
+static int dex_http_max_conns = DEX_HTTP_DEFAULT_MAX_CONNS;
+static int dex_http_live_conns = 0;
+
+/* 0 for any argument keeps that default: a program raising the body limit for
+ * uploads should not have to restate the idle timeout to do it. */
+void dex_http_set_limits(int max_body_bytes, int idle_timeout_secs, int max_conns) {
+    if (max_body_bytes > 0)    dex_http_max_body = max_body_bytes;
+    if (idle_timeout_secs > 0) dex_http_idle_secs = idle_timeout_secs;
+    if (max_conns > 0)         dex_http_max_conns = max_conns;
 }
 
 /* Answers when no route matched. NULL leaves the built-in 404 in place, which
@@ -199,6 +226,9 @@ typedef struct DexHttpConn {
     int           write_len;
     int           write_pos;       /* how much has been flushed */
 
+    /* When this connection last made progress, for the idle sweep. */
+    time_t        last_active;
+
     /* Linked list for completed queue */
     struct DexHttpConn* next;
 } DexHttpConn;
@@ -229,9 +259,11 @@ static DexHttpConn* dex_http_conn_new(int fd) {
     conn->headers_end = -1;
     conn->header_start = -1;
     conn->keep_alive = 1;
+    conn->last_active = time(NULL);
     if (fd >= 0 && fd < DEX_HTTP_MAX_FD) {
         dex_http_conn_table[fd] = conn;
     }
+    dex_http_live_conns++;
     return conn;
 }
 
@@ -240,6 +272,7 @@ static void dex_http_conn_free(DexHttpConn* conn) {
     if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD) {
         dex_http_conn_table[conn->fd] = NULL;
     }
+    dex_http_live_conns--;
     free(conn->read_buf);
     free(conn->write_buf);
     free(conn);
@@ -253,6 +286,7 @@ static void dex_http_conn_reset(DexHttpConn* conn) {
     conn->headers_end = -1;
     conn->keep_alive = 1;
     conn->header_start = -1;
+    conn->last_active = time(NULL);
     conn->method[0] = '\0';
     conn->path[0] = '\0';
     conn->query[0] = '\0';
@@ -260,6 +294,67 @@ static void dex_http_conn_reset(DexHttpConn* conn) {
     conn->write_buf = NULL;
     conn->write_len = 0;
     conn->write_pos = 0;
+}
+
+/* Answer a malformed or oversized request and drop the connection.
+ *
+ * One best-effort write: the socket is non-blocking, so a short write is
+ * possible, but a client that sent us something we are refusing does not get
+ * a retry loop. Closing without an answer at all would look like a network
+ * fault rather than a rejection. */
+static void dex_http_fail_and_close(DexHttpConn* conn, const char* status, const char* body) {
+    dex_send_response(conn->fd, status, body, "application/json", 0);
+    dex_ev_del(dex_http_loop, conn->fd);
+    close(conn->fd);
+    dex_http_conn_free(conn);
+}
+
+/* Find one header's value inside the header block. Scoped to header lines
+ * rather than searched for across the whole request, which is what strstr over
+ * read_buf did: any header *value* containing "Content-Length:" was picked up
+ * as the request's own, and so was a path containing "HTTP/1.1". Behind a
+ * proxy that difference is request smuggling.
+ *
+ * `out_dup` is set when the name appears more than once, which is a malformed
+ * request rather than something to pick a winner from. */
+static const char* dex_http_find_header(const char* block, int block_len,
+                                        const char* name, int* out_len, int* out_dup) {
+    int name_len = (int)strlen(name);
+    const char* found = NULL;
+    int found_len = 0;
+    if (out_dup) *out_dup = 0;
+
+    /* Past the request line: a header can only start after the first CRLF. */
+    const char* p = block;
+    const char* limit = block + block_len;
+    const char* eol = (const char*)memchr(p, '\n', (size_t)block_len);
+    if (!eol) return NULL;
+    p = eol + 1;
+
+    while (p < limit) {
+        const char* line_end = (const char*)memchr(p, '\n', (size_t)(limit - p));
+        const char* end = line_end ? line_end : limit;
+        int line_len = (int)(end - p);
+        if (line_len > 0 && p[line_len - 1] == '\r') line_len--;
+        if (line_len <= 0) break;
+
+        if (line_len > name_len && p[name_len] == ':' &&
+            strncasecmp(p, name, (size_t)name_len) == 0) {
+            const char* vp = p + name_len + 1;
+            int vlen = line_len - name_len - 1;
+            while (vlen > 0 && (*vp == ' ' || *vp == '\t')) { vp++; vlen--; }
+            while (vlen > 0 && (vp[vlen - 1] == ' ' || vp[vlen - 1] == '\t')) vlen--;
+            if (found && out_dup) *out_dup = 1;
+            found = vp;
+            found_len = vlen;
+        }
+
+        if (!line_end) break;
+        p = line_end + 1;
+    }
+
+    if (found && out_len) *out_len = found_len;
+    return found;
 }
 
 /* Try to parse headers from the read buffer. Returns 1 if complete. */
@@ -298,20 +393,64 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
         conn->header_start = eol ? (int)(eol - conn->read_buf) + 2 : -1;
     }
 
-    /* Check keep-alive */
-    conn->keep_alive = (strstr(conn->read_buf, "HTTP/1.1") != NULL);
-    if (strstr(conn->read_buf, "Connection: close")) conn->keep_alive = 0;
+    /* Keep-alive comes from the request line's version, read where the version
+     * actually is, then from a Connection header scoped to the headers. */
+    {
+        const char* rl_end = (const char*)memchr(conn->read_buf, '\n', (size_t)conn->headers_end);
+        int rl_len = rl_end ? (int)(rl_end - conn->read_buf) : conn->headers_end;
+        conn->keep_alive = 0;
+        for (int i = 0; i + 8 <= rl_len; i++) {
+            if (memcmp(conn->read_buf + i, "HTTP/1.1", 8) == 0) { conn->keep_alive = 1; break; }
+        }
+    }
+    {
+        int vlen = 0;
+        const char* v = dex_http_find_header(conn->read_buf, conn->headers_end,
+                                             "Connection", &vlen, NULL);
+        if (v && vlen == 5 && strncasecmp(v, "close", 5) == 0) conn->keep_alive = 0;
+    }
 
-    /* Parse Content-Length */
-    const char* cl = strstr(conn->read_buf, "Content-Length:");
-    if (!cl) cl = strstr(conn->read_buf, "content-length:");
-    if (cl) {
-        conn->content_length = atoi(cl + 15);
-    } else {
-        conn->content_length = 0;
+    /* A request that frames its body with chunked encoding is refused rather
+     * than guessed at. Treating it as Content-Length: 0 left the chunk data in
+     * the buffer to be read as the next pipelined request, which is the other
+     * half of request smuggling. */
+    {
+        int vlen = 0;
+        if (dex_http_find_header(conn->read_buf, conn->headers_end,
+                                 "Transfer-Encoding", &vlen, NULL)) {
+            conn->read_buf[conn->headers_end] = save;
+            return -1;
+        }
+    }
+
+    {
+        int vlen = 0, dup = 0;
+        const char* v = dex_http_find_header(conn->read_buf, conn->headers_end,
+                                             "Content-Length", &vlen, &dup);
+        if (!v) {
+            conn->content_length = 0;
+        } else if (dup || vlen <= 0 || vlen > 9) {
+            /* Two of them disagree, or it is too long to be a length we accept.
+             * Nine digits caps it below INT_MAX with no overflow to reason
+             * about; the body limit below is what actually decides. */
+            conn->read_buf[conn->headers_end] = save;
+            return -1;
+        } else {
+            int n = 0;
+            for (int i = 0; i < vlen; i++) {
+                if (v[i] < '0' || v[i] > '9') {
+                    conn->read_buf[conn->headers_end] = save;
+                    return -1;
+                }
+                n = n * 10 + (v[i] - '0');
+            }
+            conn->content_length = n;
+        }
     }
 
     conn->read_buf[conn->headers_end] = save;
+
+    if (conn->content_length > dex_http_max_body) return -2;
     return 1;
 }
 
@@ -660,8 +799,31 @@ static void dex_listen_on(const char* host, int port) {
 
     DexEvent events[256];
 
+    /* A one-second wait rather than an indefinite one, so the idle sweep below
+     * runs even on a listener nobody is talking to. That is the whole defence
+     * against a client that opens a socket, sends a byte, and waits: without
+     * it nothing ever reaps the connection. */
+    time_t last_sweep = time(NULL);
+
     for (;;) {
-        int n = dex_ev_wait(dex_http_loop, events, 256, -1);
+        int n = dex_ev_wait(dex_http_loop, events, 256, 1000);
+
+        time_t now = time(NULL);
+        if (now - last_sweep >= 1) {
+            last_sweep = now;
+            for (int fd = 0; fd < DEX_HTTP_MAX_FD; fd++) {
+                DexHttpConn* c = dex_http_conn_table[fd];
+                if (!c) continue;
+                /* A dispatched connection is owned by a worker thread and a
+                 * writing one is mid-response; neither is idle, and freeing
+                 * either from here would pull it out from under its owner. */
+                if (c->state != HTTP_READING_HEADERS && c->state != HTTP_READING_BODY) continue;
+                if (now - c->last_active < dex_http_idle_secs) continue;
+                dex_ev_del(dex_http_loop, c->fd);
+                close(c->fd);
+                dex_http_conn_free(c);
+            }
+        }
 
         for (int i = 0; i < n; i++) {
             DexEvent* ev = &events[i];
@@ -673,6 +835,13 @@ static void dex_listen_on(const char* host, int port) {
                     socklen_t client_len = sizeof(client_addr);
                     int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
                     if (client_fd < 0) break;
+                    /* Refusing beyond the cap keeps the listener answering:
+                     * accepting without limit means a flood of half-open
+                     * sockets exhausts fds and memory for everyone. */
+                    if (dex_http_live_conns >= dex_http_max_conns) {
+                        close(client_fd);
+                        continue;
+                    }
                     dex_set_nonblocking(client_fd);
                     DexHttpConn* conn = dex_http_conn_new(client_fd);
                     if (!conn) { close(client_fd); continue; }
@@ -713,12 +882,32 @@ static void dex_listen_on(const char* host, int port) {
 
             /* Readable: accumulate request data */
             if ((ev->events & DEX_EV_READ) && (conn->state == HTTP_READING_HEADERS || conn->state == HTTP_READING_BODY)) {
-                /* Grow buffer if needed */
+                /* What this connection is still allowed to accumulate. While
+                 * the headers are being read that is the header cap; once
+                 * Content-Length is known it is the headers plus that body.
+                 * Both are far below INT_MAX, so the doubling below cannot
+                 * overflow the way an unbounded read_cap * 2 could. */
+                int ceiling = DEX_HTTP_MAX_HEADER_BYTES;
+                if (conn->state == HTTP_READING_BODY) {
+                    ceiling = conn->headers_end + conn->content_length;
+                }
+
+                if (conn->read_len >= ceiling) {
+                    if (conn->state == HTTP_READING_HEADERS) {
+                        dex_http_fail_and_close(conn, "431 Request Header Fields Too Large",
+                                                "{\"error\": \"Request Header Fields Too Large\"}");
+                    } else {
+                        dex_http_fail_and_close(conn, "400 Bad Request",
+                                                "{\"error\": \"Bad Request\"}");
+                    }
+                    continue;
+                }
+
                 if (conn->read_len >= conn->read_cap - 1) {
                     int new_cap = conn->read_cap * 2;
-                    char* new_buf = (char*)realloc(conn->read_buf, new_cap);
+                    if (new_cap > ceiling + 1) new_cap = ceiling + 1;
+                    char* new_buf = (char*)realloc(conn->read_buf, (size_t)new_cap);
                     if (!new_buf) {
-                        /* Allocation failed, close connection */
                         dex_ev_del(dex_http_loop, conn->fd);
                         close(conn->fd);
                         dex_http_conn_free(conn);
@@ -727,8 +916,14 @@ static void dex_listen_on(const char* host, int port) {
                     conn->read_buf = new_buf;
                     conn->read_cap = new_cap;
                 }
-                int r = (int)read(conn->fd, conn->read_buf + conn->read_len,
-                                  conn->read_cap - conn->read_len - 1);
+
+                int want = conn->read_cap - conn->read_len - 1;
+                if (want <= 0) {
+                    dex_http_fail_and_close(conn, "400 Bad Request",
+                                            "{\"error\": \"Bad Request\"}");
+                    continue;
+                }
+                int r = (int)read(conn->fd, conn->read_buf + conn->read_len, (size_t)want);
                 if (r <= 0) {
                     /* Connection closed or error */
                     dex_ev_del(dex_http_loop, conn->fd);
@@ -738,9 +933,21 @@ static void dex_listen_on(const char* host, int port) {
                 }
                 conn->read_len += r;
                 conn->read_buf[conn->read_len] = '\0';
+                conn->last_active = time(NULL);
 
                 if (conn->state == HTTP_READING_HEADERS) {
-                    if (dex_http_try_parse_headers(conn)) {
+                    int parsed = dex_http_try_parse_headers(conn);
+                    if (parsed == -1) {
+                        dex_http_fail_and_close(conn, "400 Bad Request",
+                                                "{\"error\": \"Bad Request\"}");
+                        continue;
+                    }
+                    if (parsed == -2) {
+                        dex_http_fail_and_close(conn, "413 Payload Too Large",
+                                                "{\"error\": \"Payload Too Large\"}");
+                        continue;
+                    }
+                    if (parsed == 1) {
                         conn->state = HTTP_READING_BODY;
                     }
                 }

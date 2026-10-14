@@ -34,6 +34,13 @@ func init() {
 				CName:      "dex_http_set_threads",
 				Doc:        "How many threads run handlers. Call before listen. 0, the default, sizes the pool from the CPU count with a floor of four — the right hedge when a handler might block on a database or an outbound request. Set it lower when handlers are CPU-bound and serialised behind a lock on a small box, where extra threads only add context switches to work that cannot overlap.",
 			},
+			"limits": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeInt, ast.TypeInt},
+				ParamNames: []string{"maxBodyBytes", "idleTimeoutSecs", "maxConnections"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_http_set_limits",
+				Doc:        "Bound what one client can cost the server. Call before listen. Defaults are 8 MB, 30 seconds and 8192 connections; a 0 for any argument keeps that default, so raising the body limit for uploads does not mean restating the others. The header block is capped at 32 KB and is not adjustable. A body larger than the limit is answered 413, headers that never terminate 431, and a connection that stops making progress for the idle timeout is closed.",
+			},
 			"notFound": {
 				Params:     nil, // special codegen: function value, like route
 				ParamNames: []string{"handler"},

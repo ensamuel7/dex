@@ -74,6 +74,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <pthread.h>
 
 // The handle is kept as void* rather than SSL* throughout, so this file needs
@@ -90,14 +91,11 @@ static SSL_CTX* dex_smtp_get_ctx(void) {
         OpenSSL_add_all_algorithms();
         dex_smtp_ssl_ctx = SSL_CTX_new(TLS_client_method());
         if (dex_smtp_ssl_ctx) {
-            // Loaded so the chain is actually built and SSL_get_verify_result
-            // has something to say. The handshake is not failed on a bad
-            // certificate — that matches the ws module, and mail hosts on
-            // shared hosting very often present a certificate for the hosting
-            // provider rather than for the name you dialled — but it is
-            // reported, because the alternative is sending a password into a
-            // connection nobody ever looked at.
-            SSL_CTX_set_default_verify_paths(dex_smtp_ssl_ctx);
+            SSL_CTX_set_verify(dex_smtp_ssl_ctx, SSL_VERIFY_PEER, NULL);
+            SSL_CTX_set_min_proto_version(dex_smtp_ssl_ctx, TLS1_2_VERSION);
+            if (!SSL_CTX_set_default_verify_paths(dex_smtp_ssl_ctx)) {
+                fprintf(stderr, "[smtp] no system trust store found: TLS cannot verify a peer\n");
+            }
         }
     }
     SSL_CTX* ctx = dex_smtp_ssl_ctx;
@@ -310,17 +308,45 @@ static int dex_smtp_start_tls(DexSmtpSock* s, const char* host) {
         fprintf(stderr, "[smtp] could not create a TLS connection\n");
         return -1;
     }
+    // A mail host on shared hosting often presents a certificate for the
+    // hosting provider rather than for the name you dialled, which is why this
+    // has an escape hatch at all. It is opt-in and per-process: the password
+    // goes over this connection, so an unverified peer is a decision someone
+    // has to make rather than the default.
+    const char* insecure = getenv("DEX_SMTP_INSECURE_TLS");
+    int skip_verify = insecure && *insecure && strcmp(insecure, "0") != 0;
+    if (skip_verify) {
+        SSL_set_verify(ssl, SSL_VERIFY_NONE, NULL);
+    }
+
     SSL_set_fd(ssl, s->fd);
     SSL_set_tlsext_host_name(ssl, host);   // SNI: shared hosting needs it
+    if (!skip_verify) {
+        X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
+        X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        if (!X509_VERIFY_PARAM_set1_host(param, host, 0)) {
+            fprintf(stderr, "[smtp] could not bind %s for certificate verification\n", host);
+            SSL_free(ssl);
+            return -1;
+        }
+    }
+
     if (SSL_connect(ssl) <= 0) {
-        fprintf(stderr, "[smtp] TLS handshake with %s failed\n", host);
+        long verdict = SSL_get_verify_result(ssl);
+        if (verdict != X509_V_OK) {
+            fprintf(stderr,
+                    "[smtp] refusing to send credentials to %s: %s\n"
+                    "       set DEX_SMTP_INSECURE_TLS=1 to connect anyway\n",
+                    host, X509_verify_cert_error_string(verdict));
+        } else {
+            fprintf(stderr, "[smtp] TLS handshake with %s failed\n", host);
+        }
         SSL_free(ssl);
         return -1;
     }
-    long verdict = SSL_get_verify_result(ssl);
-    if (verdict != X509_V_OK) {
-        fprintf(stderr, "[smtp] warning: %s presented a certificate that does not verify (%s)\n",
-                host, X509_verify_cert_error_string(verdict));
+    if (skip_verify) {
+        fprintf(stderr, "[smtp] warning: certificate not verified for %s "
+                        "(DEX_SMTP_INSECURE_TLS is set)\n", host);
     }
     s->ssl = ssl;
     return 0;

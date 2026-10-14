@@ -10,6 +10,10 @@
 #include <netdb.h>
 #include <pthread.h>
 #include <signal.h>
+#include <fcntl.h>
+#if defined(__APPLE__)
+#include <sys/random.h>
+#endif
 
 // --- SSL support (optional, requires OpenSSL) ---
 //
@@ -32,6 +36,7 @@
 #ifdef DEX_SSL_AVAILABLE
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/x509v3.h>
 #else
 typedef void SSL;
 typedef void SSL_CTX;
@@ -40,16 +45,58 @@ typedef void SSL_CTX;
 #ifdef DEX_SSL_AVAILABLE
 static SSL_CTX* dex_ssl_ctx = NULL;
 
+// A client SSL_CTX defaults to SSL_VERIFY_NONE, so a wss:// handshake without
+// this succeeds against any certificate at all.
 static SSL_CTX* dex_ssl_get_ctx(void) {
     if (!dex_ssl_ctx) {
         SSL_library_init();
         SSL_load_error_strings();
         OpenSSL_add_all_algorithms();
         dex_ssl_ctx = SSL_CTX_new(TLS_client_method());
+        if (!dex_ssl_ctx) return NULL;
+        SSL_CTX_set_verify(dex_ssl_ctx, SSL_VERIFY_PEER, NULL);
+        SSL_CTX_set_min_proto_version(dex_ssl_ctx, TLS1_2_VERSION);
+        if (!SSL_CTX_set_default_verify_paths(dex_ssl_ctx)) {
+            fprintf(stderr, "[ws] no system trust store found: wss:// cannot verify a peer\n");
+        }
     }
     return dex_ssl_ctx;
 }
+
+// SNI names the host for the server's benefit; it is not a check. The
+// hostname has to be bound to the verification parameters separately or a
+// valid certificate for any other domain passes.
+static int dex_ws_tls_set_host(SSL* ssl, const char* host) {
+    SSL_set_tlsext_host_name(ssl, host);
+    X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
+    X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    return X509_VERIFY_PARAM_set1_host(param, host, 0) == 1;
+}
 #endif
+
+// RFC 6455 5.3 requires a client's masking key to be unpredictable: a key an
+// attacker can guess lets them choose the bytes on the wire, which is how a
+// WebSocket frame gets a proxy to cache a response for someone else's URL.
+// rand() was both unseeded and shared, so every process masked with the same
+// sequence. The handshake key wants the same treatment for a simpler reason —
+// two connections must not present the same one.
+static int dex_ws_random_bytes(unsigned char* out, size_t want) {
+#if defined(__APPLE__) || defined(__GLIBC__) || defined(__OpenBSD__) || defined(__FreeBSD__)
+    if (getentropy(out, want) == 0) return 1;
+#endif
+    int rfd = open("/dev/urandom", O_RDONLY);
+    if (rfd < 0) return 0;
+    size_t got = 0;
+    while (got < want) {
+        ssize_t n = read(rfd, out + got, want - got);
+        if (n > 0) { got += (size_t)n; continue; }
+        if (n < 0 && errno == EINTR) continue;
+        close(rfd);
+        return 0;
+    }
+    close(rfd);
+    return 1;
+}
 
 // --- SSL-aware I/O helpers ---
 
@@ -129,7 +176,7 @@ static int dex_ws_frame_send(int fd, SSL* ssl, const char* payload, size_t len, 
     // Client frames must be masked (RFC 6455 section 5.3)
     unsigned char mask_key[4] = {0};
     if (!is_server) {
-        for (int i = 0; i < 4; i++) mask_key[i] = (unsigned char)(rand() & 0xFF);
+        if (!dex_ws_random_bytes(mask_key, 4)) return -1;
         memcpy(header + hlen, mask_key, 4);
         hlen += 4;
     }
@@ -1060,22 +1107,30 @@ Dex_Conn dex_ws_connect(const char* url) {
         strncpy(host, p, sizeof(host) - 1);
     }
 
-    // Resolve host
-    struct hostent* he = gethostbyname(host);
-    if (!he) return conn;
+    // getaddrinfo rather than gethostbyname: the latter returns a pointer into
+    // static storage, so two threads opening connections at once overwrite each
+    // other's answer. It is also IPv4-only.
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%d", port);
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return conn;
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
 
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    memcpy(&addr.sin_addr, he->h_addr_list[0], (size_t)he->h_length);
+    struct addrinfo* res = NULL;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return conn;
 
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    int fd = -1;
+    for (struct addrinfo* ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;
+        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
         close(fd);
-        return conn;
+        fd = -1;
     }
+    freeaddrinfo(res);
+    if (fd < 0) return conn;
 
     // SSL handshake if wss://
     SSL* ssl_ptr = NULL;
@@ -1086,8 +1141,20 @@ Dex_Conn dex_ws_connect(const char* url) {
         ssl_ptr = SSL_new(ctx);
         if (!ssl_ptr) { close(fd); return conn; }
         SSL_set_fd(ssl_ptr, fd);
-        SSL_set_tlsext_host_name(ssl_ptr, host);
+        if (!dex_ws_tls_set_host(ssl_ptr, host)) {
+            fprintf(stderr, "[ws] could not bind %s for certificate verification\n", host);
+            SSL_free(ssl_ptr);
+            close(fd);
+            return conn;
+        }
         if (SSL_connect(ssl_ptr) <= 0) {
+            long verdict = SSL_get_verify_result(ssl_ptr);
+            if (verdict != X509_V_OK) {
+                fprintf(stderr, "[ws] refusing wss://%s: %s\n",
+                        host, X509_verify_cert_error_string(verdict));
+            } else {
+                fprintf(stderr, "[ws] TLS handshake with %s failed\n", host);
+            }
             SSL_free(ssl_ptr);
             close(fd);
             return conn;
@@ -1103,7 +1170,14 @@ Dex_Conn dex_ws_connect(const char* url) {
 
     // Generate a random key (16 bytes base64-encoded)
     unsigned char raw_key[16];
-    for (int i = 0; i < 16; i++) raw_key[i] = (unsigned char)(rand() & 0xFF);
+    if (!dex_ws_random_bytes(raw_key, sizeof(raw_key))) {
+        fprintf(stderr, "[ws] no entropy source: cannot open a connection\n");
+#ifdef DEX_SSL_AVAILABLE
+        if (ssl_ptr) SSL_free(ssl_ptr);
+#endif
+        close(fd);
+        return conn;
+    }
     char ws_key[32];
     dex_base64_encode(raw_key, 16, ws_key);
 

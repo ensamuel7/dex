@@ -133,6 +133,13 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 		return g.jsonValueOwned(expr)
 	}
 	switch expr.(type) {
+	case *ast.EnumCtorExpr:
+		return true // a variant is built in a fresh box
+	case *ast.EnumAccessExpr:
+		// Naming a payload enum's fieldless variant allocates a box too: it is
+		// a constructor call, not a constant, even though it reads like one.
+		// A plain enum is still an integer and still allocates nothing.
+		return ast.IsPayloadEnumType(g.typeOfExpr(expr))
 	case *ast.Ident:
 		// Naming a top-level function where a value is expected mints a fresh
 		// closure over no environment, so it is an allocation despite reading
@@ -428,6 +435,34 @@ func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
 }
 
 // Such a literal needs a retain even in a function with nothing to clean up.
+// structHasReleasableField reports whether a struct carries any reference
+// counted field, directly or through a nested struct.
+//
+// It asks in advance what emitRetainBorrowedStructFields answers by emitting
+// nothing, so that returning a struct of plain data is not rewritten into a
+// temporary for the sake of a retain that would not be written.
+func (g *Generator) structHasReleasableField(structType ast.Type) bool {
+	def := ast.GetStructDef(structType)
+	if def == nil {
+		return false
+	}
+	for _, f := range def.Fields {
+		if !ast.NeedsRelease(f.Type) {
+			continue
+		}
+		// A nested struct needs release only if something inside it does, so
+		// this recurses the way the emitter does rather than stopping here.
+		if ast.IsStructType(f.Type) {
+			if g.structHasReleasableField(f.Type) {
+				return true
+			}
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit ast.Expr) bool {
 	def := ast.GetStructDef(structType)
 	if def == nil {
@@ -501,6 +536,14 @@ func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit ast.Expr)
 // target is the C lvalue holding the struct at the push site.
 func (g *Generator) emitRetainPushedStructFields(out *strings.Builder, target string, elemType ast.Type, elem ast.Expr) {
 	if !ast.NeedsRelease(elemType) {
+		return
+	}
+	// A payload enum element is one pointer, not a struct with fields: the
+	// array takes a reference to the box unless the element already minted one.
+	if ast.IsPayloadEnumType(elemType) {
+		if g.borrowsHeapValue(elem) {
+			out.WriteString(fmt.Sprintf("dex_retain(%s); ", target))
+		}
 		return
 	}
 	var retains strings.Builder

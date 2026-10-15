@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 )
@@ -603,28 +604,60 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if err != nil {
 			return err
 		}
-		// Tag must be a primitive type suitable for comparison
-		if !isPrimitiveType(tagType) {
+		// A payload enum is the one non-primitive a switch accepts, because
+		// destructuring it is the only way to read what a variant carries.
+		isPayloadEnum := ast.IsPayloadEnumType(tagType)
+		if !isPrimitiveType(tagType) && !isPayloadEnum {
 			return c.errAt(s.Pos, "switch tag must be a primitive type (int, string, char, long, double, bool), got %s", typeName(tagType))
 		}
+		covered := map[string]bool{}
 		// Check each case
 		for _, sc := range s.Cases {
+			c.pushScope()
 			for _, val := range sc.Values {
+				if pat, ok := val.(*ast.EnumPatternExpr); ok {
+					if err := c.checkEnumPattern(pat, tagType, sc.Pos, covered); err != nil {
+						c.popScope()
+						return err
+					}
+					continue
+				}
 				valType, err := c.checkExpr(val)
 				if err != nil {
+					c.popScope()
 					return err
 				}
+				if acc, ok := val.(*ast.EnumAccessExpr); ok && isPayloadEnum {
+					covered[acc.Variant] = true
+				}
 				if !canAssign(tagType, valType, val) {
+					c.popScope()
 					return c.errAt(sc.Pos, "case value type %s does not match switch tag type %s", typeName(valType), typeName(tagType))
 				}
 			}
-			c.pushScope()
 			for _, stmt := range sc.Body {
 				if err := c.checkStmt(stmt, returnType); err != nil {
+					c.popScope()
 					return err
 				}
 			}
 			c.popScope()
+		}
+		// Exhaustiveness. A switch over a payload enum that names every variant
+		// needs no default, and one that misses a variant is told which: the
+		// point of a closed set of variants is that the compiler knows it.
+		if isPayloadEnum && !s.HasDefault {
+			def := ast.GetEnumDef(tagType)
+			var missing []string
+			for _, v := range def.Variants {
+				if !covered[v] {
+					missing = append(missing, v)
+				}
+			}
+			if len(missing) > 0 {
+				return c.errAt(s.Pos, "switch over '%s' does not handle %s; add the case(s) or a default",
+					ast.DisplayStructName(def.Name), strings.Join(missing, ", "))
+			}
 		}
 		// Check default
 		if s.Default != nil {
@@ -675,4 +708,39 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 	default:
 		return fmt.Errorf("unknown statement type")
 	}
+}
+
+// checkEnumPattern validates `case Expr.Add(l, r):` and declares the bindings
+// for the arm's body. A binding borrows: the value it names is owned by the
+// enum being switched on, which outlives the arm, so nothing is retained here
+// and nothing is released at the end of it.
+func (c *Checker) checkEnumPattern(pat *ast.EnumPatternExpr, tagType ast.Type, pos ast.Pos, covered map[string]bool) error {
+	if !ast.IsPayloadEnumType(tagType) {
+		return c.errAt(pos, "cannot destructure %s: only an enum with payload variants can be matched this way", typeName(tagType))
+	}
+	def := ast.GetEnumDef(tagType)
+	if pat.EnumType != tagType {
+		return c.errAt(pos, "case matches '%s' but the switch is over '%s'",
+			ast.DisplayStructName(pat.EnumName), ast.DisplayStructName(def.Name))
+	}
+	fields, ok := def.VariantPayload(pat.Variant)
+	if !ok {
+		return c.errAt(pos, "enum '%s' has no variant '%s'", ast.DisplayStructName(def.Name), pat.Variant)
+	}
+	if len(pat.Binds) != len(fields) {
+		return c.errAt(pos, "variant '%s.%s' carries %d value(s), but the pattern binds %d",
+			ast.DisplayStructName(def.Name), pat.Variant, len(fields), len(pat.Binds))
+	}
+	if covered[pat.Variant] {
+		return c.errAt(pos, "variant '%s.%s' is already handled by an earlier case",
+			ast.DisplayStructName(def.Name), pat.Variant)
+	}
+	covered[pat.Variant] = true
+	for i, b := range pat.Binds {
+		if b == "_" {
+			continue
+		}
+		c.define(b, fields[i])
+	}
+	return nil
 }

@@ -619,6 +619,7 @@ func (p *Parser) parseSwitchStmt() (ast.Stmt, error) {
 
 	var cases []ast.SwitchCase
 	var defaultBody []ast.Stmt
+	hasDefault := false
 
 	for !p.check(token.TokenRBrace) && !p.atEnd() {
 		if p.check(token.TokenCase) {
@@ -631,6 +632,17 @@ func (p *Parser) parseSwitchStmt() (ast.Stmt, error) {
 				val, err := p.parseExpr(0)
 				if err != nil {
 					return nil, err
+				}
+				// `case Expr.Add(l, r):` parses as a constructor call,
+				// because that is what it looks like until you know it is a
+				// pattern. Here is where it is known: in a case position the
+				// arguments are names to bind, not values to build with.
+				if ctor, ok := val.(*ast.EnumCtorExpr); ok {
+					pat, err := p.enumPatternFromCtor(ctor)
+					if err != nil {
+						return nil, err
+					}
+					val = pat
 				}
 				values = append(values, val)
 				if !p.match(token.TokenComma) {
@@ -663,6 +675,7 @@ func (p *Parser) parseSwitchStmt() (ast.Stmt, error) {
 				return nil, err
 			}
 
+			hasDefault = true
 			defaultBody, err = p.parseBlock()
 			if err != nil {
 				return nil, err
@@ -676,7 +689,7 @@ func (p *Parser) parseSwitchStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 
-	return &ast.SwitchStmt{Pos: pos, Tag: tag, Cases: cases, Default: defaultBody}, nil
+	return &ast.SwitchStmt{Pos: pos, Tag: tag, Cases: cases, Default: defaultBody, HasDefault: hasDefault}, nil
 }
 
 func (p *Parser) parseExprStmt() (ast.Stmt, error) {
@@ -928,4 +941,23 @@ func (p *Parser) parseMultiLetStmt(pos ast.Pos, firstName string, isConst bool) 
 	}
 
 	return &ast.LetStmt{Pos: pos, Names: names, Type: typ, Value: value, IsConst: isConst}, nil
+}
+
+// enumPatternFromCtor reinterprets a parsed constructor call as a destructuring
+// pattern. Only plain names can be bound: matching on the payload's value as
+// well as its tag would be a nested pattern, which this does not have.
+func (p *Parser) enumPatternFromCtor(ctor *ast.EnumCtorExpr) (*ast.EnumPatternExpr, error) {
+	binds := make([]string, 0, len(ctor.Args))
+	for _, a := range ctor.Args {
+		id, ok := a.(*ast.Ident)
+		if !ok {
+			return nil, p.errorf("case %s.%s(...) binds names, so each one must be an identifier or '_'",
+				ast.DisplayStructName(ctor.EnumName), ctor.Variant)
+		}
+		binds = append(binds, id.Name)
+	}
+	return &ast.EnumPatternExpr{
+		Pos: ctor.Pos, EnumName: ctor.EnumName, Variant: ctor.Variant,
+		EnumType: ctor.EnumType, Binds: binds,
+	}, nil
 }

@@ -465,13 +465,44 @@ func (p *Parser) parseEnumDef() (*ast.EnumDef, error) {
 		return nil, err
 	}
 
+	// The enum is registered before its payload types are read, because a
+	// variant may name the enum itself -- `Add(Expr, Expr)` inside `enum Expr`
+	// -- and resolveTypeName has to find it. The entry is rewritten with the
+	// payloads once they are known; RegisterEnumType updates in place.
+	flatName := ast.QualifiedStructName(p.module, name)
+	p.enumNames[flatName] = true
+	ast.RegisterEnumType(ast.EnumDef{Name: flatName, Module: p.module})
+
 	var variants []string
+	var payloads [][]ast.Type
 	for !p.check(token.TokenRBrace) && !p.atEnd() {
 		variant, err := p.expectDeclName("an enum variant")
 		if err != nil {
 			return nil, err
 		}
+		var fields []ast.Type
+		if p.check(token.TokenLParen) {
+			p.advance() // consume '('
+			if p.check(token.TokenRParen) {
+				return nil, p.errorf("enum variant '%s.%s' has empty parentheses; drop them for a variant that carries nothing", name, variant)
+			}
+			for {
+				ft, err := p.parseType()
+				if err != nil {
+					return nil, err
+				}
+				fields = append(fields, ft)
+				if !p.check(token.TokenComma) {
+					break
+				}
+				p.advance()
+			}
+			if err := p.expect(token.TokenRParen); err != nil {
+				return nil, err
+			}
+		}
 		variants = append(variants, variant)
+		payloads = append(payloads, fields)
 	}
 
 	if err := p.expect(token.TokenRBrace); err != nil {
@@ -482,15 +513,10 @@ func (p *Parser) parseEnumDef() (*ast.EnumDef, error) {
 		return nil, p.errorf("enum '%s' must have at least one variant", name)
 	}
 
-	// Registered under the module that declares it; for the main program that
-	// is the bare name. Keeping a bare entry as well sent a reference inside
-	// the module down the unqualified path, which then looked up a name the
-	// registry does not hold.
-	flatName := ast.QualifiedStructName(p.module, name)
-	p.enumNames[flatName] = true
-	ast.RegisterEnumType(ast.EnumDef{Name: flatName, Module: p.module, Variants: variants})
+	def := ast.EnumDef{Name: flatName, Module: p.module, Variants: variants, Payloads: payloads}
+	ast.RegisterEnumType(def)
 
-	return &ast.EnumDef{Name: flatName, Module: p.module, Variants: variants}, nil
+	return &def, nil
 }
 
 func (p *Parser) parseStructDef() (*ast.StructDef, error) {

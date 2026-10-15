@@ -103,6 +103,12 @@ func (g *Generator) cType(t ast.Type) string {
 			}
 		}
 		if ast.IsEnumType(t) {
+			// A payload-carrying enum is a refcounted tagged union, reached
+			// through a pointer so a recursive variant has a finite size. A
+			// plain one is still the C enum it always was.
+			if ast.IsPayloadEnumType(t) {
+				return "Dex_" + ast.EnumName(t) + "*"
+			}
 			return "Dex_" + ast.EnumName(t)
 		}
 		if ast.IsInterfaceType(t) {
@@ -299,6 +305,11 @@ func (g *Generator) structArrayCleanupFunc(elemType ast.Type) string {
 	// concrete struct behind it turns out to be.
 	if ast.IsInterfaceType(elemType) {
 		return interfaceElemCleanupName(ast.InterfaceName(elemType))
+	}
+	// A payload enum element is a refcounted pointer the array owns, exactly
+	// as an interface element owns its box.
+	if ast.IsPayloadEnumType(elemType) {
+		return enumElemCleanupName(ast.EnumName(elemType))
 	}
 	def := ast.GetStructDef(elemType)
 	if def == nil {
@@ -649,6 +660,8 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			return ast.TaskReturnType(srcType)
 		}
 	case *ast.EnumAccessExpr:
+		return e.EnumType
+	case *ast.EnumCtorExpr:
 		return e.EnumType
 	case *ast.MapLitExpr:
 		if e.AsJsonValue {

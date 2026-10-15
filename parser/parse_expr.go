@@ -321,6 +321,11 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				return nil, err
 			}
 			enumType, _ := ast.LookupEnumType(flat)
+			if args, ok, err := p.parseEnumCtorArgs(); err != nil {
+				return nil, err
+			} else if ok {
+				return &ast.EnumCtorExpr{Pos: pos, EnumName: flat, Variant: variant, EnumType: enumType, Args: args}, nil
+			}
 			return &ast.EnumAccessExpr{Pos: pos, EnumName: flat, Variant: variant, EnumType: enumType}, nil
 		}
 
@@ -432,6 +437,11 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				}
 				if p.enumNames[enumName] {
 					enumType, _ := ast.LookupEnumType(enumName)
+					if args, ok, err := p.parseEnumCtorArgs(); err != nil {
+						return nil, err
+					} else if ok {
+						return &ast.EnumCtorExpr{Pos: pos, EnumName: enumName, Variant: members[1], EnumType: enumType, Args: args}, nil
+					}
 					return &ast.EnumAccessExpr{Pos: pos, EnumName: enumName, Variant: members[1], EnumType: enumType}, nil
 				}
 			}
@@ -881,4 +891,32 @@ func (p *Parser) parseObjectLit() (ast.Expr, error) {
 		return nil, p.errorf("expected '}' to close object literal")
 	}
 	return &ast.ObjectLitExpr{Pos: pos, Keys: keys, Values: values}, nil
+}
+
+// parseEnumCtorArgs reads the argument list of a payload variant, if there is
+// one. A variant that carries nothing is written without parentheses, so the
+// absence of a '(' is what distinguishes Color.Red from Expr.Lit(5).
+func (p *Parser) parseEnumCtorArgs() ([]ast.Expr, bool, error) {
+	if !p.check(token.TokenLParen) {
+		return nil, false, nil
+	}
+	p.advance() // consume '('
+	var args []ast.Expr
+	if !p.check(token.TokenRParen) {
+		for {
+			a, err := p.parseExpr(0)
+			if err != nil {
+				return nil, true, err
+			}
+			args = append(args, a)
+			if !p.check(token.TokenComma) {
+				break
+			}
+			p.advance()
+		}
+	}
+	if err := p.expect(token.TokenRParen); err != nil {
+		return nil, true, err
+	}
+	return args, true, nil
 }

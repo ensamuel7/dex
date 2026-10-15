@@ -621,6 +621,27 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 // The mirror of emitRetainStructLitFields, for copies rather than literals, and
 // it recurses the same way emitReleaseVar does so a nested struct field is not
 // left unbalanced.
+// emitRetainValue takes a reference to one named value of a given type, which
+// is what a container does when it stores something handed to it borrowed. It
+// is the single-value form of emitRetainBorrowedStructFields, and the two
+// agree case for case -- a struct still recurses into its fields, because a
+// struct is a value and the references it holds are the ones that matter.
+func (g *Generator) emitRetainValue(out *strings.Builder, prefix, target string, typ ast.Type) {
+	switch {
+	case ast.IsOptionalType(typ):
+		// dex_retain is NULL-safe, which is what absent looks like.
+		if ast.IsHeapType(ast.OptionalInnerType(typ)) {
+			out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, target))
+		}
+	case ast.IsHeapType(typ):
+		out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, target))
+	case ast.IsInterfaceType(typ):
+		out.WriteString(fmt.Sprintf("%sdex_retain(%s._obj);\n", prefix, target))
+	case ast.IsStructType(typ):
+		g.emitRetainBorrowedStructFields(out, prefix, target, typ)
+	}
+}
+
 func (g *Generator) emitRetainBorrowedStructFields(out *strings.Builder, prefix, target string, structType ast.Type) {
 	def := ast.GetStructDef(structType)
 	if def == nil {

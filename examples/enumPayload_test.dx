@@ -1,0 +1,118 @@
+// Payload-carrying enums: a tagged union, matched by destructuring.
+//
+// A variant that carries fields makes the enum a refcounted box rather than an
+// integer constant, because `Add(Expr, Expr)` has no finite size as a value.
+// Dispatch is a switch on the tag — one compare and a jump, with no vtable and
+// no indirect call.
+//
+// A plain enum is untouched by all of this and is still an integer.
+
+import "fmt"
+import "str"
+
+enum Color {
+    Red
+    Green
+}
+
+enum Expr {
+    Lit(long)
+    Add(Expr, Expr)
+    Mul(Expr, Expr)
+    Neg(Expr)
+}
+
+enum Shape {
+    Empty
+    Label(string)
+    Tags(string[])
+    Tagged(string, Shape)
+}
+
+struct Holder {
+    name: string
+    body: Expr
+}
+
+fn eval(e: Expr): long {
+    switch (e) {
+        case Expr.Lit(v): { return v }
+        case Expr.Add(a, b): { return eval(a) + eval(b) }
+        case Expr.Mul(a, b): { return eval(a) * eval(b) }
+        case Expr.Neg(a): { return 0 - eval(a) }
+    }
+    return 0
+}
+
+// Built in a function and returned, so the box outlives the frame that made it.
+fn tree(depth: int): Expr {
+    if (depth == 0) {
+        return Expr.Lit(2)
+    }
+    return Expr.Add(tree(depth - 1), tree(depth - 1))
+}
+
+fn describe(s: Shape): string {
+    switch (s) {
+        case Shape.Empty: { return "-" }
+        case Shape.Label(t): { return t }
+        case Shape.Tags(items): { return str.fromInt(items.len()) }
+        case Shape.Tagged(k, inner): { return k + "/" + describe(inner) }
+    }
+    return ""
+}
+
+fn main(): void {
+    // A plain enum is still an integer constant.
+    let c: Color = Color.Red
+    assert(c == Color.Red)
+
+    // Construction and destructuring.
+    let two: Expr = Expr.Lit(2)
+    let three: Expr = Expr.Lit(3)
+    let sum: Expr = Expr.Add(two, three)
+    assert(eval(sum) == 5)
+    assert(eval(Expr.Mul(sum, three)) == 15)
+    assert(eval(Expr.Neg(sum)) == -5)
+
+    // The operands stay valid after being built into a variant: the box took
+    // its own reference rather than consuming theirs.
+    assert(eval(two) == 2)
+    assert(eval(sum) == 5)
+
+    // 2^8 leaves of 2, returned up through eight frames.
+    assert(eval(tree(8)) == 512)
+
+    // Heap payloads, including one built on the spot.
+    assert(describe(Shape.Empty) == "-")
+    assert(describe(Shape.Label("hi")) == "hi")
+    assert(describe(Shape.Tags(["a", "b", "c"])) == "3")
+    let built: string = "made" + "-up"
+    assert(describe(Shape.Label(built)) == "made-up")
+    assert(describe(Shape.Tagged("k", Shape.Label("v"))) == "k/v")
+
+    // A struct field, an array element, and reassignment.
+    let h: Holder = Holder{name: "h", body: sum}
+    assert(eval(h.body) == 5)
+
+    let many: Expr[] = [two, sum, Expr.Lit(7)]
+    assert(eval(many[2]) == 7)
+    assert(many.len() == 3)
+
+    let slot: Expr = two
+    slot = Expr.Add(three, three)
+    assert(eval(slot) == 6)
+    slot = sum
+    assert(eval(slot) == 5)
+    assert(eval(sum) == 5)
+
+    // `_` discards a binding it does not need.
+    let discarded: long = 0
+    switch (sum) {
+        case Expr.Add(l, _): { discarded = eval(l) }
+        default: {}
+    }
+    assert(discarded == 2)
+
+    fmt.println("enumPayload ok " + str.fromLong(eval(tree(4))))
+}

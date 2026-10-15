@@ -218,7 +218,13 @@ func StructName(t Type) string {
 }
 
 func IsHeapType(t Type) bool {
-	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t) || IsFuncType(t)
+	// A payload-carrying enum is a refcounted pointer to a tagged union, which
+	// is what makes a recursive variant representable at all. Saying so here
+	// rather than special-casing it everywhere is what gives it retain and
+	// release, scope cleanup, the unwind stack, array elements and struct
+	// fields without a single one of those sites knowing about enums. A plain
+	// enum is still an integer and still answers false.
+	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t) || IsFuncType(t) || IsPayloadEnumType(t)
 }
 
 func NeedsRelease(t Type) bool {
@@ -608,10 +614,15 @@ type SwitchCase struct {
 
 // SwitchStmt — switch (tag) { case val: { ... } default: { ... } }
 type SwitchStmt struct {
-	Pos     Pos
-	Tag     Expr
-	Cases   []SwitchCase
-	Default []Stmt // nil if no default
+	Pos   Pos
+	Tag   Expr
+	Cases []SwitchCase
+	// Default is the default arm's body, and is nil both when there is no
+	// default and when there is an empty one. HasDefault is what tells those
+	// apart, which the exhaustiveness check over a payload enum needs: a
+	// `default: {}` is a deliberate catch-all, not a missing arm.
+	Default    []Stmt
+	HasDefault bool
 }
 
 func (s *SwitchStmt) stmtNode() {}

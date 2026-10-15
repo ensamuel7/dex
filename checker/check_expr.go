@@ -446,6 +446,42 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		if !found {
 			return 0, c.errAt(e.Pos, "enum '%s' has no variant '%s'", e.EnumName, e.Variant)
 		}
+		// A variant that carries fields cannot be named without them: the
+		// value would have a tag and no payload to go with it.
+		if fields, _ := def.VariantPayload(e.Variant); len(fields) > 0 {
+			return 0, c.errAt(e.Pos, "enum variant '%s.%s' carries %d value(s); write %s.%s(...)",
+				ast.DisplayStructName(e.EnumName), e.Variant, len(fields),
+				ast.DisplayStructName(e.EnumName), e.Variant)
+		}
+		return e.EnumType, nil
+
+	case *ast.EnumCtorExpr:
+		def := ast.GetEnumDef(e.EnumType)
+		if def == nil {
+			return 0, c.errAt(e.Pos, "unknown enum type '%s'", e.EnumName)
+		}
+		fields, ok := def.VariantPayload(e.Variant)
+		if !ok {
+			return 0, c.errAt(e.Pos, "enum '%s' has no variant '%s'", ast.DisplayStructName(e.EnumName), e.Variant)
+		}
+		if len(fields) == 0 {
+			return 0, c.errAt(e.Pos, "enum variant '%s.%s' carries nothing; write it without parentheses",
+				ast.DisplayStructName(e.EnumName), e.Variant)
+		}
+		if len(e.Args) != len(fields) {
+			return 0, c.errAt(e.Pos, "enum variant '%s.%s' takes %d value(s), got %d",
+				ast.DisplayStructName(e.EnumName), e.Variant, len(fields), len(e.Args))
+		}
+		for i, arg := range e.Args {
+			at, err := c.checkExpr(arg)
+			if err != nil {
+				return 0, err
+			}
+			if at != fields[i] && !canAssign(fields[i], at, arg) {
+				return 0, c.errAt(e.Pos, "enum variant '%s.%s' value %d must be %s, got %s",
+					ast.DisplayStructName(e.EnumName), e.Variant, i+1, typeName(fields[i]), typeName(at))
+			}
+		}
 		return e.EnumType, nil
 
 	case *ast.StringInterpExpr:

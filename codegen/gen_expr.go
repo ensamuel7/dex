@@ -359,7 +359,16 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		out.WriteString(fmt.Sprintf("dex_chan_new(sizeof(%s), 64)", ctyp))
 
 	case *ast.EnumAccessExpr:
+		// A payload enum's fieldless variant is still a box, so naming it is a
+		// call rather than a constant.
+		if ast.IsPayloadEnumType(e.EnumType) {
+			out.WriteString(fmt.Sprintf("%s()", g.enumCtorName(e.EnumName, e.Variant)))
+			break
+		}
 		out.WriteString(fmt.Sprintf("Dex_%s_%s", e.EnumName, e.Variant))
+
+	case *ast.EnumCtorExpr:
+		g.genEnumCtor(out, e)
 
 	case *ast.MapLitExpr:
 		if e.AsJsonValue {

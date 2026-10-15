@@ -524,6 +524,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		out.WriteString(";\n")
 		// Generate as if/else if/else chain (supports string comparison via strcmp)
 		isString := tagType == ast.TypeString
+		isPayloadEnum := ast.IsPayloadEnumType(tagType)
 		for i, sc := range s.Cases {
 			if i == 0 {
 				out.WriteString(fmt.Sprintf("%sif (", prefix))
@@ -534,23 +535,44 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 				if j > 0 {
 					out.WriteString(" || ")
 				}
-				if isString {
+				switch {
+				case isPayloadEnum:
+					// The tag is a pointer to a tagged union, so the test is on
+					// the discriminant rather than on the value.
+					variant := ""
+					switch v := val.(type) {
+					case *ast.EnumPatternExpr:
+						variant = v.Variant
+					case *ast.EnumAccessExpr:
+						variant = v.Variant
+					}
+					out.WriteString(fmt.Sprintf("%s->tag == %s", tagVar,
+						g.enumTagName(ast.EnumName(tagType), variant)))
+				case isString:
 					out.WriteString(fmt.Sprintf("strcmp(%s->data, ", tagVar))
 					g.genStringData(out, val)
 					out.WriteString(") == 0")
-				} else {
+				default:
 					out.WriteString(fmt.Sprintf("%s == ", tagVar))
 					g.genExpr(out, val)
 				}
 			}
 			out.WriteString(") {\n")
 			g.pushScope()
+			// A pattern's bindings are read out of the union at the top of the
+			// arm. They borrow: the enum being switched on owns them and
+			// outlives the arm, so none is retained here and none is released
+			// at the end of it. That is also why they are declared directly
+			// rather than registered as scope variables.
+			if isPayloadEnum {
+				g.genEnumPatternBindings(out, prefix+"    ", tagVar, tagType, sc.Values)
+			}
 			for _, stmt := range sc.Body {
 				g.genStmt(out, stmt, indent+1)
 			}
 			g.popScope(out, prefix+"    ")
 		}
-		if s.Default != nil {
+		if s.HasDefault {
 			if len(s.Cases) > 0 {
 				out.WriteString(fmt.Sprintf("%s} else {\n", prefix))
 			} else {

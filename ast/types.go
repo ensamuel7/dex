@@ -395,6 +395,40 @@ type EnumDef struct {
 	// Module is the module that declared it, empty for the main program.
 	Module   string
 	Variants []string
+	// Payloads is parallel to Variants: Payloads[i] are the field types the
+	// i-th variant carries, and is empty for a variant that carries none.
+	//
+	// A plain enum -- every entry empty -- stays exactly what it was, an
+	// integer constant with no representation of its own. One with payloads is
+	// a different thing: a refcounted tagged union, because a variant whose
+	// field is the enum itself has no finite size otherwise. Keeping the two
+	// apart is what lets every existing use of an enum go on working.
+	Payloads [][]Type
+}
+
+// HasPayload reports whether any variant carries fields, which is what decides
+// between the two representations.
+func (e *EnumDef) HasPayload() bool {
+	for _, p := range e.Payloads {
+		if len(p) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// VariantPayload returns the field types of a named variant, and whether the
+// variant exists at all.
+func (e *EnumDef) VariantPayload(name string) ([]Type, bool) {
+	for i, v := range e.Variants {
+		if v == name {
+			if i < len(e.Payloads) {
+				return e.Payloads[i], true
+			}
+			return nil, true
+		}
+	}
+	return nil, false
 }
 
 var (
@@ -443,6 +477,16 @@ func IsEnumType(t Type) bool {
 	return t >= TypeEnumBase && t < TypeInterfaceBase
 }
 
+// IsPayloadEnumType separates the tagged union from the integer constant. Every
+// site that assumed an enum is an int has to ask this before it still can.
+func IsPayloadEnumType(t Type) bool {
+	if !IsEnumType(t) {
+		return false
+	}
+	def := GetEnumDef(t)
+	return def != nil && def.HasPayload()
+}
+
 func EnumName(t Type) string {
 	def := GetEnumDef(t)
 	if def == nil {
@@ -460,6 +504,33 @@ type EnumAccessExpr struct {
 }
 
 func (e *EnumAccessExpr) exprNode() {}
+
+// EnumCtorExpr builds a payload-carrying variant: Expr.Lit(5), Expr.Add(a, b).
+// A variant that carries nothing is still an EnumAccessExpr, so a plain enum
+// never reaches this node.
+type EnumCtorExpr struct {
+	Pos      Pos
+	EnumName string
+	Variant  string
+	EnumType Type
+	Args     []Expr
+}
+
+func (e *EnumCtorExpr) exprNode() {}
+
+// EnumPatternExpr is a switch case that destructures a variant:
+// `case Expr.Add(l, r):` matches the tag and binds the payload to l and r for
+// the arm's body. Binds is parallel to the variant's declared fields; "_"
+// discards one.
+type EnumPatternExpr struct {
+	Pos      Pos
+	EnumName string
+	Variant  string
+	EnumType Type
+	Binds    []string
+}
+
+func (e *EnumPatternExpr) exprNode() {}
 
 // Interface type registry
 var (

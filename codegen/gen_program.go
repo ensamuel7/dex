@@ -303,6 +303,22 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// struct may hold one as a field, which needs the name to already exist.
 	// Emitting them last meant a struct with an enum field never compiled.
 	for _, ed := range program.Enums {
+		// A payload enum's storage is a struct, and that struct may hold a
+		// struct by value, so its definition has to wait until after the
+		// struct typedefs. Only the name and the tag constants go here, which
+		// is all a struct field of this type needs.
+		if ed.HasPayload() {
+			out.WriteString(fmt.Sprintf("typedef struct Dex_%s Dex_%s;\n", ed.Name, ed.Name))
+			out.WriteString("typedef enum { ")
+			for i, v := range ed.Variants {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				out.WriteString(fmt.Sprintf("Dex_%s_%s = %d", ed.Name, v, i))
+			}
+			out.WriteString(fmt.Sprintf(" } Dex_%s_Tag;\n", ed.Name))
+			continue
+		}
 		out.WriteString("typedef enum { ")
 		for i, v := range ed.Variants {
 			if i > 0 {
@@ -352,6 +368,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 		out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
 	}
+	// After the struct typedefs, because a variant may carry a struct by
+	// value; before the struct cleanup functions, because one of those may
+	// have to release an enum field.
+	g.genPayloadEnums(&out, program)
+
 	// Emit cleanup functions for structs that have heap fields (used by struct arrays)
 	for _, sd := range program.Structs {
 		hasHeapFields := false

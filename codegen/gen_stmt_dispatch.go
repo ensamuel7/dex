@@ -73,7 +73,9 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	}
 	name := fn.Name
 
-	if fn.ReturnType == ast.TypeString && len(fn.Params) == 0 {
+	if fn.Name == "main" && g.usesOsArgs {
+		out.WriteString("int main(int argc, char** argv) {\n")
+	} else if fn.ReturnType == ast.TypeString && len(fn.Params) == 0 {
 		out.WriteString(fmt.Sprintf("%s %s(void) {\n", retType, name))
 	} else {
 		out.WriteString(fmt.Sprintf("%s %s(", retType, name))
@@ -110,6 +112,12 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	// crash.
 	if fn.Name == "main" {
 		out.WriteString("    setvbuf(stdout, NULL, _IOLBF, 0);\n")
+	}
+
+	// Handed to the os runtime before anything can call os.args().
+	if fn.Name == "main" && g.usesOsArgs {
+		out.WriteString("    _dex_argc = argc;\n")
+		out.WriteString("    _dex_argv = argv;\n")
 	}
 
 	// Register the leak report before anything can allocate.

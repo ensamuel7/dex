@@ -6,6 +6,31 @@
 #include <poll.h>
 #include <sys/wait.h>
 
+/* main stores its argv here when a program calls os.args(). Codegen only
+ * gives main the (argc, argv) signature for a program that asks, so these stay
+ * zero otherwise and os.args() hands back an empty array rather than reading
+ * a pointer nobody set. */
+static int _dex_argc = 0;
+static char** _dex_argv = 0;
+
+/* Argument zero is the path the program was invoked by, not an argument, so it
+ * is skipped -- `args()` is what the caller typed.
+ *
+ * Guarded because this is the only thing in the os runtime that needs the
+ * array runtime, and that one is emitted only for a program that uses arrays.
+ * Importing os without calling args() must not drag it in. */
+#ifdef DEX_HAVE_ARRAYS
+static DexArrayString* dex_os_args(void) {
+    DexArrayString* a = dex_array_string_new();
+    for (int i = 1; i < _dex_argc; i++) {
+        DexString* s = dex_string_new(_dex_argv[i], strlen(_dex_argv[i]));
+        dex_array_string_push(a, s);
+        dex_release(s);
+    }
+    return a;
+}
+#endif
+
 static char* dex_os_env(const char* name) {
     const char* val = getenv(name);
     if (val == NULL) {

@@ -20,6 +20,14 @@ func init() {
 				CName:      "dex_os_env",
 				Doc:        "Read an environment variable (returns empty string if unset).",
 			},
+			"args": {
+				Params:     []ast.Type{},
+				ParamNames: []string{},
+				ReturnType: ast.TypeArrayString,
+				CName:      "dex_os_args",
+				RawReturn:  true,
+				Doc:        "The program's command-line arguments, excluding the program name.",
+			},
 			"exit": {
 				Params:     []ast.Type{ast.TypeInt},
 				ParamNames: []string{"code"},

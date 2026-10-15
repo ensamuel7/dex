@@ -1,0 +1,28 @@
+// os.args: the program's own command line.
+//
+// main only takes (argc, argv) for a program that calls this, so a program
+// that does not is generated exactly as before. Argument zero is the path the
+// program was invoked by rather than an argument, so it is not included.
+
+import "fmt"
+import "os"
+import "str"
+
+fn main(): void {
+    let a: string[] = os.args()
+
+    // The test suite runs examples with no arguments, so this is the shape
+    // that has to hold: an empty array, not a null, and safe to index past.
+    assert(a.len() == 0)
+
+    // An empty result still behaves like any other array.
+    let joined = StringBuilder()
+    let i: int = 0
+    while (i < a.len()) {
+        joined.append(a[i])
+        i = i + 1
+    }
+    assert(joined.toString() == "")
+
+    fmt.println("osArgs ok " + str.fromInt(a.len()))
+}

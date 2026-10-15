@@ -50,6 +50,7 @@ type Generator struct {
 	usesMap           bool
 	usesEventLoop     bool
 	usesStringBuilder bool
+	usesOsArgs        bool
 
 	// memCheck emits the debug memory checker: a widened object header, a live
 	// object registry, and a DEX_AT marker ahead of every statement so an

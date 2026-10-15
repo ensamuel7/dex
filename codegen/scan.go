@@ -212,6 +212,24 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 				g.usesArray = true
 			}
 		}
+		// A module function is the only source of a string in a program that
+		// writes no literal of its own: fmt.println(str.fromLong(n)) wraps the
+		// returned char* in a DexString, so the string runtime has to exist
+		// even though nothing in the source is spelled as a string. Scanning
+		// the declared return type covers every module the same way, where
+		// naming them one at a time left the rest of them broken.
+		if e.Module != "" {
+			if mod, ok := g.importedModules[e.Module]; ok {
+				if fd, ok := mod.Funcs[e.Name]; ok {
+					g.scanType(fd.ReturnType)
+				}
+			}
+		}
+		// main only takes (argc, argv) for a program that asks for them, so
+		// that a program which does not is unchanged.
+		if e.Module == "os" && e.Name == "args" {
+			g.usesOsArgs = true
+		}
 		// Scan for assert usage
 		if e.Module == "" && e.Name == "assert" {
 			g.usesAssert = true

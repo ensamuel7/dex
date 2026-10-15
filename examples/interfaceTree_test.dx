@@ -1,0 +1,98 @@
+// A recursive tree of interface values, and the two things that used to break
+// it.
+//
+// A struct whose only heap field is an interface is a program whose only heap
+// value is a refcounted box. The coercion calls dex_obj_alloc and the
+// declaration releases it, so the refcount runtime has to be emitted for a
+// program that writes no string literal, array or closure at all.
+//
+// And coercing a struct literal hoists it into a statement temporary. A block
+// around that hoist scoped the declaration to it, so the variable named by
+// `let node: Expr = Add{...}` was gone by the next statement.
+
+import "fmt"
+import "str"
+
+interface Expr {
+    fn eval(): long
+}
+
+struct Lit {
+    v: long
+
+    fn eval(): long {
+        return v
+    }
+}
+
+struct Add {
+    left: Expr
+    right: Expr
+
+    fn eval(): long {
+        return left.eval() + right.eval()
+    }
+}
+
+struct Mul {
+    left: Expr
+    right: Expr
+
+    fn eval(): long {
+        return left.eval() * right.eval()
+    }
+}
+
+// Built in the natural spelling: a struct literal straight into an interface
+// declaration, which is the case the hoist used to scope away.
+fn tree(depth: int): Expr {
+    if (depth == 0) {
+        let leaf: Expr = Lit{v: 2}
+        return leaf
+    }
+    let lhs: Expr = tree(depth - 1)
+    let rhs: Expr = tree(depth - 1)
+    let node: Expr = Add{left: lhs, right: rhs}
+    return node
+}
+
+fn main(): void {
+    let two: Expr = Lit{v: 2}
+    let three: Expr = Lit{v: 3}
+    let sum: Expr = Add{left: two, right: three}
+    assert(sum.eval() == 5)
+
+    // The declaration is still live after the statement that hoisted a temp.
+    let product: Expr = Mul{left: sum, right: three}
+    assert(product.eval() == 15)
+    assert(sum.eval() == 5)
+
+    // Nested one level deeper: an interface field holding a value that itself
+    // holds interface fields, released through the box's destructor.
+    let nested: Expr = Add{left: product, right: sum}
+    assert(nested.eval() == 20)
+
+    // 2^8 leaves of 2, summed.
+    let deep: Expr = tree(8)
+    assert(deep.eval() == 512)
+
+    // Reassignment. A minted right-hand side hands over its only reference, so
+    // the variable must not take another: the retain used to be emitted for any
+    // interface-typed right-hand side, which leaked one box per assignment.
+    let slot: Expr = Lit{v: 1}
+    slot = tree(2)
+    assert(slot.eval() == 8)
+    slot = tree(3)
+    assert(slot.eval() == 16)
+
+    // A borrowed right-hand side is the case that does need the retain: both
+    // names stay live and neither frees what the other holds.
+    let shared: Expr = Lit{v: 9}
+    slot = shared
+    assert(slot.eval() == 9)
+    assert(shared.eval() == 9)
+
+    // A module function is the only source of a string here, which is what the
+    // string runtime used to be missed for.
+    fmt.println("interfaceTree ok " + str.fromLong(nested.eval()))
+}

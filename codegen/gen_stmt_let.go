@@ -55,12 +55,14 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 	// Interface target: the right-hand side is a struct and the declaration
 	// takes the vtable pair built from it.
 	if ast.IsInterfaceType(s.Type) {
-		g.beginStmtHoist()
-		var body strings.Builder
-		body.WriteString(fmt.Sprintf("%s %s = ", g.cType(s.Type), s.Name))
-		g.genInterfaceValue(&body, s.Value, s.Type)
-		body.WriteString(";\n")
-		g.emitWithHoists(out, prefix, body.String())
+		// The hoists are left to genStmt, which emits them around the statement
+		// rather than wrapping it. Coercing a struct literal hoists it into a
+		// temporary, and a block put here scoped the declaration to that block:
+		// `let s: Expr = Add{...}` declared an `s` that was gone by the next
+		// statement.
+		out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(s.Type), s.Name))
+		g.genInterfaceValue(out, s.Value, s.Type)
+		out.WriteString(";\n")
 		// The declaration owns the box the coercion minted, so it is released
 		// at scope exit like any other owning local.
 		g.registerScopeVar(out, prefix, s.Name, s.Type)

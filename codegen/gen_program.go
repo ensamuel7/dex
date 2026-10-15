@@ -100,7 +100,13 @@ func (g *Generator) Generate(program *ast.Program) string {
 	if _, ok := g.importedModules["ws"]; ok {
 		g.usesClosure = true
 	}
-	g.usesRefcount = g.usesString || g.usesArray || g.usesConcurrency || g.usesClosure
+	// An interface value is a refcounted box: the coercion calls dex_obj_alloc
+	// and the declaration releases it, so the refcount runtime has to exist for
+	// a program whose only heap value is one. Keying this off the other flags
+	// meant a program with interfaces but no string literal, array or closure
+	// referenced DexObjHeader and dex_retain without ever declaring them.
+	g.usesRefcount = g.usesString || g.usesArray || g.usesConcurrency || g.usesClosure ||
+		len(program.Interfaces) > 0
 
 	// Guarded on usesString because the pool's definitions and the macro behind
 	// them come from the string runtime, which is emitted only under that flag.

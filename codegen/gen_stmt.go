@@ -59,7 +59,13 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 				g.genInterfaceValue(out, s.Value, varType)
 			}
 			out.WriteString(";")
-			if alreadyIface {
+			// Only a *borrowed* interface value needs a second owner. Keying
+			// this on "the right-hand side is already an interface" retained a
+			// box that was minted rather than borrowed — `r = makeExpr()`
+			// handed over its only reference and then took another, so the new
+			// box was never freed and one leaked per assignment. This is the
+			// same question the heap-type path below asks.
+			if alreadyIface && g.borrowsHeapValue(s.Value) {
 				// Forwarded rather than minted: the source still owns it.
 				out.WriteString(fmt.Sprintf(" dex_retain(%s._obj);", s.Name))
 			}
@@ -610,7 +616,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		out.WriteString(fmt.Sprintf("%s_dex_exc_push_frame();\n", prefix))
 		out.WriteString(fmt.Sprintf("%svolatile int _dex_exc_%d_caught = 0;\n", prefix, id))
 		out.WriteString(fmt.Sprintf("%svolatile int _dex_exc_%d_handled = 0;\n", prefix, id))
-		out.WriteString(fmt.Sprintf("%sif (setjmp(_dex_exc_stack[_dex_exc_top].env) == 0) {\n", prefix))
+		out.WriteString(fmt.Sprintf("%sif (DEX_SETJMP(_dex_exc_stack[_dex_exc_top].env) == 0) {\n", prefix))
 		out.WriteString(fmt.Sprintf("%s    _dex_exc_stack[_dex_exc_top].active = 0;\n", prefix))
 
 		// Try body

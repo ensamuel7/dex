@@ -3467,9 +3467,64 @@ struct ExecResult {
 
 | Function | Signature                       | Description                                        |
 |----------|---------------------------------|----------------------------------------------------|
+| `args`   | `args(): string[]`              | Command-line arguments, excluding the program name |
 | `env`    | `env(name: string): string`     | Read an environment variable (empty string if unset) |
 | `exit`   | `exit(code: int): void`         | Exit the process with the given status code        |
 | `exec`   | `exec(command: string): ExecResult` | Run a shell command and return the result      |
+
+### Command-line arguments
+
+```dex
+import "os"
+
+let a: string[] = os.args()
+if (a.len() == 0) {
+    fmt.println("usage: tool <path>")
+    os.exit(1)
+}
+let path: string = a[0]
+```
+
+`args()` excludes argument zero, which is the path the program was invoked by
+rather than something the caller typed. A program that never calls it is
+generated exactly as before &mdash; `main` only takes the argument vector when
+something asks for it.
+
+### num
+
+Explicit numeric conversion. Widening is deliberately **not** implicit for a
+computed value — `let b: long = a` where `a` is an `int` is a type error, so
+that a narrowing or a loss of precision is always something somebody wrote
+down. A *literal* still widens on its own, because its type is chosen by where
+it is used:
+
+```dex
+let a: long = 42        // fine: a literal takes the type of its context
+let b: long = 'A'       // fine, same reason
+
+let n: int = 42
+let c: long = n         // error: expected long, got int
+let d: long = num.toLong(n)   // this is how you say it
+```
+
+```dex
+import "num"
+
+num.toInt('7') - num.toInt('0')   // 7, by character code
+num.toLong(s.len())               // len() is an int
+num.toChar(65)                    // 'A'
+num.toInt(3.99)                   // 3, truncated toward zero
+```
+
+| Function   | Signature                                   | Description |
+|------------|---------------------------------------------|-------------|
+| `toInt`    | `toInt(value: int\|long\|double\|char): int`     | To `int`. Truncates toward zero |
+| `toLong`   | `toLong(value: int\|long\|double\|char): long`   | To `long`. Truncates toward zero |
+| `toDouble` | `toDouble(value: int\|long\|double\|char): double` | To `double` |
+| `toChar`   | `toChar(value: int\|long\|char): char`          | To `char`, by character code |
+
+`toChar` does not accept a `double`: there is no character code for one, and
+rounding it silently would be a conversion nobody asked for.
 
 ### str
 

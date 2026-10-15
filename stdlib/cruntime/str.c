@@ -5,26 +5,40 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char* dex_str_fromInt(int n) {
+/* These build the DexString directly rather than returning a malloc'd char*
+ * for the caller to copy. The old shape cost a strdup, then a strlen, then a
+ * second allocation, then a free -- four operations and two allocations to
+ * produce one string. snprintf already reports the length, so there is nothing
+ * to measure afterwards. On `"k" + str.fromLong(i)` in a loop this is a third
+ * of the work. They are marked RawReturn in stdlib/str.go, which is what tells
+ * codegen the DexString is already built. */
+
+static DexString* dex_str_fromInt(int n) {
     char buf[32];
-    snprintf(buf, sizeof(buf), "%d", n);
-    return strdup(buf);
+    int len = snprintf(buf, sizeof(buf), "%d", n);
+    if (len < 0) len = 0;
+    if ((size_t)len >= sizeof(buf)) len = (int)sizeof(buf) - 1;
+    return dex_string_new(buf, (size_t)len);
 }
 
-static char* dex_str_fromLong(long n) {
+static DexString* dex_str_fromLong(long n) {
     char buf[32];
-    snprintf(buf, sizeof(buf), "%ld", n);
-    return strdup(buf);
+    int len = snprintf(buf, sizeof(buf), "%ld", n);
+    if (len < 0) len = 0;
+    if ((size_t)len >= sizeof(buf)) len = (int)sizeof(buf) - 1;
+    return dex_string_new(buf, (size_t)len);
 }
 
-static char* dex_str_fromDouble(double d) {
+static DexString* dex_str_fromDouble(double d) {
     char buf[64];
-    snprintf(buf, sizeof(buf), "%g", d);
-    return strdup(buf);
+    int len = snprintf(buf, sizeof(buf), "%g", d);
+    if (len < 0) len = 0;
+    if ((size_t)len >= sizeof(buf)) len = (int)sizeof(buf) - 1;
+    return dex_string_new(buf, (size_t)len);
 }
 
-static char* dex_str_fromBool(_Bool b) {
-    return strdup(b ? "true" : "false");
+static DexString* dex_str_fromBool(_Bool b) {
+    return b ? dex_string_new("true", 4) : dex_string_new("false", 5);
 }
 
 static int dex_str_toInt(const char* s) {

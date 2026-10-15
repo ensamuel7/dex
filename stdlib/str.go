@@ -18,6 +18,7 @@ func init() {
 				ParamNames: []string{"n"},
 				ReturnType: ast.TypeString,
 				CName:      "dex_str_fromInt",
+				RawReturn:  true,
 				Doc:        "Convert an integer to its string representation.",
 			},
 			"fromLong": {
@@ -25,6 +26,7 @@ func init() {
 				ParamNames: []string{"n"},
 				ReturnType: ast.TypeString,
 				CName:      "dex_str_fromLong",
+				RawReturn:  true,
 				Doc:        "Convert a long to its string representation.",
 			},
 			"fromDouble": {
@@ -32,6 +34,7 @@ func init() {
 				ParamNames: []string{"d"},
 				ReturnType: ast.TypeString,
 				CName:      "dex_str_fromDouble",
+				RawReturn:  true,
 				Doc:        "Convert a double to its string representation.",
 			},
 			"fromBool": {
@@ -39,6 +42,7 @@ func init() {
 				ParamNames: []string{"b"},
 				ReturnType: ast.TypeString,
 				CName:      "dex_str_fromBool",
+				RawReturn:  true,
 				Doc:        "Convert a boolean to \"true\" or \"false\".",
 			},
 			"toInt": {

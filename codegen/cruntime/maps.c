@@ -42,9 +42,16 @@ static unsigned int dex_hash_int(int key) {
 
 #define DEX_MAP_DEFINE(KEY_TYPE, VAL_TYPE, SUFFIX, HASH_KEY, KEY_EQ, KEY_RETAIN, KEY_RELEASE, VAL_RETAIN, VAL_RELEASE, KEY_COPY, VAL_COPY, VAL_MISSING) \
 \
+/* The hash is stored beside the key. It pays for itself three times over: a \
+ * resize re-masks it instead of running FNV-1a over every key again, a probe \
+ * rejects a collision with an int compare instead of a memcmp, and the \
+ * backward-shift delete finds each entry's natural slot without rehashing. \
+ * For a string key that is the difference between touching the bytes on every \
+ * probe and touching them only on a genuine hash match. */ \
 typedef struct { \
     KEY_TYPE key; \
     VAL_TYPE value; \
+    unsigned int hash; \
     _Bool occupied; \
 } DexMapEntry_##SUFFIX; \
 \
@@ -85,12 +92,14 @@ static void dex_map_##SUFFIX##_resize(DexMap_##SUFFIX* m, int newCap) { \
     m->len = 0; \
     for (int i = 0; i < oldCap; i++) { \
         if (oldEntries[i].occupied) { \
-            unsigned int h = HASH_KEY(oldEntries[i].key) & (unsigned int)mask; \
+            unsigned int hv = oldEntries[i].hash; \
+            unsigned int h = hv & (unsigned int)mask; \
             while (m->entries[h].occupied) { \
                 h = (h + 1) & (unsigned int)mask; \
             } \
             m->entries[h].key = oldEntries[i].key; \
             m->entries[h].value = oldEntries[i].value; \
+            m->entries[h].hash = hv; \
             m->entries[h].occupied = 1; \
             m->len++; \
         } \
@@ -103,9 +112,10 @@ static void dex_map_##SUFFIX##_set(DexMap_##SUFFIX* m, KEY_TYPE key, VAL_TYPE va
         dex_map_##SUFFIX##_resize(m, m->cap * 2); \
     } \
     int mask = m->cap - 1; \
-    unsigned int h = HASH_KEY(key) & (unsigned int)mask; \
+    unsigned int hv = HASH_KEY(key); \
+    unsigned int h = hv & (unsigned int)mask; \
     while (m->entries[h].occupied) { \
-        if (KEY_EQ(m->entries[h].key, key)) { \
+        if (m->entries[h].hash == hv && KEY_EQ(m->entries[h].key, key)) { \
             VAL_RELEASE(m->entries[h].value); \
             m->entries[h].value = VAL_COPY(value); \
             return; \
@@ -114,15 +124,17 @@ static void dex_map_##SUFFIX##_set(DexMap_##SUFFIX* m, KEY_TYPE key, VAL_TYPE va
     } \
     m->entries[h].key = KEY_COPY(key); \
     m->entries[h].value = VAL_COPY(value); \
+    m->entries[h].hash = hv; \
     m->entries[h].occupied = 1; \
     m->len++; \
 } \
 \
 static VAL_TYPE dex_map_##SUFFIX##_get(DexMap_##SUFFIX* m, KEY_TYPE key) { \
     int mask = m->cap - 1; \
-    unsigned int h = HASH_KEY(key) & (unsigned int)mask; \
+    unsigned int hv = HASH_KEY(key); \
+    unsigned int h = hv & (unsigned int)mask; \
     while (m->entries[h].occupied) { \
-        if (KEY_EQ(m->entries[h].key, key)) { \
+        if (m->entries[h].hash == hv && KEY_EQ(m->entries[h].key, key)) { \
             VAL_TYPE v = m->entries[h].value; \
             VAL_RETAIN(v); \
             return v; \
@@ -138,9 +150,10 @@ static VAL_TYPE dex_map_##SUFFIX##_get(DexMap_##SUFFIX* m, KEY_TYPE key) { \
 \
 static _Bool dex_map_##SUFFIX##_has(DexMap_##SUFFIX* m, KEY_TYPE key) { \
     int mask = m->cap - 1; \
-    unsigned int h = HASH_KEY(key) & (unsigned int)mask; \
+    unsigned int hv = HASH_KEY(key); \
+    unsigned int h = hv & (unsigned int)mask; \
     while (m->entries[h].occupied) { \
-        if (KEY_EQ(m->entries[h].key, key)) { \
+        if (m->entries[h].hash == hv && KEY_EQ(m->entries[h].key, key)) { \
             return 1; \
         } \
         h = (h + 1) & (unsigned int)mask; \
@@ -150,9 +163,10 @@ static _Bool dex_map_##SUFFIX##_has(DexMap_##SUFFIX* m, KEY_TYPE key) { \
 \
 static void dex_map_##SUFFIX##_remove(DexMap_##SUFFIX* m, KEY_TYPE key) { \
     int mask = m->cap - 1; \
-    unsigned int h = HASH_KEY(key) & (unsigned int)mask; \
+    unsigned int hv = HASH_KEY(key); \
+    unsigned int h = hv & (unsigned int)mask; \
     while (m->entries[h].occupied) { \
-        if (KEY_EQ(m->entries[h].key, key)) { \
+        if (m->entries[h].hash == hv && KEY_EQ(m->entries[h].key, key)) { \
             KEY_RELEASE(m->entries[h].key); \
             VAL_RELEASE(m->entries[h].value); \
             m->entries[h].occupied = 0; \
@@ -160,7 +174,7 @@ static void dex_map_##SUFFIX##_remove(DexMap_##SUFFIX* m, KEY_TYPE key) { \
             /* Backward-shift deletion: re-insert displaced entries */ \
             unsigned int j = (h + 1) & (unsigned int)mask; \
             while (m->entries[j].occupied) { \
-                unsigned int natural = HASH_KEY(m->entries[j].key) & (unsigned int)mask; \
+                unsigned int natural = m->entries[j].hash & (unsigned int)mask; \
                 /* Check if entry j is displaced past the gap at h */ \
                 _Bool displaced = (j > h) ? (natural <= h || natural > j) : (natural <= h && natural > j); \
                 if (displaced) { \

@@ -1,0 +1,144 @@
+// Returning a struct that was *copied* out of somewhere the function does not
+// own — an array element, a field of another struct.
+//
+// The copy duplicates the struct's heap field pointers without taking a
+// reference to them, so a scope that releases the container frees what the
+// caller is about to be handed, and a caller that releases the copy's fields
+// frees what the container still owns. Two shapes, two different wrong answers,
+// and the same missing retain behind both.
+//
+// `let x = arr[0]` had been retained for a while; the return had not. The
+// symptom was never a crash at the return: the string fields survived, because
+// they are retained by a different path, so the struct looked right and
+// encoding it was correct — and then reading its array field gave a length of
+// 979,725,935 and the next read segfaulted. This test is written to fail under
+// DEX_MEM_CHECK in both of the places it used to go wrong, rather than to rely
+// on a crash that only happens sometimes.
+import "fmt"
+import "str"
+
+struct Inner {
+    tag: string
+}
+
+struct Holder {
+    id: string
+    items: Inner[]
+    inner: Inner
+}
+
+// A struct of plain data, to check the fix does not rewrite a return that has
+// no reference counted field in it at all.
+struct Plain {
+    count: int
+    ratio: double
+}
+
+fn noItems(): Inner[] {
+    let out: Inner[] = []
+    return out
+}
+
+fn build(): Holder[] {
+    let items: Inner[] = noItems()
+    let a: Inner = Inner { tag: "A" }
+    items.push(a)
+    let b: Inner = Inner { tag: "B" }
+    items.push(b)
+    let core: Inner = Inner { tag: "core" }
+    let one: Holder = Holder { id: "H1", items: items, inner: core }
+    let all: Holder[] = []
+    all.push(one)
+    return all
+}
+
+// The container is this function's own, and the cleanup on the way out releases
+// it. Without a retain the caller gets pointers into freed memory.
+fn fromOwnArray(): Holder {
+    let all: Holder[] = build()
+    return all[0]
+}
+
+// The container belongs to the caller, so nothing here releases it — and that
+// is why the copy still needs its own reference: the caller will release the
+// container *and* the copy. This one compiled to a bare `return expr` with no
+// temporary, so it was reached by neither of the paths that handle the others.
+fn fromCallersArray(all: Holder[]): Holder {
+    return all[0]
+}
+
+fn innerOfOwn(): Inner {
+    let all: Holder[] = build()
+    let holder: Holder = all[0]
+    return holder.inner
+}
+
+fn innerOfCallers(holder: Holder): Inner {
+    return holder.inner
+}
+
+// A whole by-value parameter handed straight back.
+fn passedThrough(holder: Holder): Holder {
+    return holder
+}
+
+fn plainOf(values: Plain[]): Plain {
+    return values[0]
+}
+
+fn main(): void {
+    // Out of an array the callee owned.
+    let own: Holder = fromOwnArray()
+    assert(own.id == "H1")
+    let ownItems: Inner[] = own.items
+    assert(ownItems.len() == 2)
+    let ownFirst: Inner = ownItems[0]
+    assert(ownFirst.tag == "A")
+    assert(own.inner.tag == "core")
+
+    // Out of an array the caller owns, used after the container is still live.
+    let container: Holder[] = build()
+    let borrowed: Holder = fromCallersArray(container)
+    assert(borrowed.id == "H1")
+    let borrowedItems: Inner[] = borrowed.items
+    assert(borrowedItems.len() == 2)
+    let borrowedSecond: Inner = borrowedItems[1]
+    assert(borrowedSecond.tag == "B")
+
+    // A nested struct field, from each side.
+    let fromOwn: Inner = innerOfOwn()
+    assert(fromOwn.tag == "core")
+    let source: Holder = fromOwnArray()
+    let fromCaller: Inner = innerOfCallers(source)
+    assert(fromCaller.tag == "core")
+
+    // A parameter returned whole.
+    let through: Holder = passedThrough(source)
+    assert(through.id == "H1")
+    let throughItems: Inner[] = through.items
+    assert(throughItems.len() == 2)
+
+    // Plain data, which needs no retain and must still work.
+    let plains: Plain[] = []
+    let p: Plain = Plain { count: 3, ratio: 0.5 }
+    plains.push(p)
+    let got: Plain = plainOf(plains)
+    assert(got.count == 3)
+
+    // Repeated, so an imbalance in either direction accumulates into something
+    // a single pass would not show: a missing retain frees memory still in use,
+    // and a surplus one leaves every iteration's array alive at exit.
+    let rounds: int = 0
+    let total: int = 0
+    while (rounds < 200) {
+        let each: Holder = fromOwnArray()
+        let items: Inner[] = each.items
+        total = total + items.len()
+        let viaParam: Holder = fromCallersArray(container)
+        let paramItems: Inner[] = viaParam.items
+        total = total + paramItems.len()
+        rounds = rounds + 1
+    }
+    assert(total == 800)
+    fmt.println("returned " + str.fromInt(total) + " items through borrowed struct returns")
+}

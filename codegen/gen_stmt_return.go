@@ -191,6 +191,21 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 						// taken from a borrowed reference need a retain to
 						// survive the cleanup.
 						g.emitRetainReturnedLitFields(out, prefix, retType, s.Value)
+					} else if g.borrowsHeapValue(s.Value) {
+						// `return all[0]` or `return holder.inner` — a copy out
+						// of a container this scope owns. The copy aliases the
+						// container's heap fields and the cleanup below releases
+						// the container, so without this the caller is handed
+						// pointers into memory that has just been freed.
+						//
+						// The same hole the `let` branch had, in the other
+						// statement that moves a struct across a scope: strings
+						// were retained there by a separate path, so an id or a
+						// name survived and the struct looked correct, while an
+						// array field read out of it gave a nonsense length and
+						// the next read segfaulted. Only `exceptVar` above and
+						// literals were covered; a borrowed expression was not.
+						g.emitRetainBorrowedStructFields(out, prefix, "_ret_tmp", retType)
 					}
 				}
 				g.emitHoistReleases(out, prefix)
@@ -213,6 +228,26 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
 			g.emitRetainReturnedLitFields(out, prefix, retType, s.Value)
+			g.emitReturn(out, prefix, "_ret_tmp")
+		} else if ast.IsStructType(retType) && g.borrowsHeapValue(s.Value) &&
+			g.structHasReleasableField(retType) {
+			// The same copy-out-of-a-container as above, in a function with no
+			// locals to clean up: `fn first(all: Holder[]): Holder { return
+			// all[0] }`, or returning a by-value parameter's field.
+			//
+			// Nothing here releases the container — it is the caller's — so
+			// there is no cleanup to survive, and that is exactly why the
+			// retain is needed. The caller receives the copy as an owned value
+			// and releases its fields when that value dies, *and* releases the
+			// container's when the container dies: two releases against one
+			// reference. This is the one that was reached by a bare
+			// `return expr` with no temporary at all, so neither arm above
+			// could have caught it.
+			ctyp := g.cType(retType)
+			out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
+			g.genExpr(out, s.Value)
+			out.WriteString(";\n")
+			g.emitRetainBorrowedStructFields(out, prefix, "_ret_tmp", retType)
 			g.emitReturn(out, prefix, "_ret_tmp")
 		} else {
 			// Nothing in scope to clean up, but the return expression may

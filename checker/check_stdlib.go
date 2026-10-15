@@ -16,6 +16,44 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return t, true, err
 	}
 
+	// The num module is one rule for four names: take any numeric-ish value,
+	// return the type the name says. The conversion itself is a C cast, so
+	// there is nothing to resolve beyond checking the argument is convertible.
+	if e.Module == "num" {
+		if len(e.Args) != 1 {
+			return 0, true, c.errAt(e.Pos, "num.%s() takes exactly 1 argument, got %d", e.Name, len(e.Args))
+		}
+		argType, err := c.checkExpr(e.Args[0])
+		if err != nil {
+			return 0, true, err
+		}
+		if ast.IsRefType(argType) {
+			argType = ast.RefInnerType(argType)
+		}
+		switch argType {
+		case ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeChar:
+		default:
+			return 0, true, c.errAt(e.Pos, "num.%s() argument must be int, long, double or char, got %s",
+				e.Name, typeName(argType))
+		}
+		switch e.Name {
+		case "toInt":
+			return ast.TypeInt, true, nil
+		case "toLong":
+			return ast.TypeLong, true, nil
+		case "toDouble":
+			return ast.TypeDouble, true, nil
+		case "toChar":
+			// A double has no character code; rounding one silently would be
+			// a conversion nobody asked for.
+			if argType == ast.TypeDouble {
+				return 0, true, c.errAt(e.Pos, "num.toChar() argument must be int, long or char, got double")
+			}
+			return ast.TypeChar, true, nil
+		}
+		return 0, true, c.errAt(e.Pos, "unknown function num.%s()", e.Name)
+	}
+
 	// Special case: fmt.print/fmt.println — accepts any primitive type
 	if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
 		if len(e.Args) != 1 {

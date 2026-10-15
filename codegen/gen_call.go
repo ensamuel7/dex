@@ -157,6 +157,18 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
+	// num.* is a C cast. The checker has already rejected anything the cast
+	// would not be meaningful on.
+	if e.Module == "num" {
+		cast := map[string]string{
+			"toInt": "int", "toLong": "long", "toDouble": "double", "toChar": "char",
+		}[e.Name]
+		out.WriteString("((" + cast + ")(")
+		g.genExpr(out, e.Args[0])
+		out.WriteString("))")
+		return
+	}
+
 	// Special case: fmt.print / fmt.println — polymorphic print for any type
 	if e.Module == "fmt" && (e.Name == "print" || e.Name == "println") {
 		newline := e.Name == "println"

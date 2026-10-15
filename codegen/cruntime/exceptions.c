@@ -1,6 +1,22 @@
 // DexLang exception runtime — setjmp/longjmp-based exception handling
 
 #include <setjmp.h>
+
+/* _setjmp / _longjmp do not save or restore the signal mask. On macOS and the
+   BSDs plain setjmp() is sigsetjmp(env, 1), so every try entry pays a
+   sigprocmask syscall -- measured at ~180ns per entry, which is 45x what a
+   table-driven implementation costs. Nothing in this runtime installs a signal
+   handler or depends on the mask surviving an unwind, so saving it is pure
+   waste. On glibc setjmp already omits the mask, so this is a no-op there.
+   _setjmp/_longjmp are POSIX. MinGW spells those names for something else, so
+   Windows keeps the plain pair -- where it costs nothing anyway. */
+#if defined(_WIN32)
+#define DEX_SETJMP(env)  setjmp(env)
+#define DEX_LONGJMP(env) longjmp(env, 1)
+#else
+#define DEX_SETJMP(env)  _setjmp(env)
+#define DEX_LONGJMP(env) _longjmp(env, 1)
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -189,7 +205,7 @@ static void _dex_throw_staged(const char* type) {
     _dex_exc_stack[_dex_exc_top].message = _dex_exc_msg;
     _dex_exc_stack[_dex_exc_top].type = type;
     _dex_exc_stack[_dex_exc_top].active = 1;
-    longjmp(_dex_exc_stack[_dex_exc_top].env, 1);
+    DEX_LONGJMP(_dex_exc_stack[_dex_exc_top].env);
 }
 
 // A literal message needs no staging: it is static storage and outlives the
@@ -203,7 +219,7 @@ static void _dex_throw(const char* type, const char* msg) {
     _dex_exc_stack[_dex_exc_top].message = msg;
     _dex_exc_stack[_dex_exc_top].type = type;
     _dex_exc_stack[_dex_exc_top].active = 1;
-    longjmp(_dex_exc_stack[_dex_exc_top].env, 1);
+    DEX_LONGJMP(_dex_exc_stack[_dex_exc_top].env);
 }
 
 // Re-throwing keeps what was staged: the exception is the same one, so its
@@ -216,5 +232,5 @@ static void _dex_rethrow(const char* type, const char* msg) {
     _dex_exc_stack[_dex_exc_top].message = msg;
     _dex_exc_stack[_dex_exc_top].type = type;
     _dex_exc_stack[_dex_exc_top].active = 1;
-    longjmp(_dex_exc_stack[_dex_exc_top].env, 1);
+    DEX_LONGJMP(_dex_exc_stack[_dex_exc_top].env);
 }

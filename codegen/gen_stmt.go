@@ -525,7 +525,24 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		// Generate as if/else if/else chain (supports string comparison via strcmp)
 		isString := tagType == ast.TypeString
 		isPayloadEnum := ast.IsPayloadEnumType(tagType)
+		// The checker proves a payload-enum switch with no default covers every
+		// variant, so the last arm can be an unconditional else. Without it C
+		// cannot see that the chain is total and warns that a function whose
+		// every arm returns does not return on all paths -- a warning on
+		// perfectly ordinary code, and an error under -Werror.
+		exhaustive := isPayloadEnum && !s.HasDefault && len(s.Cases) > 0
 		for i, sc := range s.Cases {
+			last := i == len(s.Cases)-1
+			if exhaustive && last && i > 0 {
+				out.WriteString(fmt.Sprintf("%s} else {\n", prefix))
+				g.pushScope()
+				g.genEnumPatternBindings(out, prefix+"    ", tagVar, tagType, sc.Values)
+				for _, stmt := range sc.Body {
+					g.genStmt(out, stmt, indent+1)
+				}
+				g.popScope(out, prefix+"    ")
+				continue
+			}
 			if i == 0 {
 				out.WriteString(fmt.Sprintf("%sif (", prefix))
 			} else {

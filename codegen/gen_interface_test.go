@@ -60,3 +60,49 @@ func TestInterfaceLetFromStructLitStaysInScope(t *testing.T) {
 		}
 	}
 }
+
+// An exhaustive payload-enum switch closes with an unconditional else, so C
+// can see the chain is total. Without it, a function whose every arm returns
+// draws "does not return a value in all control paths" -- a warning on
+// perfectly ordinary code, and an error under -Werror.
+func TestExhaustiveEnumSwitchClosesWithElse(t *testing.T) {
+	out := generate(t, `
+	enum Expr {
+		Lit(long)
+		Add(Expr, Expr)
+	}
+	fn eval(e: Expr): long {
+		switch (e) {
+			case Expr.Lit(v): { return v }
+			case Expr.Add(a, b): { return eval(a) + eval(b) }
+		}
+	}
+	fn main(): void {
+		let x: long = eval(Expr.Lit(1))
+	}`)
+	assertContains(t, out, "} else {")
+	// Two variants, one tag test: the second arm is reached by elimination.
+	if n := strings.Count(out, "->tag == "); n != 1 {
+		t.Fatalf("expected exactly 1 tag test in an exhaustive 2-variant switch, got %d", n)
+	}
+}
+
+// A switch with a default keeps the ordinary chain: the default is the else.
+func TestEnumSwitchWithDefaultKeepsChain(t *testing.T) {
+	out := generate(t, `
+	enum Expr {
+		Lit(long)
+		Add(Expr, Expr)
+	}
+	fn f(e: Expr): long {
+		switch (e) {
+			case Expr.Lit(v): { return v }
+			default: { return 0 }
+		}
+		return 0
+	}
+	fn main(): void {
+		let x: long = f(Expr.Lit(1))
+	}`)
+	assertContains(t, out, "_switch_tag_0->tag == Dex_Expr_Lit")
+}

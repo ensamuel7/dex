@@ -1,0 +1,68 @@
+// Encoding a struct that nests struct arrays, where an inner struct carries a
+// primitive array of its own.
+//
+// The codecs for these are emitted as C functions, one pair per array element
+// type, and a struct-array codec's body names the codecs of its element's own
+// array fields. They used to be written in declaration order — struct arrays
+// first, primitive arrays after — so `tags` below, a `string[]` reached
+// through a struct array, named a function the C compiler had not seen yet and
+// the program failed to compile. Every codec is now declared before any is
+// defined. A struct array nested in a struct array cannot go wrong the same
+// way, because a struct must be declared before it is used.
+import "fmt"
+import "json"
+
+struct Line {
+    sku: string
+    quantity: int
+    tags: string[]
+    sizes: int[]
+}
+
+struct Order {
+    reference: string
+    lines: Line[]
+    labels: string[]
+}
+
+fn main(): void {
+    let tags: string[] = ["fragile", "cold"]
+    let sizes: int[] = [1, 2, 3]
+    let line: Line = Line { sku: "A-1", quantity: 2, tags: tags, sizes: sizes }
+    let lines: Line[] = []
+    lines.push(line)
+    // Empty arrays encode as [], and a literal needs a type to infer from.
+    let noTags: string[] = []
+    let noSizes: int[] = []
+    let second: Line = Line { sku: "B-2", quantity: 1, tags: noTags, sizes: noSizes }
+    lines.push(second)
+
+    let labels: string[] = ["priority"]
+    let order: Order = Order { reference: "R-9", lines: lines, labels: labels }
+
+    let encoded: string = json.encode(order)
+    fmt.println(encoded)
+    assert(encoded.contains("\"reference\":\"R-9\""))
+    assert(encoded.contains("\"tags\":[\"fragile\",\"cold\"]"))
+    assert(encoded.contains("\"sizes\":[1,2,3]"))
+    assert(encoded.contains("\"labels\":[\"priority\"]"))
+    assert(encoded.contains("\"sku\":\"B-2\""))
+
+    // An array of them, which is the other path through the same descriptors.
+    let orders: Order[] = []
+    orders.push(order)
+    let many: string = json.encode(orders)
+    assert(many.startsWith("[{"))
+    assert(many.contains("\"fragile\""))
+
+    // And back again, so the decode half of each pair is declared too.
+    let restored: Order = json.decode(encoded)
+    assert(restored.reference == "R-9")
+    assert(restored.lines.len() == 2)
+    let first: Line = restored.lines[0]
+    assert(first.sku == "A-1")
+    assert(first.tags.len() == 2)
+    let firstTag: string = first.tags[0]
+    assert(firstTag == "fragile")
+    assert(restored.labels.len() == 1)
+}

@@ -855,6 +855,32 @@ func (g *Generator) emitArrayFieldCodecs(out *strings.Builder, program *ast.Prog
 			}
 		}
 	}
+	// Every codec is declared before any of them is defined.
+	//
+	// A struct-array codec's body embeds its element type's field
+	// descriptors, and those name the codecs of that element's own array
+	// fields — a `string[]` inside it, or a further struct array. The bodies
+	// below are emitted in struct declaration order, which is not dependency
+	// order, so a body could name a function the C compiler had not seen yet:
+	// a `string[]` field on a struct reached through a struct array failed to
+	// compile, because the primitive codecs are written after the struct ones.
+	// Declaring all of them first settles the question rather than leaving it
+	// to the order the structs happen to appear in.
+	codecOrder := []ast.Type{ast.TypeArrayInt, ast.TypeArrayLong, ast.TypeArrayDouble,
+		ast.TypeArrayBool, ast.TypeArrayChar, ast.TypeArrayString}
+	for _, t := range codecOrder {
+		if !needed[t] {
+			continue
+		}
+		encName, decName, _ := jsonArrayCodecNames(t)
+		out.WriteString(fmt.Sprintf("static const char* %s(void* _field);\n", encName))
+		out.WriteString(fmt.Sprintf("static void %s(const char* _json, void* _field);\n", decName))
+	}
+	for _, t := range structArrs {
+		encName, decName := jsonStructArrayCodecNames(t)
+		out.WriteString(fmt.Sprintf("static const char* %s(void* _field);\n", encName))
+		out.WriteString(fmt.Sprintf("static void %s(const char* _json, void* _field);\n", decName))
+	}
 	for _, t := range structArrs {
 		elemType := ast.ElementType(t)
 		elemCType := g.cType(elemType)
@@ -886,10 +912,8 @@ func (g *Generator) emitArrayFieldCodecs(out *strings.Builder, program *ast.Prog
 	if len(needed) == 0 {
 		return
 	}
-	// Deterministic order so output is reproducible.
-	order := []ast.Type{ast.TypeArrayInt, ast.TypeArrayLong, ast.TypeArrayDouble,
-		ast.TypeArrayBool, ast.TypeArrayChar, ast.TypeArrayString}
-	for _, t := range order {
+	// The same order the prototypes were written in, so output is reproducible.
+	for _, t := range codecOrder {
 		if !needed[t] {
 			continue
 		}

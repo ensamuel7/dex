@@ -86,6 +86,15 @@ func init() {
 				RawParams:  []int{0, 1, 2, 3},
 				Doc:        "Verify an RS256 signature — RSASSA-PKCS1-v1_5 over SHA-256 — against an RSA public key given as its raw modulus and exponent, which is what a JWK's 'n' and 'e' are once base64UrlDecode has run over them. What checking a Google or Apple ID token needs. False on any failure, including a build without OpenSSL. Needs OpenSSL.",
 			},
+			"signRs256": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeString},
+				ParamNames: []string{"message", "privateKeyPem"},
+				ReturnType: ast.TypeString,
+				CName:      "dex_crypto_sign_rs256",
+				RawParams:  []int{0, 1},
+				RawReturn:  true,
+				Doc:        "Sign a message with RS256 — RSASSA-PKCS1-v1_5 over SHA-256 — using an RSA private key in PEM form, returning unpadded base64url: a JWS signature as written, so the result is a token's third segment. The private half of verifyRs256, and what minting a Google service-account assertion needs, which is the only way to reach Firebase Cloud Messaging v1. The PEM must have real newlines, not the \\n escapes a JSON key file writes. Empty on any failure, including a build without OpenSSL. Needs OpenSSL.",
+			},
 			"sha256Hex": {
 				Params:     []ast.Type{ast.TypeString},
 				ParamNames: []string{"data"},

@@ -1,0 +1,111 @@
+// RS256 signing, and the verifier it has to agree with.
+//
+// `verifyRs256` came first, for checking what Google and Apple sign. This is
+// the other half, for signing what *they* will check: a service account's
+// assertion, which is the only way to an OAuth2 access token and therefore the
+// only way to Firebase Cloud Messaging v1.
+//
+// The two are tested against each other rather than against a recorded
+// signature, because RSASSA-PKCS1-v1_5 is deterministic and a fixture would
+// only prove this build still produces what it produced before. Agreeing with
+// the verifier proves it produces what *anyone else* will accept.
+//
+// The key below is a throwaway generated for this file. It signs nothing real
+// and protects nothing; it is here so the test needs no files beside it.
+import "fmt"
+import "str"
+import "crypto"
+
+const TEST_KEY: string =
+    "-----BEGIN PRIVATE KEY-----\n" +
+    "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCS3Ezd3ycglH9W\n" +
+    "mCnb17KXJNtNtOeubP+F2mPJ59LJVsIYmK2E1Pm/XozK8a/bcLCoyvJ8pABF+Szu\n" +
+    "kDBnLxMZlKGOdaSJgEz0/EQHtOkORnc9e+yTU0vBX8FHIzywsiwi8qy1I66tqA/f\n" +
+    "omc+DIQoEfhqavqgjoah84n12ZB1Q37k14VJ2U7+sH++2SN2tf/AbJ/aWP74D5J1\n" +
+    "bz0ZxbifgzYrUHogdkSIaP3SP5jTaYaXWrRZFsnrAxxoJzqAYXyNgTd7zd8Vgu7w\n" +
+    "4XquQoVN/9wwpwp7XrX/jd1rWlRgNhyZGLQARZpE5dzG3biB3IT4DEG7whm5Q/yK\n" +
+    "EY28Af4fAgMBAAECggEAJLV/WzhD4f9sYvtO/z5HzELwtFhDTxS8vDsOFXJmfGA8\n" +
+    "zQQg32KS+NRL8hB+iiX9anusKB6gWN1Db3BIQQqBxjOiPGdIlPwmgFgsMxbz6FcR\n" +
+    "yCMZS+wWtAPY3oy+x1YJ9UReijqcl5i6OwavstFTGWcAhq0t74MgwQuMkRDsbHrt\n" +
+    "HLfuUAbLkvO2sXBhJf4YZDDgrJHbBZQjhq4QZYe6UpasjYfHFu1VUxjYaxyQqqln\n" +
+    "PHoxiunusWN5hOA2sJpjHebnyiGrs2A2SmY0tjhUqCx4bnudojlbyGfFhQQcSSQ6\n" +
+    "dJ5JAUq4LV0JCQ0H1R5B4lDxYr/TW7tDbm5QvvRvkQKBgQDHZkBxyQtld3+WfnoB\n" +
+    "efcVr4UP0AoIqh+eDsehl+WbeCy0I2YLjnEF81JFoEwUmag5SM3zB6ozMaZ3zB6y\n" +
+    "rKjIs4hY1wTLjgo8ixmPCCtZiqH7auKgEFgYuwp7NzMPMYb1JMp2kn+SZQkxWzmf\n" +
+    "3hOfayBCmwY2B6ggS5yNFbYa7wKBgQC8jDVvkJIYygxfPl7Dn5JMyZ2zselj+Hv5\n" +
+    "c5PAbPDMZOrtQ0ltzSvdFY8O1YH4rWWKIWdFxis/vq4uKgElRprhzpxWQ09tcsw8\n" +
+    "/r/o5EduI/EkGpWKHuesCAjNtzPed6ny3N1chq4bEEe2AbWxyywTamtXS2i2A5iT\n" +
+    "dtY3vV4P0QKBgFmN6P+xpbaqltkGcNFc78YDkKVrcDY4Af9A8BP5XpwWuy0kgN5L\n" +
+    "2SMtBxRSTBkscctYkXbHSH+5muRO/rKMrTmGuIP9/h9V6e8LIi2FI8MRanK6rJHr\n" +
+    "BUYGK0zvm7UFL3HGVlAut7EOQ7SxHg5Y9UMyH8kKSx3VDoOCsgsDZ0htAoGAYUyJ\n" +
+    "ltUoT5qU3+GzzYffW7j/pOe+5VQpxgUazkZpzVCW23HJxtwGMsUZWjJcLBRvPeUX\n" +
+    "Ai7Nyst/31rV1IKnErgofWum5XhEZYWhS3HiWrg5jMQbP3fLXj+XK3HLVpayIR5R\n" +
+    "LZpi5px0JTykoueSC0Lzucy0cJlSd2bwDTuv+sECgYArk2Rkep98Wn0o8AtJZoe9\n" +
+    "4TtcLWjKCS8HZTS+YGIsGCvFAjhBMO8FZPBWTH/br+Skk4UR6e4ScioBplddSrwR\n" +
+    "WoXYCUyNqQfcIXCFDZWy/4ThVzPoTMffB+X/ZZywjTTOdbfHkmXq3DY2O8NppUzo\n" +
+    "uB6QiDs1JhMyD5w1v1yc5A==\n" +
+    "-----END PRIVATE KEY-----\n"
+
+// The public half, as a JWK writes it: the modulus and the exponent, base64url.
+const TEST_MODULUS_B64: string = "ktxM3d8nIJR_Vpgp29eylyTbTbTnrmz_hdpjyefSyVbCGJithNT5v16MyvGv23CwqMryfKQARfks7pAwZy8TGZShjnWkiYBM9PxEB7TpDkZ3PXvsk1NLwV_BRyM8sLIsIvKstSOuragP36JnPgyEKBH4amr6oI6GofOJ9dmQdUN-5NeFSdlO_rB_vtkjdrX_wGyf2lj--A-SdW89GcW4n4M2K1B6IHZEiGj90j-Y02mGl1q0WRbJ6wMcaCc6gGF8jYE3e83fFYLu8OF6rkKFTf_cMKcKe161_43da1pUYDYcmRi0AEWaROXcxt24gdyE-AxBu8IZuUP8ihGNvAH-Hw"
+const TEST_EXPONENT_B64: string = "AQAB"
+
+// A JWT's first two segments, which is exactly what gets signed.
+const SIGNING_INPUT: string =
+    "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdmNAcHJvamVjdC5pYW0iLCJzY29wZSI6ImZjbSJ9"
+
+fn main(): void {
+    let signature: string = crypto.signRs256(SIGNING_INPUT, TEST_KEY)
+
+    // 2048 bits of signature is 256 bytes, which is 342 base64 characters with
+    // the padding left off.
+    assert(signature.len() == 342)
+
+    // Base64url, not base64: a JWS carries no '+', '/' or '='.
+    assert(!signature.contains("+"))
+    assert(!signature.contains("/"))
+    assert(!signature.contains("="))
+
+    // The point of the whole thing: the verifier accepts it.
+    let modulus: string = crypto.base64UrlDecode(TEST_MODULUS_B64)
+    let exponent: string = crypto.base64UrlDecode(TEST_EXPONENT_B64)
+    let raw: string = crypto.base64UrlDecode(signature)
+    assert(crypto.verifyRs256(SIGNING_INPUT, raw, modulus, exponent))
+
+    // And rejects a signature over anything else.
+    let tampered: string = SIGNING_INPUT + "x"
+    assert(!crypto.verifyRs256(tampered, raw, modulus, exponent))
+
+    // Deterministic, so the same input signs the same way twice. Worth
+    // asserting because a signer that quietly salted would still verify and
+    // would break any caller that caches a token by its signature.
+    let again: string = crypto.signRs256(SIGNING_INPUT, TEST_KEY)
+    assert(again == signature)
+
+    // Every failure is an empty string rather than something that looks like a
+    // signature. A caller cannot tell a wrong signature from a right one, so
+    // the only safe answer is one it can test.
+    let noKey: string = crypto.signRs256(SIGNING_INPUT, "")
+    assert(noKey.isEmpty())
+    let notPem: string = crypto.signRs256(SIGNING_INPUT, "hello")
+    assert(notPem.isEmpty())
+    let wrongBody: string = crypto.signRs256(SIGNING_INPUT,
+        "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n")
+    assert(wrongBody.isEmpty())
+
+    // The mistake a JSON key file invites. Google's service account holds its
+    // key with the newlines escaped, and a caller that forgets to turn them
+    // back gets this — refused, rather than signing with something else.
+    let escaped: string = TEST_KEY.replace("\n", "\\n")
+    let unparsed: string = crypto.signRs256(SIGNING_INPUT, escaped)
+    assert(unparsed.isEmpty())
+
+    // An empty message is still signable: it is a message of no bytes, not a
+    // missing argument, and the verifier agrees about it.
+    let overNothing: string = crypto.signRs256("", TEST_KEY)
+    assert(!overNothing.isEmpty())
+    let rawEmpty: string = crypto.base64UrlDecode(overNothing)
+    assert(crypto.verifyRs256("", rawEmpty, modulus, exponent))
+
+    fmt.println("signed " + str.fromInt(signature.len()) + " base64url characters, verified")
+}

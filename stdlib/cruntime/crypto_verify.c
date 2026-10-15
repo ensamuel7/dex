@@ -56,6 +56,7 @@ DexString* dex_crypto_base64url_decode(DexString* in) {
 
 #ifdef DEX_HAS_SSL
 #include <openssl/bn.h>
+#include <openssl/pem.h>
 #include <openssl/rsa.h>
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/core_names.h>
@@ -153,6 +154,76 @@ _Bool dex_crypto_verify_rs256(DexString* message, DexString* signature,
     return ok ? 1 : 0;
 }
 
+/* === Signing, the other direction ===
+
+   Verification above takes a public key as two numbers, because that is what a
+   JWKS document carries. Signing takes a PEM, because that is what a private
+   key is distributed as: a Google service account's JSON holds its key as a
+   PKCS#8 PEM in the `private_key` field, and an Apple one is a file.
+
+   What this is for: minting the assertion that buys an OAuth2 access token.
+   Google's service-account flow is a JWT signed with RS256 and exchanged at
+   their token endpoint, and without a signer there is no way to reach any
+   Google API that uses it — Firebase Cloud Messaging v1 among them.
+
+   Returns the signature as unpadded base64url, which is the only spelling a
+   JWS uses, so the result is the token's third segment as written. Empty on
+   every failure, which is the same contract the digests above keep: a signer
+   that cannot sign must not return something that looks like a signature. */
+DexString* dex_crypto_sign_rs256(DexString* message, DexString* pem) {
+    if (!pem || pem->len == 0) {
+        fprintf(stderr, "[crypto] signRs256: no private key given\n");
+        return dex_string_new("", 0);
+    }
+
+    /* BIO_new_mem_buf does not copy, so the PEM has to outlive the read — it
+       does, being the caller's string. */
+    BIO* bio = BIO_new_mem_buf(pem->data, (int)pem->len);
+    if (!bio) {
+        return dex_string_new("", 0);
+    }
+    EVP_PKEY* key = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    BIO_free(bio);
+    if (!key) {
+        /* Almost always one of two things: a key whose \n escapes were never
+           turned into newlines, which PEM cannot parse, or a passphrase this
+           has no way to ask for. Worth a line either way, because the caller
+           only sees an empty string. */
+        fprintf(stderr, "[crypto] signRs256: the private key could not be read as PEM\n");
+        return dex_string_new("", 0);
+    }
+
+    const unsigned char* m = message ? (const unsigned char*)message->data
+                                     : (const unsigned char*)"";
+    size_t mlen = message ? message->len : 0;
+
+    DexString* out = NULL;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (ctx && EVP_DigestSignInit(ctx, NULL, EVP_sha256(), NULL, key) == 1) {
+        /* Twice, as the API requires: once with no buffer to learn the length,
+           then again to fill it. The length is the key's modulus size, so it
+           is not knowable from the message. */
+        size_t siglen = 0;
+        if (EVP_DigestSign(ctx, NULL, &siglen, m, mlen) == 1 && siglen > 0) {
+            unsigned char* sig = (unsigned char*)malloc(siglen);
+            if (sig) {
+                if (EVP_DigestSign(ctx, sig, &siglen, m, mlen) == 1) {
+                    out = dex_b64url_string(sig, siglen);
+                }
+                free(sig);
+            }
+        }
+    }
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(key);
+
+    if (!out) {
+        fprintf(stderr, "[crypto] signRs256: the key would not sign\n");
+        return dex_string_new("", 0);
+    }
+    return out;
+}
+
 #else
 
 /* Built without OpenSSL. Refusing every signature is the only safe answer: a
@@ -164,6 +235,15 @@ _Bool dex_crypto_verify_rs256(DexString* message, DexString* signature,
     (void)message; (void)signature; (void)modulus; (void)exponent;
     fprintf(stderr, "[crypto] verifyRs256 needs OpenSSL; this build has none\n");
     return 0;
+}
+
+/* And the same for signing: an empty signature rather than a wrong one. A
+   caller that sent it would be refused by whatever it was meant to prove
+   itself to, which is the right end for the failure to surface at. */
+DexString* dex_crypto_sign_rs256(DexString* message, DexString* pem) {
+    (void)message; (void)pem;
+    fprintf(stderr, "[crypto] signRs256 needs OpenSSL; this build has none\n");
+    return dex_string_new("", 0);
 }
 
 #endif

@@ -23,11 +23,14 @@ type CodeAction struct {
 
 const codeActionQuickFix = "quickfix"
 
-// The two checker errors an import fixes: a qualified call into a module the
-// file never imported, and a bare call to a name some module exports.
+// The errors an import fixes: a qualified call into a module the file never
+// imported, a bare call to a name some module exports, and a type some module
+// declares. The type's message can carry a suffix — "in catch clause" — so it
+// is anchored at the start only, and a qualified name is left to the first.
 var (
 	missingModuleRe = regexp.MustCompile(`^module '([^']+)' is not imported$`)
 	missingFuncRe   = regexp.MustCompile(`^undefined function '([^']+)'$`)
+	missingTypeRe   = regexp.MustCompile(`^unknown type '([A-Za-z_][A-Za-z0-9_]*)'`)
 )
 
 func (s *Server) handleCodeAction(msg *jsonrpcMessage) {
@@ -81,6 +84,25 @@ func (s *Server) importCodeActions(uri, text string, rng Range, diags []Diagnost
 		// `userService.init(1)` with no import: insert the import line.
 		if m := missingModuleRe.FindStringSubmatch(d.Message); m != nil {
 			for _, path := range importPathsForModule(m[1], sourceDir, filePath) {
+				add(CodeAction{
+					Title:       fmt.Sprintf("Import %q", path),
+					Kind:        codeActionQuickFix,
+					Diagnostics: []Diagnostic{d},
+					IsPreferred: true,
+					Edit:        &WorkspaceEdit{Changes: map[string][]TextEdit{uri: buildImportEdit(path, text)}},
+				})
+			}
+			continue
+		}
+
+		// `fn f(c: Columns)` where Columns is declared in query.dx: importing
+		// the module is the whole fix, because a bare type name reaches an
+		// imported module's type.
+		if m := missingTypeRe.FindStringSubmatch(d.Message); m != nil {
+			for _, path := range modulesDeclaringType(m[1], sourceDir, filePath) {
+				if isModuleImported(path, text) {
+					continue
+				}
 				add(CodeAction{
 					Title:       fmt.Sprintf("Import %q", path),
 					Kind:        codeActionQuickFix,

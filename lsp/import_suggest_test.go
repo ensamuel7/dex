@@ -277,3 +277,66 @@ private fn hidden(): void {
 		t.Fatal("a private function must not be offered to importers")
 	}
 }
+
+// A type declared in another file had no fix at all: the error said "unknown
+// type" and nothing pointed at the file declaring it. Importing the module is
+// the whole fix, since a bare type name reaches an imported module's type.
+func TestCodeActionImportsModuleDeclaringType(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"main.dx": `fn describe(c: Columns): string {
+    return c.alias
+}
+
+fn main(): void {
+}
+`,
+		"library/query.dx": `struct Columns {
+    alias: string
+}
+`,
+	})
+	s, uri, _ := openAndDiagnose(t, dir, "main.dx")
+
+	actions := codeActionsAt(t, s, uri, 0, 16)
+	act := findAction(actions, `Import "library/query"`)
+	if act == nil {
+		t.Fatalf("no import fix for a type another module declares, got %v", titles(actions))
+	}
+	if got := act.Edit.Changes[uri][0].NewText; got != "import \"library/query\"\n" {
+		t.Fatalf("unexpected import edit %q", got)
+	}
+}
+
+func TestCodeActionImportsModuleDeclaringEnumOrInterface(t *testing.T) {
+	cases := []struct {
+		name, main, file, src, want string
+	}{
+		{"enum", `fn f(s: Status): void {
+}
+
+fn main(): void {
+}
+`, "status.dx", `enum Status {
+    Active
+    Closed
+}
+`, `Import "status"`},
+		{"interface", `fn f(h: Handler): void {
+}
+
+fn main(): void {
+}
+`, "events.dx", `interface Handler {
+    fn handle(name: string): void
+}
+`, `Import "events"`},
+	}
+	for _, c := range cases {
+		dir := writeProject(t, map[string]string{"main.dx": c.main, c.file: c.src})
+		s, uri, _ := openAndDiagnose(t, dir, "main.dx")
+		actions := codeActionsAt(t, s, uri, 0, 9)
+		if findAction(actions, c.want) == nil {
+			t.Errorf("%s: no import fix, got %v", c.name, titles(actions))
+		}
+	}
+}

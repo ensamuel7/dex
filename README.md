@@ -567,7 +567,7 @@ run, code nothing reaches. The rest are hints, which editors render as a quiet
 grey mark rather than a squiggle, because on the command line lint is opt-in
 while an editor asks for every diagnostic on every keystroke.
 
-Unresolved names carry an import quick fix. A call into a module the file never imported (`fmt.println(...)`, `userService.init(...)`) offers to add the import line, and an unqualified call offers to add the import and qualify the call. Typing a bare name also completes to `module.function` from any stdlib module or sibling `.dx` file that exports it, writing the import alongside.
+Unresolved names carry an import quick fix. A call into a module the file never imported (`fmt.println(...)`, `userService.init(...)`) offers to add the import line, and an unqualified call offers to add the import and qualify the call. A type declared in another file (`fn f(c: Columns)` with `Columns` in `query.dx`) offers to import the file that declares it. Typing a bare name also completes to `module.function` from any stdlib module or sibling `.dx` file that exports it, writing the import alongside.
 
 ```bash
 dex lsp

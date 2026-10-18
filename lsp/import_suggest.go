@@ -184,6 +184,57 @@ func modulesExporting(fnName, sourceDir, selfPath string) []importCandidate {
 	return out
 }
 
+// modulesDeclaringType returns the import paths of the modules that declare a
+// struct, enum or interface named typeName: a stdlib module that provides it,
+// or a user .dx file beside or below the source.
+func modulesDeclaringType(typeName, sourceDir, selfPath string) []string {
+	var out []string
+	modNames := make([]string, 0, len(stdlib.AllModules()))
+	for name := range stdlib.AllModules() {
+		modNames = append(modNames, name)
+	}
+	sort.Strings(modNames)
+	for _, name := range modNames {
+		for _, sd := range stdlib.Lookup(name).Types {
+			if sd.Name == typeName {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+
+	files := userModuleFiles(sourceDir)
+	for _, impPath := range sortedKeys(files) {
+		file := files[impPath]
+		if sameFile(file, selfPath) {
+			continue
+		}
+		if program := parseModuleFile(file); program != nil && declaresType(program, typeName) {
+			out = append(out, impPath)
+		}
+	}
+	return out
+}
+
+func declaresType(program *ast.Program, typeName string) bool {
+	for _, sd := range program.Structs {
+		if sd.Name == typeName {
+			return true
+		}
+	}
+	for _, ed := range program.Enums {
+		if ed.Name == typeName {
+			return true
+		}
+	}
+	for _, id := range program.Interfaces {
+		if id.Name == typeName {
+			return true
+		}
+	}
+	return false
+}
+
 // userModuleNamed finds the .dx file a module name refers to, preferring the
 // shallowest path so `config` means ./config.dx rather than a/b/config.dx.
 func userModuleNamed(moduleName, sourceDir, selfPath string) (impPath string, file string, ok bool) {

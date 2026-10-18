@@ -775,6 +775,44 @@ let theirs: signupController.SignupController = signupController.new(7)
 Two *modules* declaring the same name is still an ambiguity error when the
 bare name is used, because neither is the file's own.
 
+### Interfaces across modules
+
+A module may declare an interface, and it belongs to that module the way its
+structs and enums do. This is how a library states a contract its callers
+implement without naming any concrete type:
+
+```dex
+// eventbus/bus.dx
+interface Handler {
+    fn onMessage(payload: string): bool
+}
+
+struct Consumer {
+    fn dispatch(env: Envelope, h: Handler): string { ... }
+}
+```
+
+```dex
+// the consuming project
+import "eventbus/bus"
+
+struct PaidHandler {
+    minimumMinor: long
+
+    fn onMessage(payload: string): bool {
+        return payload.len() > 0
+    }
+}
+
+let ok: Handler = PaidHandler { minimumMinor: 1000 }
+```
+
+Structural typing does not care where either side was declared, so a struct in
+the importing file satisfies a module's interface with no declaration of
+intent. The bare name resolves when nothing else in scope declares it; two
+modules may each declare a `Handler`, and then the bare name is an ambiguity
+error naming both while `alpha.Handler` and `beta.Handler` stay distinct types.
+
 ### Enums across modules
 
 An enum declared in one file is used from another through its module, in every

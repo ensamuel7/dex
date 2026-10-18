@@ -288,6 +288,22 @@ A bare reference still reaches a module imported only indirectly, as it always
 could. Narrowing that to direct imports would be defensible but would break
 code that reads perfectly well.
 
+An **interface** a module declares belongs to it too, and that took more than
+the missing merge in `resolve.go`. `parseInterfaceDef` registers the qualified
+name when `Parser.module` is set and `InterfaceDef.Module` carries it for
+diagnostics; the pre-registration scan picks up `interface` beside `struct` and
+`enum`; and `ModuleType.IsEnum` became `Kind`, because a bool cannot say which
+of three kinds a name is. Both type-position paths resolve one — the bare name
+through the candidate list a struct uses, and `alpha.Handler` through the
+qualified branch — and missing the second is why the bare form worked while the
+qualified form still reported an unknown type. `DisplayStructName` renders an
+interface as well, so a diagnostic reads `alpha.Handler`.
+
+Without this a library could not state a contract: the declaration parsed and
+was dropped, and the importing file reported an unknown type for a name
+visible in the source.
+
+
 ## Where a heap value comes from, and whether it dies
 
 Two things sit underneath the ownership rules, and both are about allocation

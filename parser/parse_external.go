@@ -138,6 +138,20 @@ func (p *Parser) parseExternalFunc(moduleName string) (*ast.ExternalFunc, error)
 		if err != nil {
 			return nil, err
 		}
+		// `freed by "f"` names the library's own deallocator, for a string
+		// that plain free must not touch: sqlite3_free, xmlFree, OPENSSL_free.
+		if p.softKeyword("freed") {
+			p.advance()
+			if !p.softKeyword("by") {
+				return nil, p.errorf("expected 'by' after 'freed' on %s.%s", moduleName, name)
+			}
+			p.advance()
+			if !p.check(token.TokenString) {
+				return nil, p.errorf("expected the freeing function in quotes on %s.%s, as in freed by \"sqlite3_free\"", moduleName, name)
+			}
+			fn.ReturnFreer = p.current().Value
+			p.advance()
+		}
 	}
 
 	// `= "symbol"` names a C function that differs from the declared name.

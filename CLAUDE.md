@@ -69,9 +69,15 @@ functions through `g.lookupFunc`, not the global `stdlib.LookupFunc`.
 Scalars and `string` cross (`externalTypeSupported`). A returned string has two
 conventions and the declaration picks one: `string` copies and leaves the
 pointer alone (`dex_string_copy_cstr`), `owned string` copies and then frees it
-(`dex_string_from_cstr`). The default matters — `dex_string_from_cstr` frees,
+(`dex_string_from_cstr`), and `owned string freed by "f"` copies and then calls
+the library's own deallocator — emitted inline as a statement expression, not
+through a function pointer, because `OPENSSL_free` is a macro. The default matters — `dex_string_from_cstr` frees,
 which is right for the stdlib, where every CName function returning a string
 hands over malloc'd memory, and heap corruption for a user binding `getenv`.
+
+Every C name a block supplies — `= "symbol"`, `closed by`, `freed by` — is
+pasted into the generated C, so `validCSymbol` holds each to a C identifier,
+for the same reason `validLinkFlag` restricts flags.
 
 `owned` is a soft keyword in the return position, not an annotation: `#[owned]`
 already means no-aliasing on a variable, and a marker deciding whether `free`
@@ -302,7 +308,6 @@ interface as well, so a diagnostic reads `alpha.Handler`.
 Without this a library could not state a contract: the declaration parsed and
 was dropped, and the importing file reported an unknown type for a name
 visible in the source.
-
 
 ## Where a heap value comes from, and whether it dies
 

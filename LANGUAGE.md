@@ -4185,6 +4185,7 @@ conventions and guessing wrong corrupts the heap rather than merely leaking:
 |-------------|----------------|---------------|
 | `string` | returns a pointer it keeps — `getenv`, `strerror`, `zlibVersion` | copies the bytes, leaves the pointer alone |
 | `owned string` | `malloc`'d the buffer and hands it over — `strdup` | copies the bytes, then frees the original |
+| `owned string freed by "f"` | allocated it with its own allocator — `OPENSSL_buf2hexstr` | copies the bytes, then calls `f` on the original |
 
 ```dex
 external module cstr {
@@ -4205,6 +4206,27 @@ rather than the advice an annotation carries. It is also **soft**: `owned` is
 only a keyword in this position, so it stays usable as an ordinary name.
 `owned` on anything but a string return is an error, since it has nothing to
 say about an `int`.
+
+Many libraries hand back memory that plain `free` must not touch, because they
+allocated it themselves: sqlite's `sqlite3_free`, libxml2's `xmlFree`,
+OpenSSL's `OPENSSL_free`. `freed by` names the function that does:
+
+```dex
+external module ossl {
+    include "<openssl/crypto.h>"
+    link "-lcrypto"
+
+    fn hex(buf: string, len: long): owned string freed by "OPENSSL_free" = "OPENSSL_buf2hexstr"
+}
+
+let h: string = ossl.hex("ab", 2)   // "61:62"
+```
+
+The function is called once per call, after the bytes are copied, and not at
+all for a NULL return, which arrives as `""`. It may be a macro — `OPENSSL_free`
+is one — because the call is emitted inline rather than taken as a function
+pointer. `freed by` without `owned` is an error: without `owned` Dex never frees
+the string, so there is nothing to free it with.
 
 ### Bytes, and why there is no raw marker
 
@@ -4301,7 +4323,10 @@ representation does not. There is no unsigned-char type to declare instead.
 
 An external declaration is validated where it is written rather than at the
 call site: a duplicate module or function, a name a stdlib module already has,
-a malformed header, a disallowed link flag, and a type that cannot cross. The
+a malformed header, a disallowed link flag, a type that cannot cross, and a
+C symbol — a `= "symbol"`, a `closed by` or a `freed by` — that is not a C
+identifier. Those names are pasted into the generated C as written, so anything
+wider would be code run at build time. The
 signature is then checked at every call exactly as a stdlib function's is.
 
 One thing is left to the C compiler and deliberately so: whether the C function

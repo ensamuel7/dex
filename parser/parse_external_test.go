@@ -173,3 +173,29 @@ func TestParseExternalHandleNeedsACloser(t *testing.T) {
 	}
 	fn main(): void {}`, "closed by")
 }
+
+func TestParseExternalFreedBy(t *testing.T) {
+	prog := parseExtern(t, `external module sq {
+		include "<sqlite3.h>"
+		fn expanded(n: int): owned string freed by "sqlite3_free" = "sqlite3_expanded_sql"
+		fn dup(s: string): owned string = "strdup"
+	}
+	fn main(): void {}`)
+	fns := prog.Externals[0].Funcs
+	if fns[0].ReturnFreer != "sqlite3_free" || !fns[0].OwnedReturn {
+		t.Errorf("expanded: freer = %q owned = %v, want sqlite3_free and owned", fns[0].ReturnFreer, fns[0].OwnedReturn)
+	}
+	if fns[0].CName != "sqlite3_expanded_sql" {
+		t.Errorf("expanded: CName = %q, want sqlite3_expanded_sql", fns[0].CName)
+	}
+	if fns[1].ReturnFreer != "" {
+		t.Errorf("dup: freer = %q, want none", fns[1].ReturnFreer)
+	}
+}
+
+func TestParseExternalFreedNeedsBy(t *testing.T) {
+	parseExternalFails(t, `external module sq {
+		fn f(): owned string freed "sqlite3_free"
+	}
+	fn main(): void {}`, "expected 'by' after 'freed'")
+}

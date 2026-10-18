@@ -172,3 +172,19 @@ func TestCodegenNoPrototypesWhenHeaderNamed(t *testing.T) {
 		t.Error("declared a function the named header already declares")
 	}
 }
+
+func TestCodegenExternalFreedByCallsTheLibraryDeallocator(t *testing.T) {
+	out := generate(t, `external module sq {
+		include "<sqlite3.h>"
+		fn expanded(n: int): owned string freed by "sqlite3_free" = "sqlite3_expanded_sql"
+	}
+	fn main(): void {
+		let s: string = sq.expanded(1)
+	}`)
+	assertContains(t, out, "sqlite3_expanded_sql(1)")
+	assertContains(t, out, "dex_string_copy_cstr(")
+	assertContains(t, out, "sqlite3_free((void*)")
+	if strings.Contains(out, "dex_string_from_cstr(sqlite3_expanded_sql") {
+		t.Error("freed the library's string with free instead of its own deallocator")
+	}
+}

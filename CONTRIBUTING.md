@@ -52,6 +52,7 @@ docgen/     Documentation generator (template.html + generate.go)
 docs/       Generated documentation output (do not edit directly)
 examples/   Example .dx programs
 editors/    Editor extensions (VSCode)
+design/     Proposals for work not built yet
 ```
 
 ## Compilation Pipeline

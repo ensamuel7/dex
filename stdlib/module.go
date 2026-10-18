@@ -47,6 +47,10 @@ type FuncDef struct {
 	// malloc'd memory — so this stays false there and is set only for an
 	// external declaration without #[owned].
 	BorrowedReturn bool
+
+	// ReturnFreer is the C function that frees an owned string return in
+	// place of free. Set only from an external declaration's `freed by`.
+	ReturnFreer string
 }
 
 // IsRawParam reports whether argument idx is handed over as a DexString*.
@@ -152,6 +156,7 @@ func FromExternal(em ast.ExternalModule) *Module {
 			ReturnType:     f.ReturnType,
 			CName:          f.CName,
 			BorrowedReturn: !f.OwnedReturn,
+			ReturnFreer:    f.ReturnFreer,
 			Doc:            "external " + em.Name + "." + f.Name,
 		}
 	}

@@ -825,7 +825,22 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			// A RawString function has already built a DexString with the right
 			// length, so wrapping it would strlen away the bytes it exists to
 			// preserve.
-			if funcDef.ReturnType == ast.TypeString && !funcDef.RawReturn {
+			if funcDef.ReturnType == ast.TypeString && !funcDef.RawReturn && funcDef.ReturnFreer != "" {
+				// A statement expression rather than a runtime helper taking a
+				// function pointer, because a library's deallocator may be a
+				// macro: OPENSSL_free is.
+				ptr := g.nextTemp()
+				str := g.nextTemp()
+				out.WriteString(fmt.Sprintf("({ const char* %s = %s(", ptr, funcDef.CName))
+				for i, arg := range e.Args {
+					if i > 0 {
+						out.WriteString(", ")
+					}
+					g.genStdlibArg(out, arg, funcDef, i)
+				}
+				out.WriteString(fmt.Sprintf("); DexString* %s = dex_string_copy_cstr(%s); if (%s) %s((void*)%s); %s; })",
+					str, ptr, ptr, funcDef.ReturnFreer, ptr, str))
+			} else if funcDef.ReturnType == ast.TypeString && !funcDef.RawReturn {
 				if funcDef.BorrowedReturn {
 					out.WriteString("dex_string_copy_cstr(")
 				} else {

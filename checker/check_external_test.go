@@ -227,3 +227,28 @@ func TestExternalHandleCollidesWithStruct(t *testing.T) {
 	}
 	fn main(): void {}`, "collides with a struct")
 }
+
+func TestExternalFreedByNeedsOwned(t *testing.T) {
+	mustFail(t, `external module sq {
+		fn f(): string freed by "sqlite3_free"
+	}
+	fn main(): void {}`, "needs an 'owned string' return")
+}
+
+// A symbol is pasted into the generated C as written, so anything that is not
+// an identifier would be code run at build time.
+func TestExternalRejectsSymbolsThatAreNotIdentifiers(t *testing.T) {
+	mustFail(t, `external module z {
+		fn f(): int = "abs(0); exit"
+	}
+	fn main(): void {}`, "is not a C identifier")
+	mustFail(t, `external module z {
+		type H closed by "fclose); exit(1"
+		fn f(): H? = "g"
+	}
+	fn main(): void {}`, "is not a C identifier")
+	mustFail(t, `external module z {
+		fn f(): owned string freed by "free); exit(1" = "g"
+	}
+	fn main(): void {}`, "is not a C identifier")
+}

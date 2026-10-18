@@ -353,6 +353,14 @@ fn errorText(n: int): string = "strerror"        // copied
 fn dup(s: string): owned string = "strdup"       // taken over and freed
 ```
 
+A library that allocates with its own allocator names the function that frees
+it, because plain `free` on its memory is undefined behaviour. It may be a
+macro:
+
+```dex
+fn hex(buf: string, len: long): owned string freed by "OPENSSL_free" = "OPENSSL_buf2hexstr"
+```
+
 Bytes that may contain a NUL cross as a pointer and a length, which is how the
 C functions taking them are already written — `.len()` is the byte length, so
 nothing truncates.
@@ -382,7 +390,8 @@ catches that.
 
 `link` accepts `-l<name>`, `-L<path>` and a bare library name, and refuses the
 rest: a block that could hand arbitrary flags to the C compiler would be code
-execution at build time.
+execution at build time. For the same reason every C name a block supplies —
+`= "symbol"`, `closed by`, `freed by` — must be a plain C identifier.
 
 **It is the C ABI, not the C language.** Any library exposing C-ABI symbols can
 be bound — C++ behind `extern "C"`, Rust built as a `staticlib` with
@@ -571,6 +580,13 @@ DexLang compiles `.dx` source to native binaries through C. See the [Language Re
 ## Project Layout
 
 See [CONTRIBUTING.md](CONTRIBUTING.md#project-structure) for the full directory structure.
+
+## Planned
+
+Proposals for work that is designed but not built live in [`design/`](design/):
+
+- [Package management](design/package-management.md) — sharing Dex libraries
+  through git URLs, `dex.mod` and `dex get`, the way Go modules work.
 
 ## Releasing
 

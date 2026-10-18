@@ -427,6 +427,9 @@ type ExternalFunc struct {
 	// malloc'd the string it returned and Dex frees it. Without it the buffer
 	// is copied and left alone, which is what getenv and strerror need.
 	OwnedReturn bool
+	// ReturnFreer is the `freed by "f"` clause after `owned string`: the
+	// library's own deallocator, for memory plain free must not touch.
+	ReturnFreer string
 }
 
 // GenericDecl is a generic declaration held as tokens, with the names of its

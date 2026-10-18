@@ -73,6 +73,8 @@ func (c *Checker) checkExternals(program *ast.Program) {
 			typeSeen[t.Name] = true
 			if t.Closer == "" {
 				c.addError(c.errAt(t.Pos, "type %s.%s needs a closing function, as in closed by \"fclose\"", em.Name, t.Name))
+			} else if !validCSymbol(t.Closer) {
+				c.addError(c.errAt(t.Pos, "closed by %q on type %s.%s is not a C identifier", t.Closer, em.Name, t.Name))
 			}
 			if _, taken := ast.LookupStructType(t.Name); taken {
 				c.addError(c.errAt(t.Pos, "external type '%s' collides with a struct of the same name", t.Name))
@@ -87,6 +89,10 @@ func (c *Checker) checkExternals(program *ast.Program) {
 			}
 			fnSeen[f.Name] = true
 
+			if !validCSymbol(f.CName) {
+				c.addError(c.errAt(f.Pos, "%q on %s.%s() is not a C identifier", f.CName, em.Name, f.Name))
+			}
+
 			for j, pt := range f.Params {
 				if !externalTypeSupported(pt) {
 					c.addError(c.errAt(f.Pos, "%s.%s() parameter '%s' is %s, which cannot cross the C boundary yet — only int, long, double, bool, char and string can",
@@ -98,6 +104,12 @@ func (c *Checker) checkExternals(program *ast.Program) {
 			if f.OwnedReturn && f.ReturnType != ast.TypeString {
 				c.addError(c.errAt(f.Pos, "'owned' on %s.%s() needs a string return, not %s — it says the C function malloc'd the string and Dex should free it",
 					em.Name, f.Name, typeName(f.ReturnType)))
+			}
+			if f.ReturnFreer != "" && !f.OwnedReturn {
+				c.addError(c.errAt(f.Pos, "'freed by' on %s.%s() needs an 'owned string' return — without 'owned' Dex never frees the string, so there is nothing to free it with",
+					em.Name, f.Name))
+			} else if f.ReturnFreer != "" && !validCSymbol(f.ReturnFreer) {
+				c.addError(c.errAt(f.Pos, "freed by %q on %s.%s() is not a C identifier", f.ReturnFreer, em.Name, f.Name))
 			}
 
 			if f.ReturnType != ast.TypeVoid && !externalTypeSupported(f.ReturnType) {
@@ -139,6 +151,25 @@ func validLinkFlag(l string) bool {
 		return len(l) > 2 && !strings.Contains(l, "..")
 	case strings.HasPrefix(l, "-"):
 		return false
+	}
+	return true
+}
+
+// validCSymbol accepts a C identifier and nothing else. A symbol name is pasted
+// into the generated C as written, so anything wider would let a module fetched
+// from somewhere else run code at build time — the hole validLinkFlag closes
+// for flags.
+func validCSymbol(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
 	}
 	return true
 }

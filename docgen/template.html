@@ -213,6 +213,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
         <a onclick="show('structs')">Structs</a>
         <a onclick="show('interfaces')">Interfaces</a>
         <a onclick="show('generics')">Generics</a>
+        <a onclick="show('calling-c')">Calling C</a>
         <a onclick="show('enums')">Enums</a>
         <a onclick="show('maps')">Maps</a>
         <a onclick="show('string-methods')">String Methods</a>
@@ -1421,6 +1422,50 @@ let many: Box&lt;int&gt;[] = [inner, boxed(4)]</code></pre>
 <h3>How It Works</h3>
 <p>Generics are monomorphised by <strong>re-parsing</strong>. A generic declaration is captured as the tokens it was written as and skipped rather than parsed; instantiating it re-parses those tokens with its type parameters bound to concrete types and its own name mangled to <code>Box_int</code> or <code>max_int</code>. What comes out is an ordinary function or struct, which is why the code generator needs no knowledge of generics at all.</p>
 <p>A struct's instantiation happens in the parser, where the type arguments are written. A function's happens in the type checker, because inferring them needs the argument types and only the checker has those; the checker asks the parser to re-parse, registers the result, and appends it to the program, where the body-checking pass reaches it like any other function.</p>
+</section>
+
+<!-- Calling C -->
+<section id="calling-c" class="page-section">
+<h2>Calling C</h2>
+<p>An <code>external module</code> block declares C functions, the headers they need, and the libraries to link against. The block is the declaration, so there is no import, and a call compiles to a direct call to the C symbol with no wrapper:</p>
+<pre><code>external module zlib {
+    include "&lt;zlib.h&gt;"
+    link "-lz"
+
+    fn compressBound(sourceLen: long): long
+    fn compileFlags(): long = "zlibCompileFlags"
+}
+
+fn main(): void {
+    fmt.println(zlib.compressBound(1024))   // 1037
+}</code></pre>
+<p><code>= "symbol"</code> names a C function whose own name reads badly in Dex. <code>int</code>, <code>long</code>, <code>double</code>, <code>bool</code>, <code>char</code> and <code>string</code> cross the boundary, plus <code>void</code> as a return type and opaque handles.</p>
+
+<h3>Who Owns a Returned String</h3>
+<table>
+<tr><th>Return type</th><th>The C function</th><th>What Dex does</th></tr>
+<tr><td><code>string</code></td><td>returns a pointer it keeps: <code>getenv</code>, <code>strerror</code></td><td>copies the bytes, leaves the pointer alone</td></tr>
+<tr><td><code>owned string</code></td><td><code>malloc</code>'d the buffer: <code>strdup</code></td><td>copies the bytes, then calls <code>free</code></td></tr>
+<tr><td><code>owned string freed by "f"</code></td><td>used its own allocator: <code>OPENSSL_buf2hexstr</code></td><td>copies the bytes, then calls <code>f</code></td></tr>
+</table>
+<pre><code>fn errorText(n: int): string = "strerror"
+fn dup(s: string): owned string = "strdup"
+fn hex(buf: string, len: long): owned string freed by "OPENSSL_free" = "OPENSSL_buf2hexstr"</code></pre>
+<p>The freeing function may be a macro, as <code>OPENSSL_free</code> is. It is not called for a NULL return, which arrives as <code>""</code>.</p>
+
+<h3>Opaque Handles</h3>
+<pre><code>external module cio {
+    include "&lt;stdio.h&gt;"
+
+    type File closed by "fclose"
+
+    fn open(path: string, mode: string): File? = "fopen"
+    fn readByte(f: File): int = "fgetc"
+}</code></pre>
+<p>A handle is refcounted, so the closing function runs when the last reference goes: at scope exit, on overwrite, and when an exception unwinds past it. A NULL return is <code>null</code>.</p>
+
+<h3>What Is Checked</h3>
+<p><code>link</code> accepts only <code>-l&lt;name&gt;</code>, <code>-L&lt;path&gt;</code> and a bare library name, and every C name a block supplies must be a plain C identifier. Both are pasted into the C build, so anything wider would let a library run code at build time.</p>
 </section>
 
 <!-- Standard Library -->

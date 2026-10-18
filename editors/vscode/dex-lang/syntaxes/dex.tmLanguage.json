@@ -178,7 +178,7 @@
         {
           "comment": "Only keywords inside an external block, so they stay ordinary names elsewhere",
           "name": "keyword.other.modifier.dex",
-          "match": "\\b(owned|closed|by)\\b"
+          "match": "\\b(owned|closed|freed|by)\\b"
         },
         {
           "name": "keyword.other.access.dex",

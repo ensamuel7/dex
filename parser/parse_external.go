@@ -53,6 +53,23 @@ func (p *Parser) parseExternalModule() (*ast.ExternalModule, error) {
 			mod.Links = append(mod.Links, p.current().Value)
 			p.advance()
 
+		case p.check(token.TokenAnnotation):
+			annots := p.collectAnnotations()
+			if !p.check(token.TokenFn) && !p.check(token.TokenFunction) {
+				return nil, p.errorf("an annotation in external module '%s' must sit on an 'fn' declaration", name)
+			}
+			fn, err := p.parseExternalFunc(name)
+			if err != nil {
+				return nil, err
+			}
+			fn.Annotations = annots
+			for _, a := range annots {
+				if a == ast.AnnotOwned {
+					fn.OwnedReturn = true
+				}
+			}
+			mod.Funcs = append(mod.Funcs, *fn)
+
 		case p.check(token.TokenFn), p.check(token.TokenFunction):
 			fn, err := p.parseExternalFunc(name)
 			if err != nil {

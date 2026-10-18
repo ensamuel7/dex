@@ -4,10 +4,12 @@
 // and the flags to link against. No import is needed — the block is the
 // declaration — and a call goes straight to the C symbol with no wrapper.
 //
-// Only int, long, double, bool and char cross the boundary at this stage.
-// Nothing heap-allocated does, so no ownership question arises.
+// The scalars cross, and so does string — as a NUL-terminated const char*.
+// Bytes that may contain a NUL cross as a pointer and a length, which is how
+// the C functions taking them are already written.
 
 import "fmt"
+import "crypto"
 
 external module cmath {
     include "<math.h>"
@@ -28,6 +30,22 @@ external module zlib {
     fn compileFlags(): long = "zlibCompileFlags"
 }
 
+external module cstr {
+    include "<string.h>"
+    include "<stdlib.h>"
+
+    fn length(s: string): long = "strlen"
+    fn compare(a: string, b: string, n: int): int = "memcmp"
+    fn toInt(s: string): int = "atoi"
+
+    // strerror returns a pointer it keeps, so Dex copies and leaves it alone.
+    fn errorText(n: int): string = "strerror"
+
+    // strdup malloc'd it, so Dex takes ownership and frees it.
+    #[owned]
+    fn dup(s: string): string = "strdup"
+}
+
 fn main(): void {
     assert(cmath.hypot(3.0, 4.0) == 5.0)
     assert(cmath.floorDouble(3.7) == 3.0)
@@ -44,6 +62,31 @@ fn main(): void {
     // An extern call is an ordinary expression.
     let total: double = cmath.hypot(3.0, 4.0) + cmath.floorDouble(1.9)
     assert(total == 6.0)
+
+    // A string crosses as a const char*.
+    assert(cstr.length("hello") == 5)
+    assert(cstr.toInt("42") == 42)
+
+    // A returned pointer the callee owns is copied, not freed.
+    let msg: string = cstr.errorText(2)
+    assert(msg.len() > 0)
+
+    // One the callee malloc'd is taken over and released.
+    let copied: string = cstr.dup("hello")
+    assert(copied == "hello")
+
+    // Bytes with an interior NUL cross as a pointer and a length, so nothing
+    // truncates at the NUL the way strlen would. These two differ only in
+    // their last byte, which is past the NUL.
+    let a: string = crypto.base64Decode("YWIAY2Q=")
+    let b: string = crypto.base64Decode("YWIAY2U=")
+    assert(a.len() == 5)
+    assert(b.len() == 5)
+    assert(cstr.compare(a, b, 5) != 0)
+    assert(cstr.compare(a, b, 2) == 0)
+
+    // strlen stops at the NUL, which is exactly why a byte API takes a length.
+    assert(cstr.length(a) == 2)
 
     fmt.println("external_test: all assertions passed")
 }

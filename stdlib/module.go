@@ -40,6 +40,13 @@ type FuncDef struct {
 	// this way can use dex_string_new and the rest of the DexString API directly.
 	RawParams []int
 	RawReturn bool
+
+	// BorrowedReturn says the callee keeps ownership of the string it
+	// returned, so it is copied rather than freed. The stdlib convention is
+	// the opposite — every CName function returning a string hands over
+	// malloc'd memory — so this stays false there and is set only for an
+	// external declaration without #[owned].
+	BorrowedReturn bool
 }
 
 // IsRawParam reports whether argument idx is handed over as a DexString*.
@@ -140,11 +147,12 @@ func FromExternal(em ast.ExternalModule) *Module {
 	m.CIncludes = includes.String()
 	for _, f := range em.Funcs {
 		m.Funcs[f.Name] = FuncDef{
-			Params:     f.Params,
-			ParamNames: f.ParamNames,
-			ReturnType: f.ReturnType,
-			CName:      f.CName,
-			Doc:        "external " + em.Name + "." + f.Name,
+			Params:         f.Params,
+			ParamNames:     f.ParamNames,
+			ReturnType:     f.ReturnType,
+			CName:          f.CName,
+			BorrowedReturn: !f.OwnedReturn,
+			Doc:            "external " + em.Name + "." + f.Name,
 		}
 	}
 	return m

@@ -36,13 +36,6 @@ func TestExternalVoidReturnPasses(t *testing.T) {
 	}`)
 }
 
-func TestExternalRejectsStringParam(t *testing.T) {
-	mustFail(t, `external module z {
-		fn f(s: string): int
-	}
-	fn main(): void {}`, "cannot cross the C boundary yet")
-}
-
 func TestExternalRejectsArrayParam(t *testing.T) {
 	mustFail(t, `external module z {
 		fn f(a: int[]): int
@@ -164,4 +157,42 @@ func TestExternalIncludeAcceptsBareAndAngled(t *testing.T) {
 	fn main(): void {
 		let n: int = z.f(1)
 	}`)
+}
+
+func TestExternalAcceptsStrings(t *testing.T) {
+	mustCheck(t, `external module cstr {
+		include "<string.h>"
+		fn length(s: string): long = "strlen"
+		fn errorText(n: int): string = "strerror"
+		#[owned]
+		fn dup(s: string): string = "strdup"
+	}
+	fn main(): void {
+		let n: long = cstr.length("hi")
+		let e: string = cstr.errorText(2)
+		let d: string = cstr.dup("hi")
+	}`)
+}
+
+func TestExternalOwnedNeedsAStringReturn(t *testing.T) {
+	mustFail(t, `external module z {
+		#[owned]
+		fn f(n: int): int
+	}
+	fn main(): void {}`, "needs a string return")
+}
+
+func TestExternalRejectsUnknownAnnotation(t *testing.T) {
+	mustFail(t, `external module z {
+		#[raw]
+		fn f(s: string): string
+	}
+	fn main(): void {}`, "takes only #[owned]")
+}
+
+func TestExternalStillRejectsNonScalarContainers(t *testing.T) {
+	mustFail(t, `external module z {
+		fn f(a: string[]): int
+	}
+	fn main(): void {}`, "cannot cross the C boundary yet")
 }

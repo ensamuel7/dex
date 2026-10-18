@@ -338,11 +338,26 @@ fn main(): void {
 
 `= "symbol"` names a C function whose own name reads badly in Dex — `fn absInt(n: int): int = "abs"`.
 
-Only `int`, `long`, `double`, `bool` and `char` cross the boundary so far, plus
-`void` as a return type. Nothing heap-allocated does, so no ownership question
-arises and nothing can leak across the call. Anything else is refused where it
-is declared, naming the type, rather than left to produce a C error about the
-generated code.
+`int`, `long`, `double`, `bool`, `char` and `string` cross the boundary, plus
+`void` as a return type. Anything else is refused where it is declared, naming
+the type, rather than left to produce a C error about the generated code.
+
+A returned string is the one place a declaration has to say something, because
+C has two conventions and guessing wrong corrupts the heap rather than leaking.
+By default the bytes are copied and the pointer left alone, which is what
+`getenv` and `strerror` need. `#[owned]` says the callee `malloc`'d it, so Dex
+frees it after copying — what `strdup` needs:
+
+```dex
+fn errorText(n: int): string = "strerror"   // copied
+
+#[owned]
+fn dup(s: string): string = "strdup"        // taken over and freed
+```
+
+Bytes that may contain a NUL cross as a pointer and a length, which is how the
+C functions taking them are already written — `.len()` is the byte length, so
+nothing truncates.
 
 `link` accepts `-l<name>`, `-L<path>` and a bare library name, and refuses the
 rest: a block that could hand arbitrary flags to the C compiler would be code

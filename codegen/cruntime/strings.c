@@ -60,11 +60,24 @@ static DexString* dex_string_from_lit(const char* s) {
     return dex_string_new(s, strlen(s));
 }
 
+// Takes ownership: the callee malloc'd the buffer and Dex frees it. This is
+// the stdlib convention — dex_os_env returns strdup(getenv(...)) and every
+// other CName function returning a string does the same.
 static DexString* dex_string_from_cstr(const char* s) {
     if (!s) return dex_string_new("", 0);
     DexString* ds = dex_string_new(s, strlen(s));
     free((void*)s);
     return ds;
+}
+
+// Copies instead: the callee still owns the buffer. This is what a foreign
+// function declared in an `external module` gets unless it says `#[owned]`,
+// because the common C idiom returns a pointer the caller must not free —
+// getenv, strerror and zlibVersion all do — and freeing one is heap
+// corruption rather than a leak.
+static DexString* dex_string_copy_cstr(const char* s) {
+    if (!s) return dex_string_new("", 0);
+    return dex_string_new(s, strlen(s));
 }
 
 static DexString* dex_string_empty(void) {

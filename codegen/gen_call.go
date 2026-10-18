@@ -826,7 +826,11 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			// length, so wrapping it would strlen away the bytes it exists to
 			// preserve.
 			if funcDef.ReturnType == ast.TypeString && !funcDef.RawReturn {
-				out.WriteString("dex_string_from_cstr(")
+				if funcDef.BorrowedReturn {
+					out.WriteString("dex_string_copy_cstr(")
+				} else {
+					out.WriteString("dex_string_from_cstr(")
+				}
 				out.WriteString(funcDef.CName)
 				out.WriteString("(")
 				for i, arg := range e.Args {

@@ -7,16 +7,18 @@ import (
 	"github.com/ensamuel7/dex/stdlib"
 )
 
-// externalTypeSupported reports whether a type can cross the C boundary. Stage
-// one is scalars only: nothing heap-allocated crosses, so no ownership
-// question arises and nothing can leak.
+// externalTypeSupported reports whether a type can cross the C boundary: the
+// scalars, plus string, which crosses as a NUL-terminated const char*. Bytes
+// that may contain a NUL cross as a pointer and a length, the way the C
+// functions that take them are already written, so a string parameter needs no
+// special marking.
 //
 // The refusal is here rather than left to the C compiler because the generated
 // call would otherwise be a diagnostic about Dex_Person and int rather than
 // about the program, which is the mistake mapKeyTypeSupported exists to avoid.
 func externalTypeSupported(t ast.Type) bool {
 	switch t {
-	case ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeBool, ast.TypeChar:
+	case ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeBool, ast.TypeChar, ast.TypeString:
 		return true
 	}
 	return false
@@ -63,12 +65,24 @@ func (c *Checker) checkExternals(program *ast.Program) {
 
 			for j, pt := range f.Params {
 				if !externalTypeSupported(pt) {
-					c.addError(c.errAt(f.Pos, "%s.%s() parameter '%s' is %s, which cannot cross the C boundary yet — only int, long, double, bool and char can",
+					c.addError(c.errAt(f.Pos, "%s.%s() parameter '%s' is %s, which cannot cross the C boundary yet — only int, long, double, bool, char and string can",
 						em.Name, f.Name, f.ParamNames[j], typeName(pt)))
 				}
 			}
+			for _, a := range f.Annotations {
+				if a != ast.AnnotOwned {
+					c.addError(c.errAt(f.Pos, "unknown annotation '#[%s]' on %s.%s() — an external declaration takes only #[owned]", a, em.Name, f.Name))
+				}
+			}
+			// #[owned] says the callee malloc'd the string it returned, so it
+			// means nothing anywhere else.
+			if f.OwnedReturn && f.ReturnType != ast.TypeString {
+				c.addError(c.errAt(f.Pos, "#[owned] on %s.%s() needs a string return, not %s — it says the C function malloc'd the string and Dex should free it",
+					em.Name, f.Name, typeName(f.ReturnType)))
+			}
+
 			if f.ReturnType != ast.TypeVoid && !externalTypeSupported(f.ReturnType) {
-				c.addError(c.errAt(f.Pos, "%s.%s() returns %s, which cannot cross the C boundary yet — only int, long, double, bool and char can",
+				c.addError(c.errAt(f.Pos, "%s.%s() returns %s, which cannot cross the C boundary yet — only int, long, double, bool, char and string can",
 					em.Name, f.Name, typeName(f.ReturnType)))
 			}
 		}

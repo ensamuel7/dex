@@ -55,3 +55,46 @@ func TestExternalDoesNotEnterTheStdlibRegistry(t *testing.T) {
 		t.Error("external module leaked into the global stdlib registry")
 	}
 }
+
+// The default for an external string return is to copy: the common C idiom
+// hands back a pointer the caller must not free — getenv, strerror — and
+// freeing one is heap corruption rather than a leak.
+func TestCodegenExternalStringReturnIsCopied(t *testing.T) {
+	out := generate(t, `external module cstr {
+		include "<string.h>"
+		fn errorText(n: int): string = "strerror"
+	}
+	fn main(): void {
+		let e: string = cstr.errorText(2)
+	}`)
+	assertContains(t, out, "dex_string_copy_cstr(strerror(2))")
+	if strings.Contains(out, "dex_string_from_cstr(strerror") {
+		t.Error("freed a buffer the callee still owns")
+	}
+}
+
+// #[owned] is the other case: the callee malloc'd it and Dex frees it, which
+// is also what every stdlib CName function returning a string does.
+func TestCodegenExternalOwnedStringReturnIsTakenOver(t *testing.T) {
+	out := generate(t, `external module cstr {
+		include "<string.h>"
+		#[owned]
+		fn dup(s: string): string = "strdup"
+	}
+	fn main(): void {
+		let d: string = cstr.dup("hi")
+	}`)
+	assertContains(t, out, "dex_string_from_cstr(strdup(")
+}
+
+func TestCodegenExternalStringParamPassesTheBytes(t *testing.T) {
+	out := generate(t, `external module cstr {
+		include "<string.h>"
+		fn length(s: string): long = "strlen"
+	}
+	fn main(): void {
+		let s: string = "hello"
+		let n: long = cstr.length(s)
+	}`)
+	assertContains(t, out, "strlen(s->data)")
+}

@@ -396,6 +396,11 @@ type ExternalFunc struct {
 	Params     []Type
 	ParamNames []string
 	ReturnType Type
+	// OwnedReturn is #[owned]: the C function malloc'd the string it returned
+	// and Dex frees it. Without it the buffer is copied and left alone, which
+	// is what getenv and strerror need.
+	OwnedReturn bool
+	Annotations []string
 }
 
 // GenericDecl is a generic declaration held as tokens, with the names of its

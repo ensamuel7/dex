@@ -4037,21 +4037,77 @@ fn absInt(n: int): int = "abs"
 
 ### What can cross
 
-Only `int`, `long`, `double`, `bool` and `char`, plus `void` as a return type.
-Nothing heap-allocated crosses yet, so no ownership question arises and nothing
-can leak across the boundary. Anything else is refused by name rather than left
-to the C compiler:
+`int`, `long`, `double`, `bool`, `char` and `string`, plus `void` as a return
+type. Anything else is refused by name rather than left to the C compiler:
 
 ```
-z.f() parameter 's' is string, which cannot cross the C boundary yet —
-only int, long, double, bool and char can
+z.f() parameter 'a' is string[], which cannot cross the C boundary yet —
+only int, long, double, bool, char and string can
 ```
 
-Strings, opaque handles and callbacks are each their own problem and are not
-supported yet. A string needs an answer for who owns the bytes; a handle needs
-a destructor wired into scope exit; and a callback cannot be unwound through,
-because `throw` is `longjmp` and a C frame in between would have its cleanup
-skipped.
+Containers, opaque handles and callbacks are each their own problem and are not
+supported yet. A handle needs a destructor wired into scope exit, and a
+callback cannot be unwound through, because `throw` is `longjmp` and a C frame
+in between would have its cleanup skipped.
+
+### Who owns a returned string
+
+A `string` parameter crosses as a `const char*`. A `string` **return** is the
+one place an external declaration has to say something, because C has two
+conventions and guessing wrong corrupts the heap rather than merely leaking:
+
+| Declaration | The C function | What Dex does |
+|-------------|----------------|---------------|
+| (default) | returns a pointer it keeps — `getenv`, `strerror`, `zlibVersion` | copies the bytes, leaves the pointer alone |
+| `#[owned]` | `malloc`'d the buffer and hands it over — `strdup` | copies the bytes, then frees the original |
+
+```dex
+external module cstr {
+    include "<string.h>"
+
+    fn errorText(n: int): string = "strerror"   // copied
+
+    #[owned]
+    fn dup(s: string): string = "strdup"        // taken over and freed
+}
+```
+
+The default is the safe one. `#[owned]` on a non-string return is an error,
+since it has nothing to say about an `int`.
+
+### Bytes, and why there is no raw marker
+
+A `string` crosses as a NUL-terminated `const char*`, so a C function that
+calls `strlen` on it stops at the first NUL. That is not a limitation to work
+around: a C function handling arbitrary bytes already takes a pointer and a
+length, so pass the length.
+
+```dex
+external module cstr {
+    include "<string.h>"
+    fn compare(a: string, b: string, n: int): int = "memcmp"
+    fn length(s: string): long = "strlen"
+}
+
+let a: string = crypto.base64Decode("YWIAY2Q=")   // five bytes, NUL at index 2
+assert(a.len() == 5)
+assert(cstr.length(a) == 2)                        // strlen stops at the NUL
+assert(cstr.compare(a, b, 5) != 0)                 // memcmp sees past it
+```
+
+`.len()` is the byte length, so nothing truncates. This is why there is no
+`#[raw]` marker for parameters, though the stdlib has one internally: a stdlib
+C helper is compiled into the same translation unit and can take a `DexString*`
+directly, while a library you link against has no access to that layout. The
+pointer-and-length form is the only one that could work, and it is the form
+those functions are already written in.
+
+### A known wart
+
+A `string` crosses as `char*`. A C function declared to take `unsigned char*`
+or `Bytef*` — zlib's `crc32` is one — compiles and works but draws a
+`-Wpointer-sign` warning, because the signedness differs even though the
+representation does not. There is no unsigned-char type to declare instead.
 
 ### What is checked
 

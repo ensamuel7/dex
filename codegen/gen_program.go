@@ -105,8 +105,15 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// a program whose only heap value is one. Keying this off the other flags
 	// meant a program with interfaces but no string literal, array or closure
 	// referenced DexObjHeader and dex_retain without ever declaring them.
+	usesPayloadEnum := false
+	for i := range program.Enums {
+		if program.Enums[i].HasPayload() {
+			usesPayloadEnum = true
+			break
+		}
+	}
 	g.usesRefcount = g.usesString || g.usesArray || g.usesConcurrency || g.usesClosure ||
-		len(program.Interfaces) > 0
+		len(program.Interfaces) > 0 || usesPayloadEnum
 
 	// Guarded on usesString because the pool's definitions and the macro behind
 	// them come from the string runtime, which is emitted only under that flag.

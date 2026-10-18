@@ -973,7 +973,7 @@ func seedParserModuleTypes(p *parser.Parser, tokens []token.Token, sourceDir str
 	}
 	if sourceDir != "" {
 		for _, mt := range resolve.PreRegisterUserStructs(resolve.ExtractImports(tokens), sourceDir) {
-			p.AddModuleType(mt.Module, mt.Name, mt.IsEnum)
+			p.AddModuleType(mt.Module, mt.Name, mt.Kind)
 		}
 	}
 	p.AddStructName("Exception") // built-in Exception type

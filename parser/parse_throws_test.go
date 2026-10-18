@@ -65,7 +65,7 @@ func TestModuleScopedTypeResolution(t *testing.T) {
 		p := New(tokens)
 		p.SetModule(module)
 		for _, m := range mods {
-			p.AddModuleType(m[0], m[1], false)
+			p.AddModuleType(m[0], m[1], "struct")
 		}
 		_, errs := p.Parse()
 		if len(errs) > 0 {

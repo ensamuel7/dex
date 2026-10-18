@@ -68,11 +68,14 @@ func (p *Parser) SetModule(name string) {
 // AddModuleType records that `module` declares a type called `bare`, so a
 // reference to it from this file resolves — qualified as `module.bare`, or
 // unqualified when nothing else in scope declares that name.
-func (p *Parser) AddModuleType(module, bare string, isEnum bool) {
+func (p *Parser) AddModuleType(module, bare, kind string) {
 	flat := ast.QualifiedStructName(module, bare)
-	if isEnum {
+	switch kind {
+	case "enum":
 		p.enumNames[flat] = true
-	} else {
+	case "interface":
+		p.interfaceNames[flat] = true
+	default:
 		p.structNames[flat] = true
 	}
 	for _, existing := range p.candidates[bare] {
@@ -195,6 +198,12 @@ func (p *Parser) synchronize() {
 // Used for module-provided struct types (e.g. HttpResponse from the http module).
 func (p *Parser) AddStructName(name string) {
 	p.structNames[name] = true
+}
+
+// AddInterfaceName registers an interface name, for a module-declared one the
+// main file has to recognize in type position.
+func (p *Parser) AddInterfaceName(name string) {
+	p.interfaceNames[name] = true
 }
 
 // AddEnumName registers an enum name so the parser recognizes it as a type and
@@ -455,10 +464,18 @@ func (p *Parser) parseInterfaceDef() (*ast.InterfaceDef, error) {
 		return nil, err
 	}
 
-	p.interfaceNames[name] = true
-	ast.RegisterInterfaceType(ast.InterfaceDef{Name: name, Methods: methods})
+	// A module's interface belongs to it, the way its structs and enums do, so
+	// two modules can each declare a `Handler` and the generated C names differ
+	// without any further work.
+	flat := name
+	if p.module != "" {
+		flat = ast.QualifiedStructName(p.module, name)
+	}
+	p.interfaceNames[flat] = true
+	def := ast.InterfaceDef{Name: flat, Module: p.module, Methods: methods}
+	ast.RegisterInterfaceType(def)
 
-	return &ast.InterfaceDef{Name: name, Methods: methods}, nil
+	return &def, nil
 }
 
 // isEnumDefAhead returns true if the current token is the 'enum' keyword.
@@ -1003,8 +1020,13 @@ func (p *Parser) parseType() (ast.Type, error) {
 				base = t
 			} else if t, ok := ast.LookupEnumType(flat); ok {
 				base = t
+			} else if t, ok := ast.LookupInterfaceType(flat); ok {
+				// A module's interface resolves here too: it is registered
+				// under the module that declared it, so the bare name reaches
+				// it through the same candidate list a struct uses.
+				base = t
 			} else {
-				return 0, p.errorf("unknown struct type '%s'", name)
+				return 0, p.errorf("unknown type '%s'", name)
 			}
 		} else if p.enumNames[name] {
 			p.advance()
@@ -1030,7 +1052,7 @@ func (p *Parser) parseType() (ast.Type, error) {
 				p.advance()
 				p.advance()
 				base = ast.TypeJsonValue
-			} else if flat := ast.QualifiedStructName(name, qualifiedName); p.structNames[flat] || p.enumNames[flat] {
+			} else if flat := ast.QualifiedStructName(name, qualifiedName); p.structNames[flat] || p.enumNames[flat] || p.interfaceNames[flat] {
 				// A user module's type, named by the module that declares it.
 				p.advance() // consume module name
 				p.advance() // consume '.'
@@ -1038,6 +1060,8 @@ func (p *Parser) parseType() (ast.Type, error) {
 				if t, ok := ast.LookupStructType(flat); ok {
 					base = t
 				} else if t, ok := ast.LookupEnumType(flat); ok {
+					base = t
+				} else if t, ok := ast.LookupInterfaceType(flat); ok {
 					base = t
 				} else {
 					return 0, p.errorf("unknown type '%s.%s'", name, qualifiedName)

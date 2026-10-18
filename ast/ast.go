@@ -143,6 +143,11 @@ func DisplayStructName(flat string) string {
 			return def.Module + "." + strings.TrimPrefix(def.Name, def.Module+"_")
 		}
 	}
+	if t, ok := LookupInterfaceType(flat); ok {
+		if def := GetInterfaceDef(t); def != nil && def.Module != "" {
+			return def.Module + "." + strings.TrimPrefix(def.Name, def.Module+"_")
+		}
+	}
 	return flat
 }
 
@@ -195,6 +200,15 @@ func AllStructNames() []string {
 func AllEnumNames() []string {
 	names := make([]string, 0, len(enumByName))
 	for name := range enumByName {
+		names = append(names, name)
+	}
+	return names
+}
+
+// AllInterfaceNames is every registered interface's flat name.
+func AllInterfaceNames() []string {
+	names := make([]string, 0, len(interfaceByName))
+	for name := range interfaceByName {
 		names = append(names, name)
 	}
 	return names
@@ -961,7 +975,11 @@ type InterfaceMethod struct {
 
 // InterfaceDef defines an interface with structural typing.
 type InterfaceDef struct {
-	Name    string
+	// Name is flat, and carries the declaring module the way a struct's does:
+	// see StructDef.Name.
+	Name string
+	// Module is the module that declared it, empty for the main program.
+	Module  string
 	Methods []InterfaceMethod
 }
 

@@ -71,7 +71,9 @@ func own(owners map[string]string, flatName, absPath, moduleName string) error {
 type ModuleType struct {
 	Module string
 	Name   string
-	IsEnum bool
+	// Kind is "struct", "enum" or "interface". Empty means struct, so the
+	// zero value stays what it was.
+	Kind string
 }
 
 // Registers struct and enum declarations from user modules globally so the main
@@ -129,13 +131,18 @@ func preRegisterStructsFromFile(filePath, module string, visited map[string]bool
 	for i := 0; i < len(tokens)-1; i++ {
 		if tokens[i].Kind == token.TokenStruct && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
-			*found = append(*found, ModuleType{Module: module, Name: name})
+			*found = append(*found, ModuleType{Module: module, Name: name, Kind: "struct"})
 			ast.RegisterStructType(ast.StructDef{Name: ast.QualifiedStructName(module, name), Module: module})
 		}
 		if tokens[i].Kind == token.TokenEnum && tokens[i+1].Kind == token.TokenIdent {
 			name := tokens[i+1].Value
-			*found = append(*found, ModuleType{Module: module, Name: name, IsEnum: true})
+			*found = append(*found, ModuleType{Module: module, Name: name, Kind: "enum"})
 			ast.RegisterEnumType(ast.EnumDef{Name: ast.QualifiedStructName(module, name), Module: module})
+		}
+		if tokens[i].Kind == token.TokenInterface && tokens[i+1].Kind == token.TokenIdent {
+			name := tokens[i+1].Value
+			*found = append(*found, ModuleType{Module: module, Name: name, Kind: "interface"})
+			ast.RegisterInterfaceType(ast.InterfaceDef{Name: ast.QualifiedStructName(module, name), Module: module})
 		}
 	}
 
@@ -153,35 +160,50 @@ func preRegisterStructsFromFile(filePath, module string, visited map[string]bool
 // and the struct types a stdlib module provides — is seeded by its bare name.
 func SeedParserTypes(p *parser.Parser) {
 	for _, name := range ast.AllStructNames() {
-		seedOne(p, name, false)
+		seedOne(p, name, "struct")
 	}
 	for _, name := range ast.AllEnumNames() {
-		seedOne(p, name, true)
+		seedOne(p, name, "enum")
+	}
+	for _, name := range ast.AllInterfaceNames() {
+		seedOne(p, name, "interface")
 	}
 }
 
-func seedOne(p *parser.Parser, flat string, isEnum bool) {
+func seedOne(p *parser.Parser, flat, kind string) {
 	module := ""
-	if isEnum {
+	switch kind {
+	case "enum":
 		if t, ok := ast.LookupEnumType(flat); ok {
 			if def := ast.GetEnumDef(t); def != nil {
 				module = def.Module
 			}
 		}
-	} else if t, ok := ast.LookupStructType(flat); ok {
-		if def := ast.GetStructDef(t); def != nil {
-			module = def.Module
+	case "interface":
+		if t, ok := ast.LookupInterfaceType(flat); ok {
+			if def := ast.GetInterfaceDef(t); def != nil {
+				module = def.Module
+			}
+		}
+	default:
+		if t, ok := ast.LookupStructType(flat); ok {
+			if def := ast.GetStructDef(t); def != nil {
+				module = def.Module
+			}
 		}
 	}
 	if module == "" {
-		if isEnum {
+		switch kind {
+		case "enum":
 			p.AddEnumName(flat)
-		} else {
+		case "interface":
+			p.AddInterfaceName(flat)
+		default:
 			p.AddStructName(flat)
 		}
 		return
 	}
-	p.AddModuleType(module, strings.TrimPrefix(flat, module+"_"), isEnum)
+	p.AddModuleType(module, strings.TrimPrefix(flat, module+"_"), kind)
 }
 
 // ResolveUserModules finds non-stdlib imports, parses their .dx files,
@@ -450,6 +472,16 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		program.StructModule[sd.Name] = moduleName
 	}
 	program.Structs = append(program.Structs, modProgram.Structs...)
+
+	// Interfaces merge the same way structs and enums do. Without this a
+	// library could not export one: the declaration parsed fine and was then
+	// dropped, so the importing file reported "unknown type" for a name it
+	// could see in the source.
+	for _, id := range modProgram.Interfaces {
+		if !containsInterface(program.Interfaces, id.Name) {
+			program.Interfaces = append(program.Interfaces, id)
+		}
+	}
 
 	// Enums merge the same way structs do. Without this an imported enum has no
 	// typedef emitted and no variants validated, which is what made a
@@ -918,6 +950,15 @@ func collectDeclaredNames(stmts []ast.Stmt, out map[string]bool) {
 }
 
 func containsExternal(list []ast.ExternalModule, name string) bool {
+	for i := range list {
+		if list[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInterface(list []ast.InterfaceDef, name string) bool {
 	for i := range list {
 		if list[i].Name == name {
 			return true

@@ -429,7 +429,7 @@ func frontend(filename string) (*ast.Program, error) {
 		p.AddStructName(name)
 	}
 	for _, mt := range moduleTypes {
-		p.AddModuleType(mt.Module, mt.Name, mt.IsEnum)
+		p.AddModuleType(mt.Module, mt.Name, mt.Kind)
 	}
 	p.AddStructName("Exception") // built-in Exception type
 	program, parseErrs := p.Parse()

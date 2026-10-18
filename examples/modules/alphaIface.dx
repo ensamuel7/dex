@@ -1,0 +1,16 @@
+// A module exporting an interface, plus a struct that satisfies it.
+interface Handler {
+    fn run(): int
+}
+
+struct Bump {
+    n: int
+
+    fn run(): int {
+        return n + 1
+    }
+}
+
+fn make(n: int): Bump {
+    return Bump { n: n }
+}

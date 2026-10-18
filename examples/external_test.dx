@@ -1,0 +1,49 @@
+// FFI stage one: calling C with scalar arguments and returns.
+//
+// An `external module` block declares the C functions, the headers they need,
+// and the flags to link against. No import is needed — the block is the
+// declaration — and a call goes straight to the C symbol with no wrapper.
+//
+// Only int, long, double, bool and char cross the boundary at this stage.
+// Nothing heap-allocated does, so no ownership question arises.
+
+import "fmt"
+
+external module cmath {
+    include "<math.h>"
+    include "<stdlib.h>"
+
+    fn hypot(x: double, y: double): double
+    fn floorDouble(x: double): double = "floor"
+    fn ceilDouble(x: double): double = "ceil"
+    fn absInt(n: int): int = "abs"
+    fn absLong(n: long): long = "labs"
+}
+
+external module zlib {
+    include "<zlib.h>"
+    link "-lz"
+
+    fn compressBound(sourceLen: long): long
+    fn compileFlags(): long = "zlibCompileFlags"
+}
+
+fn main(): void {
+    assert(cmath.hypot(3.0, 4.0) == 5.0)
+    assert(cmath.floorDouble(3.7) == 3.0)
+    assert(cmath.ceilDouble(3.2) == 4.0)
+
+    // The declared name need not match the C symbol.
+    assert(cmath.absInt(-7) == 7)
+    assert(cmath.absLong(-7) == 7)
+
+    // A real library, reached through its link flag.
+    assert(zlib.compressBound(1024) == 1037)
+    assert(zlib.compileFlags() > 0)
+
+    // An extern call is an ordinary expression.
+    let total: double = cmath.hypot(3.0, 4.0) + cmath.floorDouble(1.9)
+    assert(total == 6.0)
+
+    fmt.println("external_test: all assertions passed")
+}

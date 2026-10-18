@@ -460,6 +460,14 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		}
 	}
 
+	// An external block declared in a module has to reach the program, or the
+	// module's own calls into it report the module as not imported.
+	for _, em := range modProgram.Externals {
+		if !containsExternal(program.Externals, em.Name) {
+			program.Externals = append(program.Externals, em)
+		}
+	}
+
 	for _, modImp := range modProgram.Imports {
 		if stdlib.Lookup(modImp.Path) != nil && !containsImport(program.Imports, modImp.Path) {
 			program.Imports = append(program.Imports, modImp)
@@ -907,4 +915,13 @@ func collectDeclaredNames(stmts []ast.Stmt, out map[string]bool) {
 			}
 		}
 	}, func(expr ast.Expr) ast.Expr { return nil })
+}
+
+func containsExternal(list []ast.ExternalModule, name string) bool {
+	for i := range list {
+		if list[i].Name == name {
+			return true
+		}
+	}
+	return false
 }

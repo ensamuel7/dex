@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
-	"github.com/ensamuel7/dex/stdlib"
 )
 
 // genExprNoParen generates an expression without wrapping outer parens,
@@ -380,7 +379,7 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 		}
 		// Check stdlib functions
 		if e.Module != "" {
-			funcDef, ok := stdlib.LookupFunc(e.Module, e.Name)
+			funcDef, ok := g.lookupFunc(e.Module, e.Name)
 			if ok {
 				return funcDef.ReturnType == ast.TypeString
 			}

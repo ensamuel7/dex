@@ -51,6 +51,26 @@
   copy of its receiver. See `codegen/gen_closure.go` and `cruntime/closure.c`.
 - Concurrency (`spawn`, `send`, `receive`, `channel`, `close`) compiles to pthreads + lock-free channels in C.
 
+## Calling C
+
+`external module` blocks declare C functions (`parser/parse_external.go`,
+`checker/check_external.go`). A block becomes a `stdlib.Module` via
+`stdlib.FromExternal` and is merged into the checker's import map and the
+generator's `importedModules`, so every existing qualified-call path handles it
+unchanged — the checker's signature match at `check_expr.go` and codegen's
+`CName` emission at `gen_call.go` needed no changes at all.
+
+It is deliberately **not** passed to `stdlib.Register`. That registry is a
+package global populated at `init` and never reset, and the LSP is one process
+compiling many files, so a module registered there would outlive the file that
+declared it and could shadow a real one. Codegen therefore resolves module
+functions through `g.lookupFunc`, not the global `stdlib.LookupFunc`.
+
+Stage one is scalars only (`externalTypeSupported`). Strings, opaque handles
+and callbacks are each unsolved for their own reason — ownership of the bytes,
+a destructor wired into scope exit, and the fact that `throw` is `longjmp` so a
+C frame between a throw and its catch has its cleanup skipped.
+
 ## Naming Conventions
 
 - DexLang standard library functions use **camelCase** (e.g. `json.encode`, `time.nowNs`), not snake_case.

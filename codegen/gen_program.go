@@ -21,6 +21,12 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 	}
 
+	// An external module is declared rather than imported, so it joins the same
+	// map: includes, link flags and call emission all read from here.
+	for i := range program.Externals {
+		g.importedModules[program.Externals[i].Name] = stdlib.FromExternal(program.Externals[i])
+	}
+
 	// Register user modules
 	for _, modName := range program.UserModules {
 		g.userModules[modName] = true

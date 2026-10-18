@@ -232,6 +232,22 @@ func (g *Generator) CompilerFlags() []string {
 	return flags
 }
 
+// lookupFunc resolves a qualified call against the modules this program
+// imported or declared. It replaces the global stdlib.LookupFunc at every call
+// site because an extern module is per-compilation state and is deliberately
+// absent from that registry.
+func (g *Generator) lookupFunc(module, name string) (*stdlib.FuncDef, bool) {
+	mod, ok := g.importedModules[module]
+	if !ok {
+		return nil, false
+	}
+	fd, ok := mod.Funcs[name]
+	if !ok {
+		return nil, false
+	}
+	return &fd, true
+}
+
 // EnableMemCheck turns on the debug memory checker for this generation: the
 // object header grows bookkeeping fields, every allocation is registered, and
 // each statement is preceded by a marker naming its .dx source position so a

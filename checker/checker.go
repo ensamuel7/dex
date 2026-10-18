@@ -108,6 +108,14 @@ func (c *Checker) Check(program *ast.Program) []error {
 		c.imports[key] = mod
 	}
 
+	// An external module needs no import: the block itself is the declaration,
+	// so it goes straight into the same map a stdlib import lands in and every
+	// qualified-call path downstream is unchanged.
+	c.checkExternals(program)
+	for i := range program.Externals {
+		c.imports[program.Externals[i].Name] = stdlib.FromExternal(program.Externals[i])
+	}
+
 	// Validate struct definitions
 	seen := map[string]bool{}
 	for _, sd := range program.Structs {

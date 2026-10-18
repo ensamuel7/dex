@@ -819,7 +819,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 
 	// Qualified call with CName — look up from stdlib
 	if e.Module != "" {
-		funcDef, ok := stdlib.LookupFunc(e.Module, e.Name)
+		funcDef, ok := g.lookupFunc(e.Module, e.Name)
 		if ok && funcDef.CName != "" {
 			// Check if function returns string — needs wrapping.
 			// A RawString function has already built a DexString with the right

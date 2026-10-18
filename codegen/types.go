@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
-	"github.com/ensamuel7/dex/stdlib"
 )
 
 func (g *Generator) cType(t ast.Type) string {
@@ -537,7 +536,7 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			}
 		}
 		if e.Module != "" {
-			funcDef, ok := stdlib.LookupFunc(e.Module, e.Name)
+			funcDef, ok := g.lookupFunc(e.Module, e.Name)
 			if ok {
 				return funcDef.ReturnType
 			}

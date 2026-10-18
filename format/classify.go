@@ -301,7 +301,7 @@ func isCloser(k token.TokenKind) bool {
 func isDeclKeyword(k token.TokenKind) bool {
 	switch k {
 	case token.TokenFn, token.TokenFunction, token.TokenStruct, token.TokenEnum,
-		token.TokenInterface:
+		token.TokenInterface, token.TokenExternal:
 		return true
 	}
 	return false
@@ -380,7 +380,8 @@ func canStart(k token.TokenKind) bool {
 		token.TokenDefer, token.TokenSpawn, token.TokenBreak, token.TokenContinue,
 		token.TokenFn, token.TokenFunction, token.TokenStruct, token.TokenEnum,
 		token.TokenInterface, token.TokenImport, token.TokenPublic, token.TokenPrivate,
-		token.TokenAnnotation, token.TokenCase, token.TokenDefault, token.TokenWeak,
+		token.TokenExternal, token.TokenAnnotation, token.TokenCase, token.TokenDefault,
+		token.TokenWeak,
 		token.TokenInt, token.TokenFloat, token.TokenString, token.TokenChar,
 		token.TokenTrue, token.TokenFalse, token.TokenNull:
 		return true

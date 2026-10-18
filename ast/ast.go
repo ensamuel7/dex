@@ -368,6 +368,34 @@ type Program struct {
 	// kinds; re-parsing reuses the type resolution the parser already does.
 	GenericFuncs   []GenericDecl
 	GenericStructs []GenericDecl
+	// Externals are the C modules this compilation declares. They are carried on
+	// the program rather than registered in the stdlib registry, which is a
+	// package global populated at init and never reset: the language server is
+	// one process compiling many files, so a module registered there would
+	// outlive the file that declared it and could shadow a real one.
+	Externals []ExternalModule
+}
+
+// ExternalModule is an `external module` block: a set of C functions to call, the
+// headers they need, and the flags to link against.
+type ExternalModule struct {
+	Pos      Pos
+	Name     string
+	Includes []string
+	Links    []string
+	Funcs    []ExternalFunc
+}
+
+// ExternalFunc is one declaration inside an external block. CName is the symbol to
+// call, which defaults to the declared name when the `= "symbol"` form is left
+// off.
+type ExternalFunc struct {
+	Pos        Pos
+	Name       string
+	CName      string
+	Params     []Type
+	ParamNames []string
+	ReturnType Type
 }
 
 // GenericDecl is a generic declaration held as tokens, with the names of its

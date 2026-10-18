@@ -97,6 +97,7 @@ let b: int = 2
 | `null`     | Absent value for optional types       |
 | `match`    | Pattern matching expression           |
 | `defer`    | Defer a call to function exit         |
+| `external` | Declare a module of C functions       |
 
 ---
 
@@ -3999,6 +4000,78 @@ The formatter works on the token stream rather than the AST, and checks itself:
 it re-reads its own output and compares the two token streams before writing
 anything, so a bug in it is a layout bug and never a lost line. A file it cannot
 account for is reported and left alone.
+
+
+## Calling C
+
+An `external module` block declares C functions to call, the headers they
+need, and the libraries to link against. The block *is* the declaration, so
+there is no import:
+
+```dex
+external module zlib {
+    include "<zlib.h>"
+    link "-lz"
+
+    fn compressBound(sourceLen: long): long
+    fn compileFlags(): long = "zlibCompileFlags"
+}
+
+fn main(): void {
+    fmt.println(zlib.compressBound(1024))   // 1037
+}
+```
+
+A call compiles to a direct call to the C symbol — no wrapper, no marshalling
+layer. `include` takes a system header in angle brackets or a bare name for one
+beside the source. `link` takes `-l<name>`, `-L<path>`, or a bare library name;
+anything else is refused, because an external block that could pass arbitrary
+flags to the C compiler would be code execution at build time.
+
+The declared name need not match the C symbol. `= "symbol"` names it, which is
+how a C function whose name reads badly in Dex gets a better one:
+
+```dex
+fn absInt(n: int): int = "abs"
+```
+
+### What can cross
+
+Only `int`, `long`, `double`, `bool` and `char`, plus `void` as a return type.
+Nothing heap-allocated crosses yet, so no ownership question arises and nothing
+can leak across the boundary. Anything else is refused by name rather than left
+to the C compiler:
+
+```
+z.f() parameter 's' is string, which cannot cross the C boundary yet —
+only int, long, double, bool and char can
+```
+
+Strings, opaque handles and callbacks are each their own problem and are not
+supported yet. A string needs an answer for who owns the bytes; a handle needs
+a destructor wired into scope exit; and a callback cannot be unwound through,
+because `throw` is `longjmp` and a C frame in between would have its cleanup
+skipped.
+
+### What is checked
+
+An external declaration is validated where it is written rather than at the
+call site: a duplicate module or function, a name a stdlib module already has,
+a malformed header, a disallowed link flag, and a type that cannot cross. The
+signature is then checked at every call exactly as a stdlib function's is.
+
+One thing is left to the C compiler and deliberately so: whether the C function
+actually exists and has the signature you declared. `-Werror=implicit-function-declaration`
+makes a missing header fatal, and a declaration that disagrees with the real one
+is an incompatible-pointer error rather than a warning.
+
+### Where a block may be written
+
+In the main program or in a user module. A module that declares one can call it
+itself, and the declaration reaches the whole program, so two modules declaring
+the same external module name is an error.
+
+---
 
 ## Linting
 

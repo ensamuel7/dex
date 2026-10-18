@@ -173,7 +173,7 @@ func (p *Parser) synchronize() {
 		switch p.current().Kind {
 		case token.TokenFn, token.TokenFunction, token.TokenStruct, token.TokenEnum,
 			token.TokenPublic, token.TokenPrivate, token.TokenAnnotation,
-			token.TokenLet, token.TokenConst:
+			token.TokenLet, token.TokenConst, token.TokenExternal:
 			return
 		}
 		p.advance()
@@ -263,6 +263,15 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 				p.genericStructs[decl.Name] = decl
 				program.GenericStructs = append(program.GenericStructs, *decl)
 			}
+
+		case p.isExternalModuleAhead():
+			em, err := p.parseExternalModule()
+			if err != nil {
+				p.recordError(err)
+				p.synchronize()
+				continue
+			}
+			program.Externals = append(program.Externals, *em)
 
 		case p.isInterfaceDefAhead():
 			ifaceDef, err := p.parseInterfaceDef()

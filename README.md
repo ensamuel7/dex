@@ -314,6 +314,40 @@ The call is registered when the `defer` statement runs, not where it is written
 in the file — one in a branch nothing took registers nothing, and one in a loop
 registers per iteration. Its arguments are evaluated at the `defer`.
 
+## Calling C
+
+An `external module` block declares C functions, the headers they need, and the
+libraries to link against. The block is the declaration, so there is no import,
+and a call compiles to a direct call to the C symbol with no wrapper:
+
+```dex
+import "fmt"
+
+external module zlib {
+    include "<zlib.h>"
+    link "-lz"
+
+    fn compressBound(sourceLen: long): long
+    fn compileFlags(): long = "zlibCompileFlags"
+}
+
+fn main(): void {
+    fmt.println(zlib.compressBound(1024))   // 1037
+}
+```
+
+`= "symbol"` names a C function whose own name reads badly in Dex — `fn absInt(n: int): int = "abs"`.
+
+Only `int`, `long`, `double`, `bool` and `char` cross the boundary so far, plus
+`void` as a return type. Nothing heap-allocated does, so no ownership question
+arises and nothing can leak across the call. Anything else is refused where it
+is declared, naming the type, rather than left to produce a C error about the
+generated code.
+
+`link` accepts `-l<name>`, `-L<path>` and a bare library name, and refuses the
+rest: a block that could hand arbitrary flags to the C compiler would be code
+execution at build time.
+
 ## Error Handling
 
 Exceptions carry a type. Any struct with a `message: string` can be thrown,

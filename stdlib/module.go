@@ -2,6 +2,7 @@ package stdlib
 
 import (
 	_ "embed"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 )
@@ -116,4 +117,35 @@ func ModuleTypesForImports(importPaths []string) []string {
 		}
 	}
 	return names
+}
+
+// FromExternal builds a Module from an `external module` block so that an extern
+// declared in source reaches the same checker and codegen paths a Go-side
+// stdlib module does. It is deliberately not passed to Register: the registry
+// is a package global never reset between compilations, and the language
+// server compiles many files in one process.
+func FromExternal(em ast.ExternalModule) *Module {
+	m := &Module{
+		Name:   em.Name,
+		Funcs:  make(map[string]FuncDef, len(em.Funcs)),
+		CFlags: em.Links,
+	}
+	var includes strings.Builder
+	for _, h := range em.Includes {
+		if h != "" && h[0] != '<' && h[0] != '"' {
+			h = `"` + h + `"`
+		}
+		includes.WriteString("#include " + h + "\n")
+	}
+	m.CIncludes = includes.String()
+	for _, f := range em.Funcs {
+		m.Funcs[f.Name] = FuncDef{
+			Params:     f.Params,
+			ParamNames: f.ParamNames,
+			ReturnType: f.ReturnType,
+			CName:      f.CName,
+			Doc:        "external " + em.Name + "." + f.Name,
+		}
+	}
+	return m
 }

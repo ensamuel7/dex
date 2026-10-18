@@ -10,8 +10,8 @@ func (p *Parser) isExternalModuleAhead() bool {
 }
 
 // softKeyword reports whether the current token is an identifier spelled word.
-// `module`, `include` and `link` are only keywords inside an external block, so
-// they stay usable as ordinary names everywhere else.
+// `module`, `include`, `link` and `pkg` are only keywords inside an external
+// block, so they stay usable as ordinary names everywhere else.
 func (p *Parser) softKeyword(word string) bool {
 	return p.check(token.TokenIdent) && p.current().Value == word
 }
@@ -45,6 +45,14 @@ func (p *Parser) parseExternalModule() (*ast.ExternalModule, error) {
 			mod.Includes = append(mod.Includes, p.current().Value)
 			p.advance()
 
+		case p.softKeyword("pkg"):
+			p.advance()
+			if !p.check(token.TokenString) {
+				return nil, p.errorf("expected a library name in quotes after 'pkg', as in pkg \"openssl\"")
+			}
+			mod.Packages = append(mod.Packages, p.current().Value)
+			p.advance()
+
 		case p.softKeyword("type"):
 			t, err := p.parseExternalType(name)
 			if err != nil {
@@ -75,7 +83,7 @@ func (p *Parser) parseExternalModule() (*ast.ExternalModule, error) {
 			mod.Funcs = append(mod.Funcs, *fn)
 
 		default:
-			return nil, p.errorf("expected 'fn', 'include' or 'link' in external module '%s', got %s", name, p.current().Kind)
+			return nil, p.errorf("expected 'fn', 'type', 'include', 'link' or 'pkg' in external module '%s', got %s", name, p.current().Kind)
 		}
 		p.match(token.TokenSemicolon)
 	}

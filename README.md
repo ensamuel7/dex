@@ -390,7 +390,10 @@ catches that.
 
 `link` accepts `-l<name>`, `-L<path>` and a bare library name, and refuses the
 rest: a block that could hand arbitrary flags to the C compiler would be code
-execution at build time. For the same reason every C name a block supplies —
+execution at build time. A library outside the default search paths — all of
+Homebrew on Apple Silicon — is found with `pkg "openssl"`, which asks
+`pkg-config` for its header and library paths and passes on only `-I`, `-L`,
+`-l`, `-D`, `-pthread` and `-framework`. For the same reason every C name a block supplies —
 `= "symbol"`, `closed by`, `freed by` — must be a plain C identifier.
 
 **It is the C ABI, not the C language.** Any library exposing C-ABI symbols can

@@ -139,7 +139,7 @@ func FromExternal(em ast.ExternalModule) *Module {
 	m := &Module{
 		Name:   em.Name,
 		Funcs:  make(map[string]FuncDef, len(em.Funcs)),
-		CFlags: em.Links,
+		CFlags: append([]string(nil), em.Links...),
 	}
 	var includes strings.Builder
 	for _, h := range em.Includes {
@@ -149,6 +149,15 @@ func FromExternal(em ast.ExternalModule) *Module {
 		includes.WriteString("#include " + h + "\n")
 	}
 	m.CIncludes = includes.String()
+	// A pkg-config failure is reported by the checker, at the pkg line; here
+	// it contributes no flags.
+	for _, name := range em.Packages {
+		if ValidPkgName(name) {
+			if flags, err := PkgConfig(name); err == nil {
+				m.CFlags = append(m.CFlags, flags...)
+			}
+		}
+	}
 	for _, f := range em.Funcs {
 		m.Funcs[f.Name] = FuncDef{
 			Params:         f.Params,

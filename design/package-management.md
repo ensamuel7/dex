@@ -125,17 +125,14 @@ travel with its source and reach the C build of every program that uses it, so
 the program's author never writes `-lsqlite3`.
 
 What is not downloaded is the C library itself. Whoever builds needs it
-installed, headers included, as with cgo. A library can instead ship the C
+installed, headers included, as with cgo; `pkg "name"` finds it wherever the
+machine put it. A library can instead ship the C
 source (sqlite is a single `sqlite3.c`) beside its `.dx` files so it builds
 with nothing installed.
 
-Two gaps in `external module` stand between this and wrapping common libraries,
-both found by trying:
+One gap in `external module` stood between this and wrapping common
+libraries, found by trying:
 
-- **No header search path.** `link` takes `-L` for the library but nothing
-  takes `-I` for its headers, so a library outside the default paths (all of
-  Homebrew on Apple Silicon, `/opt/homebrew`) fails at `#include` unless the
-  builder sets `CPATH`. `pkg-config` is the usual answer, and cgo's.
 - **No out-parameters.** A C function that returns its result through a
   pointer argument cannot be declared. That rules out `sqlite3_open` and
   `sqlite3_prepare_v2`, so sqlite cannot be wrapped at all today.

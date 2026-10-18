@@ -75,6 +75,14 @@ through a function pointer, because `OPENSSL_free` is a macro. The default matte
 which is right for the stdlib, where every CName function returning a string
 hands over malloc'd memory, and heap corruption for a user binding `getenv`.
 
+`pkg "name"` runs `pkg-config --cflags --libs` through `stdlib.PkgConfig`,
+cached per process because the LSP checks on every edit. `filterPkgFlags`
+passes on only `-I`, `-L`, `-l`, `-D`, `-pthread` and `-framework`: the name is
+the block's, the output is the machine's, and both reach the compiler. The
+checker reports a failure at the block; `FromExternal` silently contributes no
+flags for one, and copies `Links` before appending so the declaration's own
+slice is never written.
+
 Every C name a block supplies — `= "symbol"`, `closed by`, `freed by` — is
 pasted into the generated C, so `validCSymbol` holds each to a C identifier,
 for the same reason `validLinkFlag` restricts flags.

@@ -199,3 +199,15 @@ func TestParseExternalFreedNeedsBy(t *testing.T) {
 	}
 	fn main(): void {}`, "expected 'by' after 'freed'")
 }
+
+func TestParseExternalPkg(t *testing.T) {
+	prog := parseExtern(t, `external module ossl {
+		include "<openssl/crypto.h>"
+		pkg "openssl"
+		fn f(): int
+	}
+	fn main(): void {}`)
+	if got := prog.Externals[0].Packages; len(got) != 1 || got[0] != "openssl" {
+		t.Errorf("packages = %v, want [openssl]", got)
+	}
+}

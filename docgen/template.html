@@ -1465,6 +1465,7 @@ fn hex(buf: string, len: long): owned string freed by "OPENSSL_free" = "OPENSSL_
 <p>A handle is refcounted, so the closing function runs when the last reference goes: at scope exit, on overwrite, and when an exception unwinds past it. A NULL return is <code>null</code>.</p>
 
 <h3>What Is Checked</h3>
+<p>A library outside the default search paths (all of Homebrew on Apple Silicon) is found with <code>pkg "openssl"</code>, which asks <code>pkg-config</code> for its header and library paths.</p>
 <p><code>link</code> accepts only <code>-l&lt;name&gt;</code>, <code>-L&lt;path&gt;</code> and a bare library name, and every C name a block supplies must be a plain C identifier. Both are pasted into the C build, so anything wider would let a library run code at build time.</p>
 </section>
 

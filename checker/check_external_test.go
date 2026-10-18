@@ -252,3 +252,19 @@ func TestExternalRejectsSymbolsThatAreNotIdentifiers(t *testing.T) {
 	}
 	fn main(): void {}`, "is not a C identifier")
 }
+
+func TestExternalRejectsPkgNameThatIsAnOption(t *testing.T) {
+	mustFail(t, `external module z {
+		pkg "--variable=prefix"
+		fn f(): int
+	}
+	fn main(): void {}`, "is not a library name")
+}
+
+func TestExternalReportsUnknownPkg(t *testing.T) {
+	mustFail(t, `external module z {
+		pkg "no-such-library-anywhere"
+		fn f(): int
+	}
+	fn main(): void {}`, "no-such-library-anywhere")
+}

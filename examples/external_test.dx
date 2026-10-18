@@ -90,6 +90,15 @@ external module lib {
     fn released(): int = "freer_count"
 }
 
+// A library outside the default search paths — Homebrew's OpenSSL is one —
+// found through pkg-config, and a deallocator that is a macro.
+external module ossl {
+    include "<openssl/crypto.h>"
+    pkg "openssl"
+
+    fn hex(buf: string, len: long): owned string freed by "OPENSSL_free" = "OPENSSL_buf2hexstr"
+}
+
 fn main(): void {
     assert(cmath.hypot(3.0, 4.0) == 5.0)
     assert(cmath.floorDouble(3.7) == 3.0)
@@ -130,6 +139,8 @@ fn main(): void {
     // A NULL return is an empty string and is not handed to the deallocator.
     assert(lib.none() == "")
     assert(lib.released() == 2)
+
+    assert(ossl.hex("ab", 2) == "61:62")
 
     // Bytes with an interior NUL cross as a pointer and a length, so nothing
     // truncates at the NUL the way strlen would. These two differ only in

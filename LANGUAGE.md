@@ -4088,6 +4088,25 @@ so a header you wrote is found without configuration. `link` takes `-l<name>`,
 external block that could pass arbitrary flags to the C compiler would be code
 execution at build time.
 
+A library outside the default search paths — everything Homebrew installs on
+Apple Silicon, under `/opt/homebrew` — needs its header path as well as its
+library path. `pkg` asks `pkg-config` for both, so the block does not have to
+know where the library lives on whichever machine builds it:
+
+```dex
+external module ossl {
+    include "<openssl/crypto.h>"
+    pkg "openssl"
+
+    fn hex(buf: string, len: long): owned string freed by "OPENSSL_free" = "OPENSSL_buf2hexstr"
+}
+```
+
+Only the flags a library needs are passed on — `-I`, `-L`, `-l`, `-D`,
+`-pthread` and `-framework` — and anything else `pkg-config` prints is an
+error, for the same reason `link` is restricted. A library `pkg-config` does
+not know is reported at the block, naming it.
+
 ### It is the C ABI, not the C language
 
 Nothing here requires the library to be written in C — only that it exposes
@@ -4214,7 +4233,7 @@ OpenSSL's `OPENSSL_free`. `freed by` names the function that does:
 ```dex
 external module ossl {
     include "<openssl/crypto.h>"
-    link "-lcrypto"
+    pkg "openssl"
 
     fn hex(buf: string, len: long): owned string freed by "OPENSSL_free" = "OPENSSL_buf2hexstr"
 }

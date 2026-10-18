@@ -64,6 +64,16 @@ func (c *Checker) checkExternals(program *ast.Program) {
 			}
 		}
 
+		for _, name := range em.Packages {
+			if !stdlib.ValidPkgName(name) {
+				c.addError(c.errAt(em.Pos, "pkg %q is not a library name", name))
+				continue
+			}
+			if _, err := stdlib.PkgConfig(name); err != nil {
+				c.addError(c.errAt(em.Pos, "%v", err))
+			}
+		}
+
 		typeSeen := map[string]bool{}
 		for _, t := range em.Types {
 			if typeSeen[t.Name] {

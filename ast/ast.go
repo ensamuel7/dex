@@ -400,6 +400,9 @@ type ExternalModule struct {
 	Name     string
 	Includes []string
 	Links    []string
+	// Packages are `pkg "name"` lines: libraries whose flags come from
+	// pkg-config rather than being written out.
+	Packages []string
 	Types    []ExternalType
 	Funcs    []ExternalFunc
 }

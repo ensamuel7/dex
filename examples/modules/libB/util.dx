@@ -1,0 +1,31 @@
+// The other util.dx. Same names, different behaviour, and its external module
+// binds a different C function under the same module and function names.
+
+const NAME: string = "beta"
+
+enum Kind {
+    Small
+    Large
+}
+
+struct Item {
+    label: string
+    kind: Kind
+}
+
+external module cstr {
+    include "<stdlib.h>"
+    fn length(s: string): long = "atol"
+}
+
+fn make(label: string): Item {
+    return Item { label: label, kind: Kind.Large }
+}
+
+fn describe(item: Item): string {
+    return NAME + ":" + item.label
+}
+
+fn measure(s: string): long {
+    return cstr.length(s)
+}

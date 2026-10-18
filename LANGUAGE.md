@@ -2356,11 +2356,16 @@ let kind: int = frame.CALL              // a module-level const
 http.route("GET", "/items", users.list)      // a function as a value
 ```
 
-Module names are flat and so are type names: both are shared across the whole
-program. Two files with the same base name therefore merge under one module
-name, which is fine until they both declare the same function or module-level
-value — at which point the compiler names the two files and the clashing symbol
-and asks you to rename one of them.
+What a file calls an import is local to that file. Each file is one module,
+however many files share its base name: two libraries can each contain a
+`util.dx` declaring the same functions, types and constants, and every file that
+imports one of them reaches that one. Two imports **in one file** under the same
+name are an error, because nothing in the file could say which one a reference
+means — give one of them another name with `as`.
+
+The same file imported by two names is one module, not two: its state is shared,
+and `import "model/billing" as "bill"` in one file and `import "model/billing"`
+in another both reach it.
 
 ### Aliasing an import
 
@@ -4399,9 +4404,17 @@ is an incompatible-pointer error rather than a warning.
 
 ### Where a block may be written
 
-In the main program or in a user module. A module that declares one can call it
-itself, and the declaration reaches the whole program, so two modules declaring
-the same external module name is an error.
+In the main program or in a user module, and it is visible **only in the file
+that declares it**. Two files can each declare an `external module cstr`, even
+binding different C functions under the same names, and each reaches its own. A
+file that wants C functions another file declared declares them too; a library
+that wants to share a set of bindings puts them behind ordinary Dex functions in
+a module and has its users import that.
+
+That is what keeps a library's C bindings its own business. Without it, every
+program that imported a library could call the library's raw C functions
+directly, and two libraries that happened to pick the same module name would
+break any program that used both.
 
 ---
 

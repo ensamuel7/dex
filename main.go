@@ -422,9 +422,14 @@ func frontend(filename string) (*ast.Program, error) {
 	}
 	absSourceDir, _ := filepath.Abs(sourceDir)
 	moduleTypes := resolve.PreRegisterUserStructs(resolve.ExtractImports(tokens), absSourceDir)
+	aliases, err := resolve.ModuleAliases(resolve.ExtractImports(tokens), absSourceDir, filename)
+	if err != nil {
+		return nil, err
+	}
 
 	// Parse
 	p := parser.New(tokens)
+	p.SetModuleAliases(aliases)
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
@@ -450,7 +455,7 @@ func frontend(filename string) (*ast.Program, error) {
 	// only the checker has, while re-parsing the template with them bound is
 	// something only the parser can do.
 	ch := checker.New()
-	ch.SetGenerics(program.GenericFuncs, p)
+	ch.SetGenerics(program.GenericFuncs, resolve.Instantiator{Parser: p, Aliases: program.ModuleAliases})
 	checkErrs := ch.Check(program)
 	printWarnings(ch.Warnings())
 	if len(checkErrs) > 0 {

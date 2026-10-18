@@ -431,7 +431,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			// members is the only shape this can take; a longer chain is a
 			// field access.
 			if len(members) == 2 {
-				enumName := ast.QualifiedStructName(name, members[0])
+				enumName := ast.QualifiedStructName(p.moduleIdentity(name), members[0])
 				if !p.enumNames[enumName] {
 					enumName = members[0]
 				}
@@ -447,7 +447,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			}
 
 			// Check for module-qualified struct literal: module.StructName { field: value, ... }
-			qualifiedLit := ast.QualifiedStructName(name, memberName)
+			qualifiedLit := ast.QualifiedStructName(p.moduleIdentity(name), memberName)
 			if !p.structNames[qualifiedLit] {
 				// Not a user module's type; a stdlib module's are bare.
 				qualifiedLit = memberName

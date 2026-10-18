@@ -34,7 +34,14 @@ func (p *Parser) parseExternalModule() (*ast.ExternalModule, error) {
 		return nil, err
 	}
 
-	mod := &ast.ExternalModule{Pos: pos, Name: name}
+	// A module's external block is registered under a name scoped to that
+	// module, so it is visible only there; resolve renames the module's calls
+	// to match. The main program's keeps the name written.
+	key := name
+	if p.module != "" {
+		key = p.module + "__" + name
+	}
+	mod := &ast.ExternalModule{Pos: pos, Name: key, Local: name}
 	for !p.check(token.TokenRBrace) && !p.atEnd() {
 		switch {
 		case p.softKeyword("include"):
@@ -54,7 +61,7 @@ func (p *Parser) parseExternalModule() (*ast.ExternalModule, error) {
 			p.advance()
 
 		case p.softKeyword("type"):
-			t, err := p.parseExternalType(name)
+			t, err := p.parseExternalType(name, key)
 			if err != nil {
 				return nil, err
 			}
@@ -186,7 +193,7 @@ func (p *Parser) parseExternalFunc(moduleName string) (*ast.ExternalFunc, error)
 // as a type immediately, so the fn declarations below it in the same block can
 // use it — the language's declare-before-use rule, which falls out of reading
 // the block top to bottom.
-func (p *Parser) parseExternalType(moduleName string) (*ast.ExternalType, error) {
+func (p *Parser) parseExternalType(moduleName, key string) (*ast.ExternalType, error) {
 	pos := p.nodePos()
 	p.advance() // consume 'type'
 
@@ -209,6 +216,6 @@ func (p *Parser) parseExternalType(moduleName string) (*ast.ExternalType, error)
 	closer := p.current().Value
 	p.advance()
 
-	p.handleNames[name] = ast.HandleTypeOf(moduleName, name, closer)
+	p.handleNames[name] = ast.HandleTypeOf(key, name, closer)
 	return &ast.ExternalType{Pos: pos, Name: name, Closer: closer}, nil
 }

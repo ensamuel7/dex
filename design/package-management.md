@@ -143,7 +143,13 @@ scripts, which is npm's largest hole.
 
 These block a package manager regardless of how fetching is done.
 
-### 1. A package's names belong to the package
+### 1. A package's names belong to the package — done
+
+Each file now has its own identity (`util`, then `util_2` for a different
+`util.dx`), what a file calls an import is local to it, and an external module is
+visible only in the file that declares it. `examples/moduleIdentity_test.dx`
+uses two libraries that each contain a `util.dx` with the same names. What
+follows is the problem as it stood.
 
 Today a module's name is its file's base name, shared across the whole
 program, and that name becomes the C prefix (`alpha_make`, `alpha_Response`).
@@ -179,7 +185,7 @@ this moves from deliberately unsupported to required.
 
 ## Order of work
 
-1. Package-scoped names and file-scoped external modules.
+1. ~~Package-scoped names and file-scoped external modules.~~ Done.
 2. `dex.mod` and import resolution, with `replace` only. Sharing from local
    directories and monorepos works from here.
 3. `dex get`: fetching tags into the cache and writing `dex.sum`.

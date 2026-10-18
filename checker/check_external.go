@@ -52,17 +52,22 @@ func (c *Checker) checkExternals(program *ast.Program) {
 	seen := map[string]bool{}
 	for i := range program.Externals {
 		em := &program.Externals[i]
+		// The name written, not the one a module's block is scoped under.
+		shown := em.Name
+		if em.Local != "" {
+			shown = em.Local
+		}
 
 		if seen[em.Name] {
-			c.addError(c.errAt(em.Pos, "external module '%s' is declared twice", em.Name))
+			c.addError(c.errAt(em.Pos, "external module '%s' is declared twice", shown))
 			continue
 		}
 		seen[em.Name] = true
 
 		// A name the stdlib already provides would be ambiguous at every call
 		// site, and which one won would depend on lookup order.
-		if stdlib.Lookup(em.Name) != nil {
-			c.addError(c.errAt(em.Pos, "external module '%s' shadows the stdlib module of the same name — give it another name", em.Name))
+		if stdlib.Lookup(shown) != nil {
+			c.addError(c.errAt(em.Pos, "external module '%s' shadows the stdlib module of the same name — give it another name", shown))
 		}
 
 		for _, h := range em.Includes {
@@ -89,14 +94,14 @@ func (c *Checker) checkExternals(program *ast.Program) {
 		typeSeen := map[string]bool{}
 		for _, t := range em.Types {
 			if typeSeen[t.Name] {
-				c.addError(c.errAt(t.Pos, "external module '%s' declares type '%s' twice", em.Name, t.Name))
+				c.addError(c.errAt(t.Pos, "external module '%s' declares type '%s' twice", shown, t.Name))
 				continue
 			}
 			typeSeen[t.Name] = true
 			if t.Closer == "" {
-				c.addError(c.errAt(t.Pos, "type %s.%s needs a closing function, as in closed by \"fclose\"", em.Name, t.Name))
+				c.addError(c.errAt(t.Pos, "type %s.%s needs a closing function, as in closed by \"fclose\"", shown, t.Name))
 			} else if !validCSymbol(t.Closer) {
-				c.addError(c.errAt(t.Pos, "closed by %q on type %s.%s is not a C identifier", t.Closer, em.Name, t.Name))
+				c.addError(c.errAt(t.Pos, "closed by %q on type %s.%s is not a C identifier", t.Closer, shown, t.Name))
 			}
 			if _, taken := ast.LookupStructType(t.Name); taken {
 				c.addError(c.errAt(t.Pos, "external type '%s' collides with a struct of the same name", t.Name))
@@ -106,44 +111,44 @@ func (c *Checker) checkExternals(program *ast.Program) {
 		fnSeen := map[string]bool{}
 		for _, f := range em.Funcs {
 			if fnSeen[f.Name] {
-				c.addError(c.errAt(f.Pos, "external module '%s' declares '%s' twice", em.Name, f.Name))
+				c.addError(c.errAt(f.Pos, "external module '%s' declares '%s' twice", shown, f.Name))
 				continue
 			}
 			fnSeen[f.Name] = true
 
 			if !validCSymbol(f.CName) {
-				c.addError(c.errAt(f.Pos, "%q on %s.%s() is not a C identifier", f.CName, em.Name, f.Name))
+				c.addError(c.errAt(f.Pos, "%q on %s.%s() is not a C identifier", f.CName, shown, f.Name))
 			}
 
 			for j, pt := range f.Params {
 				if ast.IsRefType(pt) {
 					if !externalOutTypeSupported(ast.RefInnerType(pt)) {
 						c.addError(c.errAt(f.Pos, "%s.%s() parameter '%s' is %s, which cannot be written by C — an out-parameter is &int, &long, &double, &bool, &char or a handle",
-							em.Name, f.Name, f.ParamNames[j], typeName(pt)))
+							shown, f.Name, f.ParamNames[j], typeName(pt)))
 					}
 					continue
 				}
 				if !externalTypeSupported(pt) {
 					c.addError(c.errAt(f.Pos, "%s.%s() parameter '%s' is %s, which cannot cross the C boundary yet — only int, long, double, bool, char and string can",
-						em.Name, f.Name, f.ParamNames[j], typeName(pt)))
+						shown, f.Name, f.ParamNames[j], typeName(pt)))
 				}
 			}
 			// `owned` says the callee malloc'd the string it returned, so it
 			// means nothing on any other type.
 			if f.OwnedReturn && f.ReturnType != ast.TypeString {
 				c.addError(c.errAt(f.Pos, "'owned' on %s.%s() needs a string return, not %s — it says the C function malloc'd the string and Dex should free it",
-					em.Name, f.Name, typeName(f.ReturnType)))
+					shown, f.Name, typeName(f.ReturnType)))
 			}
 			if f.ReturnFreer != "" && !f.OwnedReturn {
 				c.addError(c.errAt(f.Pos, "'freed by' on %s.%s() needs an 'owned string' return — without 'owned' Dex never frees the string, so there is nothing to free it with",
-					em.Name, f.Name))
+					shown, f.Name))
 			} else if f.ReturnFreer != "" && !validCSymbol(f.ReturnFreer) {
-				c.addError(c.errAt(f.Pos, "freed by %q on %s.%s() is not a C identifier", f.ReturnFreer, em.Name, f.Name))
+				c.addError(c.errAt(f.Pos, "freed by %q on %s.%s() is not a C identifier", f.ReturnFreer, shown, f.Name))
 			}
 
 			if f.ReturnType != ast.TypeVoid && !externalTypeSupported(f.ReturnType) {
 				c.addError(c.errAt(f.Pos, "%s.%s() returns %s, which cannot cross the C boundary yet — only int, long, double, bool, char and string can",
-					em.Name, f.Name, typeName(f.ReturnType)))
+					shown, f.Name, typeName(f.ReturnType)))
 			}
 		}
 	}

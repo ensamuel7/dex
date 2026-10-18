@@ -20,6 +20,7 @@ type Parser struct {
 	enumNames      map[string]bool
 	interfaceNames map[string]bool
 	handleNames    map[string]ast.Type
+	moduleAliases  map[string]string
 	errors         []error
 	maxErrors      int
 	lastArgNames   []string // set by parseArgs when named arguments are used
@@ -63,6 +64,23 @@ func New(tokens []token.Token) *Parser {
 // that name, and a bare reference inside it resolves to its own first.
 func (p *Parser) SetModule(name string) {
 	p.module = name
+}
+
+// SetModuleAliases tells the parser which names this file imports a module by
+// differ from the module's identity — an alias, or a module renamed because
+// another file had its name. A qualified type, struct literal or enum variant
+// written with the local name then resolves to the identity it is registered
+// under.
+func (p *Parser) SetModuleAliases(aliases map[string]string) {
+	p.moduleAliases = aliases
+}
+
+// moduleIdentity is the identity a qualifier written in this file refers to.
+func (p *Parser) moduleIdentity(qualifier string) string {
+	if id, ok := p.moduleAliases[qualifier]; ok {
+		return id
+	}
+	return qualifier
 }
 
 // AddModuleType records that `module` declares a type called `bare`, so a
@@ -1052,7 +1070,7 @@ func (p *Parser) parseType() (ast.Type, error) {
 				p.advance()
 				p.advance()
 				base = ast.TypeJsonValue
-			} else if flat := ast.QualifiedStructName(name, qualifiedName); p.structNames[flat] || p.enumNames[flat] || p.interfaceNames[flat] {
+			} else if flat := ast.QualifiedStructName(p.moduleIdentity(name), qualifiedName); p.structNames[flat] || p.enumNames[flat] || p.interfaceNames[flat] {
 				// A user module's type, named by the module that declares it.
 				p.advance() // consume module name
 				p.advance() // consume '.'

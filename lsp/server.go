@@ -682,7 +682,7 @@ func (s *Server) diagnose(uri string, text string) {
 	// as in the compiler driver: without this a call to a generic function has
 	// no signature registered and the editor reports it as undefined.
 	ch := checker.New()
-	ch.SetGenerics(program.GenericFuncs, p)
+	ch.SetGenerics(program.GenericFuncs, resolve.Instantiator{Parser: p, Aliases: program.ModuleAliases})
 	checkErrs := ch.Check(program)
 
 	// Warnings are advisory — deprecated calls still compile — so they are
@@ -974,6 +974,11 @@ func seedParserModuleTypes(p *parser.Parser, tokens []token.Token, sourceDir str
 	if sourceDir != "" {
 		for _, mt := range resolve.PreRegisterUserStructs(resolve.ExtractImports(tokens), sourceDir) {
 			p.AddModuleType(mt.Module, mt.Name, mt.Kind)
+		}
+		// Two imports under one name is reported by ResolveUserModules, with
+		// its position; here it only means no aliases to seed.
+		if aliases, err := resolve.ModuleAliases(resolve.ExtractImports(tokens), sourceDir, ""); err == nil {
+			p.SetModuleAliases(aliases)
 		}
 	}
 	p.AddStructName("Exception") // built-in Exception type

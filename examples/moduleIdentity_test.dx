@@ -1,0 +1,39 @@
+// Two libraries that each contain a util.dx, used together.
+//
+// A module's merged name was its file's base name, so both util.dx files merged
+// into one module `util` and a function both declared was an error nobody could
+// fix: the clash was inside the libraries, out of reach of an alias. Each file
+// now has its own identity, and what a file calls an import is local to it.
+//
+// External modules are local to the file that declares it, too: both utils
+// declare `external module cstr` with a `length`, bound to different C
+// functions, and each reaches its own.
+
+import "fmt"
+import "modules/libA/front" as "afront"
+import "modules/libB/front" as "bfront"
+import "modules/libA/util" as "autil"
+import "modules/libB/util" as "butil"
+
+fn main(): void {
+    // Each front reaches its own library's util.
+    assert(afront.run("x") == "alpha:x")
+    assert(bfront.run("x") == "beta:x")
+    assert(afront.isSmall("x"))
+    assert(!bfront.isSmall("x"))
+
+    // The same file under a name of this file's choosing: calls, types, struct
+    // literals, enum variants and constants all follow the alias.
+    let item: autil.Item = autil.Item { label: "y", kind: autil.Kind.Large }
+    assert(autil.describe(item) == "alpha:y")
+    assert(autil.make("z").kind == autil.Kind.Small)
+    assert(autil.NAME == "alpha")
+
+    // Same external module, same function name, different C function:
+    // strlen in one, atol in the other.
+    assert(autil.measure("42abc") == 5)
+    assert(butil.measure("42abc") == 42)
+    assert(butil.describe(butil.make("w")) == "beta:w")
+
+    fmt.println("moduleIdentity_test: all assertions passed")
+}

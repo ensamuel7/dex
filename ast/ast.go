@@ -370,14 +370,17 @@ type Import struct {
 }
 
 type Program struct {
-	Imports      []Import
-	Structs      []StructDef
-	Enums        []EnumDef
-	GlobalLets   []LetStmt // module-level let/const declarations
-	Functions    []Function
-	Interfaces   []InterfaceDef
-	UserModules  []string          // module names (last path segment) of resolved user imports
-	StructModule map[string]string // structName -> moduleName (for cross-module structs)
+	Imports     []Import
+	Structs     []StructDef
+	Enums       []EnumDef
+	GlobalLets  []LetStmt // module-level let/const declarations
+	Functions   []Function
+	Interfaces  []InterfaceDef
+	UserModules []string // identities of resolved user imports: see resolve.moduleIdentities
+	// ModuleAliases maps a name the main program imports a module by to that
+	// module's identity, where the two differ.
+	ModuleAliases map[string]string
+	StructModule  map[string]string // structName -> moduleName (for cross-module structs)
 	// Generic declarations are kept as the tokens they were written as rather
 	// than as a parsed AST, because instantiating one means re-parsing it with
 	// its type parameters bound to concrete types. Substituting over a parsed
@@ -396,8 +399,14 @@ type Program struct {
 // ExternalModule is an `external module` block: a set of C functions to call, the
 // headers they need, and the flags to link against.
 type ExternalModule struct {
-	Pos      Pos
-	Name     string
+	Pos Pos
+	// Name is what the block is registered under. In the main program it is
+	// the name written; in a user module it is scoped to that module —
+	// alpha__cstr — so an external module is visible only in the file that
+	// declares it, and two files can each declare a `cstr`.
+	Name string
+	// Local is the name as written, for diagnostics.
+	Local    string
 	Includes []string
 	Links    []string
 	// Packages are `pkg "name"` lines: libraries whose flags come from

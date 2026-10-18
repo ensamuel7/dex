@@ -1,0 +1,31 @@
+// One of two files named util.dx. Each declares the same function, struct,
+// enum, constant and external module names as the other.
+
+const NAME: string = "alpha"
+
+enum Kind {
+    Small
+    Large
+}
+
+struct Item {
+    label: string
+    kind: Kind
+}
+
+external module cstr {
+    include "<string.h>"
+    fn length(s: string): long = "strlen"
+}
+
+fn make(label: string): Item {
+    return Item { label: label, kind: Kind.Small }
+}
+
+fn describe(item: Item): string {
+    return NAME + ":" + item.label
+}
+
+fn measure(s: string): long {
+    return cstr.length(s)
+}

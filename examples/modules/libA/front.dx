@@ -1,0 +1,11 @@
+// Imports its own library's util by the plain name.
+import "util"
+
+fn run(label: string): string {
+    let item: util.Item = util.make(label)
+    return util.describe(item)
+}
+
+fn isSmall(label: string): bool {
+    return util.make(label).kind == util.Kind.Small
+}

@@ -286,6 +286,40 @@ be gone. The consequence is that arguments are evaluated at the `defer` rather
 than at the exit, which is also what Go does. `examples/defer_test.dx` pins all
 of it.
 
+## A module is a file, and its names are its own
+
+A module's **identity** — the prefix on its functions, globals and types in the
+generated C — is assigned per file by `resolve.moduleIdentities`: the name the
+file is first imported by, or `util_2`, `util_3` when a different file already
+holds it. It was the base name, shared by every file with that base name, so two
+libraries each with a `util.dx` merged and a function both declared was an error
+nobody could fix. A program with no such clash is named exactly as before.
+
+The walk is depth first in import order and runs separately in every caller —
+pre-registration, resolution, the LSP — so each derives the same names.
+
+What a file calls an import is local to it. `fileAliases` maps a name written in
+a file to the identity where they differ, and two imports under one name in one
+file are an error. The rename happens in two places, because references are
+resolved in two places:
+
+- **Calls and field accesses** are renamed after parsing by `renameModuleRefs`,
+  shadow-aware through `withoutShadowed`, for the main program and each module.
+- **Types, struct literals and enum variants** are resolved by the parser, so it
+  is told the aliases first (`Parser.SetModuleAliases`, read by
+  `moduleIdentity` at the three qualified-name sites).
+
+A generic is re-parsed by the checker after the main program's calls were
+renamed, so `resolve.Instantiator` wraps the parser and renames each
+instantiation the same way. `program.ModuleAliases` carries the main program's
+map to it.
+
+An **external module** is visible only in the file that declares it. In a user
+module the parser registers it as `<module>__<name>` (`ExternalModule.Local`
+keeps the written name for diagnostics) and its handle types under that key,
+and resolve renames the module's calls to match. The main program's keep their
+names, so `refuseForeignExternals` stops a module reaching one.
+
 ## A module's types belong to it
 
 A type declared in a user module registers under that module — `alpha_Response`

@@ -27,6 +27,8 @@ func ExtractImportPaths(tokens []token.Token) []string {
 type ImportRef struct {
 	Path  string
 	Alias string
+	Line  int
+	Col   int
 }
 
 // ExtractImports scans raw tokens for import declarations, keeping any alias.
@@ -39,7 +41,7 @@ func ExtractImports(tokens []token.Token) []ImportRef {
 		if tokens[i].Kind != token.TokenImport || tokens[i+1].Kind != token.TokenString {
 			continue
 		}
-		ref := ImportRef{Path: tokens[i+1].Value}
+		ref := ImportRef{Path: tokens[i+1].Value, Line: tokens[i].Line, Col: tokens[i].Col}
 		if i+3 < len(tokens) && tokens[i+2].Kind == token.TokenAs && tokens[i+3].Kind == token.TokenString {
 			ref.Alias = tokens[i+3].Value
 		}
@@ -90,30 +92,126 @@ type ModuleType struct {
 func PreRegisterUserStructs(imports []ImportRef, sourceDir string) []ModuleType {
 	var found []ModuleType
 	visited := map[string]bool{}
+	ids := moduleIdentities(imports, sourceDir)
 	for _, ref := range imports {
 		if stdlib.Lookup(ref.Path) != nil {
 			continue
 		}
-		preRegisterStructsFromFile(filepath.Join(sourceDir, ref.Path+".dx"), moduleNameFor(ref), visited, &found)
+		preRegisterStructsFromFile(filepath.Join(sourceDir, ref.Path+".dx"), ids, visited, &found)
 	}
 	return found
 }
 
-// moduleNameFor is the name an import is known by: its alias, or its file's
-// base name.
-func moduleNameFor(ref ImportRef) string {
+// localName is the name an import is known by in the file that writes it: its
+// alias, or its file's base name.
+func localName(ref ImportRef) string {
 	if ref.Alias != "" {
 		return ref.Alias
 	}
 	return filepath.Base(ref.Path)
 }
 
-func preRegisterStructsFromFile(filePath, module string, visited map[string]bool, found *[]ModuleType) {
+// moduleIdentities gives every user module reachable from imports the name it
+// is merged under, keyed by absolute path. A module's identity is what prefixes
+// its functions, globals and types in the generated C — `util_make`,
+// `util_Columns` — so it has to be unique per file, not per spelling.
+//
+// It was the file's base name, shared by every file with that base name, so two
+// libraries each with a util.dx merged into one module and a function both
+// declared was an error the program's author could not fix: the clash was in
+// code they did not own, and an alias could not reach it. Now a file keeps the
+// name it is first imported by, and a different file wanting the same name gets
+// the first free util_2, util_3. A program with no such clash is named exactly
+// as before.
+//
+// The walk is depth first, in the order imports are written, so every caller —
+// pre-registration, resolution, the language server — assigns the same names.
+func moduleIdentities(imports []ImportRef, sourceDir string) map[string]string {
+	ids := map[string]string{}
+	taken := map[string]bool{}
+	var visit func(refs []ImportRef, dir string)
+	visit = func(refs []ImportRef, dir string) {
+		for _, ref := range refs {
+			if stdlib.Lookup(ref.Path) != nil {
+				continue
+			}
+			abs, err := filepath.Abs(filepath.Join(dir, ref.Path+".dx"))
+			if err != nil {
+				continue
+			}
+			if _, seen := ids[abs]; seen {
+				continue
+			}
+			id := localName(ref)
+			for n := 2; taken[id]; n++ {
+				id = fmt.Sprintf("%s_%d", localName(ref), n)
+			}
+			ids[abs] = id
+			taken[id] = true
+			source, err := os.ReadFile(abs)
+			if err != nil {
+				continue
+			}
+			tokens, err := lexer.New(string(source)).Tokenize()
+			if err != nil {
+				continue
+			}
+			visit(ExtractImports(tokens), filepath.Dir(abs))
+		}
+	}
+	visit(imports, sourceDir)
+	return ids
+}
+
+// fileAliases maps each name a file imports a module by to that module's
+// identity, for the names that differ — an alias, or a module renamed because
+// another file took its name first. Everything else is spelled the same in the
+// file as in the merged program, which is the usual case and leaves the map
+// empty.
+//
+// Two imports in one file under the same name, naming different files, are an
+// error: nothing in the file could say which one a reference means.
+func fileAliases(refs []ImportRef, dir, file string, ids map[string]string) (map[string]string, error) {
+	aliases := map[string]string{}
+	byName := map[string]string{}
+	for _, ref := range refs {
+		if stdlib.Lookup(ref.Path) != nil {
+			continue
+		}
+		abs, err := filepath.Abs(filepath.Join(dir, ref.Path+".dx"))
+		if err != nil {
+			continue
+		}
+		local := localName(ref)
+		if prev, dup := byName[local]; dup && prev != abs {
+			return nil, fmt.Errorf("%s:%d:%d: two imports are both named '%s' — give one another name: import \"%s\" as \"<name>\"",
+				file, ref.Line, ref.Col, local, ref.Path)
+		}
+		byName[local] = abs
+		if id, ok := ids[abs]; ok && id != local {
+			aliases[local] = id
+		}
+	}
+	return aliases, nil
+}
+
+// ModuleAliases is fileAliases for the main program, for seeding its parser
+// before it is parsed: a qualified type, struct literal or enum variant is
+// resolved there rather than afterwards.
+func ModuleAliases(imports []ImportRef, sourceDir, file string) (map[string]string, error) {
+	return fileAliases(imports, sourceDir, file, moduleIdentities(imports, sourceDir))
+}
+
+func preRegisterStructsFromFile(filePath string, ids map[string]string, visited map[string]bool, found *[]ModuleType) {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil || visited[absPath] {
 		return
 	}
 	visited[absPath] = true
+	module, ok := ids[absPath]
+	if !ok {
+		return
+	}
 
 	source, err := os.ReadFile(filePath)
 	if err != nil {
@@ -151,7 +249,7 @@ func preRegisterStructsFromFile(filePath, module string, visited map[string]bool
 		if stdlib.Lookup(ref.Path) != nil {
 			continue
 		}
-		preRegisterStructsFromFile(filepath.Join(modDir, ref.Path+".dx"), moduleNameFor(ref), visited, found)
+		preRegisterStructsFromFile(filepath.Join(modDir, ref.Path+".dx"), ids, visited, found)
 	}
 }
 
@@ -212,11 +310,117 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 	visited := map[string]bool{}
 	processing := map[string]bool{}
 	owners := map[string]string{}
-	if err := resolveImports(program, sourceDir, visited, processing, owners); err != nil {
+
+	refs := make([]ImportRef, 0, len(program.Imports))
+	mainFile := ""
+	for _, imp := range program.Imports {
+		refs = append(refs, ImportRef{Path: imp.Path, Alias: imp.Alias, Line: imp.Pos.Line, Col: imp.Pos.Col})
+		if mainFile == "" {
+			mainFile = imp.Pos.File
+		}
+	}
+	ids := moduleIdentities(refs, sourceDir)
+	aliases, err := fileAliases(refs, sourceDir, mainFile, ids)
+	if err != nil {
+		return err
+	}
+	// Kept for the checker's generic instantiations, which re-parse the main
+	// program's templates after this pass has already renamed its calls.
+	program.ModuleAliases = aliases
+	for i := range program.Functions {
+		renameModuleRefs(&program.Functions[i], aliases)
+	}
+	for i := range program.GlobalLets {
+		renameModuleRefsInExpr(program.GlobalLets[i].Value, aliases)
+	}
+
+	// The main program's external modules keep their names. A module reaching
+	// one without declaring it would otherwise still compile, because the name
+	// is in the program's import map — which is the leak that made a library's
+	// C bindings everyone's.
+	mainExternals := map[string]bool{}
+	for _, em := range program.Externals {
+		mainExternals[em.Name] = true
+	}
+
+	r := &resolver{program: program, ids: ids, visited: visited, processing: processing, owners: owners, mainExternals: mainExternals}
+	if err := r.resolveImports(sourceDir); err != nil {
 		return err
 	}
 	resolveQualifiedGlobals(program)
 	return nil
+}
+
+// resolver carries what every file's resolution shares: the program being
+// merged into, each file's identity, and the bookkeeping that stops a file being
+// merged twice or importing itself.
+type resolver struct {
+	program       *ast.Program
+	ids           map[string]string
+	visited       map[string]bool
+	processing    map[string]bool
+	owners        map[string]string
+	mainExternals map[string]bool
+}
+
+// renameModuleRefs rewrites a function's qualified references whose head is a
+// key of names into its value: a call `local.f()`, including the head of a
+// dotted receiver chain, and a field access `local.x`. A parameter or local of
+// the same name wins inside the function that declares it, as it does for the
+// module prefixer.
+func renameModuleRefs(fn *ast.Function, names map[string]string) {
+	if len(names) == 0 {
+		return
+	}
+	keys := make(map[string]bool, len(names))
+	for k := range names {
+		keys[k] = true
+	}
+	visible := withoutShadowed(keys, fn)
+	if len(visible) == 0 {
+		return
+	}
+	walkStmts(fn.Body, func(expr ast.Expr) ast.Expr {
+		renameModuleRef(expr, names, visible)
+		return nil
+	})
+}
+
+func renameModuleRefsInExpr(expr ast.Expr, names map[string]string) {
+	if expr == nil || len(names) == 0 {
+		return
+	}
+	visible := make(map[string]bool, len(names))
+	for k := range names {
+		visible[k] = true
+	}
+	walkExpr(expr, func(e ast.Expr) ast.Expr {
+		renameModuleRef(e, names, visible)
+		return nil
+	})
+}
+
+func renameModuleRef(expr ast.Expr, names map[string]string, visible map[string]bool) {
+	switch e := expr.(type) {
+	case *ast.CallExpr:
+		head, rest := splitModuleHead(e.Module)
+		if head != "" && visible[head] {
+			e.Module = names[head] + rest
+		}
+	case *ast.FieldAccessExpr:
+		if id, ok := e.Object.(*ast.Ident); ok && visible[id.Name] {
+			id.Name = names[id.Name]
+		}
+	}
+}
+
+// splitModuleHead splits a call's Module into its first segment and the dotted
+// rest: "svc.repo" is "svc" and ".repo".
+func splitModuleHead(module string) (string, string) {
+	if dot := strings.Index(module, "."); dot >= 0 {
+		return module[:dot], module[dot:]
+	}
+	return module, ""
 }
 
 // resolveQualifiedGlobals rewrites `someModule.NAME` into the flat name that
@@ -288,7 +492,9 @@ func resolveQualifiedGlobals(program *ast.Program) {
 	}
 }
 
-func resolveImports(program *ast.Program, sourceDir string, visited, processing map[string]bool, owners map[string]string) error {
+func (r *resolver) resolveImports(sourceDir string) error {
+	program := r.program
+	visited, processing := r.visited, r.processing
 	var userImports []ast.Import
 	var stdlibImports []ast.Import
 
@@ -303,15 +509,12 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 	program.Imports = stdlibImports
 
 	for _, imp := range userImports {
-		moduleName := filepath.Base(imp.Path)
-		if imp.Alias != "" {
-			moduleName = imp.Alias
-		}
 		filePath := filepath.Join(sourceDir, imp.Path+".dx")
 		absPath, err := filepath.Abs(filePath)
 		if err != nil {
 			return fmt.Errorf("cannot resolve path for import '%s': %v", imp.Path, err)
 		}
+		moduleName := r.identity(absPath, ImportRef{Path: imp.Path, Alias: imp.Alias})
 
 		if visited[absPath] {
 			if !containsString(program.UserModules, moduleName) {
@@ -324,7 +527,7 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 			return fmt.Errorf("circular import detected: '%s'", imp.Path)
 		}
 
-		if err := resolveModuleFile(filePath, absPath, moduleName, program, visited, processing, owners); err != nil {
+		if err := r.resolveModuleFile(filePath, absPath, moduleName); err != nil {
 			return err
 		}
 	}
@@ -332,9 +535,21 @@ func resolveImports(program *ast.Program, sourceDir string, visited, processing 
 	return nil
 }
 
+// identity is a file's merged name. Every reachable file was named up front, so
+// the fallback only covers a file the walk could not read — which then fails
+// to open with its own error.
+func (r *resolver) identity(absPath string, ref ImportRef) string {
+	if id, ok := r.ids[absPath]; ok {
+		return id
+	}
+	return localName(ref)
+}
+
 // Sub-imports are resolved before this module is parsed, so their struct types
 // are registered by the time its type annotations are read.
-func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Program, visited, processing map[string]bool, owners map[string]string) error {
+func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error {
+	program := r.program
+	visited, processing, owners := r.visited, r.processing, r.owners
 	processing[absPath] = true
 
 	source, err := os.ReadFile(filePath)
@@ -355,20 +570,25 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	}
 
 	modDir := filepath.Dir(absPath)
+	aliases, err := fileAliases(subImports, modDir, filePath, r.ids)
+	if err != nil {
+		return err
+	}
+	localImports := map[string]bool{}
+	for _, ref := range subImports {
+		localImports[localName(ref)] = true
+	}
 	for _, ref := range subImports {
 		subPath := ref.Path
 		if stdlib.Lookup(subPath) != nil {
 			continue
-		}
-		subModuleName := filepath.Base(subPath)
-		if ref.Alias != "" {
-			subModuleName = ref.Alias
 		}
 		subFilePath := filepath.Join(modDir, subPath+".dx")
 		subAbsPath, err := filepath.Abs(subFilePath)
 		if err != nil {
 			return fmt.Errorf("cannot resolve path for import '%s': %v", subPath, err)
 		}
+		subModuleName := r.identity(subAbsPath, ref)
 
 		if visited[subAbsPath] {
 			if !containsString(program.UserModules, subModuleName) {
@@ -380,7 +600,7 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 			return fmt.Errorf("circular import detected: '%s'", subPath)
 		}
 
-		if err := resolveModuleFile(subFilePath, subAbsPath, subModuleName, program, visited, processing, owners); err != nil {
+		if err := r.resolveModuleFile(subFilePath, subAbsPath, subModuleName); err != nil {
 			return err
 		}
 	}
@@ -390,6 +610,7 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	// This file declares `moduleName`, so its own types register under it and a
 	// bare reference inside it resolves to its own first.
 	p.SetModule(moduleName)
+	p.SetModuleAliases(aliases)
 	for _, name := range typeNames {
 		p.AddStructName(name)
 	}
@@ -417,6 +638,29 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	}
 
 	FlattenStructMethods(modProgram)
+
+	// What this file calls its imports and its external modules is local to
+	// it: an import whose identity differs from the name written, and an
+	// external module, which the parser registered under a name scoped to this
+	// file, are renamed here so the merged program has one spelling for each.
+	names := map[string]string{}
+	for local, id := range aliases {
+		names[local] = id
+	}
+	for _, em := range modProgram.Externals {
+		if em.Local != "" && em.Local != em.Name {
+			names[em.Local] = em.Name
+		}
+	}
+	for i := range modProgram.Functions {
+		renameModuleRefs(&modProgram.Functions[i], names)
+	}
+	for i := range modProgram.GlobalLets {
+		renameModuleRefsInExpr(modProgram.GlobalLets[i].Value, names)
+	}
+	if err := r.refuseForeignExternals(modProgram, names, localImports); err != nil {
+		return err
+	}
 
 	delete(processing, absPath)
 	visited[absPath] = true
@@ -506,12 +750,16 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 		}
 	}
 
-	for _, subPath := range importPaths {
-		if stdlib.Lookup(subPath) == nil {
-			subModName := filepath.Base(subPath)
-			if !containsString(program.UserModules, subModName) {
-				program.UserModules = append(program.UserModules, subModName)
-			}
+	for _, ref := range subImports {
+		if stdlib.Lookup(ref.Path) != nil {
+			continue
+		}
+		subAbs, err := filepath.Abs(filepath.Join(modDir, ref.Path+".dx"))
+		if err != nil {
+			continue
+		}
+		if subModName := r.identity(subAbs, ref); !containsString(program.UserModules, subModName) {
+			program.UserModules = append(program.UserModules, subModName)
 		}
 	}
 
@@ -520,6 +768,34 @@ func resolveModuleFile(filePath, absPath, moduleName string, program *ast.Progra
 	}
 
 	return nil
+}
+
+// refuseForeignExternals reports a module calling into an external module the
+// main program declares. The main program's keep their names, so without this
+// the call would resolve: an external module is visible only in the file that
+// declares it, and a module that wants the same C functions declares them too.
+func (r *resolver) refuseForeignExternals(modProgram *ast.Program, own map[string]string, imports map[string]bool) error {
+	if len(r.mainExternals) == 0 {
+		return nil
+	}
+	var found error
+	for i := range modProgram.Functions {
+		fn := &modProgram.Functions[i]
+		visible := withoutShadowed(r.mainExternals, fn)
+		walkStmts(fn.Body, func(expr ast.Expr) ast.Expr {
+			call, ok := expr.(*ast.CallExpr)
+			if !ok || found != nil {
+				return nil
+			}
+			head, _ := splitModuleHead(call.Module)
+			if visible[head] && own[head] == "" && !imports[head] {
+				found = fmt.Errorf("%s:%d:%d: external module '%s' is declared in the main program, and an external module is visible only in the file that declares it — declare it in this file too",
+					call.Pos.File, call.Pos.Line, call.Pos.Col, head)
+			}
+			return nil
+		})
+	}
+	return found
 }
 
 func containsString(slice []string, s string) bool {
@@ -965,4 +1241,21 @@ func containsInterface(list []ast.InterfaceDef, name string) bool {
 		}
 	}
 	return false
+}
+
+// Instantiator is the parser's generic instantiation with the main program's
+// module renames applied to what it produces. A template is re-parsed by the
+// checker after ResolveUserModules has already renamed the main program's calls,
+// so without this a generic calling an aliased module named it by the alias.
+type Instantiator struct {
+	*parser.Parser
+	Aliases map[string]string
+}
+
+func (in Instantiator) InstantiateFunc(name string, args []ast.Type) (*ast.Function, []ast.StructDef, error) {
+	fn, structs, err := in.Parser.InstantiateFunc(name, args)
+	if err == nil && fn != nil {
+		renameModuleRefs(fn, in.Aliases)
+	}
+	return fn, structs, err
 }

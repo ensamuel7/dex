@@ -1,0 +1,40 @@
+// Using a library that wraps C, the way most programs would: import it and call
+// Dex functions. Nothing here names a C function, a header or a link flag.
+//
+// It needed three things that did not work: a C handle as a struct field, and a
+// string? or Db? field keeping its own reference both when a struct literal
+// stores it and when a local reads it back out.
+
+import "fmt"
+import "modules/sqlite"
+
+fn total(db: sqlite.Database): int {
+    return sqlite.queryInt(db, "SELECT sum(v) FROM t")
+}
+
+fn fresh(): sqlite.Database {
+    let db: sqlite.Database = sqlite.open(":memory:")
+    assert(sqlite.exec(db, "CREATE TABLE t(v INT)"))
+    return db
+}
+
+fn main(): void {
+    let db: sqlite.Database = fresh()
+    assert(sqlite.exec(db, "INSERT INTO t VALUES (2), (40)"))
+    assert(total(db) == 42)
+
+    // Copies share the connection; it closes when the last one goes.
+    let copy: sqlite.Database = db
+    assert(total(copy) == 42)
+
+    let i: int = 0
+    while (i < 50) {
+        let scratch: sqlite.Database = fresh()
+        assert(total(scratch) == 0)
+        i = i + 1
+    }
+
+    // A C library's own calls cannot be reached from here: `c` is private to
+    // modules/sqlite.dx.
+    fmt.println("externalLibrary_test: all assertions passed")
+}

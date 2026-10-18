@@ -244,6 +244,13 @@ func IsHeapType(t Type) bool {
 	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t) || IsFuncType(t) || IsPayloadEnumType(t) || IsHandleType(t)
 }
 
+// IsHeapOptionalType reports an optional whose value is a nullable pointer to a
+// refcounted object — string?, Db? — so it is retained and released exactly as
+// the heap type is, with NULL as the absent value.
+func IsHeapOptionalType(t Type) bool {
+	return IsOptionalType(t) && IsHeapType(OptionalInnerType(t))
+}
+
 func NeedsRelease(t Type) bool {
 	if IsOptionalType(t) {
 		return NeedsRelease(OptionalInnerType(t))

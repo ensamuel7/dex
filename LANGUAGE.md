@@ -4337,6 +4337,48 @@ use-after-free, and keeping the statement alive will not keep the connection
 alive. Rust expresses that with lifetimes; there is no way to say it here. So
 nested handles remain a sharp edge, and the language will not catch it for you.
 
+### Wrapping a C library
+
+Most programs should never contain an `external module`. A library does it
+once, in its own file, and exports ordinary Dex: a struct that holds the C
+handle, and functions that take it. The external module is private to that
+file, so programs using the library never see the C names, headers or link
+flags — they import the library and call Dex functions.
+
+```dex
+// modules/sqlite.dx — the library
+external module c {
+    include "<sqlite3.h>"
+    pkg "sqlite3"
+
+    type Db closed by "sqlite3_close"
+    fn open(path: string, db: &Db?): int = "sqlite3_open"
+    // ...
+}
+
+struct Database {
+    handle: Db?
+}
+
+fn open(path: string): Database {
+    let db: Db? = null
+    c.open(path, db)
+    return Database { handle: db }
+}
+```
+
+```dex
+// a program using it
+import "modules/sqlite"
+
+let db: sqlite.Database = sqlite.open("app.db")
+```
+
+A handle can be a struct field like any heap value: the struct holds a
+reference, copies of the struct share the connection, and it is closed when the
+last one goes. `examples/modules/sqlite.dx` is the full library and
+`examples/externalLibrary_test.dx` uses it.
+
 ### Out-parameters
 
 Many C functions return a result through a pointer argument: `sqlite3_open`

@@ -630,6 +630,14 @@ or a use-after-free, so change them deliberately:
   The returned struct carried a freed string, and comparing it failed against
   the value it had just been built from. `examples/structConstruct_test.dx`
   covers both spellings, nested and flat.
+- **An optional heap field is a heap field.** `string?`, `string[]?` and a
+  handle's `Db?` are the same pointer with NULL as absent, so a struct literal
+  storing a borrowed one retains it and a `let` reading one out of a field
+  retains it — `ast.IsHeapOptionalType` is what both ask, alongside
+  `IsHeapType`. Neither did: `Box { name: n }` shared `n`'s reference, and
+  `let n: string? = b.name` released the struct's string at scope exit. Both
+  were silent until the memory checker ran, and both blocked a library holding
+  a C connection in a struct. `examples/optionalFields_test.dx` covers them.
 - **A container owns its elements.** `dex_array_string_push` retains what it is
   given and the array's destructor releases every slot, so an array literal
   built from a borrowed expression must let push take that reference and an

@@ -517,7 +517,7 @@ func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit ast.Expr)
 		}
 		// A heap field borrowed directly, or a nested struct copied from
 		// somewhere that still owns its fields.
-		if ast.IsHeapType(ft) || (ast.IsStructType(ft) && ast.NeedsRelease(ft)) {
+		if ast.IsHeapType(ft) || ast.IsHeapOptionalType(ft) || (ast.IsStructType(ft) && ast.NeedsRelease(ft)) {
 			return true
 		}
 	}

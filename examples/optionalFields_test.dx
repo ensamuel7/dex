@@ -1,0 +1,50 @@
+// A struct field holding a string? keeps its own reference.
+//
+// A struct literal took none — `Box { name: n }` shared n's, and n was released
+// at scope exit — and a local read back out of the field took none either, so
+// `let n: string? = b.name` released the struct's string when it went. Both
+// were silent without the memory checker.
+
+import "fmt"
+
+struct Box {
+    name: string?
+    tags: string[]?
+}
+
+fn make(): Box {
+    let n: string? = "a" + "b"
+    let list: string[] = ["x", "y"]
+    let t: string[]? = list
+    return Box { name: n, tags: t }
+}
+
+fn nameLength(b: Box): int {
+    let n: string? = b.name
+    if (n == null) {
+        return 0
+    }
+    return n.len()
+}
+
+fn tagCount(b: Box): int {
+    let t: string[]? = b.tags
+    if (t == null) {
+        return 0
+    }
+    return t.len()
+}
+
+fn main(): void {
+    let b: Box = make()
+    let i: int = 0
+    while (i < 100) {
+        assert(nameLength(b) == 2)
+        assert(tagCount(b) == 2)
+        i = i + 1
+    }
+    let empty: Box = Box { name: null, tags: null }
+    assert(nameLength(empty) == 0)
+    assert(tagCount(empty) == 0)
+    fmt.println("optionalFields_test: all assertions passed")
+}

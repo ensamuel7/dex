@@ -1,0 +1,58 @@
+// A library wrapping a C library: the external module is private to this
+// file, and what it exports is ordinary Dex — a struct holding the connection
+// and functions taking it. A program importing this never sees sqlite's C
+// names, and the connection closes when the last Database holding it goes.
+
+external module c {
+    include "<sqlite3.h>"
+    pkg "sqlite3"
+
+    type Db closed by "sqlite3_close"
+    type Stmt closed by "sqlite3_finalize"
+
+    fn open(path: string, db: &Db?): int = "sqlite3_open"
+    fn prepare(db: Db, sql: string, n: int, stmt: &Stmt?, tail: &Stmt?): int = "sqlite3_prepare_v2"
+    fn step(s: Stmt): int = "sqlite3_step"
+    fn colInt(s: Stmt, i: int): int = "sqlite3_column_int"
+}
+
+struct Database {
+    handle: Db?
+}
+
+fn open(path: string): Database {
+    let db: Db? = null
+    c.open(path, db)
+    return Database { handle: db }
+}
+
+// Runs a statement to completion. SQLITE_DONE is 101.
+fn exec(d: Database, sql: string): bool {
+    let h: Db? = d.handle
+    if (h == null) {
+        return false
+    }
+    let st: Stmt? = null
+    c.prepare(h, sql, -1, st, null)
+    if (st == null) {
+        return false
+    }
+    return c.step(st) == 101
+}
+
+// The first column of the first row as an int. SQLITE_ROW is 100.
+fn queryInt(d: Database, sql: string): int {
+    let h: Db? = d.handle
+    if (h == null) {
+        return 0
+    }
+    let st: Stmt? = null
+    c.prepare(h, sql, -1, st, null)
+    if (st == null) {
+        return 0
+    }
+    if (c.step(st) != 100) {
+        return 0
+    }
+    return c.colInt(st, 0)
+}

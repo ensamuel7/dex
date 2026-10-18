@@ -216,14 +216,13 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 					out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
 					g.genExpr(out, s.Value)
 					out.WriteString(";\n")
-					if _, ok := s.Value.(*ast.Ident); ok {
-						out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, s.Name))
-					}
+					g.emitRetainIfBorrowed(out, prefix, s.Name, s.Value)
 				}
 			} else {
 				out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
 				g.genExpr(out, s.Value)
 				out.WriteString(";\n")
+				g.emitRetainIfBorrowed(out, prefix, s.Name, s.Value)
 			}
 		}
 		g.registerScopeVar(out, prefix, s.Name, s.Type)
@@ -281,4 +280,15 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 		out.WriteString(fmt.Sprintf("%sdex_cycle_track(%s, %q);\n", prefix, s.Name, s.Name))
 	}
 
+}
+
+// emitRetainIfBorrowed gives a heap optional local its own reference when its
+// initial value is borrowed. It asked only whether the value was a bare name,
+// and only for a string, so `let n: string? = b.name` — and any optional array,
+// map or handle read out of a field or an element — shared the owner's reference
+// and released it at scope exit.
+func (g *Generator) emitRetainIfBorrowed(out *strings.Builder, prefix, name string, value ast.Expr) {
+	if g.borrowsHeapValue(value) {
+		out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, name))
+	}
 }

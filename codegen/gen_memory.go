@@ -598,7 +598,11 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 			continue
 		}
 		switch {
-		case ast.IsHeapType(ft):
+		// An optional heap field is the same pointer, possibly NULL, which
+		// dex_retain ignores. Leaving it out stored `Box { name: n }` with no
+		// reference of its own, and releasing n at scope exit freed the
+		// string the returned struct still held.
+		case ast.IsHeapType(ft) || ast.IsHeapOptionalType(ft):
 			out.WriteString(fmt.Sprintf("%sdex_retain(%s.%s);\n", prefix, target, name))
 		case ast.IsInterfaceType(ft):
 			// A struct coerced into the field minted its own box and needs no

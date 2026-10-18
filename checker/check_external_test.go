@@ -345,3 +345,19 @@ func TestExternalHandleAsFunctionParameter(t *testing.T) {
 		}
 	}`)
 }
+
+// A library wrapping C keeps its connection in a struct its callers can name.
+func TestExternalHandleAsStructField(t *testing.T) {
+	mustCheck(t, `external module c {
+		include "<stdio.h>"
+		type File closed by "fclose"
+		fn open(path: string, mode: string): File? = "fopen"
+	}
+	struct Log {
+		file: File?
+		path: string
+	}
+	fn main(): void {
+		let l: Log = Log { file: c.open("/tmp/x", "w"), path: "/tmp/x" }
+	}`)
+}

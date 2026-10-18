@@ -4024,9 +4024,59 @@ fn main(): void {
 
 A call compiles to a direct call to the C symbol — no wrapper, no marshalling
 layer. `include` takes a system header in angle brackets or a bare name for one
-beside the source. `link` takes `-l<name>`, `-L<path>`, or a bare library name;
-anything else is refused, because an external block that could pass arbitrary
-flags to the C compiler would be code execution at build time.
+beside the source; the directory holding the `.dx` file is on the include path,
+so a header you wrote is found without configuration. `link` takes `-l<name>`,
+`-L<path>`, or a bare library name; anything else is refused, because an
+external block that could pass arbitrary flags to the C compiler would be code
+execution at build time.
+
+### It is the C ABI, not the C language
+
+Nothing here requires the library to be written in C — only that it exposes
+C-ABI symbols. Anything that can do so can be bound, and a C++ library wrapped
+in `extern "C"` is the common case:
+
+```cpp
+// counter.hpp
+extern "C" {
+typedef struct CounterOpaque CounterOpaque;
+CounterOpaque* counter_new(int start);
+void counter_free(CounterOpaque* c);
+int counter_bump(CounterOpaque* c, int by);
+}
+```
+
+```dex
+external module counter {
+    include "counter.hpp"
+    link "-lcounter"
+    link "-lc++"
+
+    type Counter closed by "counter_free"
+
+    fn make(start: int): Counter? = "counter_new"
+    fn bump(c: Counter, by: int): int = "counter_bump"
+}
+```
+
+The C++ object is held as a handle, so `delete` runs through `counter_free`
+when the last reference goes — Dex's reference counting driving a C++
+destructor. Rust works the same way (`#[no_mangle] pub extern "C"`, built as a
+`staticlib`), as do Zig's `export fn`, Swift's `@_cdecl`, and Go built with
+`-buildmode=c-archive`.
+
+What does not cross is anything the C ABI has no word for: C++ classes,
+methods, templates, overloads and exceptions, Rust traits and generics. Those
+need a flat `extern "C"` shim on the far side, which is also the only form the
+declaration syntax here can describe.
+
+One practical requirement: the C compiler must see a declaration for the symbol,
+because `-Werror=implicit-function-declaration` is on. A header is how it does,
+even for a library written in another language — hand-written for a couple of
+functions, or generated (cbindgen and the like) for more. The upside of
+requiring it is that the compiler cross-checks your declaration against the
+real one, so a signature that disagrees is an error rather than a silent ABI
+mismatch.
 
 The declared name need not match the C symbol. `= "symbol"` names it, which is
 how a C function whose name reads badly in Dex gets a better one:

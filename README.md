@@ -384,6 +384,15 @@ catches that.
 rest: a block that could hand arbitrary flags to the C compiler would be code
 execution at build time.
 
+**It is the C ABI, not the C language.** Any library exposing C-ABI symbols can
+be bound — C++ behind `extern "C"`, Rust built as a `staticlib` with
+`#[no_mangle] pub extern "C"`, Zig's `export fn`, Go with `-buildmode=c-archive`.
+A C++ object held as a handle gets `delete`d through its closing function when
+the last reference goes, so Dex's reference counting drives the C++ destructor.
+What cannot cross is anything the C ABI has no word for: classes, methods,
+templates, overloads, exceptions, traits, generics. Those need a flat
+`extern "C"` shim, which is also the only shape this syntax can describe.
+
 ## Error Handling
 
 Exceptions carry a type. Any struct with a `message: string` can be thrown,

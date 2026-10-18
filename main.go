@@ -524,7 +524,19 @@ func build(filename string) (string, error) {
 	// and then corrupted the heap when the callee read a length out of a raw
 	// buffer. That has cost real debugging time, so the mismatch is fatal here
 	// rather than advisory.
+	// The generated C sits in build/, so a header named by an external module
+	// has to be looked for beside the source rather than beside the output.
+	// `include "counter.hpp"` is how you bind a shim you wrote yourself, and
+	// that header lives with your code.
+	srcDir := filepath.Dir(filename)
+	if srcDir == "" {
+		srcDir = "."
+	}
+	if abs, err := filepath.Abs(srcDir); err == nil {
+		srcDir = abs
+	}
 	args := append([]string{"-o", binaryPath,
+		"-I" + srcDir,
 		"-Werror=incompatible-pointer-types",
 		"-Werror=implicit-function-declaration",
 	}, cflags...)

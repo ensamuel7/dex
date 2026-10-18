@@ -62,13 +62,7 @@ fn main(): void {
     // field has no single-line rendering and reports "".
     let i: int = 0
     while (i < reflect.fieldCount(unit)) {
-        fmt.println(
-            reflect.fieldName(unit, i) +
-            " (" +
-            reflect.fieldKind(unit, i) +
-            ") = " +
-            reflect.toString(unit, i)
-        )
+        fmt.println(reflect.fieldName(unit, i) + " (" + reflect.fieldKind(unit, i) + ") = " + reflect.toString(unit, i))
         i = i + 1
     }
 

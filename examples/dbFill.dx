@@ -46,20 +46,9 @@ fn main(): void {
 
     let r: int = 0
     while (r < 300) {
-        let rows: int = db.query(
-            conn,
-            "SELECT id, name, age, score, active, tags, note FROM people"
-        )
+        let rows: int = db.query(conn, "SELECT id, name, age, score, active, tags, note FROM people")
         while (db.next(rows)) {
-            let p: Person = Person {
-                id: 0,
-                name: "seed",
-                age: 0,
-                score: 0.0,
-                active: false,
-                tags: [],
-                note: "seed"
-            }
+            let p: Person = Person { id: 0, name: "seed", age: 0, score: 0.0, active: false, tags: [], note: "seed" }
             db.fill(p, rows)
             // A long past 2^31 survives, which dex_db_col_int would not manage.
             assert(p.id == 9007199254740993)

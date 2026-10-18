@@ -112,10 +112,7 @@ fn main(): void {
     while (j < 200) {
         let at: map[string, int] = {}
         let exprs: string[] = ["r.label"]
-        let unit: Row = Row {
-            email: "ada@example.com",
-            label: Cols { alias: "r", exprs: exprs, at: at }
-        }
+        let unit: Row = Row { email: "ada@example.com", label: Cols { alias: "r", exprs: exprs, at: at } }
         let rows: Row[] = [unit]
         assert(rows.len() == 1)
         assert(rows[0].email == "ada@example.com")

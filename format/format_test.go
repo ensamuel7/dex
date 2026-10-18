@@ -35,13 +35,13 @@ func TestCanonicalShape(t *testing.T) {
 		{
 			name: "a call too wide for the line breaks one argument per line",
 			in: "fn f() {\n    send(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, " +
-				"cccccccccccccccccccccccccccccccc, dddd)\n}\n",
+				"cccccccccccccccccccccccccccccccc, dddddddddddddddddddddddd)\n}\n",
 			want: "fn f() {\n" +
 				"    send(\n" +
 				"        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n" +
 				"        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,\n" +
 				"        cccccccccccccccccccccccccccccccc,\n" +
-				"        dddd\n" +
+				"        dddddddddddddddddddddddd\n" +
 				"    )\n}\n",
 		},
 		{
@@ -102,7 +102,7 @@ func TestCanonicalShape(t *testing.T) {
 		{
 			name: "an assignment keeps its right-hand side on the line when a group can open",
 			in: "fn f() {\n    let encoded: string = json.encode({alpha: 1, beta: 2, gamma: 3, " +
-				"delta: 4, epsilon: 5, zeta: 6})\n}\n",
+				"delta: 4, epsilon: 5, zeta: 6, eta: 7, theta: 8, iota: 9})\n}\n",
 			want: "fn f() {\n" +
 				"    let encoded: string = json.encode({\n" +
 				"        alpha: 1,\n" +
@@ -110,16 +110,19 @@ func TestCanonicalShape(t *testing.T) {
 				"        gamma: 3,\n" +
 				"        delta: 4,\n" +
 				"        epsilon: 5,\n" +
-				"        zeta: 6\n" +
+				"        zeta: 6,\n" +
+				"        eta: 7,\n" +
+				"        theta: 8,\n" +
+				"        iota: 9\n" +
 				"    })\n}\n",
 		},
 		{
 			name: "a condition too wide opens its brackets",
 			in: "fn f() {\n    if (someLongConditionName == 1 && anotherLongConditionName == 2 && " +
-				"aThirdLongConditionNameX == 3) {\n        g()\n    }\n}\n",
+				"aThirdLongConditionNameWithExtraPaddingHere == 3) {\n        g()\n    }\n}\n",
 			want: "fn f() {\n" +
 				"    if (\n" +
-				"        someLongConditionName == 1 && anotherLongConditionName == 2 && aThirdLongConditionNameX == 3\n" +
+				"        someLongConditionName == 1 && anotherLongConditionName == 2 && aThirdLongConditionNameWithExtraPaddingHere == 3\n" +
 				"    ) {\n" +
 				"        g()\n" +
 				"    }\n}\n",
@@ -127,13 +130,13 @@ func TestCanonicalShape(t *testing.T) {
 		{
 			name: "operands line up with each other when even that is too wide",
 			in: "fn f() {\n    if (someLongConditionName == 1 && anotherLongConditionName == 2 && " +
-				"aThirdLongConditionNameX == 3 && fourth == 4) {\n        g()\n    }\n}\n",
+				"aThirdLongConditionNameWithExtraPaddingHere == 3 && fourthConditionName == 4) {\n        g()\n    }\n}\n",
 			want: "fn f() {\n" +
 				"    if (\n" +
 				"        someLongConditionName == 1 &&\n" +
 				"        anotherLongConditionName == 2 &&\n" +
-				"        aThirdLongConditionNameX == 3 &&\n" +
-				"        fourth == 4\n" +
+				"        aThirdLongConditionNameWithExtraPaddingHere == 3 &&\n" +
+				"        fourthConditionName == 4\n" +
 				"    ) {\n" +
 				"        g()\n" +
 				"    }\n}\n",
@@ -141,10 +144,10 @@ func TestCanonicalShape(t *testing.T) {
 		{
 			name: "an assignment with no group to open breaks after the operator",
 			in: "fn f() {\n    let value: int = someName * otherName + thirdName * fourthName - " +
-				"fifthName * sixthName + seventhNameXX\n}\n",
+				"fifthName * sixthName + seventhNameWithEvenMorePaddingX\n}\n",
 			want: "fn f() {\n" +
 				"    let value: int =\n" +
-				"        someName * otherName + thirdName * fourthName - fifthName * sixthName + seventhNameXX\n" +
+				"        someName * otherName + thirdName * fourthName - fifthName * sixthName + seventhNameWithEvenMorePaddingX\n" +
 				"}\n",
 		},
 		{
@@ -233,5 +236,34 @@ func TestCorpus(t *testing.T) {
 				t.Errorf("%s:%d: trailing whitespace", filepath.Base(file), i+1)
 			}
 		}
+	}
+}
+
+// A declaration too wide for one line breaks after the `=` rather than
+// spreading a short argument list one-per-line. preferGroup counted any
+// multi-argument call as a group worth opening, which turned a two-argument
+// call into five lines while the line above it was still the long one.
+func TestLongDeclarationBreaksAtAssign(t *testing.T) {
+	in := "fn main(): void {\n" +
+		"    let certsApi: certificationController.CertificationController = certificationController.newCertificationController(conn, brand)\n" +
+		"}\n"
+	want := "fn main(): void {\n" +
+		"    let certsApi: certificationController.CertificationController =\n" +
+		"        certificationController.newCertificationController(conn, brand)\n" +
+		"}\n"
+	if got := format(t, in); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A sole object literal or lambda still hugs its brackets, which is the case
+// preferGroup exists for.
+func TestHuggedArgumentStillOpensTheGroup(t *testing.T) {
+	in := "fn main(): void {\n" +
+		"    let obj: string = json.encode({ message: \"a fairly long message value here to push it over\" })\n" +
+		"}\n"
+	got := format(t, in)
+	if !strings.Contains(got, "json.encode({") {
+		t.Errorf("hugged group was not kept on the line:\n%s", got)
 	}
 }

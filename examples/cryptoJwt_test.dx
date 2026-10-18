@@ -39,10 +39,7 @@ fn main(): void {
     assert(crypto.hmacSha256B64Url(secret, "a") == "U_SHc6P11l95fQU_vNu15l5-Dt8YgwmBGk6su74bm_o")
     assert(crypto.hmacSha256B64Url(secret, "ab") == "FY62fNPz7KiI3qCbAUnERFO5Kbc3hmMCdh8k7EVzdaA")
     assert(crypto.hmacSha256B64Url(secret, "abc") == "cKcSs_wlTuxW_AV8_3UC3JnAieYpHy93QzBhPUTTKlU")
-    assert(
-        crypto.hmacSha256B64Url(secret, "hello world") ==
-        "EqWg7k_REJB-gy4BDDnWmDFjRQrHhfaI0eTIOW-Sizs"
-    )
+    assert(crypto.hmacSha256B64Url(secret, "hello world") == "EqWg7k_REJB-gy4BDDnWmDFjRQrHhfaI0eTIOW-Sizs")
 
     // The key matters as much as the message.
     assert(crypto.hmacSha256B64Url("other-secret", signingInput) != sig)

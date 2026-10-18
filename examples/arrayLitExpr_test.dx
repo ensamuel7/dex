@@ -52,20 +52,9 @@ fn main(): void {
     assert(bad.isNull())
 
     let scores: int[] = [10, 20, 30]
-    let obj: string = json.encode({
-        message: "Hello from Dex!",
-        count: scores.len(),
-        scores: scores,
-        success: true
-    })
-    assert(
-        obj ==
-        "{\"message\":\"Hello from Dex!\",\"count\":3,\"scores\":[10,20,30],\"success\":true}"
-    )
+    let obj: string = json.encode({ message: "Hello from Dex!", count: scores.len(), scores: scores, success: true })
+    assert(obj == "{\"message\":\"Hello from Dex!\",\"count\":3,\"scores\":[10,20,30],\"success\":true}")
 
-    let headers: string = json.encode({
-        "Authorization": "Bearer token",
-        "Accept": "application/json"
-    })
+    let headers: string = json.encode({ "Authorization": "Bearer token", "Accept": "application/json" })
     assert(headers == "{\"Authorization\":\"Bearer token\",\"Accept\":\"application/json\"}")
 }

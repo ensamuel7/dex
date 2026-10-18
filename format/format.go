@@ -27,7 +27,9 @@ const (
 	// LineWidth is the column a group is allowed to reach before it breaks.
 	// Wider than gofmt has any opinion about, because the complaint this
 	// formatter answers was lines cut off far earlier than they needed to be.
-	LineWidth = 100
+	// 120 keeps a declaration whose type is module-qualified on one line,
+	// which is most of them in a real codebase.
+	LineWidth = 120
 
 	// IndentWidth is one level of indentation, matching the existing corpus.
 	IndentWidth = 4

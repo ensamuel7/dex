@@ -31,10 +31,7 @@ fn main(): void {
         // Empty only when the build has no OpenSSL, which is a legitimate
         // configuration — the module says so on stderr rather than failing.
         assert(emptyDigest == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-        assert(
-            crypto.sha256Hex("abc") ==
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        )
+        assert(crypto.sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
 
         // --- HMAC-SHA-256, RFC 4231 test case 2 ---
         assert(

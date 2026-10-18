@@ -90,10 +90,8 @@ fn main(): void {
     assert(noKey.isEmpty())
     let notPem: string = crypto.signRs256(SIGNING_INPUT, "hello")
     assert(notPem.isEmpty())
-    let wrongBody: string = crypto.signRs256(
-        SIGNING_INPUT,
-        "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n"
-    )
+    let wrongBody: string =
+        crypto.signRs256(SIGNING_INPUT, "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n")
     assert(wrongBody.isEmpty())
 
     // The mistake a JSON key file invites. Google's service account holds its

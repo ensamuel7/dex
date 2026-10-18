@@ -70,9 +70,7 @@ fn main(): void {
         assert(!crypto.verifyRs256(SIGNED + "x", signature, modulus, exponent))
 
         // A signature that is the right length and the wrong bytes.
-        let forged: string = crypto.base64UrlDecode(
-            "AAAA" + SIGNATURE.substring(4, SIGNATURE.len())
-        )
+        let forged: string = crypto.base64UrlDecode("AAAA" + SIGNATURE.substring(4, SIGNATURE.len()))
         assert(!crypto.verifyRs256(SIGNED, forged, modulus, exponent))
 
         // The right signature against somebody else's key. Exponent 3 rather

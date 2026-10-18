@@ -54,14 +54,7 @@ fn columnsFor(bk: Book, alias: string): string[] {
 }
 
 fn main(): void {
-    let bk: Book = Book {
-        id: 1,
-        pages: 2,
-        authorName: "a",
-        releasedOn: "r",
-        priceMinor: 5,
-        note: "n"
-    }
+    let bk: Book = Book { id: 1, pages: 2, authorName: "a", releasedOn: "r", priceMinor: 5, note: "n" }
 
     // A tagged field reports its tag; an untagged one reports "".
     assert(reflect.fieldTag(bk, 2, "db") == "COALESCE(a.name, '')")
@@ -136,14 +129,7 @@ struct Skipped {
 }
 
 fn checkFieldTags(): void {
-    let bk: Book = Book {
-        id: 1,
-        pages: 2,
-        authorName: "a",
-        releasedOn: "r",
-        priceMinor: 5,
-        note: "n"
-    }
+    let bk: Book = Book { id: 1, pages: 2, authorName: "a", releasedOn: "r", priceMinor: 5, note: "n" }
 
     let tags: string[] = reflect.fieldTags(bk, "db")
     assert(tags.len() == 6)

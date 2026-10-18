@@ -36,10 +36,7 @@ fn make(ok: bool, tag: string): Page {
     return Page {
         ok: ok,
         url: "https://" + tag,
-        headers: Headers {
-            raw: "Server: " + tag,
-            index: Index { key: "server-" + tag, values: values }
-        },
+        headers: Headers { raw: "Server: " + tag, index: Index { key: "server-" + tag, values: values } },
         hops: hops
     }
 }

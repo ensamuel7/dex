@@ -223,7 +223,7 @@ func (p *printer) flatWidth(lo, hi int) int {
 // operator in the statement first, because that is the seam a reader already
 // sees, and only then open up the bracketed groups.
 func (p *printer) broken(lo, hi, cont int) {
-	if ops := p.loosestOps(lo, hi); len(ops) > 0 && !p.preferGroup(ops[0], hi) {
+	if ops := p.loosestOps(lo, hi); len(ops) > 0 && !p.preferGroup(ops[0], hi, cont) {
 		start := lo
 		for _, op := range ops {
 			p.segment(start, op+1, cont)
@@ -305,8 +305,22 @@ func (p *printer) staysFlat(open, close, hi int) bool {
 // rather than an `=` left hanging at the end of a line. With no group to open —
 // a long arithmetic expression, say — there is nothing to prefer and the break
 // after the operator is the only one available.
-func (p *printer) preferGroup(op, hi int) bool {
+func (p *printer) preferGroup(op, hi, cont int) bool {
 	if p.opPrecedence(op) != 1 {
+		return false
+	}
+	// A hugged group reads better kept on the line whatever else would fit,
+	// because the brackets stay with the call they belong to.
+	for k := op + 1; k < hi; k++ {
+		if isOpener(p.it[k].kind) && p.match[k] > k+1 && p.match[k] < hi && p.hugged(k, p.match[k]) {
+			return true
+		}
+	}
+	// Otherwise the right-hand side going to its own line is the better of the
+	// two breaks whenever it fits there. Opening a group instead spreads a call
+	// whose arguments are three short names over five lines while the line
+	// above it is still the long one.
+	if cont+p.flatWidth(op+1, hi)+p.reserve <= LineWidth {
 		return false
 	}
 	for k := op + 1; k < hi; k++ {

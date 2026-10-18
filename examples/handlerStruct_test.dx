@@ -18,11 +18,7 @@ struct ApiHandler {
     }
 
     fn show(req: http.HttpRequest): http.HttpResponse {
-        return http.response(
-            200,
-            json.encode({ id: req.params.get("id"), from: greeting }),
-            "application/json"
-        )
+        return http.response(200, json.encode({ id: req.params.get("id"), from: greeting }), "application/json")
     }
 
     fn count(): int {

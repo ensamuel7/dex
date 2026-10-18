@@ -109,14 +109,8 @@ fn main(): void {
     // release.
     let r: int = 0
     while (r < 400) {
-        let q: Pending = Pending {
-            sessions: 0,
-            energyWh: 0,
-            rate: 0.0,
-            settled: false,
-            currency: "seed",
-            firstAt: "seed"
-        }
+        let q: Pending =
+            Pending { sessions: 0, energyWh: 0, rate: 0.0, settled: false, currency: "seed", firstAt: "seed" }
         fill(q, r)
         assert(q.sessions == r)
         assert(q.energyWh == 1000)

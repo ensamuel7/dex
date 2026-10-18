@@ -37,10 +37,7 @@ fn main(): void {
 
     // --- Nesting: a value built earlier drops into a later literal ---
     let call: json.Value = [2, "id-1", "BootNotification", device]
-    assert(
-        json.encode(call) ==
-        "[2,\"id-1\",\"BootNotification\",{\"vendor\":\"Acme\",\"model\":\"MX-9\"}]"
-    )
+    assert(json.encode(call) == "[2,\"id-1\",\"BootNotification\",{\"vendor\":\"Acme\",\"model\":\"MX-9\"}]")
     assert(call[3]["vendor"].asString() == "Acme")
 
     // Literals nest to any depth without annotation at each level

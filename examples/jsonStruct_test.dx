@@ -99,10 +99,8 @@ fn main(): void {
     assert(partial.addr.city == "")
 
     //Nested structs inside struct arrays
-    let items: Item[] = [
-        Item { label: "a", geo: Geo { lat: 1.5, lng: 2.5 } },
-        Item { label: "b", geo: Geo { lat: 3.5, lng: 4.5 } }
-    ]
+    let items: Item[] =
+        [Item { label: "a", geo: Geo { lat: 1.5, lng: 2.5 } }, Item { label: "b", geo: Geo { lat: 3.5, lng: 4.5 } }]
     let arrJson: string = json.encode(items)
     assert(
         arrJson ==

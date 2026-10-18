@@ -104,6 +104,22 @@ new codegen. The destroy shim must not free the box: destroy releases contents,
 the runtime frees the object, the same contract `dex_string_destroy` follows.
 `ast.ResetHandleTypes` is wired into both reset sites for the LSP.
 
+An out-parameter is a `&T` external parameter, parsed in `parseExternalFunc`
+because `parseType` allows `&` only on structs and scalars. A scalar crosses as
+`&var`, uncast so a header still checks it. A handle needs `genHandleOutCall`:
+C writes into a `void*` local, which is read back with `memcpy` — clang gives
+distinct pointer types distinct aliasing classes by default (`-pointer-tbaa`),
+so a store through `sqlite3**` inlined from a header could otherwise be assumed
+not to change a `void*` — then boxed into the variable as an assignment would
+store it. `isReassigned` counts an out-argument as an assignment, or a variable
+written only by C would get no unwind slot and the cleanup stack would name
+what it held before. `checkOutArg` requires a variable of exactly the referenced
+type, refusing one narrowed from `H?`, since C may write NULL.
+
+`IsTypeParamType` is bounded above by `TypeHandleBase`. It was open-ended, so
+every handle counted as a type parameter and a function taking one failed with
+an internal instantiation error.
+
 Refcounting does not model dependency: a statement handle outliving its
 connection handle is a use-after-free the language cannot catch. Documented
 rather than implied away.

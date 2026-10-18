@@ -211,3 +211,21 @@ func TestParseExternalPkg(t *testing.T) {
 		t.Errorf("packages = %v, want [openssl]", got)
 	}
 }
+
+func TestParseExternalOutParams(t *testing.T) {
+	prog := parseExtern(t, `external module sq {
+		include "<sqlite3.h>"
+		type Db closed by "sqlite3_close"
+		fn open(path: string, db: &Db?): int = "sqlite3_open"
+		fn frexp(x: double, exponent: &int): double
+	}
+	fn main(): void {}`)
+	fns := prog.Externals[0].Funcs
+	db := fns[0].Params[1]
+	if !ast.IsRefType(db) || !ast.IsOptionalType(ast.RefInnerType(db)) || !ast.IsHandleType(ast.OptionalInnerType(ast.RefInnerType(db))) {
+		t.Errorf("open's db parameter should be &Db?, got type %d", db)
+	}
+	if exp := fns[1].Params[1]; !ast.IsRefType(exp) || ast.RefInnerType(exp) != ast.TypeInt {
+		t.Errorf("frexp's exponent parameter should be &int")
+	}
+}

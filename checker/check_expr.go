@@ -922,6 +922,12 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return 0, c.errAt(e.Pos, "%s.%s() takes exactly %d argument(s), got %d", e.Module, e.Name, len(funcDef.Params), len(e.Args))
 			}
 			for i, arg := range e.Args {
+				if ast.IsRefType(funcDef.Params[i]) {
+					if err := c.checkOutArg(e, i, funcDef.Params[i]); err != nil {
+						return 0, err
+					}
+					continue
+				}
 				argType, err := c.checkExpr(arg)
 				if err != nil {
 					return 0, err

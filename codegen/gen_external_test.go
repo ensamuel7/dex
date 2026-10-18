@@ -188,3 +188,60 @@ func TestCodegenExternalFreedByCallsTheLibraryDeallocator(t *testing.T) {
 		t.Error("freed the library's string with free instead of its own deallocator")
 	}
 }
+
+func TestCodegenExternalOutParams(t *testing.T) {
+	out := generate(t, `external module sq {
+		include "<sqlite3.h>"
+		type Db closed by "sqlite3_close"
+		fn open(path: string, db: &Db?): int = "sqlite3_open"
+		fn frexp(x: double, exponent: &int): double
+	}
+	fn main(): void {
+		let db: Db? = null
+		let rc: int = sq.open(":memory:", db)
+		let e: int = 0
+		let m: double = sq.frexp(8.0, e)
+		let skipped: int = sq.open(":memory:", null)
+	}`)
+	// A handle is written into a raw local, read back as characters, and boxed
+	// into the variable, releasing what it held.
+	assertContains(t, out, `sqlite3_open(":memory:", (void*)&`)
+	assertContains(t, out, "memcpy(&_dex_written")
+	assertContains(t, out, "db = dex_handle_new(_dex_written, dex_handle_close_sq_Db)")
+	assertContains(t, out, "if (_dex_old) { dex_release(_dex_old); }")
+	// A scalar is just the variable's address, uncast so the header checks it.
+	assertContains(t, out, "frexp(8, &e)")
+	// null skips the output.
+	assertContains(t, out, `sqlite3_open(":memory:", NULL)`)
+}
+
+// With no header, the prototype is written from the Dex signature, so an
+// out-parameter needs a pointer type there too.
+func TestCodegenExternalOutParamPrototypes(t *testing.T) {
+	out := generate(t, `external module z {
+		type H closed by "h_close"
+		fn open(h: &H?): int = "h_open"
+		fn split(x: double, whole: &double): double = "z_modf"
+	}
+	fn main(): void {
+		let h: H? = null
+		let rc: int = z.open(h)
+	}`)
+	assertContains(t, out, "extern int h_open(void**);")
+	assertContains(t, out, "extern double z_modf(double, double*);")
+}
+
+// A discarded result would otherwise be a statement expression whose value is
+// unused, which clang warns about.
+func TestCodegenExternalOutParamDiscardedResult(t *testing.T) {
+	out := generate(t, `external module sq {
+		include "<sqlite3.h>"
+		type Db closed by "sqlite3_close"
+		fn open(path: string, db: &Db?): int = "sqlite3_open"
+	}
+	fn main(): void {
+		let db: Db? = null
+		sq.open(":memory:", db)
+	}`)
+	assertContains(t, out, "(void)({ void*")
+}

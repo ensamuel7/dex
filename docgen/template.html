@@ -1464,6 +1464,13 @@ fn hex(buf: string, len: long): owned string freed by "OPENSSL_free" = "OPENSSL_
 }</code></pre>
 <p>A handle is refcounted, so the closing function runs when the last reference goes: at scope exit, on overwrite, and when an exception unwinds past it. A NULL return is <code>null</code>.</p>
 
+<h3>Out-Parameters</h3>
+<p>A C function that returns a result through a pointer argument takes it as an <code>&amp;</code> parameter. The caller passes a variable and C writes into it; <code>null</code> skips the output. Scalars and handles can be written.</p>
+<pre><code>fn open(path: string, db: &amp;Db?): int = "sqlite3_open"
+
+let db: Db? = null
+let rc: int = sq.open("app.db", db)</code></pre>
+
 <h3>What Is Checked</h3>
 <p>A library outside the default search paths (all of Homebrew on Apple Silicon) is found with <code>pkg "openssl"</code>, which asks <code>pkg-config</code> for its header and library paths.</p>
 <p><code>link</code> accepts only <code>-l&lt;name&gt;</code>, <code>-L&lt;path&gt;</code> and a bare library name, and every C name a block supplies must be a plain C identifier. Both are pasted into the C build, so anything wider would let a library run code at build time.</p>

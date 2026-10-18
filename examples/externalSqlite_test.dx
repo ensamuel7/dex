@@ -1,0 +1,93 @@
+// A real handle-based C library bound end to end: sqlite, found through
+// pkg-config, opened and prepared through out-parameters, and closed by its own
+// closing functions — on reassignment, at scope exit, and when an exception
+// unwinds past the frame holding a connection.
+import "fmt"
+
+external module sq {
+    include "<sqlite3.h>"
+    pkg "sqlite3"
+
+    type Db closed by "sqlite3_close"
+    type Stmt closed by "sqlite3_finalize"
+
+    fn open(path: string, db: &Db?): int = "sqlite3_open"
+    fn prepare(db: Db, sql: string, n: int, stmt: &Stmt?, tail: &Stmt?): int = "sqlite3_prepare_v2"
+    fn step(s: Stmt): int = "sqlite3_step"
+    fn colInt(s: Stmt, i: int): int = "sqlite3_column_int"
+    fn status(op: int, current: &int, high: &int, reset: int): int = "sqlite3_status"
+}
+
+struct Failed {
+    message: string
+}
+
+fn openAndThrow(): void throws Failed {
+    let db: Db? = null
+    sq.open(":memory:", db)
+    throw Failed { message: "unwound" }
+}
+
+// Runs one statement to completion. SQLITE_DONE is 101.
+fn run(db: Db, sql: string): int {
+    let st: Stmt? = null
+    let rc: int = sq.prepare(db, sql, -1, st, null)
+    if (rc != 0 || st == null) {
+        return rc
+    }
+    if (st != null) {
+        rc = sq.step(st)
+    }
+    return rc
+}
+
+fn sum(db: Db): int {
+    let st: Stmt? = null
+    let rc: int = sq.prepare(db, "SELECT sum(v) FROM t", -1, st, null)
+    assert(rc == 0)
+    let total: int = 0
+    if (st != null) {
+        if (sq.step(st) == 100) {
+            total = sq.colInt(st, 0)
+        }
+    }
+    return total
+}
+
+fn main(): void {
+    let db: Db? = null
+    assert(sq.open(":memory:", db) == 0)
+    assert(db != null)
+    let i: int = 0
+    while (i < 200) {
+        // Reopening into the same variable closes the previous connection.
+        assert(sq.open(":memory:", db) == 0)
+        i = i + 1
+    }
+    if (db != null) {
+        assert(run(db, "CREATE TABLE t(v INT)") == 101)
+        assert(run(db, "INSERT INTO t VALUES (2), (40)") == 101)
+        let k: int = 0
+        while (k < 100) {
+            assert(sum(db) == 42)
+            k = k + 1
+        }
+    }
+
+    let current: int = -1
+    let high: int = -1
+    assert(sq.status(0, current, high, 0) == 0)
+    assert(current >= 0)
+    assert(high >= 0)
+
+    let n: int = 0
+    while (n < 100) {
+        try {
+            openAndThrow()
+        } catch (e: Failed) {
+            assert(e.message == "unwound")
+        }
+        n = n + 1
+    }
+    fmt.println("externalSqlite_test: all assertions passed")
+}

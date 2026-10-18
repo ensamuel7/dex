@@ -518,6 +518,7 @@ func build(filename string) (string, error) {
 			cflags = append(cflags, f)
 		}
 	}
+	libflags = keepLastOccurrence(libflags)
 	// A stdlib function whose C signature disagrees with how it is registered —
 	// a DexString* declared where the generated call passes char*, because
 	// RawParams was left off — produced nothing worse than a warning, compiled,
@@ -782,4 +783,23 @@ func printWarnings(warnings []error) {
 	for _, w := range warnings {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", w)
 	}
+}
+
+// keepLastOccurrence drops repeated link flags. Two modules can name the same
+// library — crypto and an external block's pkg "openssl" both bring -lcrypto —
+// and macOS's linker warns on every duplicate. The last occurrence is the one
+// kept because GNU ld resolves a library against what precedes it, so the
+// latest position is the one that satisfies every user of it.
+func keepLastOccurrence(flags []string) []string {
+	last := make(map[string]int, len(flags))
+	for i, f := range flags {
+		last[f] = i
+	}
+	out := flags[:0:0]
+	for i, f := range flags {
+		if last[f] == i {
+			out = append(out, f)
+		}
+	}
+	return out
 }

@@ -268,3 +268,80 @@ func TestExternalReportsUnknownPkg(t *testing.T) {
 	}
 	fn main(): void {}`, "no-such-library-anywhere")
 }
+
+const outModule = `external module sq {
+		include "<sqlite3.h>"
+		type Db closed by "sqlite3_close"
+		fn open(path: string, db: &Db?): int = "sqlite3_open"
+		fn frexp(x: double, exponent: &int): double
+	}
+	`
+
+func TestExternalOutParamsPass(t *testing.T) {
+	mustCheck(t, outModule+`fn main(): void {
+		let db: Db? = null
+		let rc: int = sq.open(":memory:", db)
+		let e: int = 0
+		let m: double = sq.frexp(8.0, e)
+		let skipped: int = sq.open(":memory:", null)
+	}`)
+}
+
+func TestExternalOutArgMustBeAVariable(t *testing.T) {
+	mustFail(t, outModule+`fn main(): void {
+		let m: double = sq.frexp(8.0, 3)
+	}`, "must be a variable of type int")
+}
+
+func TestExternalOutArgMustNotBeConst(t *testing.T) {
+	mustFail(t, outModule+`fn main(): void {
+		const e: int = 0
+		let m: double = sq.frexp(8.0, e)
+	}`, "is a const")
+}
+
+// C writes the representation it was declared with, so a variable of another
+// type — even a wider one — would be half written.
+func TestExternalOutArgMustMatchExactly(t *testing.T) {
+	mustFail(t, outModule+`fn main(): void {
+		let e: long = 0
+		let m: double = sq.frexp(8.0, e)
+	}`, "but 'e' is long")
+	mustFail(t, outModule+`fn main(): void {
+		let db: Db? = null
+		if (db != null) {
+			let rc: int = sq.open(":memory:", db)
+		}
+	}`, "written by the C function as")
+}
+
+func TestExternalRejectsStringOutParam(t *testing.T) {
+	mustFail(t, `external module z {
+		fn f(out: &string): int
+	}
+	fn main(): void {}`, "cannot be written by C")
+}
+
+// Handles are numbered after type parameters, and an unbounded range check made
+// every handle a type parameter: a function taking one failed with an internal
+// error about instantiation.
+func TestExternalHandleAsFunctionParameter(t *testing.T) {
+	mustCheck(t, `external module cio {
+		include "<stdio.h>"
+		type File closed by "fclose"
+		fn open(path: string, mode: string): File? = "fopen"
+		fn readByte(f: File): int = "fgetc"
+	}
+	fn first(f: File): int {
+		return cio.readByte(f)
+	}
+	fn reopen(path: string): File? {
+		return cio.open(path, "r")
+	}
+	fn main(): void {
+		let f: File? = reopen("/etc/hosts")
+		if (f != null) {
+			let b: int = first(f)
+		}
+	}`)
+}

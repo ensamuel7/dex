@@ -132,6 +132,12 @@ type Generator struct {
 	// statement finishes, instead of leaking.
 	stmtPrelude *strings.Builder
 	stmtTemps   []scopeVar
+	// outRaws names, per argument, the local a C function writes a handle
+	// into, and outWrapped the calls genHandleOutCall is already generating.
+	// Keyed by node rather than held as one flag, so a nested call is
+	// generated on its own terms.
+	outRaws     map[ast.Expr]string
+	outWrapped  map[*ast.CallExpr]bool
 	tempCounter int // unique counter for temp names
 
 	// Defer tracking

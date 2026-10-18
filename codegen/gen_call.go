@@ -820,6 +820,12 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	// Qualified call with CName — look up from stdlib
 	if e.Module != "" {
 		funcDef, ok := g.lookupFunc(e.Module, e.Name)
+		if ok && funcDef.CName != "" && !g.outWrapped[e] {
+			if outs := handleOutParams(funcDef, e.Args); len(outs) > 0 {
+				g.genHandleOutCall(out, e, funcDef, outs)
+				return
+			}
+		}
 		if ok && funcDef.CName != "" {
 			// Check if function returns string — needs wrapping.
 			// A RawString function has already built a DexString with the right
@@ -1051,6 +1057,28 @@ func (g *Generator) genStrMethodWithArgs(out *strings.Builder, cFunc, receiver s
 // genStdlibArg generates an argument for a stdlib function with CName,
 // bridging DexString* to const char* when the stdlib expects it.
 func (g *Generator) genStdlibArg(out *strings.Builder, arg ast.Expr, funcDef *stdlib.FuncDef, idx int) {
+	if idx < len(funcDef.Params) && ast.IsRefType(funcDef.Params[idx]) {
+		// A handle is written into the raw local genHandleOutCall declared,
+		// cast through void* because C declared the pointee as its own type
+		// and the box hides it. A scalar crosses as the variable's address,
+		// left uncast so the header still checks it — unless the variable is
+		// itself a reference parameter, which already holds an address.
+		if _, isNull := arg.(*ast.NullLit); isNull {
+			out.WriteString("NULL")
+			return
+		}
+		if raw, ok := g.outRaws[arg]; ok {
+			out.WriteString(fmt.Sprintf("(void*)&%s", raw))
+			return
+		}
+		if ast.IsRefType(g.typeOfExpr(arg)) {
+			g.genExpr(out, arg)
+			return
+		}
+		out.WriteString("&")
+		g.genExpr(out, arg)
+		return
+	}
 	argType := g.typeOfExpr(arg)
 	if _, isHandle := handleOf(argType); isHandle {
 		// What crosses is the C pointer, not the box. Borrowed: the callee has

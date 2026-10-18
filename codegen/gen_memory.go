@@ -305,7 +305,10 @@ func headIdentName(expr ast.Expr) string {
 
 // isReassigned reports whether the function being generated ever assigns to a
 // name after its declaration. A compound assignment counts, and so does one
-// inside a lambda that captured it.
+// inside a lambda that captured it, and so does passing it to a C function that
+// writes through an out-parameter: the write replaces the value exactly as an
+// assignment does, and a variable with no unwind slot would leave the cleanup
+// stack naming what it held before.
 func (g *Generator) isReassigned(name string) bool {
 	if g.currentFn == nil {
 		return true
@@ -322,7 +325,21 @@ func (g *Generator) isReassigned(name string) bool {
 				found = true
 			}
 		}
-	}, nil)
+	}, func(ex ast.Expr) {
+		call, ok := ex.(*ast.CallExpr)
+		if !ok || call.Module == "" {
+			return
+		}
+		fd, ok := g.lookupFunc(call.Module, call.Name)
+		if !ok {
+			return
+		}
+		for i, arg := range call.Args {
+			if id, isIdent := arg.(*ast.Ident); isIdent && id.Name == name && i < len(fd.Params) && ast.IsRefType(fd.Params[i]) {
+				found = true
+			}
+		}
+	})
 	return found
 }
 

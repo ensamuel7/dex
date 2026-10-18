@@ -90,6 +90,24 @@ external module lib {
     fn released(): int = "freer_count"
 }
 
+// C functions that return a result through a pointer argument. A scalar crosses
+// as the variable's address; a handle is written as a raw pointer and boxed.
+external module outs {
+    include "<math.h>"
+    include "freer.h"
+
+    type Token closed by "freer_release"
+
+    fn frexp(x: double, exponent: &int): double
+    fn modf(x: double, whole: &double): double
+    fn open(s: string, t: &Token?): int = "freer_open"
+}
+
+fn openInto(s: string): int {
+    let t: Token? = null
+    return outs.open(s, t)
+}
+
 // A library outside the default search paths — Homebrew's OpenSSL is one —
 // found through pkg-config, and a deallocator that is a macro.
 external module ossl {
@@ -141,6 +159,33 @@ fn main(): void {
     assert(lib.released() == 2)
 
     assert(ossl.hex("ab", 2) == "61:62")
+
+    // Out-parameters: the variable is written by C.
+    let exponent: int = 0
+    assert(outs.frexp(8.0, exponent) == 0.5)
+    assert(exponent == 4)
+    let whole: double = 0.0
+    assert(outs.modf(3.25, whole) == 0.25)
+    assert(whole == 3.0)
+
+    // A handle written through an out-parameter is boxed and closed by its
+    // closing function: when replaced, at scope exit, and not at all when C
+    // never wrote one.
+    let before: int = lib.released()
+    let t: Token? = null
+    assert(outs.open("first", t) == 0)
+    assert(t != null)
+    assert(outs.open("second", t) == 0)
+    assert(lib.released() == before + 1)
+    assert(openInto("scoped") == 0)
+    assert(lib.released() == before + 2)
+    let untouched: Token? = null
+    assert(outs.open("", untouched) == 1)
+    assert(untouched == null)
+    // null tells C to skip the output, the way sqlite3_prepare_v2's pzTail is.
+    let skippedBefore: int = lib.released()
+    assert(outs.open("skipped", null) == 0)
+    assert(lib.released() == skippedBefore)
 
     // Bytes with an interior NUL cross as a pointer and a length, so nothing
     // truncates at the NUL the way strlen would. These two differ only in

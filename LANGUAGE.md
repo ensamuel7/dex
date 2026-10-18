@@ -4190,7 +4190,8 @@ z.f() parameter 'a' is string[], which cannot cross the C boundary yet —
 only int, long, double, bool, char and string can
 ```
 
-Also an **opaque handle**, declared in the block — see below. Containers and
+Also an **opaque handle**, declared in the block — see below — and a scalar or
+handle **written by C** through an out-parameter, declared `&T`. Containers and
 callbacks are not supported: a callback cannot be unwound through, because
 `throw` is `longjmp` and a C frame in between would have its cleanup skipped.
 
@@ -4330,6 +4331,49 @@ Refcounting tracks how many references a handle has, not what it depends on. A
 use-after-free, and keeping the statement alive will not keep the connection
 alive. Rust expresses that with lifetimes; there is no way to say it here. So
 nested handles remain a sharp edge, and the language will not catch it for you.
+
+### Out-parameters
+
+Many C functions return a result through a pointer argument: `sqlite3_open`
+writes the connection into a `sqlite3**`, `frexp` writes the exponent into an
+`int*`. Declare such a parameter with `&`, the same spelling a Dex function uses
+for a parameter it writes, and pass a variable. As with any `&` parameter, the
+call site writes no `&` of its own:
+
+```dex
+external module sq {
+    include "<sqlite3.h>"
+    pkg "sqlite3"
+
+    type Db closed by "sqlite3_close"
+    type Stmt closed by "sqlite3_finalize"
+
+    fn open(path: string, db: &Db?): int = "sqlite3_open"
+    fn prepare(db: Db, sql: string, n: int, stmt: &Stmt?, tail: &Stmt?): int = "sqlite3_prepare_v2"
+}
+
+let db: Db? = null
+let rc: int = sq.open("app.db", db)     // C writes the connection into db
+```
+
+What may be written is `&int`, `&long`, `&double`, `&bool`, `&char`, or a
+handle — `&H` or, usually, `&H?`, since a C function may write NULL. A scalar
+crosses as the variable's address, so a header still checks its type. A handle
+is written by C as a raw pointer and then boxed into the variable exactly as an
+assignment would store it: what the variable held before is released, and the
+new handle is closed by its closing function when its last reference goes. A C
+function that writes nothing leaves the variable `null`.
+
+The argument must be a variable of exactly the declared type — not an
+expression, not a `const`, and not one that has been narrowed from `Db?` to
+`Db` inside a null check, because C may write NULL into it. An `int` variable
+cannot stand in for a `&long` either: C writes the representation it was
+declared with, and a wider variable would be half written.
+
+`null` passes NULL, which is how a C function is told to skip an output the
+caller does not want — `sqlite3_prepare_v2`'s `pzTail` above is the usual case.
+A string cannot be written yet, because the declaration has no way to say who
+allocated what C wrote.
 
 ### A known wart
 

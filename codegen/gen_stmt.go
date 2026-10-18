@@ -41,6 +41,12 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		}
 		g.beginStmtHoist()
 		var exprBody strings.Builder
+		// A call writing handles through out-parameters is a statement
+		// expression ending in its result, which clang warns about when the
+		// result is discarded.
+		if call, ok := s.Expr.(*ast.CallExpr); ok && g.isHandleOutCall(call) {
+			exprBody.WriteString("(void)")
+		}
 		g.genExpr(&exprBody, s.Expr)
 		exprBody.WriteString(";\n")
 		g.emitWithHoists(out, prefix, exprBody.String())

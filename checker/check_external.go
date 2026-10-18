@@ -33,6 +33,18 @@ func externalTypeSupported(t ast.Type) bool {
 	return false
 }
 
+// externalOutTypeSupported reports what a C function may write through an
+// out-parameter: a scalar, whose address crosses directly, or a handle, which C
+// writes as a raw pointer and Dex then boxes. A string would need to know who
+// allocated what C wrote, which a declaration has no way to say yet.
+func externalOutTypeSupported(t ast.Type) bool {
+	switch t {
+	case ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeBool, ast.TypeChar:
+		return true
+	}
+	return ast.IsHandleType(t) || (ast.IsOptionalType(t) && ast.IsHandleType(ast.OptionalInnerType(t)))
+}
+
 // checkExternals validates every external module declared in the program. A
 // declaration that reaches codegen unchecked is a C compile error at best and
 // a corrupted heap at worst, so everything is rejected here by name.
@@ -104,6 +116,13 @@ func (c *Checker) checkExternals(program *ast.Program) {
 			}
 
 			for j, pt := range f.Params {
+				if ast.IsRefType(pt) {
+					if !externalOutTypeSupported(ast.RefInnerType(pt)) {
+						c.addError(c.errAt(f.Pos, "%s.%s() parameter '%s' is %s, which cannot be written by C — an out-parameter is &int, &long, &double, &bool, &char or a handle",
+							em.Name, f.Name, f.ParamNames[j], typeName(pt)))
+					}
+					continue
+				}
 				if !externalTypeSupported(pt) {
 					c.addError(c.errAt(f.Pos, "%s.%s() parameter '%s' is %s, which cannot cross the C boundary yet — only int, long, double, bool, char and string can",
 						em.Name, f.Name, f.ParamNames[j], typeName(pt)))
@@ -182,4 +201,38 @@ func validCSymbol(s string) bool {
 		}
 	}
 	return true
+}
+
+// checkOutArg checks an argument a C function writes through. It has to be a
+// variable, because there is nowhere else for the write to land, and of exactly
+// the referenced type: C writes the representation it was declared with, so an
+// int that widened to a long would be half written. A handle has to be the
+// optional spelling when the declaration is, since C may write NULL — and a
+// variable narrowed to the non-optional type inside a null check would then
+// hold null where the checker had promised it could not.
+func (c *Checker) checkOutArg(e *ast.CallExpr, i int, param ast.Type) error {
+	want := ast.RefInnerType(param)
+	// null passes NULL, which is how a C function is told to skip an output
+	// the caller does not want — sqlite3_prepare_v2's pzTail, say.
+	if _, isNull := e.Args[i].(*ast.NullLit); isNull {
+		return nil
+	}
+	id, ok := e.Args[i].(*ast.Ident)
+	if !ok {
+		return c.errAt(e.Pos, "%s.%s() argument %d is written by the C function, so it must be a variable of type %s",
+			e.Module, e.Name, i+1, typeName(want))
+	}
+	if c.isConst(id.Name) {
+		return c.errAt(e.Pos, "%s.%s() argument %d is written by the C function, and '%s' is a const",
+			e.Module, e.Name, i+1, id.Name)
+	}
+	got, ok := c.resolve(id.Name)
+	if !ok {
+		return c.errAt(e.Pos, "undefined variable '%s'", id.Name)
+	}
+	if got != want && got != param {
+		return c.errAt(e.Pos, "%s.%s() argument %d is written by the C function as %s, but '%s' is %s",
+			e.Module, e.Name, i+1, typeName(want), id.Name, typeName(got))
+	}
+	return nil
 }

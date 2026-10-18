@@ -120,25 +120,22 @@ a monorepo where several packages are built together and never published.
 
 ## Libraries that wrap C
 
-A library can declare `external module` blocks. Its `include` and `link` lines
-travel with its source and reach the C build of every program that uses it, so
+A library can declare `external module` blocks. Its `include`, `link` and
+`pkg` lines travel with its source and reach the C build of every program that uses it, so
 the program's author never writes `-lsqlite3`.
 
 What is not downloaded is the C library itself. Whoever builds needs it
 installed, headers included, as with cgo; `pkg "name"` finds it wherever the
-machine put it. A library can instead ship the C
-source (sqlite is a single `sqlite3.c`) beside its `.dx` files so it builds
-with nothing installed.
+machine put it. A library can instead ship the C source (sqlite is a single
+`sqlite3.c`) beside its `.dx` files so it builds with nothing installed.
 
-One gap in `external module` stood between this and wrapping common
-libraries, found by trying:
+`examples/externalSqlite_test.dx` binds sqlite end to end — `pkg` to find
+it, out-parameters to open and prepare, handles closed by their own functions
+— which is the shape a library wrapping C takes.
 
-- **No out-parameters.** A C function that returns its result through a
-  pointer argument cannot be declared. That rules out `sqlite3_open` and
-  `sqlite3_prepare_v2`, so sqlite cannot be wrapped at all today.
-
-`link` already accepts only `-l`, `-L` and bare library names, and every C name
-in a block must be a C identifier. A dependency must not be able to run code at
+`link` accepts only `-l`, `-L` and bare library names, `pkg` passes on only
+the flag kinds a library needs, and every C name in a block must be a C
+identifier. A dependency must not be able to run code at
 build time, and these are what stop it. There are deliberately no install
 scripts, which is npm's largest hole.
 

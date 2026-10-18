@@ -119,9 +119,17 @@ func (p *Parser) parseExternalFunc(moduleName string) (*ast.ExternalFunc, error)
 			if err := p.expect(token.TokenColon); err != nil {
 				return nil, err
 			}
+			// `&T` is a parameter the C function writes through. Parsed here
+			// rather than by parseType, which allows & only on structs and
+			// scalars: a handle is neither, and an out-parameter is the one
+			// place a reference to one means something.
+			out := p.match(token.TokenAmpersand)
 			ptype, err := p.parseType()
 			if err != nil {
 				return nil, err
+			}
+			if out {
+				ptype = ast.RefTypeOf(ptype)
 			}
 			fn.ParamNames = append(fn.ParamNames, pname)
 			fn.Params = append(fn.Params, ptype)

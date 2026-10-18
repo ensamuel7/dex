@@ -384,6 +384,16 @@ goes — at scope exit, on overwrite, and when an exception unwinds past the
 frame holding it. `fopen` returns NULL on failure, so the return is optional
 and a failed open reads as `null`.
 
+A C function that returns a result through a pointer argument takes it as an
+`&` parameter, written by C into the variable you pass; `null` skips it:
+
+```dex
+fn open(path: string, db: &Db?): int = "sqlite3_open"
+
+let db: Db? = null
+let rc: int = sq.open("app.db", db)
+```
+
 What refcounting does not give you is dependency: a statement handle that
 outlives its connection handle is still a use-after-free, and nothing here
 catches that.

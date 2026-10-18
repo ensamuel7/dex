@@ -535,9 +535,14 @@ or a use-after-free, so change them deliberately:
   right-hand side of `&&` or `||` may never be evaluated, and a hoisted
   declaration evaluates it anyway: in
   `if (!s.isEmpty() && s.substring(0, 1) == "a")` that turns a leak into a crash.
-  `genExpr` suspends hoisting for the operands of both operators, so anything
-  inside one must be self-contained — which is why `genStringCompare` releases
-  within a statement expression instead of asking for a hoist.
+  `genShortCircuit` therefore generates each operand of either operator as a
+  condition of its own, through `genCondition`: whatever an operand hoists is
+  declared and released inside it, so it exists only if the operand runs.
+  Simply switching hoisting off is not enough — a value minted for a borrowing
+  consumer, `f(name.toLower())`, then has no temporary and leaks per
+  evaluation. Both `genExpr` and `genExprNoParen`, the path every `if` and
+  `while` condition takes, route through it; the second once did not, and
+  `if (false && s().len() == 1)` ran `s()`.
 - **A field access borrows the field but not its subject.** `parse(x).ok`
   returns a struct nothing binds, and a struct owns its heap fields, so the
   subject goes through `genBorrowed` even though the read itself is a borrow.

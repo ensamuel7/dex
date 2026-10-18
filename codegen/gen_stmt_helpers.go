@@ -244,12 +244,7 @@ func (g *Generator) beginStmtHoist() {
 
 // Disabled where a hoisted declaration has nowhere to go.
 func (g *Generator) hoistingEnabled() bool {
-	return g.stmtPrelude != nil && g.stmtHoistOff == 0
-}
-
-func (g *Generator) suspendHoisting() func() {
-	g.stmtHoistOff++
-	return func() { g.stmtHoistOff-- }
+	return g.stmtPrelude != nil
 }
 
 // For a consumer that only borrows: a minted reference is bound to a
@@ -352,13 +347,12 @@ func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
 // placed before the loop would not be. And a release that happens inside the
 // condition cannot be skipped by a `return` or a `break` in the body.
 //
-// Hoisting is suspended inside `&&` and `||`, because the whole point of those
-// is that their right-hand side may not be evaluated at all. In
+// Nothing is hoisted out of `&&` or `||`, because the whole point of those is
+// that their right-hand side may not be evaluated at all. In
 // `if (!s.isEmpty() && s.substring(0, 1) == "a")` the substring must not run on
 // an empty string, and a hoisted declaration would run it unconditionally —
-// turning a leak into a crash. Operands of a short-circuit therefore keep
-// whatever self-contained handling they have of their own; genStringCompare is
-// the one that matters in practice.
+// turning a leak into a crash. genShortCircuit gives each operand a condition
+// of its own instead, which is this function again.
 func (g *Generator) genCondition(out *strings.Builder, cond ast.Expr) {
 	savedPrelude := g.stmtPrelude
 	savedTemps := g.stmtTemps
@@ -402,6 +396,23 @@ func (g *Generator) genCondition(out *strings.Builder, cond ast.Expr) {
 		out.WriteString(fmt.Sprintf("_dex_cleanup_drop_to(%s); ", mark))
 	}
 	out.WriteString(fmt.Sprintf("%s; })", result))
+}
+
+// genShortCircuit emits && or ||. Its operands must not be hoisted out of it:
+// the right-hand side may never be evaluated, and a hoisted declaration would
+// evaluate it anyway. Nor can hoisting simply be switched off, because then a
+// value an operand mints for a borrowing consumer — `f(name.toLower())` — has
+// no temporary to release it and leaks once per evaluation. So each operand is
+// generated as a condition of its own: whatever it hoists is declared and
+// released inside it, and exists only if that operand runs. An operand needs no
+// parentheses of its own: every operator genCondition can leave bare binds
+// tighter than && and ||, and a nested one brings its own.
+func (g *Generator) genShortCircuit(out *strings.Builder, e *ast.BinaryExpr) {
+	out.WriteString("(")
+	g.genCondition(out, e.Left)
+	out.WriteString(fmt.Sprintf(" %s ", g.cBinOp(e.Op)))
+	g.genCondition(out, e.Right)
+	out.WriteString(")")
 }
 
 // For a statement that must not be wrapped in a block — a `let`, whose variable

@@ -130,10 +130,9 @@ type Generator struct {
 	// expression that mints a heap value be handed to something that only
 	// borrows it — a print, a function argument — and still be released once the
 	// statement finishes, instead of leaking.
-	stmtPrelude  *strings.Builder
-	stmtTemps    []scopeVar
-	stmtHoistOff int
-	tempCounter  int // unique counter for temp names
+	stmtPrelude *strings.Builder
+	stmtTemps   []scopeVar
+	tempCounter int // unique counter for temp names
 
 	// Defer tracking
 	// fnHasDefer records that the function being generated contains a defer, so

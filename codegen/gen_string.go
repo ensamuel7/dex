@@ -12,6 +12,13 @@ import (
 func (g *Generator) genExprNoParen(out *strings.Builder, expr ast.Expr) {
 	switch e := expr.(type) {
 	case *ast.BinaryExpr:
+		// Every if and while condition comes through here, and this path once
+		// generated && like any operator, so `if (false && s().len() == 1)`
+		// hoisted s() ahead of the && and ran it.
+		if e.Op == ast.BinAnd || e.Op == ast.BinOr {
+			g.genShortCircuit(out, e)
+			return
+		}
 		// Check null comparison in no-paren context
 		if g.isNullComparison(e) {
 			g.genNullComparison(out, e, false)

@@ -1,0 +1,70 @@
+// The right-hand side of && and || runs only when the left does not decide the
+// result. A condition is generated on its own path, and that path hoisted a
+// method call's receiver ahead of the operator, so `false && s().len() == 1`
+// still called s() — and `!s.isEmpty() && s.substring(0, 1) == "a"` read past
+// the end of an empty string.
+import "fmt"
+
+let calls: int = 0
+
+fn word(): string {
+    calls = calls + 1
+    return "xy"
+}
+
+fn list(): string[] {
+    calls = calls + 1
+    return ["a"]
+}
+
+fn nonEmpty(s: string): bool {
+    return !s.isEmpty()
+}
+
+fn main(): void {
+    if (false && word().len() == 2) {
+        assert(false)
+    }
+    if (true || word().isEmpty()) {
+    }
+    if (false && list().len() == 1) {
+        assert(false)
+    }
+    assert(calls == 0)
+
+    // A while condition re-evaluates every iteration, and the right-hand side
+    // runs only on the iterations the left lets through.
+    let i: int = 0
+    while (i < 3 && word().len() == 2) {
+        i = i + 1
+    }
+    assert(calls == 3)
+
+    if (true && word().len() == 2) {
+        calls = calls + 0
+    }
+    assert(calls == 4)
+
+    // The guard this exists for.
+    let empty: string = ""
+    if (!empty.isEmpty() && empty.substring(0, 1) == "a") {
+        assert(false)
+    }
+
+    // An operand that builds a value for a consumer that only reads it still
+    // releases it, on either side, in a condition or a let, every iteration.
+    let name: string = "Alice"
+    let n: int = 0
+    while (nonEmpty(name.toLower()) && n < 50) {
+        n = n + 1
+    }
+    while (n < 100 && nonEmpty(name.toUpper())) {
+        n = n + 1
+    }
+    let both: bool = nonEmpty(name.toLower()) && nonEmpty(name.toUpper())
+    assert(both)
+    let either: bool = false || nonEmpty(name.toLower())
+    assert(either)
+
+    fmt.println("shortCircuit_test: all assertions passed")
+}

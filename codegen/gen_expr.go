@@ -98,17 +98,8 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			}
 		}
 
-		// The operands of a short-circuit must not be hoisted out of it: the
-		// right-hand side may never be evaluated, and a hoisted declaration
-		// would evaluate it anyway. See genCondition.
 		if e.Op == ast.BinAnd || e.Op == ast.BinOr {
-			restore := g.suspendHoisting()
-			out.WriteString("(")
-			g.genExpr(out, e.Left)
-			out.WriteString(fmt.Sprintf(" %s ", g.cBinOp(e.Op)))
-			g.genExpr(out, e.Right)
-			out.WriteString(")")
-			restore()
+			g.genShortCircuit(out, e)
 			return
 		}
 

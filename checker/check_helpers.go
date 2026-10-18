@@ -736,3 +736,69 @@ func (c *Checker) checkIdentifierName(name string, kind string, pos ast.Pos) err
 	}
 	return nil
 }
+
+// adaptsInArith reports whether a literal operand of type from may take the
+// other operand's type in an arithmetic expression. Only a literal adapts; a
+// variable or a computed value never does.
+func adaptsInArith(expr ast.Expr, from, to ast.Type) bool {
+	if from == to {
+		return true
+	}
+	if !isIntLiteral(expr) && !isCharLiteral(expr) {
+		return false
+	}
+	return canAssign(to, from, expr)
+}
+
+func binOpSymbol(op ast.BinOp) string {
+	switch op {
+	case ast.BinAdd:
+		return "+"
+	case ast.BinSub:
+		return "-"
+	case ast.BinMul:
+		return "*"
+	case ast.BinDiv:
+		return "/"
+	case ast.BinMod:
+		return "%"
+	}
+	return "?"
+}
+
+func numConversionFor(t ast.Type) string {
+	switch t {
+	case ast.TypeDouble:
+		return "num.toDouble"
+	case ast.TypeLong:
+		return "num.toLong"
+	case ast.TypeChar:
+		return "num.toChar"
+	}
+	return "num.toInt"
+}
+
+// arithResultType types a numeric binary expression. Operands of the same type
+// need nothing; differing types are an error unless one side is a literal that
+// adapts to the other, because a variable never converts on its own.
+func (c *Checker) arithResultType(e *ast.BinaryExpr, leftType, rightType ast.Type) (ast.Type, error) {
+	if leftType == rightType {
+		return leftType, nil
+	}
+	if adaptsInArith(e.Left, leftType, rightType) {
+		e.LeftType, e.RightType, e.HasMixedTypes = leftType, rightType, true
+		return rightType, nil
+	}
+	if adaptsInArith(e.Right, rightType, leftType) {
+		e.LeftType, e.RightType, e.HasMixedTypes = leftType, rightType, true
+		return leftType, nil
+	}
+	wider := widerNumericType(leftType, rightType)
+	narrow := "the left"
+	if leftType == wider {
+		narrow = "the right"
+	}
+	return 0, c.errAt(e.Pos,
+		"cannot apply '%s' to %s and %s: a number never widens on its own — convert %s operand with %s(...)",
+		binOpSymbol(e.Op), typeName(leftType), typeName(rightType), narrow, numConversionFor(wider))
+}

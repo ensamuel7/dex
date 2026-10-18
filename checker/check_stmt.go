@@ -388,6 +388,11 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if !isNumericType(valType) {
 			return c.errAt(s.Pos, "compound assignment value must be numeric, got %s", typeName(valType))
 		}
+		if !adaptsInArith(s.Value, valType, varType) {
+			return c.errAt(s.Pos,
+				"cannot apply '%s=' to %s and %s: a number never widens on its own — convert the right operand with %s(...)",
+				binOpSymbol(s.Op), typeName(varType), typeName(valType), numConversionFor(varType))
+		}
 		return nil
 
 	case *ast.BlockStmt:

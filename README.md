@@ -6,7 +6,9 @@ A statically-typed language that compiles to C. Sits somewhere between TypeScrip
 
 This started before and around the beginning of my undergrad. I was getting into C++ and later deep diving into Java during my master's, and I kept wanting something that had the developer experience of TypeScript and Go but compiled down to native code through C. So I just started building it.
 
-The real motivation was understanding how everything fits together — lexers, parsers, type checkers, code generation — the full pipeline from source to binary. If it turns into something I can use for personal projects or internal tooling, even better. A garbage collector is planned but not yet implemented.
+The real motivation was understanding how everything fits together — lexers, parsers, type checkers, code generation — the full pipeline from source to binary. If it turns into something I can use for personal projects or internal tooling, even better.
+
+Memory is managed by automatic reference counting, not a garbage collector. Strings, arrays, maps, channels and boxed values are refcounted; the compiler decides at every expression whether a value is owned or borrowed, and emits the retain and release. Values a frame held are released even when an exception unwinds past it. There is no runtime pause and nothing to tune, and `DEX_MEM_CHECK=1` builds with a checker that attributes a leak or a double free back to the `.dx` statement that allocated the object.
 
 This is currently an independent project developed and maintained primarily by me. The long-term goal is to release it publicly and encourage community contributions, but in the near term development will remain focused on a small team, with a few colleagues expected to contribute as the project matures.
 
@@ -53,6 +55,9 @@ dex build examples/hello.dx
 # run tests
 dex test
 
+# lay every .dx file out the one canonical way
+dex format
+
 # report what compiles but is probably not meant
 dex lint app.dx
 ```
@@ -73,8 +78,8 @@ import "fmt"
 import "math"
 
 struct Point {
-    x: int
-    y: int
+    x: double
+    y: double
 }
 
 fn distance(a: Point, b: Point): double {
@@ -84,9 +89,9 @@ fn distance(a: Point, b: Point): double {
 }
 
 fn main(): void {
-    let origin = Point { x: 0, y: 0 }
-    let target = Point { x: 3, y: 4 }
-    fmt.print(distance(origin, target))
+    let origin = Point { x: 0.0, y: 0.0 }
+    let target = Point { x: 3.0, y: 4.0 }
+    fmt.println(distance(origin, target))
 }
 ```
 
@@ -99,7 +104,30 @@ let temps = [1.0, 2.5]  // double[]
 const pi = 3.14159
 ```
 
-Methods take the instance as `self`, and returning it builds a fluent chain:
+A number never widens on its own. A literal adapts to the type it is assigned
+to, but a variable or an expression does not — `int` into `double` is a type
+error, and `num.toDouble` is how you ask for it:
+
+```dex
+let a: long = 5                    // the literal adapts
+let d: double = 2.5
+let ok: double = d * 2             // so does this one
+
+let n: int = 3
+let bad: double = n * d            // error: cannot apply '*' to int and double
+let good: double = num.toDouble(n) * d
+```
+
+Arithmetic is held to the same rule — both operands must already agree, and
+`total += n` is refused exactly as `total = total + n` is.
+
+This is Rust's rule, not Java's. Implicit widening reads as harmless and isn't:
+`long` into `double` silently loses precision past 2^53, so the conversion that
+looks safest is the one that quietly corrupts data. Asking for it costs one call
+and means the narrowing is always visible at the point it happens.
+
+Methods read fields directly and write them through `self`. Returning `self`
+builds a fluent chain:
 
 ```dex
 struct Query {
@@ -153,12 +181,147 @@ while (i < reflect.fieldCount(q)) {
 }
 ```
 
+## Interfaces
+
+Structural typing — a struct satisfies an interface by having its methods. There
+is no `implements`. Dispatch is one indirect call through a vtable the compiler
+fills in at the coercion site, with no lookup and no type metadata:
+
+```dex
+interface Shape {
+    fn area(): double
+}
+
+struct Circle {
+    r: double
+
+    fn area(): double {
+        return 3.14159 * r * r
+    }
+}
+
+struct Square {
+    side: double
+
+    fn area(): double {
+        return side * side
+    }
+}
+
+let shapes: Shape[] = [Circle { r: 1.0 }, Square { side: 2.0 }]
+```
+
+An interface value owns a copy of the struct in a refcounted box, so it can be
+returned, stored in a field, and held in an array. Mutation through an interface
+reaches the copy, not the original — the same trade Go makes.
+
+## Generics
+
+Type parameters on functions and structs, monomorphised at compile time. Each
+instantiation is an ordinary function or struct by the time codegen sees it, so
+there is no boxing and no runtime dispatch:
+
+```dex
+struct Box<T> {
+    value: T
+}
+
+fn max<T>(a: T, b: T): T {
+    if (a > b) { return a }
+    return b
+}
+
+let b: Box<int> = Box<int> { value: 42 }
+let m: int = max(3, 7)
+```
+
+A function's type arguments are inferred from its arguments; a struct's are
+written. Two mentions of `Box<int>` are the same type, not two.
+
+## Enums and Tagged Unions
+
+A plain enum is an integer constant. A variant that carries fields makes the
+enum a tagged union — a closed set of shapes, each with its own data, which a
+variant may name recursively:
+
+```dex
+enum Expr {
+    Lit(long)
+    Add(Expr, Expr)
+    Mul(Expr, Expr)
+}
+
+fn eval(e: Expr): long {
+    switch (e) {
+        case Expr.Lit(v):    { return v }
+        case Expr.Add(a, b): { return eval(a) + eval(b) }
+        case Expr.Mul(a, b): { return eval(a) * eval(b) }
+    }
+}
+```
+
+The match must be exhaustive. A `switch` that omits a variant is a compile error
+naming what it missed, so adding a variant later breaks every incomplete match
+instead of silently falling through one.
+
+## Maps and Optionals
+
+```dex
+let scores: map[string, int] = {}
+scores.set("alice", 100)
+
+if (scores.has("alice")) {
+    fmt.println(scores.get("alice"))
+}
+```
+
+Appending `?` to a type makes it optional. Inside an `if` guarded by a null
+check, the variable narrows to the inner type:
+
+```dex
+let name: string? = lookup(id)
+if (name != null) {
+    fmt.println("found " + name)   // narrowed to string here
+}
+```
+
+## Closures and defer
+
+A function value is a closure — a code pointer plus the environment it captured:
+
+```dex
+fn makeAdder(n: int): fn(int): int {
+    return fn(x: int): int { return x + n }
+}
+
+let add5: fn(int): int = makeAdder(5)
+fmt.println(add5(10))   // 15
+```
+
+`defer` registers a call to run when the function is left — on a `return`, on
+falling off the end, and when an exception unwinds past the frame:
+
+```dex
+fn increment(c: &Counter): void throws {
+    c.mu.lock()
+    defer c.mu.unlock()   // runs however increment is left
+    risky()               // including when this throws
+    c.value = c.value + 1
+}
+```
+
+The call is registered when the `defer` statement runs, not where it is written
+in the file — one in a branch nothing took registers nothing, and one in a loop
+registers per iteration. Its arguments are evaluated at the `defer`.
+
 ## Error Handling
 
 Exceptions carry a type. Any struct with a `message: string` can be thrown,
 `throws` says what escapes a signature, and a `try` takes a clause per type:
 
 ```dex
+import "fmt"
+
 struct ParseError(message: string, line: int) {}
 struct IOError(message: string) {}
 
@@ -216,6 +379,8 @@ See the [Language Reference](LANGUAGE.md#linting) for the full list.
 Spawn tasks, send and receive values through channels. Compiles down to pthreads and lock-free channels in C.
 
 ```dex
+import "fmt"
+
 fn compute(n: int): int {
     return n * 2
 }
@@ -240,17 +405,28 @@ fn main(): void {
 
 ## Standard Library
 
-| Module | What it does |
-|--------|-------------|
-| `fmt`  | Print to stdout |
-| `http` | HTTP server with route handlers |
-| `json` | Build, stringify, and parse JSON (including struct serialization) |
-| `db`   | Database access (SQLite, Postgres, MySQL, MongoDB) |
-| `math` | Trig, rounding, sqrt, pow, etc. |
-| `time` | Timestamps and sleep |
-| `file` | Read, write, append, delete, upload |
-| `os`   | Environment variables, command execution |
-| `ws`   | WebSocket server and client connections |
+| Module    | What it does |
+|-----------|-------------|
+| `fmt`     | Print to stdout |
+| `http`    | HTTP server with route handlers, and a client |
+| `json`    | `encode` / `decode` between structs and JSON, plus the `json.Value` type |
+| `db`      | Database access (SQLite, Postgres, MySQL, MongoDB) |
+| `redis`   | Redis client — strings, hashes, lists, sets, expiry |
+| `kafka`   | Kafka producer and consumer |
+| `crypto`  | Hashing, HMAC, base64, AES, RSA signing |
+| `math`    | Trig, rounding, sqrt, pow, etc. |
+| `num`     | Explicit numeric conversion — `toInt`, `toLong`, `toDouble`, `toChar` |
+| `str`     | String helpers beyond the built-in methods |
+| `time`    | Timestamps, formatting, and sleep |
+| `file`    | Read, write, append, list, rename, move, remove, and byte-exact variants |
+| `io`      | Standard input and line reading |
+| `os`      | Environment variables, command execution |
+| `ws`      | WebSocket server and client connections |
+| `smtp`    | Sending mail |
+| `reflect` | Read and write struct fields by position at runtime |
+
+Every module is documented with its full function list in the
+[Language Reference](LANGUAGE.md).
 
 A basic web server:
 
@@ -258,14 +434,17 @@ A basic web server:
 import "http"
 import "json"
 
+struct Health {
+    status: string
+    uptime: long
+}
+
 fn handleHealth(): string {
-    let resp = json.new()
-    resp = json.set(resp, "status", "ok")
-    return resp
+    return json.encode(Health { status: "ok", uptime: 1200 })
 }
 
 fn main(): void {
-    http.route("GET", "/health", "handleHealth")
+    http.route("GET", "/health", handleHealth)
     http.listen(8080)
 }
 ```
@@ -321,10 +500,10 @@ Releases are automated via GitHub Actions. When you push a version tag, the work
 **To cut a release:**
 
 ```bash
-make release VERSION=0.1.4
+make release VERSION=0.9.3
 ```
 
-This runs `git tag v0.1.4` and `git push origin v0.1.4`. The tag push triggers the workflow which:
+This creates an annotated tag `v0.9.3` and pushes it. The tag push triggers the workflow which:
 - Builds `dex` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
 - Creates a GitHub Release with all 4 tarballs attached
 - Deploys docs to GitHub Pages
@@ -332,7 +511,7 @@ This runs `git tag v0.1.4` and `git push origin v0.1.4`. The tag push triggers t
 **To also publish Docker images** (separate from the GitHub release):
 
 ```bash
-make docker-publish DEX_VERSION=0.1.4
+make docker-publish DEX_VERSION=0.9.3
 ```
 
 `make release` and `make docker-publish` are independent — run either or both.

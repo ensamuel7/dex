@@ -325,6 +325,7 @@ CMD ["server"]</code></pre>
 <tr><td><code>dex run &lt;file&gt;</code></td><td>Build and execute, then remove binary</td></tr>
 <tr><td><code>dex dev &lt;file&gt;</code></td><td>Rebuild and rerun on every change</td></tr>
 <tr><td><code>dex test [file]</code></td><td>Run test files (<code>*_test.dx</code>)</td></tr>
+<tr><td><code>dex format [path]</code></td><td>Lay files out the one canonical way (<code>--check</code> to only report)</td></tr>
 <tr><td><code>dex lint &lt;file&gt;</code></td><td>Report what compiles but is probably not meant</td></tr>
 <tr><td><code>dex check &lt;file&gt;</code></td><td>Run cppcheck over the generated C (needs <code>cppcheck</code>)</td></tr>
 <tr><td><code>dex lsp</code></td><td>Start the Language Server Protocol server</td></tr>
@@ -350,7 +351,7 @@ individual ones off.</p>
 </div>
 <div class="feature-card">
 <h4>JSON Serialization</h4>
-<p>json.stringify / json.objectify for struct-to-JSON and JSON-to-struct conversion</p>
+<p>json.encode / json.decode between JSON and structs, arrays, maps, or a json.Value document</p>
 </div>
 <div class="feature-card">
 <h4>Concurrency</h4>
@@ -1984,117 +1985,78 @@ fmt.println(1000000)       // prints: 1000000</code></pre>
 <!-- json module -->
 <section id="mod-json" class="page-section">
 <h2>json<span class="badge">module</span></h2>
-<p>The <code>json</code> module builds JSON objects using string manipulation. Each function returns a new string — JSON objects are immutable.</p>
+<p>The <code>json</code> module is two functions — <code>encode</code> and <code>decode</code> — plus one type, <code>json.Value</code>. Use a struct when the shape is known at compile time, and <code>json.Value</code> for a document you want to index and walk.</p>
 <pre><code>import "json"</code></pre>
 
-<h3>new</h3>
-<div class="func-card"><div class="sig"><span class="module">json</span>.new() <span class="ret">-&gt; string</span></div></div>
-<p>Create an empty JSON object. Returns the string <code>{}</code>.</p>
-<pre><code>let obj: string = json.new()  // "{}"</code></pre>
-
-<h3>set</h3>
-<div class="func-card"><div class="sig"><span class="module">json</span>.set(<span class="ptype">obj: string, key: string, value: string|int|bool|long|double</span>) <span class="ret">-&gt; string</span></div></div>
-<p>Set a key-value pair on a JSON object. Returns a new string with the field added. Each call inserts the new field before the closing <code>}</code>. The original string is not modified — you must reassign the result. The value type is detected at compile time — no type suffix needed.</p>
-<pre><code>let obj: string = json.new()
-obj = json.set(obj, "name", "Dex")       // string value
-obj = json.set(obj, "version", 1)         // int value
-obj = json.set(obj, "stable", true)       // bool value
-obj = json.set(obj, "bignum", 1000000)    // long value
-obj = json.set(obj, "pi", 3.14)           // double value
-// {"name":"Dex","version":1,"stable":true,"bignum":1000000,"pi":3.14}</code></pre>
-
-<h3>setArray</h3>
-<div class="func-card"><div class="sig"><span class="module">json</span>.setArray(<span class="ptype">obj: string, key: string, arr: T[]</span>) <span class="ret">-&gt; string</span></div></div>
-<p>Set an array value on a JSON object. Works with any array type (<code>int[]</code>, <code>long[]</code>, <code>double[]</code>, <code>bool[]</code>, <code>string[]</code>).</p>
-<pre><code>let nums: int[] = [1, 2, 3]
-let obj: string = json.new()
-obj = json.setArray(obj, "numbers", nums)
-// {"numbers": [1, 2, 3]}</code></pre>
-
-<h3>stringify</h3>
-<div class="func-card"><div class="sig"><span class="module">json</span>.stringify(<span class="ptype">value: T[]|struct|map[string, V]</span>) <span class="ret">-&gt; string</span></div></div>
-<p>Convert an array, struct, or map to a JSON string. Works with any array type (<code>int[]</code>, <code>string[]</code>, etc.), any struct type, and <code>map[string, V]</code> types.</p>
-
-<h4>Arrays</h4>
+<h3>encode</h3>
+<div class="func-card"><div class="sig"><span class="module">json</span>.encode(<span class="ptype">value: json.Value|struct|T[]|map[string, V]</span>) <span class="ret">-&gt; string</span></div></div>
+<p>Serialize a value to JSON text. Structs recurse into nested fields to any depth.</p>
 <pre><code>let nums: int[] = [10, 20, 30]
-let s: string = json.stringify(nums)   // "[10, 20, 30]"
+json.encode(nums)                  // [10,20,30]
 
-let names: string[] = ["alice", "bob"]
-let s2: string = json.stringify(names) // ["alice", "bob"]</code></pre>
+let p = Person { name: "Alice", age: 30, active: true }
+json.encode(p)                     // {"name":"Alice","age":30,"active":true}
 
-<h4>Structs</h4>
-<p>When given a struct, <code>stringify</code> serializes all fields into a JSON object:</p>
-<pre><code>struct Person {
-    name: string
-    age: int
-    active: bool
-}
-
-let p = Person{name: "Alice", age: 30, active: true}
-let jsonStr: string = json.stringify(p)
-// {"name": "Alice", "age": 30, "active": true}</code></pre>
-
-<h4>Maps</h4>
-<p>When given a <code>map[string, V]</code>, <code>stringify</code> serializes all key-value pairs into a JSON object:</p>
-<pre><code>let m: map[string, int] = map[string, int]{}
+let m: map[string, int] = {}
 m.set("x", 1)
-m.set("y", 2)
-let jsonStr: string = json.stringify(m)
-// {"x": 1, "y": 2}</code></pre>
+json.encode(m)                     // {"x": 1}</code></pre>
 
-<h3>objectify</h3>
-<div class="func-card"><div class="sig"><span class="module">json</span>.objectify(<span class="ptype">json: string</span>) <span class="ret">-&gt; T (struct)</span></div></div>
-<p>Convert a JSON string into a typed struct. The target type is determined by the variable's type annotation. An explicit type annotation is required — <code>let x = json.objectify(str)</code> is a compile error.</p>
-<pre><code>let jsonStr: string = "{\"name\": \"Alice\", \"age\": 30, \"active\": true}"
-let p: Person = json.objectify(jsonStr)
-fmt.println(p.name)    // "Alice"
-fmt.println(p.age)     // 30
-fmt.println(p.active)  // true</code></pre>
+<h3>Object and array literals</h3>
+<p>A <code>json.Value</code> is built with an object or array literal. No per-field call is needed, and nesting is just nesting.</p>
+<pre><code>let v: json.Value = { name: "Dex", version: 1, stable: true, tags: ["fast", "small"] }
+json.encode(v)
+// {"name":"Dex","version":1,"stable":true,"tags":["fast","small"]}</code></pre>
 
-<h3>setObj</h3>
-<div class="func-card"><div class="sig"><span class="module">json</span>.setObj(<span class="ptype">obj: string, key: string, value: string</span>) <span class="ret">-&gt; string</span></div></div>
-<p>Set a key to a raw JSON value (not quoted). Use this for nesting objects inside other objects:</p>
-<pre><code>let inner: string = json.new()
-inner = json.set(inner, "status", "Accepted")
+<h3>decode</h3>
+<div class="func-card"><div class="sig"><span class="module">json</span>.decode(<span class="ptype">json: string|json.Value</span>) <span class="ret">-&gt; T</span></div></div>
+<p>Parse JSON into a struct, a struct array, or a <code>json.Value</code>. The target type comes from the annotation, which is required.</p>
+<pre><code>let back: Person = json.decode("{\"name\":\"Bob\",\"age\":25,\"active\":false}")
+back.name                          // "Bob"</code></pre>
+<p>A missing nested object leaves that sub-struct zeroed rather than failing. For input you do not trust, annotate the target as optional and the decode returns <code>null</code> on malformed JSON or a type mismatch instead of zero values:</p>
+<pre><code>let checked: Person? = json.decode(untrusted)
+if (checked == null) {
+    // rejected rather than silently zeroed
+}</code></pre>
 
-let resp: string = json.new()
-resp = json.set(resp, "action", "Authorize")
-resp = json.setObj(resp, "details", inner)
-// {"action":"Authorize","details":{"status":"Accepted"}}</code></pre>
+<h3>Walking a document</h3>
+<p>Annotate the target as <code>json.Value</code> to index a document without declaring its shape. Indexing works by key or position, at any depth.</p>
+<pre><code>let doc: json.Value = json.decode("{\"points\":[{\"x\":4},{\"x\":9}],\"n\":2}")
+doc["points"][1]["x"].asInt()      // 9
+doc["n"].asInt()                   // 2
+doc["points"].len()                // 2
+doc.has("n")                       // true
+doc["absent"].isNull()             // true</code></pre>
 
-<h3>Getters</h3>
 <table>
-<tr><th>Function</th><th>Returns</th><th>Description</th></tr>
-<tr><td><code>json.get(json, key)</code></td><td><code>string</code></td><td>Get string value by key</td></tr>
-<tr><td><code>json.getInt(json, key)</code></td><td><code>int</code></td><td>Get integer value by key</td></tr>
-<tr><td><code>json.getBool(json, key)</code></td><td><code>bool</code></td><td>Get boolean value by key</td></tr>
-<tr><td><code>json.getDouble(json, key)</code></td><td><code>double</code></td><td>Get double value by key</td></tr>
-<tr><td><code>json.getLong(json, key)</code></td><td><code>long</code></td><td>Get long value by key</td></tr>
+<tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+<tr><td><code>.asInt()</code></td><td><code>int</code></td><td>Value as an int</td></tr>
+<tr><td><code>.asLong()</code></td><td><code>long</code></td><td>Value as a long</td></tr>
+<tr><td><code>.asDouble()</code></td><td><code>double</code></td><td>Value as a double</td></tr>
+<tr><td><code>.asString()</code></td><td><code>string</code></td><td>String contents; any other value as its JSON text</td></tr>
+<tr><td><code>.asBool()</code></td><td><code>bool</code></td><td>Value as a bool</td></tr>
+<tr><td><code>.isNull()</code></td><td><code>bool</code></td><td>Is it null, or absent?</td></tr>
+<tr><td><code>.isBool()</code></td><td><code>bool</code></td><td>Is it a boolean?</td></tr>
+<tr><td><code>.isNumber()</code></td><td><code>bool</code></td><td>Is it a number?</td></tr>
+<tr><td><code>.isString()</code></td><td><code>bool</code></td><td>Is it a string?</td></tr>
+<tr><td><code>.isArray()</code></td><td><code>bool</code></td><td>Is it an array?</td></tr>
+<tr><td><code>.isObject()</code></td><td><code>bool</code></td><td>Is it an object?</td></tr>
+<tr><td><code>.len()</code></td><td><code>int</code></td><td>Element count for an array or object, character count for a string</td></tr>
+<tr><td><code>.has(key)</code></td><td><code>bool</code></td><td>Does this object have that key?</td></tr>
+<tr><td><code>.keys()</code></td><td><code>string[]</code></td><td>This object's keys, in insertion order</td></tr>
 </table>
-<p>The <code>get*</code> functions return the default zero value (<code>""</code>, <code>0</code>, <code>false</code>, <code>0.0</code>) if the key is not found.</p>
+<p>The accessors coerce rather than insisting on an exact match, because wire formats routinely disagree about whether a number is quoted. Reading a key that is absent yields the zero value for the accessor used, so a missing field reads as <code>0</code> or <code>""</code> rather than failing.</p>
 
-<h3>JSON Arrays</h3>
-<p>Functions for working with JSON arrays as strings:</p>
+<h3>Removed in 0.9.3</h3>
+<p>Fifteen string-scanning functions that predated <code>json.Value</code> were removed. Calling one is now an undefined function.</p>
 <table>
-<tr><th>Function</th><th>Description</th></tr>
-<tr><td><code>json.arrayNew()</code></td><td>Create empty JSON array <code>[]</code></td></tr>
-<tr><td><code>json.arrayLen(json)</code></td><td>Get length of a JSON array</td></tr>
-<tr><td><code>json.arrayGet(json, index)</code></td><td>Get element at index</td></tr>
-<tr><td><code>json.arrayGetRaw(json, index)</code></td><td>Get raw element at index (strings keep quotes)</td></tr>
-<tr><td><code>json.arrayPush(arr, value)</code></td><td>Append a primitive value</td></tr>
-<tr><td><code>json.arrayPushObj(arr, obj)</code></td><td>Append a JSON object/array</td></tr>
+<tr><th>Removed</th><th>Use instead</th></tr>
+<tr><td><code>json.new()</code>, <code>json.set</code>, <code>json.setObj</code>, <code>json.setArray</code></td><td>An object literal: <code>{ key: value }</code></td></tr>
+<tr><td><code>json.arrayNew()</code>, <code>json.arrayPush</code>, <code>json.arrayPushObj</code></td><td>An array literal: <code>[a, b, c]</code></td></tr>
+<tr><td><code>json.get</code>, <code>json.getInt</code>, <code>json.getBool</code>, <code>json.getDouble</code>, <code>json.getLong</code></td><td>Indexing: <code>v["key"].asInt()</code></td></tr>
+<tr><td><code>json.arrayGet</code>, <code>json.arrayGetRaw</code></td><td>Indexing: <code>v[0]</code></td></tr>
+<tr><td><code>json.arrayLen</code></td><td><code>v.len()</code></td></tr>
 </table>
-<pre><code>let arr: string = json.arrayNew()
-arr = json.arrayPush(arr, 2)
-arr = json.arrayPush(arr, "hello")
-
-let payload: string = json.new()
-payload = json.set(payload, "key", "value")
-arr = json.arrayPushObj(arr, payload)
-// [2, "hello", {"key": "value"}]
-
-let first: string = json.arrayGet(arr, 0)  // "2"
-let len: int = json.arrayLen(arr)           // 3</code></pre>
+<p><code>json.stringify</code> and <code>json.objectify</code> were earlier names for <code>encode</code> and <code>decode</code>.</p>
 </section>
 
 <!-- http module -->
@@ -2180,17 +2142,15 @@ fmt.println(resp.statusCode)
 fmt.println(resp.body)
 
 // POST with JSON body
-let body: string = json.new()
-body = json.set(body, "name", "Alice")
-let r: HttpResponse = http.post("https://api.example.com", body)</code></pre>
+let payload: json.Value = { name: "Alice" }
+let r: HttpResponse = http.post("https://api.example.com", json.encode(payload))</code></pre>
 
 <h4>Headers</h4>
 <p>Headers can be provided in two formats:</p>
 <div class="func-card"><div class="sig"><span class="module">http</span>.header(<span class="ptype">headers: string, key: string, value: string</span>) <span class="ret">-&gt; string</span></div></div>
 <pre><code>// JSON approach — auto-detected when string starts with {
-let headers: string = json.new()
-headers = json.set(headers, "Authorization", "Bearer token")
-let r: HttpResponse = http.get("https://api.example.com", headers)
+let headers: json.Value = { Authorization: "Bearer token" }
+let r: HttpResponse = http.get("https://api.example.com", json.encode(headers))
 
 // Header builder approach
 let h: string = http.header("", "Authorization", "Bearer token")
@@ -2222,11 +2182,8 @@ fn handleHello(): string {
 }
 
 fn handleJson(): string {
-    let response: string = json.new()
-    response = json.set(response, "message", "Hello from Dex!")
-    response = json.set(response, "number", 42)
-    response = json.set(response, "success", true)
-    return response
+    let response: json.Value = { message: "Hello from Dex!", number: 42, success: true }
+    return json.encode(response)
 }
 
 fn handleEcho(req: http.HttpRequest): http.HttpResponse {

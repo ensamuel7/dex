@@ -137,40 +137,6 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return e.ResolvedType, true, nil
 	}
 
-	// Special case: json.set(obj, key, value) — polymorphic value type
-	if e.Module == "json" && e.Name == "set" {
-		if len(e.Args) != 3 {
-			return 0, true, c.errAt(e.Pos, "json.set() takes exactly 3 arguments, got %d", len(e.Args))
-		}
-		objType, err := c.checkExpr(e.Args[0])
-		if err != nil {
-			return 0, true, err
-		}
-		if objType != ast.TypeString {
-			return 0, true, c.errAt(e.Pos, "json.set() argument 1 must be string, got %s", typeName(objType))
-		}
-		keyType, err := c.checkExpr(e.Args[1])
-		if err != nil {
-			return 0, true, err
-		}
-		if keyType != ast.TypeString {
-			return 0, true, c.errAt(e.Pos, "json.set() argument 2 must be string, got %s", typeName(keyType))
-		}
-		valType, err := c.checkExpr(e.Args[2])
-		if err != nil {
-			return 0, true, err
-		}
-		switch valType {
-		case ast.TypeString, ast.TypeInt, ast.TypeBool, ast.TypeLong, ast.TypeDouble:
-			// all valid
-		default:
-			if !ast.IsArrayType(valType) {
-				return 0, true, c.errAt(e.Pos, "json.set() value must be a primitive type or array, got %s", typeName(valType))
-			}
-		}
-		return ast.TypeString, true, nil
-	}
-
 	// Special case: db.fill(into, rows) — polymorphic in the struct it fills.
 	if e.Module == "db" && e.Name == "fill" {
 		t, err := c.checkDbFillCall(e)
@@ -192,60 +158,6 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 			}
 		}
 		return e.ResolvedType, true, nil
-	}
-
-	// Special case: json.arrayPush(arr, value) — polymorphic value type
-	if e.Module == "json" && e.Name == "arrayPush" {
-		if len(e.Args) != 2 {
-			return 0, true, c.errAt(e.Pos, "json.arrayPush() takes exactly 2 arguments, got %d", len(e.Args))
-		}
-		arrType, err := c.checkExpr(e.Args[0])
-		if err != nil {
-			return 0, true, err
-		}
-		if arrType != ast.TypeString {
-			return 0, true, c.errAt(e.Pos, "json.arrayPush() argument 1 must be string, got %s", typeName(arrType))
-		}
-		valType, err := c.checkExpr(e.Args[1])
-		if err != nil {
-			return 0, true, err
-		}
-		switch valType {
-		case ast.TypeString, ast.TypeInt, ast.TypeBool, ast.TypeLong, ast.TypeDouble:
-			// all valid
-		default:
-			return 0, true, c.errAt(e.Pos, "json.arrayPush() value must be a primitive type, got %s", typeName(valType))
-		}
-		return ast.TypeString, true, nil
-	}
-
-	// Special case: json.setArray(obj, key, array) -> string
-	if e.Module == "json" && e.Name == "setArray" {
-		if len(e.Args) != 3 {
-			return 0, true, c.errAt(e.Pos, "json.setArray() takes exactly 3 arguments, got %d", len(e.Args))
-		}
-		objType, err := c.checkExpr(e.Args[0])
-		if err != nil {
-			return 0, true, err
-		}
-		if objType != ast.TypeString {
-			return 0, true, c.errAt(e.Pos, "json.setArray() argument 1 must be string, got %s", typeName(objType))
-		}
-		keyType, err := c.checkExpr(e.Args[1])
-		if err != nil {
-			return 0, true, err
-		}
-		if keyType != ast.TypeString {
-			return 0, true, c.errAt(e.Pos, "json.setArray() argument 2 must be string, got %s", typeName(keyType))
-		}
-		arrType, err := c.checkExpr(e.Args[2])
-		if err != nil {
-			return 0, true, err
-		}
-		if !ast.IsArrayType(arrType) {
-			return 0, true, c.errAt(e.Pos, "json.setArray() argument 3 must be an array type, got %s", typeName(arrType))
-		}
-		return ast.TypeString, true, nil
 	}
 
 	// Special case: http.notFound(handler) — the fallback is a route handler

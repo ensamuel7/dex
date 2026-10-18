@@ -249,29 +249,6 @@ func TestTypeMismatchCompareStringInt(t *testing.T) {
 	mustFail(t, `fn main(): bool { return 1 < "a" }`, "comparison operators require numeric operands")
 }
 
-func TestCrossNumericArithmetic(t *testing.T) {
-	mustCheck(t, `fn main(): void {
-		let a: int = 1
-		let b: double = 2.0
-		let c: double = a + b
-	}`)
-	mustCheck(t, `fn main(): void {
-		let a: int = 1
-		let b: long = 2
-		let c: long = a * b
-	}`)
-	mustCheck(t, `fn main(): void {
-		let a: double = 10.0
-		let b: int = 3
-		let c: double = a / b
-	}`)
-	mustCheck(t, `fn main(): void {
-		let a: long = 100
-		let b: int = 50
-		let c: long = a - b
-	}`)
-}
-
 func TestCrossNumericArithmeticResultType(t *testing.T) {
 	mustCheck(t, `fn main(): double {
 		let x: double = 5.0 / 2
@@ -292,11 +269,10 @@ func TestCrossNumericComparison(t *testing.T) {
 	}`)
 }
 
-func TestCrossNumericMod(t *testing.T) {
+func TestModRequiresIntegerOperands(t *testing.T) {
 	mustCheck(t, `fn main(): void {
-		let a: int = 10
-		let b: long = 3
-		let c: long = a % b
+		let a: long = 10
+		let c: long = a % 3
 	}`)
 	mustFail(t, `fn main(): void {
 		let a: int = 10
@@ -529,19 +505,6 @@ func TestFmtPrintWrongArgCount(t *testing.T) {
 	}`, "fmt.println() takes exactly 1 argument")
 }
 
-func TestJsonNew(t *testing.T) {
-	mustCheck(t, `import "json" fn main(): string {
-		return json.new()
-	}`)
-}
-
-func TestJsonSet(t *testing.T) {
-	mustCheck(t, `import "json" fn main(): string {
-		let obj: string = json.new()
-		return json.set(obj, "key", "value")
-	}`)
-}
-
 func TestJsonStringify(t *testing.T) {
 	mustCheck(t, `import "json" fn main(): string {
 		let a: int[] = [1, 2, 3]
@@ -553,14 +516,6 @@ func TestJsonStringifyNonArray(t *testing.T) {
 	mustFail(t, `import "json" fn main(): string {
 		return json.encode(42)
 	}`, "json.encode() argument must be a json.Value, array, struct, or map")
-}
-
-func TestJsonSetArr(t *testing.T) {
-	mustCheck(t, `import "json" fn main(): string {
-		let obj: string = json.new()
-		let a: int[] = [1, 2]
-		return json.setArray(obj, "nums", a)
-	}`)
 }
 
 func TestHttpRoute(t *testing.T) {

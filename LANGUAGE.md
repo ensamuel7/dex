@@ -9,6 +9,7 @@ dex build <file.dx>       # compiles to native binary
 dex run <file.dx>         # compiles and runs
 dex dev <file.dx>         # rebuilds and reruns on every change
 dex test [file_test.dx]   # runs test files (*_test.dx)
+dex format [path...]      # lays files out the one canonical way
 dex lint <file.dx>        # reports lint findings without building
 dex check <file.dx>       # runs cppcheck over the generated C
 ```
@@ -1649,6 +1650,40 @@ body-checking pass reaches it like any other function.
 
 `+` also works for string concatenation when both operands are `string`.
 
+#### Operands must already agree
+
+Arithmetic never converts a number for you. Both operands must be the same
+type, and the one exception is a **literal**, which adapts to the other side:
+
+```dex
+let d: double = 2.5
+let ok: double = d * 2            // 2 adapts to double
+
+let n: int = 3
+let bad: double = n * d           // error
+let good: double = num.toDouble(n) * d
+```
+
+```
+cannot apply '*' to int and double: a number never widens on its own —
+convert the left operand with num.toDouble(...)
+```
+
+A literal adapts only where the conversion is exact, so an `int` literal
+reaches `long` and `double` but a `double` literal never reaches `int`:
+`n + 2.0` is an error, not a silent truncation. `char` does not take part at
+all — `num.toInt(c)` is how a character becomes a number.
+
+This holds for `%` and for the compound forms, so `total += n` is refused for
+the same reason `total = total + n` is.
+
+The rule is Rust's, and the reason is that widening is not as safe as it looks:
+`long` into `double` loses precision past 2^53, so the conversion that reads as
+harmless is the one that quietly corrupts data. Requiring `num.*` costs one call
+and keeps every conversion visible where it happens. Comparison is deliberately
+looser — see below — because it yields a `bool` and cannot carry a wrong value
+forward.
+
 #### String coercion
 
 When one operand of `+` is a `string` and the other is a non-string type, the non-string operand is automatically converted to its string representation. This works for all primitive types (`int`, `long`, `double`, `bool`, `char`), structs, enums, and arrays.
@@ -2782,13 +2817,14 @@ if (doc.isNull()) {
 }
 ```
 
-#### Deprecated functions
+#### Removed functions
 
-The following are superseded by `json.Value` and warn when used. They still
-work, so existing code keeps compiling, but new code should not use them.
+The module is `json.encode`, `json.decode` and the `json.Value` type. Fifteen
+string-scanning functions that predated `json.Value` were removed in 0.9.3;
+calling one is now an undefined function. The replacements:
 
-| Deprecated | Use instead |
-|------------|-------------|
+| Removed | Use instead |
+|---------|-------------|
 | `json.new()`, `json.set`, `json.setObj`, `json.setArray` | An object literal: `{ key: value }` |
 | `json.arrayNew()`, `json.arrayPush`, `json.arrayPushObj` | An array literal: `[a, b, c]` |
 | `json.get`, `json.getInt`, `json.getBool`, `json.getDouble`, `json.getLong` | Indexing: `v["key"].asInt()` |
@@ -3923,6 +3959,46 @@ way it was written rather than by the flat name it registers under.
 
 The struct types a stdlib module provides — `http.HttpRequest`, `ws.Conn` — are
 not module-scoped and keep working under either spelling.
+
+## Formatting
+
+`dex format` lays a file out the one canonical way. There are no options and
+nothing to configure: layout stops being a thing anybody decides, the way
+`gofmt` and Prettier settled it for Go and JavaScript.
+
+```
+dex format                 # every .dx file under the current directory
+dex format src/ main.dx    # named files, and the .dx files under named directories
+dex format --check         # list what is unformatted and exit non-zero; nothing is written
+```
+
+What it decides:
+
+- **Four spaces per level**, and no trailing whitespace. Exactly one newline
+  ends the file.
+- **One space where a space belongs** — around binary operators, after a comma
+  or a colon — and none where it does not: `f(x)`, `a.b`, `-x`, `xs[0]`,
+  `Box<int>`. A struct or object literal is spaced inside its braces,
+  `Point { x: 1 }`; a call or an index is not.
+- **A line break is a consequence of the line not fitting**, never of where the
+  last person pressed return. Anything that fits in 100 columns is one line. A
+  call, array or literal that does not fit puts one element per line. An
+  expression with no group to open breaks at its loosest-binding operator, and
+  its operands line up with each other.
+- **One blank line between declarations**, one after the import block, and at
+  most one anywhere else. A comment directly above a declaration stays attached
+  to it, with the blank line going above the comment.
+- **A body is always a block.** `fn f() { return 1 }` becomes three lines; an
+  empty one stays `{}`.
+
+Formatting is editor-ready: the language server answers
+`textDocument/formatting`, so format-on-save works with no extra configuration.
+A file that does not parse is left exactly as it is rather than half-formatted.
+
+The formatter works on the token stream rather than the AST, and checks itself:
+it re-reads its own output and compares the two token streams before writing
+anything, so a bug in it is a layout bug and never a lost line. A file it cannot
+account for is reported and left alone.
 
 ## Linting
 

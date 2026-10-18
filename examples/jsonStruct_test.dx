@@ -55,11 +55,9 @@ fn main(): void {
     fmt.println(p2.name)
     fmt.println(p2.age)
 
-    //Test with manually built JSON
-    let raw: string = json.new()
-    raw = json.set(raw, "name", "Bob")
-    raw = json.set(raw, "age", 25)
-    raw = json.set(raw, "active", false)
+    //Test decoding a document built as a json.Value
+    let built: json.Value = { name: "Bob", age: 25, active: false }
+    let raw: string = json.encode(built)
     let p3: Person = json.decode(raw)
     assert(p3.name == "Bob")
     assert(p3.age == 25)
@@ -86,7 +84,8 @@ fn main(): void {
     assert(decoded.addr.geo.lng == 3.4)
 
     //Nested decode from hand-written JSON
-    let handRaw: string = "{\"name\":\"Ada\",\"active\":false,\"addr\":{\"city\":\"Accra\",\"zip\":233,\"geo\":{\"lat\":5.6,\"lng\":0.2}}}"
+    let handRaw: string =
+        "{\"name\":\"Ada\",\"active\":false,\"addr\":{\"city\":\"Accra\",\"zip\":233,\"geo\":{\"lat\":5.6,\"lng\":0.2}}}"
     let hand: Employee = json.decode(handRaw)
     assert(hand.name == "Ada")
     assert(hand.addr.city == "Accra")
@@ -105,11 +104,16 @@ fn main(): void {
         Item { label: "b", geo: Geo { lat: 3.5, lng: 4.5 } }
     ]
     let arrJson: string = json.encode(items)
-    assert(arrJson == "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]")
+    assert(
+        arrJson ==
+        "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]"
+    )
 
-    let wrapped: string = json.new()
-    wrapped = json.setArray(wrapped, "items", items)
-    assert(json.get(wrapped, "items") == "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]")
+    let wrapped: json.Value = { items: items }
+    assert(
+        json.encode(wrapped["items"]) ==
+        "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]"
+    )
 
     //Checked decode — an optional target rejects bad input instead of zeroing it
     let okDec: Person? = json.decode("{\"name\":\"Ivy\",\"age\":31,\"active\":true}")
@@ -162,7 +166,8 @@ fn main(): void {
     assert(lenient.age == 0)
 
     //Decoding a JSON array into a struct array, elements nested included
-    let arrRaw: string = "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]"
+    let arrRaw: string =
+        "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]"
     let decodedItems: Item[] = json.decode(arrRaw)
     let itemCount: int = decodedItems.len()
     assert(itemCount == 2)
@@ -174,7 +179,10 @@ fn main(): void {
     assert(it1.geo.lng == 4.5)
 
     //Round-trips back through encode (which spaces after colons)
-    assert(json.encode(decodedItems) == "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]")
+    assert(
+        json.encode(decodedItems) ==
+        "[{\"label\":\"a\",\"geo\":{\"lat\":1.5,\"lng\":2.5}},{\"label\":\"b\",\"geo\":{\"lat\":3.5,\"lng\":4.5}}]"
+    )
 
     let emptyItems: Item[] = json.decode("[]")
     let emptyCount: int = emptyItems.len()
@@ -197,13 +205,16 @@ fn main(): void {
     assert(truncArr == null)
 
     //Array struct fields — primitive, string, and struct element types
-    let ids: int[] = [7,8]
+    let ids: int[] = [7, 8]
     let ns: string[] = ["a", "b"]
-    let tags: Tag[] = [Tag{id: 1, kind: "news"},Tag{id: 2, kind: "tech"}]
+    let tags: Tag[] = [Tag { id: 1, kind: "news" }, Tag { id: 2, kind: "tech" }]
     let ch: Post = Post { tag: "p1", views: ids, names: ns, tags: tags }
 
     let chJson: string = json.encode(ch)
-    assert(chJson == "{\"tag\":\"p1\",\"views\":[7,8],\"names\":[\"a\",\"b\"],\"tags\":[{\"id\":1,\"kind\":\"news\"},{\"id\":2,\"kind\":\"tech\"}]}")
+    assert(
+        chJson ==
+        "{\"tag\":\"p1\",\"views\":[7,8],\"names\":[\"a\",\"b\"],\"tags\":[{\"id\":1,\"kind\":\"news\"},{\"id\":2,\"kind\":\"tech\"}]}"
+    )
 
     let chBack: Post = json.decode(chJson)
     assert(chBack.tag == "p1")

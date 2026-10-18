@@ -70,12 +70,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return ast.TypeString, nil
 			}
 			if isNumericType(leftType) && isNumericType(rightType) {
-				if leftType != rightType {
-					e.LeftType = leftType
-					e.RightType = rightType
-					e.HasMixedTypes = true
-				}
-				return widerNumericType(leftType, rightType), nil
+				return c.arithResultType(e, leftType, rightType)
 			}
 			// String coercion: string + T or T + string
 			if (leftType == ast.TypeString && isStringifiable(rightType)) ||
@@ -88,24 +83,14 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if !isNumericType(leftType) || !isNumericType(rightType) {
 				return 0, c.errAt(e.Pos, "arithmetic operators require numeric operands")
 			}
-			if leftType != rightType {
-				e.LeftType = leftType
-				e.RightType = rightType
-				e.HasMixedTypes = true
-			}
-			return widerNumericType(leftType, rightType), nil
+			return c.arithResultType(e, leftType, rightType)
 
 		case ast.BinMod:
 			if (leftType != ast.TypeChar && leftType != ast.TypeInt && leftType != ast.TypeLong) ||
 				(rightType != ast.TypeChar && rightType != ast.TypeInt && rightType != ast.TypeLong) {
 				return 0, c.errAt(e.Pos, "'%%' requires char, int, or long operands")
 			}
-			if leftType != rightType {
-				e.LeftType = leftType
-				e.RightType = rightType
-				e.HasMixedTypes = true
-			}
-			return widerNumericType(leftType, rightType), nil
+			return c.arithResultType(e, leftType, rightType)
 
 		case ast.BinEq, ast.BinNeq:
 			// Allow null comparisons with optional types
@@ -924,7 +909,6 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 			if !ok {
 				return 0, c.errAt(e.Pos, "module '%s' is not imported", e.Module)
 			}
-			c.warnIfDeprecated(e.Module, e.Name, e.Pos)
 
 			if t, handled, err := c.checkStdlibCall(e, mod); handled {
 				return t, err

@@ -34,10 +34,8 @@ func TestLookupFuncExisting(t *testing.T) {
 	}{
 		{"fmt", "print"},
 		{"fmt", "println"},
-		{"json", "new"},
-		{"json", "set"},
 		{"json", "encode"},
-		{"json", "setArray"},
+		{"json", "decode"},
 		{"http", "route"},
 		{"http", "listen"},
 		{"db", "open"},
@@ -88,31 +86,29 @@ func TestFmtFunctionSignatures(t *testing.T) {
 }
 
 func TestJsonFunctionSignatures(t *testing.T) {
-	// json.new — concrete function
-	fd, ok := LookupFunc("json", "new")
-	if !ok {
-		t.Fatal("LookupFunc(json, new) not found")
+	// encode and decode are the whole module surface; both are polymorphic,
+	// resolved in the checker rather than from Params.
+	for _, name := range []string{"encode", "decode"} {
+		fd, ok := LookupFunc("json", name)
+		if !ok {
+			t.Fatalf("LookupFunc(json, %s) not found", name)
+		}
+		if fd.Params != nil {
+			t.Errorf("json.%s params = %v, want nil (polymorphic)", name, fd.Params)
+		}
+		if fd.CName != "" {
+			t.Errorf("json.%s CName = %q, want empty (special-cased)", name, fd.CName)
+		}
 	}
-	if len(fd.Params) != 0 {
-		t.Errorf("json.new params count = %d, want 0", len(fd.Params))
+	if n := len(Lookup("json").Funcs); n != 2 {
+		t.Errorf("json module has %d functions, want 2 (encode, decode)", n)
 	}
-	if fd.ReturnType != ast.TypeString {
-		t.Errorf("json.new return = %d, want TypeString", fd.ReturnType)
-	}
-	if fd.CName != "dex_json_new" {
-		t.Errorf("json.new CName = %q, want %q", fd.CName, "dex_json_new")
-	}
-
-	// json.set — polymorphic (nil params, special-cased in checker/codegen)
-	fd, ok = LookupFunc("json", "set")
-	if !ok {
-		t.Fatal("LookupFunc(json, set) not found")
-	}
-	if fd.Params != nil {
-		t.Errorf("json.set params = %v, want nil (polymorphic)", fd.Params)
-	}
-	if fd.ReturnType != ast.TypeString {
-		t.Errorf("json.set return = %d, want TypeString", fd.ReturnType)
+	for _, gone := range []string{"new", "set", "setObj", "setArray", "get", "getInt",
+		"getBool", "getDouble", "getLong", "arrayNew", "arrayLen", "arrayGet",
+		"arrayGetRaw", "arrayPush", "arrayPushObj"} {
+		if _, ok := LookupFunc("json", gone); ok {
+			t.Errorf("json.%s was removed but is still registered", gone)
+		}
 	}
 }
 

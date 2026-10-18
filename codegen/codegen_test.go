@@ -493,19 +493,6 @@ func TestCodegenFmtPrintBool(t *testing.T) {
 	assertContains(t, out, `"true" : "false"`)
 }
 
-func TestCodegenJsonNew(t *testing.T) {
-	out := generate(t, `import "json" fn main(): string { return json.new() }`)
-	assertContains(t, out, "dex_string_from_cstr(dex_json_new())")
-}
-
-func TestCodegenJsonSet(t *testing.T) {
-	out := generate(t, `import "json" fn main(): string {
-		let obj: string = json.new()
-		return json.set(obj, "key", "val")
-	}`)
-	assertContains(t, out, "dex_json_set(")
-}
-
 func TestCodegenJsonStringify(t *testing.T) {
 	out := generate(t, `import "json" fn main(): string {
 		let a: int[] = [1, 2]
@@ -515,15 +502,6 @@ func TestCodegenJsonStringify(t *testing.T) {
 	// call works the same way as encoding a named local.
 	assertContains(t, out, "dex_json_stringify_int(")
 	assertContains(t, out, "dex_string_from_cstr(")
-}
-
-func TestCodegenJsonSetArr(t *testing.T) {
-	out := generate(t, `import "json" fn main(): string {
-		let obj: string = json.new()
-		let a: int[] = [1, 2]
-		return json.setArray(obj, "nums", a)
-	}`)
-	assertContains(t, out, "dex_json_set_arr_int(")
 }
 
 func TestCodegenHttpRoute(t *testing.T) {
@@ -740,30 +718,27 @@ func TestCodegenArrayIndexOf(t *testing.T) {
 	assertContains(t, out, `dex_release(_dex_tmp_2)`)
 }
 
-func TestCodegenCrossNumericAdd(t *testing.T) {
+func TestCodegenLiteralAdaptsAdd(t *testing.T) {
 	out := generate(t, `fn main(): void {
-		let a: int = 1
 		let b: double = 2.0
-		let c: double = a + b
+		let c: double = b + 1
 	}`)
 	assertContains(t, out, "(double)")
 }
 
-func TestCodegenCrossNumericDiv(t *testing.T) {
+func TestCodegenLiteralAdaptsDiv(t *testing.T) {
 	out := generate(t, `fn main(): void {
 		let a: double = 10.0
-		let b: int = 3
-		let c: double = a / b
+		let c: double = a / 3
 	}`)
 	assertContains(t, out, "(double)")
 	assertContains(t, out, "dex_check_nonzero_double(")
 }
 
-func TestCodegenCrossNumericMul(t *testing.T) {
+func TestCodegenLiteralAdaptsMul(t *testing.T) {
 	out := generate(t, `fn main(): void {
-		let a: int = 2
 		let b: long = 3
-		let c: long = a * b
+		let c: long = b * 2
 	}`)
 	assertContains(t, out, "(long)")
 }
@@ -984,11 +959,10 @@ func TestCodegenModByZeroCheckInt(t *testing.T) {
 	assertContains(t, out, "dex_check_nonzero_int(b)")
 }
 
-func TestCodegenDivByZeroCheckMixedTypes(t *testing.T) {
+func TestCodegenDivByZeroCheckAdaptedLiteral(t *testing.T) {
 	out := generate(t, `fn main(): void {
-		let a: int = 10
-		let b: long = 3
-		let c: long = a / b
+		let a: long = 10
+		let c: long = a / 3
 	}`)
 	assertContains(t, out, "dex_check_nonzero_long(")
 }

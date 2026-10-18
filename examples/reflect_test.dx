@@ -6,6 +6,7 @@
 // value instead of reinterpreting bytes.
 import "fmt"
 import "reflect"
+import "num"
 
 struct Inner {
     label: string
@@ -61,7 +62,13 @@ fn main(): void {
     // field has no single-line rendering and reports "".
     let i: int = 0
     while (i < reflect.fieldCount(unit)) {
-        fmt.println(reflect.fieldName(unit, i) + " (" + reflect.fieldKind(unit, i) + ") = " + reflect.toString(unit, i))
+        fmt.println(
+            reflect.fieldName(unit, i) +
+            " (" +
+            reflect.fieldKind(unit, i) +
+            ") = " +
+            reflect.toString(unit, i)
+        )
         i = i + 1
     }
 
@@ -105,7 +112,7 @@ fn main(): void {
         let f: int = 0
         while (f < reflect.fieldCount(unit)) {
             let shown: string = reflect.toString(unit, f)
-            total = total + shown.len()
+            total = total + num.toLong(shown.len())
             f = f + 1
         }
         r = r + 1

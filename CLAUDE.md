@@ -13,6 +13,7 @@
 - Build a `.dx` file: `go run . build <file.dx>`
 - Run a `.dx` file: `go run . run <file.dx>`
 - Run tests: `go run . test`
+- Format files: `go run . format [path...]` (`--check` to report without rewriting)
 - Lint a file: `go run . lint <file.dx>` (or `--lint` / `--lint=strict` on build)
 - Generate docs: `go run . docs`
 - Start LSP: `go run . lsp`

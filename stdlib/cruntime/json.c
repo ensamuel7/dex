@@ -111,23 +111,6 @@ const char* dex_json_set_double(const char* obj, const char* key, double val) {
     return result;
 }
 
-const char* dex_json_set_obj(const char* obj, const char* key, const char* val) {
-    size_t olen = strlen(obj);
-    size_t klen = strlen(key);
-    size_t vlen = strlen(val);
-    // non-empty: `, "key": val}` = 7 literal chars + klen + vlen + null
-    size_t need = olen + klen + vlen + 8;
-    char* result = (char*)malloc(need);
-    if (!result) return obj;
-    if (olen == 2) {
-        snprintf(result, need, "{\"%s\": %s}", key, val);
-    } else {
-        memcpy(result, obj, olen - 1);
-        snprintf(result + olen - 1, need - (olen - 1), ", \"%s\": %s}", key, val);
-    }
-    return result;
-}
-
 // --- JSON get (parse) ---
 
 static const char* dex_json_skip_value(const char* p);
@@ -341,93 +324,6 @@ const char* dex_json_array_get_raw(const char* json, int index) {
         if (*p == ',') p++;
     }
     return strdup("");
-}
-
-const char* dex_json_array_new(void) {
-    char* s = (char*)malloc(3);
-    if (!s) return strdup("");
-    s[0] = '['; s[1] = ']'; s[2] = '\0';
-    return s;
-}
-
-const char* dex_json_array_push_str(const char* arr, const char* val) {
-    size_t alen = strlen(arr);
-    size_t evlen = dex_json_escaped_len(val);
-    size_t need = alen + evlen + 8;
-    char* result = (char*)malloc(need);
-    if (!result) return arr;
-    size_t pos = 0;
-    if (alen == 2) {
-        result[pos++] = '[';
-    } else {
-        memcpy(result, arr, alen - 1);
-        pos = alen - 1;
-        result[pos++] = ',';
-        result[pos++] = ' ';
-    }
-    result[pos++] = '"';
-    pos += dex_json_escape(result + pos, val);
-    result[pos++] = '"';
-    result[pos++] = ']';
-    result[pos] = '\0';
-    return result;
-}
-
-const char* dex_json_array_push_int(const char* arr, int val) {
-    size_t alen = strlen(arr);
-    size_t need = alen + 32;
-    char* result = (char*)malloc(need);
-    if (!result) return arr;
-    if (alen == 2) {
-        snprintf(result, need, "[%d]", val);
-    } else {
-        memcpy(result, arr, alen - 1);
-        snprintf(result + alen - 1, need - (alen - 1), ", %d]", val);
-    }
-    return result;
-}
-
-const char* dex_json_array_push_long(const char* arr, long val) {
-    size_t alen = strlen(arr);
-    size_t need = alen + 32;
-    char* result = (char*)malloc(need);
-    if (!result) return arr;
-    if (alen == 2) {
-        snprintf(result, need, "[%ld]", val);
-    } else {
-        memcpy(result, arr, alen - 1);
-        snprintf(result + alen - 1, need - (alen - 1), ", %ld]", val);
-    }
-    return result;
-}
-
-const char* dex_json_array_push_double(const char* arr, double val) {
-    size_t alen = strlen(arr);
-    size_t need = alen + 64;
-    char* result = (char*)malloc(need);
-    if (!result) return arr;
-    if (alen == 2) {
-        snprintf(result, need, "[%g]", val);
-    } else {
-        memcpy(result, arr, alen - 1);
-        snprintf(result + alen - 1, need - (alen - 1), ", %g]", val);
-    }
-    return result;
-}
-
-const char* dex_json_array_push_bool(const char* arr, _Bool val) {
-    size_t alen = strlen(arr);
-    size_t need = alen + 16;
-    char* result = (char*)malloc(need);
-    if (!result) return arr;
-    const char* vs = val ? "true" : "false";
-    if (alen == 2) {
-        snprintf(result, need, "[%s]", vs);
-    } else {
-        memcpy(result, arr, alen - 1);
-        snprintf(result + alen - 1, need - (alen - 1), ", %s]", vs);
-    }
-    return result;
 }
 
 // --- Struct encode/decode ---
@@ -774,19 +670,4 @@ int dex_json_decode_struct_checked(const char* json, void* out, int num_fields, 
     if (!dex_json_check_fields(json, num_fields, fields)) return 0;
     dex_json_decode_struct(json, out, num_fields, fields);
     return 1;
-}
-
-const char* dex_json_array_push_obj(const char* arr, const char* obj) {
-    size_t alen = strlen(arr);
-    size_t olen = strlen(obj);
-    size_t need = alen + olen + 4;
-    char* result = (char*)malloc(need);
-    if (!result) return arr;
-    if (alen == 2) {
-        snprintf(result, need, "[%s]", obj);
-    } else {
-        memcpy(result, arr, alen - 1);
-        snprintf(result + alen - 1, need - (alen - 1), ", %s]", obj);
-    }
-    return result;
 }

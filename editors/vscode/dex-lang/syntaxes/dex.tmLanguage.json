@@ -28,6 +28,9 @@
       "include": "#import-statement"
     },
     {
+      "include": "#external-declaration"
+    },
+    {
       "include": "#keywords"
     },
     {
@@ -144,6 +147,44 @@
             },
             "2": {
               "name": "string.quoted.double.dex"
+            }
+          }
+        }
+      ]
+    },
+    "external-declaration": {
+      "comment": "module, include, link, pkg and type are keywords only in these positions, so they stay ordinary names elsewhere",
+      "patterns": [
+        {
+          "match": "\\b(external)\\s+(module)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.struct.dex"
+            },
+            "2": {
+              "name": "keyword.other.struct.dex"
+            },
+            "3": {
+              "name": "entity.name.type.module.dex"
+            }
+          }
+        },
+        {
+          "match": "^\\s*(include|link|pkg)(?=\\s+\")",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.dex"
+            }
+          }
+        },
+        {
+          "match": "^\\s*(type)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s+(?=closed\\b)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.struct.dex"
+            },
+            "2": {
+              "name": "entity.name.type.dex"
             }
           }
         }

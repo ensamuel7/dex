@@ -509,7 +509,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			}
 		}
 		if !found {
-			return c.errAt(s.Pos, "struct '%s' has no field '%s'", def.Name, s.Field)
+			return c.errAt(s.Pos, "struct '%s' has no field '%s'", ast.DisplayStructName(def.Name), s.Field)
 		}
 		valType, err := c.checkExpr(s.Value)
 		if err != nil {
@@ -705,7 +705,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 				}
 			}
 			if !found {
-				return c.errAt(s.Pos, "struct '%s' has no field '%s'", def.Name, name)
+				return c.errAt(s.Pos, "struct '%s' has no field '%s'", ast.DisplayStructName(def.Name), name)
 			}
 		}
 		return nil

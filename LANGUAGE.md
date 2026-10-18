@@ -755,6 +755,26 @@ switch (c) {
 
 Enums are value types (integers) — no heap allocation or refcounting needed.
 
+### A local declaration shadows an imported one
+
+A type declared in the file being compiled wins the bare name over one of the
+same name in an imported module. The module's is still reached by qualifying
+it, so nothing is hidden:
+
+```dex
+import "signupController"        // declares SignupController
+
+struct SignupController {        // mine
+    local: int
+}
+
+let mine: SignupController = SignupController { local: 1 }
+let theirs: signupController.SignupController = signupController.new(7)
+```
+
+Two *modules* declaring the same name is still an ambiguity error when the
+bare name is used, because neither is the file's own.
+
 ### Enums across modules
 
 An enum declared in one file is used from another through its module, in every

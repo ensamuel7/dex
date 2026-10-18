@@ -301,7 +301,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		}
 		def := ast.GetStructDef(t)
 		if len(e.FieldNames) > len(def.Fields) {
-			return 0, c.errAt(e.Pos, "struct '%s' has %d fields, got %d", e.Name, len(def.Fields), len(e.FieldNames))
+			return 0, c.errAt(e.Pos, "struct '%s' has %d fields, got %d", ast.DisplayStructName(e.Name), len(def.Fields), len(e.FieldNames))
 		}
 		for i, fn := range e.FieldNames {
 			// Find the field in the definition
@@ -318,14 +318,14 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 						return 0, err
 					}
 					if !canAssign(f.Type, valType, e.FieldValues[i]) {
-						return 0, c.errAt(e.Pos, "field '%s' of struct '%s': expected %s, got %s", fn, e.Name, typeName(f.Type), typeName(valType))
+						return 0, c.errAt(e.Pos, "field '%s' of struct '%s': expected %s, got %s", fn, ast.DisplayStructName(e.Name), typeName(f.Type), typeName(valType))
 					}
 					found = true
 					break
 				}
 			}
 			if !found {
-				return 0, c.errAt(e.Pos, "struct '%s' has no field '%s'", e.Name, fn)
+				return 0, c.errAt(e.Pos, "struct '%s' has no field '%s'", ast.DisplayStructName(e.Name), fn)
 			}
 		}
 		return t, nil
@@ -357,7 +357,7 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				return ast.FuncTypeOf(sig.Params, sig.ReturnType), nil
 			}
 		}
-		return 0, c.errAt(e.Pos, "struct '%s' has no field or method '%s'", def.Name, e.Field)
+		return 0, c.errAt(e.Pos, "struct '%s' has no field or method '%s'", ast.DisplayStructName(def.Name), e.Field)
 
 	case *ast.SpawnExpr:
 		if e.Body != nil {

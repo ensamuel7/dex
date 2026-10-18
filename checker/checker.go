@@ -120,19 +120,19 @@ func (c *Checker) Check(program *ast.Program) []error {
 	seen := map[string]bool{}
 	for _, sd := range program.Structs {
 		if seen[sd.Name] {
-			c.addError(fmt.Errorf("duplicate struct type '%s'", sd.Name))
+			c.addError(fmt.Errorf("duplicate struct type '%s'", ast.DisplayStructName(sd.Name)))
 			continue
 		}
 		seen[sd.Name] = true
 		fieldNames := map[string]bool{}
 		for _, f := range sd.Fields {
 			if fieldNames[f.Name] {
-				c.addError(fmt.Errorf("duplicate field '%s' in struct '%s'", f.Name, sd.Name))
+				c.addError(fmt.Errorf("duplicate field '%s' in struct '%s'", f.Name, ast.DisplayStructName(sd.Name)))
 				continue
 			}
 			fieldNames[f.Name] = true
 			if !isValidFieldType(f.Type) {
-				c.addError(fmt.Errorf("invalid type for field '%s' in struct '%s'", f.Name, sd.Name))
+				c.addError(fmt.Errorf("invalid type for field '%s' in struct '%s'", f.Name, ast.DisplayStructName(sd.Name)))
 			}
 		}
 	}

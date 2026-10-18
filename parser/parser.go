@@ -107,6 +107,15 @@ func (p *Parser) resolveTypeName(name string) (string, error) {
 		if p.structNames[own] || p.enumNames[own] {
 			return own, nil
 		}
+	} else if p.structNames[name] || p.enumNames[name] {
+		// The main program has no module prefix, so its own declarations are
+		// registered under the bare name. Without this they lost to an
+		// imported module's type of the same name: the candidate list had one
+		// entry and won, so `struct SignupController` in main.dx resolved to
+		// the imported one and reported a missing field on a type the author
+		// never wrote. A module's own declarations already win this way; the
+		// main program's did not.
+		return name, nil
 	}
 	switch cands := p.candidates[name]; len(cands) {
 	case 0:

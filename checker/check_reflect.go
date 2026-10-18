@@ -100,7 +100,7 @@ func (c *Checker) checkReflectCall(e *ast.CallExpr) (ast.Type, error) {
 	// runtime: it cannot become valid later, so it is a mistake in the source.
 	if lit, isLit := e.Args[1].(*ast.IntLit); isLit {
 		if lit.Value < 0 || int(lit.Value) >= len(def.Fields) {
-			return 0, c.errAt(e.Pos, "field index %d is out of range: %s has %d field(s)", lit.Value, def.Name, len(def.Fields))
+			return 0, c.errAt(e.Pos, "field index %d is out of range: %s has %d field(s)", lit.Value, ast.DisplayStructName(def.Name), len(def.Fields))
 		}
 	}
 

@@ -320,6 +320,11 @@ keeps the written name for diagnostics) and its handle types under that key,
 and resolve renames the module's calls to match. The main program's keep their
 names, so `refuseForeignExternals` stops a module reaching one.
 
+Globals are defined in `program.GlobalLets` order, so `ResolveUserModules` puts
+the main program's after every module's: they were first, and `let TOP: int =
+counter.LIMIT + 1` read a constant not yet defined. Modules merge dependencies
+first, so that order puts every global after what it can name.
+
 ## A module's types belong to it
 
 A type declared in a user module registers under that module — `alpha_Response`

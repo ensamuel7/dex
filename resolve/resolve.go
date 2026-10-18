@@ -343,10 +343,19 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 		mainExternals[em.Name] = true
 	}
 
+	mainGlobals := len(program.GlobalLets)
 	r := &resolver{program: program, ids: ids, visited: visited, processing: processing, owners: owners, mainExternals: mainExternals}
 	if err := r.resolveImports(sourceDir); err != nil {
 		return err
 	}
+	// Globals are defined in this order, and a module's are appended after the
+	// main program's — so `let TOP: int = counter.LIMIT + 1` read a module
+	// constant that was not defined yet. Modules merge dependencies first, so
+	// moving the main program's to the end puts every global after what it can
+	// name.
+	ordered := make([]ast.LetStmt, 0, len(program.GlobalLets))
+	ordered = append(ordered, program.GlobalLets[mainGlobals:]...)
+	program.GlobalLets = append(ordered, program.GlobalLets[:mainGlobals]...)
 	resolveQualifiedGlobals(program)
 	return nil
 }

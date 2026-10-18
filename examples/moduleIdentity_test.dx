@@ -15,6 +15,13 @@ import "modules/libB/front" as "bfront"
 import "modules/libA/util" as "autil"
 import "modules/libB/util" as "butil"
 
+// A global's initial value and a generic's body name the aliased module too.
+let PREFIX: string = autil.NAME + "/" + butil.NAME
+
+fn labelled<T>(value: T, label: string): string {
+    return autil.describe(autil.make(label))
+}
+
 fn main(): void {
     // Each front reaches its own library's util.
     assert(afront.run("x") == "alpha:x")
@@ -34,6 +41,10 @@ fn main(): void {
     assert(autil.measure("42abc") == 5)
     assert(butil.measure("42abc") == 42)
     assert(butil.describe(butil.make("w")) == "beta:w")
+
+    assert(PREFIX == "alpha/beta")
+    assert(labelled(1, "g") == "alpha:g")
+    assert(labelled("s", "h") == "alpha:h")
 
     fmt.println("moduleIdentity_test: all assertions passed")
 }

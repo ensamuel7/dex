@@ -192,3 +192,98 @@ fn run(): int { return util.make() }
 		}
 	}
 }
+
+func TestMainGlobalsFollowModuleGlobals(t *testing.T) {
+	program, err := resolveProject(t, map[string]string{
+		"main.dx": `import "a/consts" as "c"
+let TOP: int = c.LIMIT + 1
+fn main(): void {}
+`,
+		"a/consts.dx": `const LIMIT: int = 100
+`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, gl := range program.GlobalLets {
+		order = append(order, gl.Name)
+	}
+	if len(order) != 2 || order[0] != "c_LIMIT" || order[1] != "TOP" {
+		t.Fatalf("globals in order %v, want the module's constant first", order)
+	}
+	// The alias in the initialiser was renamed and then flattened.
+	if bin, ok := program.GlobalLets[1].Value.(*ast.BinaryExpr); !ok || bin.Left.(*ast.Ident).Name != "c_LIMIT" {
+		t.Errorf("TOP's initialiser does not read c_LIMIT: %#v", program.GlobalLets[1].Value)
+	}
+}
+
+func TestAliasRenamesGlobalInitialiserAndReceiverChain(t *testing.T) {
+	program, err := resolveProject(t, map[string]string{
+		"main.dx": `import "a/front"
+import "b/util"
+let FIRST: int = util.make()
+fn main(): void {}
+fn chained(): int {
+    return util.cache.len()
+}
+`,
+		"a/front.dx": `import "util"
+fn run(): int { return util.make() }
+`,
+		"a/util.dx": `fn make(): int { return 1 }
+`,
+		"b/util.dx": `let cache: int[] = []
+fn make(): int { return 2 }
+`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gl := range program.GlobalLets {
+		if gl.Name == "FIRST" {
+			if call := gl.Value.(*ast.CallExpr); call.Module != "util_2" {
+				t.Errorf("FIRST calls %s.make, want util_2.make", call.Module)
+			}
+		}
+	}
+	for _, fn := range program.Functions {
+		if fn.Name == "chained" {
+			call := fn.Body[0].(*ast.ReturnStmt).Value.(*ast.CallExpr)
+			if !strings.HasPrefix(call.Module, "util_2") {
+				t.Errorf("chained calls through %s, want util_2's cache", call.Module)
+			}
+		}
+	}
+}
+
+// A generic is re-parsed after the main program's calls were renamed, so its
+// instantiation has to be renamed the same way.
+func TestInstantiatorRenamesAliasedModules(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lib.dx"), []byte("fn make(): int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `import "lib" as "l"
+fn pick<T>(x: T): int {
+    return l.make()
+}
+fn main(): void {}
+`
+	tokens, err := lexer.New(src).Tokenize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := parser.New(tokens)
+	if _, errs := p.Parse(); len(errs) > 0 {
+		t.Fatal(errs[0])
+	}
+	in := Instantiator{Parser: p, Aliases: map[string]string{"l": "lib"}}
+	fn, _, err := in.InstantiateFunc("pick", []ast.Type{ast.TypeInt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call := fn.Body[0].(*ast.ReturnStmt).Value.(*ast.CallExpr); call.Module != "lib" {
+		t.Errorf("instantiation calls %s.make, want lib.make", call.Module)
+	}
+}

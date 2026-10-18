@@ -229,3 +229,49 @@ func TestParseExternalOutParams(t *testing.T) {
 		t.Errorf("frexp's exponent parameter should be &int")
 	}
 }
+
+// A module's external block is registered under a name scoped to the module,
+// and its handle types with it, so two files can each declare the same one.
+func TestParseExternalInModuleIsScoped(t *testing.T) {
+	toks, err := lexer.New(`external module cstr {
+		type H closed by "h_close"
+		fn f(): int
+	}`).Tokenize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New(toks)
+	p.SetModule("alpha")
+	prog, errs := p.Parse()
+	if len(errs) > 0 {
+		t.Fatal(errs[0])
+	}
+	em := prog.Externals[0]
+	if em.Name != "alpha__cstr" || em.Local != "cstr" {
+		t.Errorf("external registered as %q written %q, want alpha__cstr written cstr", em.Name, em.Local)
+	}
+	if mod := ast.HandleModule(p.handleNames["H"]); mod != "alpha__cstr" {
+		t.Errorf("handle type registered under %q, want alpha__cstr", mod)
+	}
+}
+
+// A qualified name written with an alias resolves to the identity the type is
+// registered under.
+func TestModuleAliasResolvesQualifiedType(t *testing.T) {
+	toks, err := lexer.New(`fn f(i: u.Item): void {}`).Tokenize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New(toks)
+	p.AddModuleType("util_2", "Item", "struct")
+	ast.RegisterStructType(ast.StructDef{Name: "util_2_Item", Module: "util_2"})
+	p.SetModuleAliases(map[string]string{"u": "util_2"})
+	prog, errs := p.Parse()
+	if len(errs) > 0 {
+		t.Fatal(errs[0])
+	}
+	want, _ := ast.LookupStructType("util_2_Item")
+	if got := prog.Functions[0].Params[0].Type; got != want {
+		t.Errorf("u.Item resolved to type %d, want util_2_Item (%d)", got, want)
+	}
+}

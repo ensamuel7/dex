@@ -14,9 +14,9 @@ dex lint <file.dx>        # reports lint findings without building
 dex check <file.dx>       # runs cppcheck over the generated C
 ```
 
-`build`, `run`, `dev` and `test` each accept `--lint` to report findings
-alongside the build, and `--lint=strict` to fail the build when there are any.
-See [Linting](#linting).
+`build`, `run` and `dev` report lint findings alongside the build unless given
+`--no-lint`; `test` reports them only when given `--lint`. `--lint=strict` fails
+the build when there are any. See [Linting](#linting).
 
 Pipeline: `.dx` source → tokens → AST (Abstract Syntax Tree) → type check → C code → native binary (via `cc`/`gcc`)
 
@@ -4462,16 +4462,21 @@ break any program that used both.
 
 ## Linting
 
-Lint reports what compiles but is probably not what was meant. It is off by
-default and never changes what is emitted:
+Lint reports what compiles but is probably not what was meant. It never
+changes what is emitted, and a build reports it by default — the moment a
+mistake is cheapest to hear about. Findings do not fail a build unless asked:
 
 ```
+dex build <file.dx>             # build and report findings
+dex build <file.dx> --no-lint   # build without them
+dex build <file.dx> --lint=strict   # ... fail the build if anything is reported
 dex lint <file.dx>              # front end only: no C generated, no cc run
-dex build <file.dx> --lint      # build and report
-dex build <file.dx> --lint=strict   # ... and fail the build if anything is reported
 dex lint --rules                # list the rules
-dex build <file.dx> --lint --lint-off=unused-param,shadow
+dex build <file.dx> --lint-off=unused-param,shadow
 ```
+
+`dex test` is the exception: it builds every test file, and a suite's output is
+for its failures, so it reports findings only when given `--lint`.
 
 The language server reports the same findings as you type, graded by whether
 something is actually wrong. A warning is for a `throws` the body contradicts,
@@ -4479,8 +4484,8 @@ a `catch` that can never run, code nothing reaches, or an `#[allow(...)]`
 naming no rule. Everything else is a hint — a quiet grey mark rather than a
 squiggle.
 
-`uncaught-throw` is a hint for that reason. On the command line lint is opt-in,
-but an editor asks for every diagnostic on every keystroke; since `throws` is
+`uncaught-throw` is a hint for that reason. An editor asks for every diagnostic
+on every keystroke; since `throws` is
 an optional declaration, every `throw` in a codebase that has not adopted it
 would otherwise be underlined as though it were broken.
 

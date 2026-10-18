@@ -14,7 +14,9 @@
 - Run a `.dx` file: `go run . run <file.dx>`
 - Run tests: `go run . test`
 - Format files: `go run . format [path...]` (`--check` to report without rewriting)
-- Lint a file: `go run . lint <file.dx>` (or `--lint` / `--lint=strict` on build)
+- Lint a file: `go run . lint <file.dx>`. `build`, `run` and `dev` report lint
+  findings by default (`--no-lint` to skip, `--lint=strict` to fail on them);
+  `test` only with `--lint`
 - Generate docs: `go run . docs`
 - Start LSP: `go run . lsp`
 
@@ -25,7 +27,7 @@
 - `parser/` - Parser (tokens -> AST)
 - `checker/` - Type checker and semantic analysis
 - `resolve/` - User module resolution, method flattening, the shared AST walker
-- `lint/` - Lint rules run after checking (`dex lint`, `--lint`)
+- `lint/` - Lint rules run after checking (`dex lint`, and every build unless `--no-lint`)
 - `codegen/` - C code generation
 - `stdlib/` - Standard library module definitions (Go) and C runtime (`stdlib/cruntime/`)
 - `docgen/` - Documentation generator (`template.html` + `generate.go`)

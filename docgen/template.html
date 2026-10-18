@@ -335,8 +335,8 @@ CMD ["server"]</code></pre>
 <tr><td><code>dex version</code></td><td>Print the version</td></tr>
 </table>
 
-<p>Any build command takes <code>--lint</code> to report findings alongside the
-build, and <code>--lint=strict</code> to fail the build when there are any.
+<p><code>build</code>, <code>run</code> and <code>dev</code> report lint findings by default; <code>--no-lint</code> turns
+that off and <code>--lint=strict</code> fails the build when there are any. <code>dex test</code> reports them only with <code>--lint</code>.
 <code>dex lint --rules</code> lists the rules; <code>--lint-off=a,b</code> turns
 individual ones off.</p>
 
@@ -1964,16 +1964,17 @@ and 'billing.Response' — qualify it, as in charging.Response</code></pre>
 <section id="linting" class="page-section">
 <h2>Linting</h2>
 
-<p><code>dex lint</code> reports what compiles but is probably not what was meant: a binding nothing reads, a statement nothing reaches, an exception nothing handles. It is off by default and never changes what is emitted.</p>
+<p><code>dex lint</code> reports what compiles but is probably not what was meant: a binding nothing reads, a statement nothing reaches, an exception nothing handles. Building reports it by default, and it never changes what is emitted.</p>
 
-<pre><code>dex lint app.dx                 # front end only: no C generated, no cc run
-dex build app.dx --lint         # build and report
-dex build app.dx --lint=strict  # ... and fail the build if anything is reported
+<pre><code>dex build app.dx                # build and report findings
+dex build app.dx --no-lint      # build without them
+dex build app.dx --lint=strict  # ... fail the build if anything is reported
+dex lint app.dx                 # front end only: no C generated, no cc run
 dex lint --rules                # list the rules and what each one finds
-dex build app.dx --lint --lint-off=unused-param,shadow</code></pre>
+dex build app.dx --lint-off=unused-param,shadow</code></pre>
 
 <p>The language server reports the same findings as you type, graded by whether something is actually wrong. A warning is for a <code>throws</code> the body contradicts, a <code>catch</code> that can never run, code nothing reaches, or an <code>#[allow(...)]</code> naming no rule. Everything else is a hint &mdash; a quiet grey mark rather than a squiggle.</p>
-<p><code>uncaught-throw</code> is a hint for that reason. On the command line lint is opt-in, but an editor asks for every diagnostic on every keystroke; since <code>throws</code> is an optional declaration, every <code>throw</code> in a codebase that has not adopted it would otherwise be underlined as though it were broken.</p>
+<p><code>uncaught-throw</code> is a hint for that reason. An editor asks for every diagnostic on every keystroke; since <code>throws</code> is an optional declaration, every <code>throw</code> in a codebase that has not adopted it would otherwise be underlined as though it were broken.</p>
 
 <h3>Rules</h3>
 <table>

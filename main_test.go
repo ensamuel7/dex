@@ -15,3 +15,27 @@ func TestKeepLastOccurrence(t *testing.T) {
 		t.Errorf("got %v for nil", got)
 	}
 }
+
+func TestLintOnByDefault(t *testing.T) {
+	reset := func() { lintAsked, noLint = false, false }
+	cases := []struct {
+		asked, off bool
+		command    string
+		want       bool
+	}{
+		{false, false, "build", true},
+		{false, false, "run", true},
+		{false, false, "dev", true},
+		{false, false, "test", false},
+		{true, false, "test", true},
+		{false, true, "build", false},
+	}
+	for _, c := range cases {
+		reset()
+		lintAsked, noLint = c.asked, c.off
+		if got := lintOnByDefault(c.command); got != c.want {
+			t.Errorf("%s with --lint=%v --no-lint=%v: got %v, want %v", c.command, c.asked, c.off, got, c.want)
+		}
+	}
+	reset()
+}

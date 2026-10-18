@@ -64,6 +64,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if lintAsked && noLint {
+		fmt.Fprintln(os.Stderr, "--no-lint cannot be combined with --lint or --lint=strict")
+		os.Exit(1)
+	}
+	lintEnabled = lintOnByDefault(command)
 
 	if command == "version" {
 		fmt.Println("dex version " + Version)

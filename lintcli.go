@@ -28,7 +28,9 @@ Commands:
 
 Flags:
   --check          with format: list what is unformatted instead of rewriting it
-  --lint           report lint findings as well as building
+  --no-lint        build without reporting lint findings (build, run and dev
+                   report them by default)
+  --lint           report lint findings with test, which leaves them off
   --lint=strict    report them and fail the build if there are any
   --lint-off=a,b   turn named rules off
   --rules          with lint: list the rules and what each one finds
@@ -40,12 +42,30 @@ Flags:
 // what is emitted.
 var (
 	lintEnabled bool
+	lintAsked   bool
+	noLint      bool
 	lintStrict  bool
 	lintDisable = map[string]bool{}
 	forceUpdate bool
 	listRules   bool
 	fmtCheck    bool
 )
+
+// lintOnByDefault decides whether a command reports lint findings. Building is
+// where a mistake is cheapest to hear about, so build, run and dev report them
+// unless --no-lint says otherwise; findings never fail the build without
+// --lint=strict, so this costs a few lines of output and nothing else. `dex
+// test` leaves them off unless --lint is given: it builds every test file, and
+// a suite's output is for its failures.
+func lintOnByDefault(command string) bool {
+	if lintAsked {
+		return true
+	}
+	if noLint {
+		return false
+	}
+	return command != "test"
+}
 
 // parseFlags removes the flags from args and returns the positional arguments.
 // An unknown flag is an error rather than a filename: silently compiling the
@@ -55,9 +75,11 @@ func parseFlags(args []string) ([]string, error) {
 	for _, a := range args {
 		switch {
 		case a == "--lint":
-			lintEnabled = true
+			lintAsked = true
 		case a == "--lint=strict":
-			lintEnabled, lintStrict = true, true
+			lintAsked, lintStrict = true, true
+		case a == "--no-lint":
+			noLint = true
 		case strings.HasPrefix(a, "--lint-off="):
 			for _, rule := range strings.Split(strings.TrimPrefix(a, "--lint-off="), ",") {
 				rule = strings.TrimSpace(rule)
@@ -121,7 +143,7 @@ func reportLint(program *ast.Program) error {
 	if lintStrict {
 		return fmt.Errorf("%s; --lint=strict treats them as errors", summarise(findings))
 	}
-	fmt.Fprintf(os.Stderr, "%s\n", summarise(findings))
+	fmt.Fprintf(os.Stderr, "%s (--no-lint to build without them)\n", summarise(findings))
 	return nil
 }
 

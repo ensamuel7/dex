@@ -44,7 +44,7 @@ lexer/      Tokenizer
 parser/     Parser (tokens -> AST)
 checker/    Type checker and semantic analysis
 resolve/    User module resolution, method flattening, the shared AST walker
-lint/       Lint rules run after checking (dex lint, --lint)
+lint/       Lint rules run after checking (dex lint, and every build unless --no-lint)
 codegen/    C code generation + C runtime (codegen/cruntime/)
 stdlib/     Standard library module definitions (Go) + C runtime (stdlib/cruntime/)
 lsp/        Language server protocol implementation

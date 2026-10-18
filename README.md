@@ -465,14 +465,16 @@ IOError [uncaught-throw]
 
 ## Linting
 
-`dex lint` reports what compiles but is probably not meant: a binding nothing
-reads, a statement nothing reaches, an exception nothing handles. It is off by
-default and never changes what is emitted.
+Lint reports what compiles but is probably not meant: a binding nothing
+reads, a statement nothing reaches, an exception nothing handles. Building
+reports it by default and never changes what is emitted; findings only fail the
+build with `--lint=strict`.
 
 ```bash
+dex build app.dx                # build and report findings
+dex build app.dx --no-lint      # build without them
+dex build app.dx --lint=strict  # ... fail the build if anything is reported
 dex lint app.dx                 # front end only: no C generated, no cc run
-dex build app.dx --lint         # build and report
-dex build app.dx --lint=strict  # ... and fail the build if anything is reported
 dex lint --rules                # list the rules
 ```
 
@@ -577,8 +579,8 @@ There's a VSCode extension in `editors/vscode/dex-lang/` with syntax highlightin
 Lint findings appear as you type alongside type errors. Only what is actually
 wrong is a warning — a `throws` the body contradicts, a `catch` that can never
 run, code nothing reaches. The rest are hints, which editors render as a quiet
-grey mark rather than a squiggle, because on the command line lint is opt-in
-while an editor asks for every diagnostic on every keystroke.
+grey mark rather than a squiggle, because an editor asks for every diagnostic
+on every keystroke.
 
 Unresolved names carry an import quick fix. A call into a module the file never imported (`fmt.println(...)`, `userService.init(...)`) offers to add the import line, and an unqualified call offers to add the import and qualify the call. A type declared in another file (`fn f(c: Columns)` with `Columns` in `query.dx`) offers to import the file that declares it. Typing a bare name also completes to `module.function` from any stdlib module or sibling `.dx` file that exports it, writing the import alongside.
 

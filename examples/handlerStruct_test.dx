@@ -18,7 +18,11 @@ struct ApiHandler {
     }
 
     fn show(req: http.HttpRequest): http.HttpResponse {
-        return http.response(200, json.encode({ id: req.params.get("id"), from: greeting }), "application/json")
+        return http.response(
+            200,
+            json.encode({ id: req.params.get("id"), from: greeting }),
+            "application/json"
+        )
     }
 
     fn count(): int {
@@ -35,15 +39,13 @@ struct ApiHandler {
 struct SocketHandler {
     label: string
 
-    fn onConnect(conn: ws.Conn, path: string): void {
-    }
+    fn onConnect(conn: ws.Conn, path: string): void {}
 
     fn onMessage(conn: ws.Conn, msg: string): void {
         ws.send(conn, label)
     }
 
-    fn onDisconnect(conn: ws.Conn): void {
-    }
+    fn onDisconnect(conn: ws.Conn): void {}
 
     fn register(): void {
         ws.handleConnect(onConnect)

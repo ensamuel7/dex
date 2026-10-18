@@ -5,7 +5,9 @@
 import "modules/counter"
 import "modules/sub/tally"
 
-struct Row { id: int }
+struct Row {
+    id: int
+}
 
 // A local may share a module's name; the local wins inside this function.
 fn shadowing(): int {

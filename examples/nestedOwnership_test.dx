@@ -86,9 +86,13 @@ struct Row {
     label: Cols
 }
 
-fn twice(x: int): int { return x * 2 }
+fn twice(x: int): int {
+    return x * 2
+}
 
-fn apply(f: fn(int): int, v: int): int { return f(v) }
+fn apply(f: fn(int): int, v: int): int {
+    return f(v)
+}
 
 fn main(): void {
     // 1. A nested literal returned across a scope boundary.
@@ -108,7 +112,10 @@ fn main(): void {
     while (j < 200) {
         let at: map[string, int] = {}
         let exprs: string[] = ["r.label"]
-        let unit: Row = Row { email: "ada@example.com", label: Cols { alias: "r", exprs: exprs, at: at } }
+        let unit: Row = Row {
+            email: "ada@example.com",
+            label: Cols { alias: "r", exprs: exprs, at: at }
+        }
         let rows: Row[] = [unit]
         assert(rows.len() == 1)
         assert(rows[0].email == "ada@example.com")

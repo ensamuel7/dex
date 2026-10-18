@@ -19,6 +19,7 @@ Commands:
   dev      rebuild and rerun on change
   test     run *_test.dx files
   check    run cppcheck over the generated C
+  format   lay files out the one canonical way
   lint     report what compiles but is probably not meant
   lsp      start the language server
   docs     regenerate docs/index.html
@@ -26,6 +27,7 @@ Commands:
   version  print the version
 
 Flags:
+  --check          with format: list what is unformatted instead of rewriting it
   --lint           report lint findings as well as building
   --lint=strict    report them and fail the build if there are any
   --lint-off=a,b   turn named rules off
@@ -42,6 +44,7 @@ var (
 	lintDisable = map[string]bool{}
 	forceUpdate bool
 	listRules   bool
+	fmtCheck    bool
 )
 
 // parseFlags removes the flags from args and returns the positional arguments.
@@ -66,6 +69,8 @@ func parseFlags(args []string) ([]string, error) {
 				}
 				lintDisable[rule] = true
 			}
+		case a == "--check":
+			fmtCheck = true
 		case a == "--rules":
 			listRules = true
 		case a == "--force":

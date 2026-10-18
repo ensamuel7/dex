@@ -19,13 +19,21 @@ struct Api {
 
     // A method value carries the struct holding its dependencies.
     fn handle(req: http.HttpRequest): http.HttpResponse {
-        return http.response(404, "{\"error\":\"not found\",\"api\":\"" + name + "\"}", "application/json")
+        return http.response(
+            404,
+            "{\"error\":\"not found\",\"api\":\"" + name + "\"}",
+            "application/json"
+        )
     }
 }
 
 // Takes the request: the path it could not match is worth reporting.
 fn missing(req: http.HttpRequest): http.HttpResponse {
-    return http.response(404, "{\"error\":\"not found\",\"path\":\"" + req.path + "\"}", "application/json")
+    return http.response(
+        404,
+        "{\"error\":\"not found\",\"path\":\"" + req.path + "\"}",
+        "application/json"
+    )
 }
 
 // Takes nothing, returns a bare string: adapted, exactly as a route's would be.

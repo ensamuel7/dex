@@ -2,22 +2,32 @@
 // none; a lambda carries whatever it closed over. Both are invoked identically,
 // so a caller never has to know which it holds.
 
+fn apply(f: fn(int): int, x: int): int {
+    return f(x)
+}
 
-fn apply(f: fn(int): int, x: int): int { return f(x) }
-fn call0(f: fn(): string): string { return f() }
+fn call0(f: fn(): string): string {
+    return f()
+}
 
 fn makeAdder(n: int): fn(int): int {
-    return fn(x: int): int { return x + n }
+    return fn(x: int): int {
+        return x + n
+    }
 }
 
 fn makeGreeter(name: string): fn(): string {
-    return fn(): string { return "hello " + name }
+    return fn(): string {
+        return "hello " + name
+    }
 }
 
 fn main(): void {
     // capture a local
     let base: int = 10
-    let addBase: fn(int): int = fn(x: int): int { return x + base }
+    let addBase: fn(int): int = fn(x: int): int {
+        return x + base
+    }
     assert(addBase(5) == 15)
     assert(apply(addBase, 1) == 11)
 
@@ -40,14 +50,17 @@ fn main(): void {
     // capture several variables at once
     let x: int = 2
     let y: int = 3
-    let sum: fn(): int = fn(): int { return x + y }
+    let sum: fn(): int = fn(): int {
+        return x + y
+    }
     assert(sum() == 5)
 
     // a plain function still works as a value
     let f: fn(int): int = twice
     assert(f(21) == 42)
     assert(apply(twice, 4) == 8)
-
 }
 
-fn twice(x: int): int { return x * 2 }
+fn twice(x: int): int {
+    return x * 2
+}

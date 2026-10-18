@@ -30,7 +30,10 @@ fn main(): void {
     assert(conn != -1)
 
     db.exec(conn, "DROP TABLE IF EXISTS people")
-    db.exec(conn, "CREATE TABLE people (id INTEGER, name TEXT, age INTEGER, score REAL, active INTEGER)")
+    db.exec(
+        conn,
+        "CREATE TABLE people (id INTEGER, name TEXT, age INTEGER, score REAL, active INTEGER)"
+    )
 
     // A bound value is data: the quote and the semicolon stay part of the name.
     let ins: int = db.prepare(conn, "INSERT INTO people VALUES (?, ?, ?, ?, ?)")

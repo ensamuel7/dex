@@ -13,7 +13,11 @@ fn whoami(req: http.HttpRequest): http.HttpResponse {
     let auth: string = req.headers.get("authorization")
     let agent: string = req.headers.get("user-agent")
 
-    let body: string = json.encode({ authorization: auth, userAgent: agent, count: req.headers.len() })
+    let body: string = json.encode({
+        authorization: auth,
+        userAgent: agent,
+        count: req.headers.len()
+    })
 
     // Two Set-Cookie lines prove a key may repeat — a map could not express it.
     let headers: string = http.header("", "X-Dex", "hello")

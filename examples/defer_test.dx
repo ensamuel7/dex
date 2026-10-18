@@ -80,16 +80,24 @@ fn main(): void {
     }
 
     let want: string[] = [
-        "body", "conditional",
         "body",
-        "loop body done", "iteration 2", "iteration 1", "iteration 0",
-        "released", "caught unwound",
-        "ordered body", "second registered", "first registered",
-        "captured 7", "caught captures"
+        "conditional",
+        "body",
+        "loop body done",
+        "iteration 2",
+        "iteration 1",
+        "iteration 0",
+        "released",
+        "caught unwound",
+        "ordered body",
+        "second registered",
+        "first registered",
+        "captured 7",
+        "caught captures"
     ]
 
     assert(order.len() == want.len())
-    foreach(want as i, expected) {
+    foreach (want as i, expected) {
         assert(order[i] == expected)
     }
 }

@@ -47,7 +47,8 @@ const TEST_KEY: string =
     "-----END PRIVATE KEY-----\n"
 
 // The public half, as a JWK writes it: the modulus and the exponent, base64url.
-const TEST_MODULUS_B64: string = "ktxM3d8nIJR_Vpgp29eylyTbTbTnrmz_hdpjyefSyVbCGJithNT5v16MyvGv23CwqMryfKQARfks7pAwZy8TGZShjnWkiYBM9PxEB7TpDkZ3PXvsk1NLwV_BRyM8sLIsIvKstSOuragP36JnPgyEKBH4amr6oI6GofOJ9dmQdUN-5NeFSdlO_rB_vtkjdrX_wGyf2lj--A-SdW89GcW4n4M2K1B6IHZEiGj90j-Y02mGl1q0WRbJ6wMcaCc6gGF8jYE3e83fFYLu8OF6rkKFTf_cMKcKe161_43da1pUYDYcmRi0AEWaROXcxt24gdyE-AxBu8IZuUP8ihGNvAH-Hw"
+const TEST_MODULUS_B64: string =
+    "ktxM3d8nIJR_Vpgp29eylyTbTbTnrmz_hdpjyefSyVbCGJithNT5v16MyvGv23CwqMryfKQARfks7pAwZy8TGZShjnWkiYBM9PxEB7TpDkZ3PXvsk1NLwV_BRyM8sLIsIvKstSOuragP36JnPgyEKBH4amr6oI6GofOJ9dmQdUN-5NeFSdlO_rB_vtkjdrX_wGyf2lj--A-SdW89GcW4n4M2K1B6IHZEiGj90j-Y02mGl1q0WRbJ6wMcaCc6gGF8jYE3e83fFYLu8OF6rkKFTf_cMKcKe161_43da1pUYDYcmRi0AEWaROXcxt24gdyE-AxBu8IZuUP8ihGNvAH-Hw"
 const TEST_EXPONENT_B64: string = "AQAB"
 
 // A JWT's first two segments, which is exactly what gets signed.
@@ -89,8 +90,10 @@ fn main(): void {
     assert(noKey.isEmpty())
     let notPem: string = crypto.signRs256(SIGNING_INPUT, "hello")
     assert(notPem.isEmpty())
-    let wrongBody: string = crypto.signRs256(SIGNING_INPUT,
-        "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n")
+    let wrongBody: string = crypto.signRs256(
+        SIGNING_INPUT,
+        "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n"
+    )
     assert(wrongBody.isEmpty())
 
     // The mistake a JSON key file invites. Google's service account holds its

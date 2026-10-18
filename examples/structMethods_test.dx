@@ -1,113 +1,113 @@
 struct Point(x: int, y: int) {
-  fn sum(): int {
-    return x + y
-  }
+    fn sum(): int {
+        return x + y
+    }
 
-  fn scale(factor: int): int {
-    return x * factor + y * factor
-  }
+    fn scale(factor: int): int {
+        return x * factor + y * factor
+    }
 }
 
 struct Config {
-  name: string
-  value: int
+    name: string
+    value: int
 }
 
 struct Inner {
-  depth: int
-  label: string
+    depth: int
+    label: string
 }
 
 struct Middle {
-  inner: Inner
+    inner: Inner
 }
 
 struct Outer {
-  middle: Middle
-  name: string
+    middle: Middle
+    name: string
 }
 
 struct Labelled {
-  tag: string
-  outer: Outer
+    tag: string
+    outer: Outer
 
-  fn describe(): string {
-    if (tag.isEmpty()) {
-      return "untagged"
+    fn describe(): string {
+        if (tag.isEmpty()) {
+            return "untagged"
+        }
+        return tag.toUpper() + "/" + outer.middle.inner.label.trim()
     }
-    return tag.toUpper() + "/" + outer.middle.inner.label.trim()
-  }
 
-  fn tagged(): bool {
-    return !tag.isEmpty()
-  }
+    fn tagged(): bool {
+        return !tag.isEmpty()
+    }
 }
 
 struct Bag {
-  nums: int[]
-  words: string[]
-  items: Config[]
+    nums: int[]
+    words: string[]
+    items: Config[]
 }
 
 fn main(): void {
-  let p = Point(3, 4)
-  assert(p.sum() == 7)
-  assert(p.scale(2) == 14)
-  assert(p.x == 3)
-  assert(p.y == 4)
+    let p = Point(3, 4)
+    assert(p.sum() == 7)
+    assert(p.scale(2) == 14)
+    assert(p.x == 3)
+    assert(p.y == 4)
 
-  let cfg = Config { name: "test", value: 42 }
-  assert(cfg.value == 42)
+    let cfg = Config { name: "test", value: 42 }
+    assert(cfg.value == 42)
 
-  let p2 = Point(0, 0)
-  assert(p2.sum() == 0)
-  assert(p2.scale(100) == 0)
+    let p2 = Point(0, 0)
+    assert(p2.sum() == 0)
+    assert(p2.scale(100) == 0)
 
-  let p3 = Point(1, -1)
-  assert(p3.sum() == 0)
+    let p3 = Point(1, -1)
+    assert(p3.sum() == 0)
 
-  // Chained field access must read through every level, not stop at the first
-  let o: Outer = Outer {
-    middle: Middle { inner: Inner { depth: 42, label: "deep" } },
-    name: "outer"
-  }
-  assert(o.name == "outer")
-  assert(o.middle.inner.depth == 42)
-  assert(o.middle.inner.label == "deep")
+    // Chained field access must read through every level, not stop at the first
+    let o: Outer = Outer {
+        middle: Middle { inner: Inner { depth: 42, label: "deep" } },
+        name: "outer"
+    }
+    assert(o.name == "outer")
+    assert(o.middle.inner.depth == 42)
+    assert(o.middle.inner.label == "deep")
 
-  let mid: Middle = o.middle
-  assert(mid.inner.depth == 42)
+    let mid: Middle = o.middle
+    assert(mid.inner.depth == 42)
 
-  // Array struct fields: methods and indexing through a field chain
-  let nums: int[] = [10, 20, 30]
-  let words: string[] = ["a", "b"]
-  let cfgs: Config[] = [Config{name: "x", value: 1}]
-  let b: Bag = Bag { nums: nums, words: words, items: cfgs }
-  assert(b.nums.len() == 3)
-  assert(b.words.len() == 2)
-  assert(b.items.len() == 1)
-  assert(b.nums[2] == 30)
-  assert(b.words[0] == "a")
-  let firstCfg: Config = b.items[0]
-  assert(firstCfg.name == "x")
+    // Array struct fields: methods and indexing through a field chain
+    let nums: int[] = [10, 20, 30]
+    let words: string[] = ["a", "b"]
+    let cfgs: Config[] = [Config { name: "x", value: 1 }]
+    let b: Bag = Bag { nums: nums, words: words, items: cfgs }
+    assert(b.nums.len() == 3)
+    assert(b.words.len() == 2)
+    assert(b.items.len() == 1)
+    assert(b.nums[2] == 30)
+    assert(b.words[0] == "a")
+    let firstCfg: Config = b.items[0]
+    assert(firstCfg.name == "x")
 
-  // Array methods must type correctly inside string concatenation
-  let msg: string = "count=" + b.nums.len()
-  assert(msg == "count=3")
+    // Array methods must type correctly inside string concatenation
+    let msg: string = "count=" + b.nums.len()
+    assert(msg == "count=3")
 
-  // String methods on a struct field, and through a chain of them
-  assert(o.name.isEmpty() == false)
-  assert(o.name.toUpper() == "OUTER")
-  assert(o.name.len() == 5)
-  assert(o.middle.inner.label.len() == 4)
-  assert(o.middle.inner.label.contains("ee"))
-  assert(o.middle.inner.label.replace("d", "b") == "beep")
+    // String methods on a struct field, and through a chain of them
+    assert(o.name.isEmpty() == false)
+    assert(o.name.toUpper() == "OUTER")
+    assert(o.name.len() == 5)
+    assert(o.middle.inner.label.len() == 4)
+    assert(o.middle.inner.label.contains("ee"))
+    assert(o.middle.inner.label.replace("d", "b") == "beep")
 
-  // The same, reached through the receiver inside a method
-  let l: Labelled = Labelled { tag: "cp1", outer: o }
-  assert(l.describe() == "CP1/deep")
-  assert(l.tagged())
-  let blank: Labelled = Labelled { tag: "", outer: o }
-  assert(blank.describe() == "untagged")
-  assert(blank.tagged() == false)
+    // The same, reached through the receiver inside a method
+    let l: Labelled = Labelled { tag: "cp1", outer: o }
+    assert(l.describe() == "CP1/deep")
+    assert(l.tagged())
+    let blank: Labelled = Labelled { tag: "", outer: o }
+    assert(blank.describe() == "untagged")
+    assert(blank.tagged() == false)
 }

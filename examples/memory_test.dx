@@ -9,7 +9,7 @@ fn main(): void {
     // Phase 1 regression: string variable in loop body + continue
     // Before fix: continue skipped release of loop-body-scoped strings
     let count = 0
-    for(let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10; i++) {
         let line: string = "iteration-" + str.fromInt(i)
         if (i % 2 == 0) {
             continue
@@ -53,7 +53,7 @@ fn main(): void {
 
     // Phase 3 regression: string concat chain in a loop
     let csv: string = ""
-    for(let i = 0; i < 5; i++) {
+    for (let i = 0; i < 5; i++) {
         csv = csv + str.fromInt(i) + ","
     }
     assert(csv == "0,1,2,3,4,")

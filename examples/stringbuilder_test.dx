@@ -30,7 +30,7 @@ fn main(): void {
 
     // Loop performance pattern (the motivating use case)
     let sb4 = StringBuilder()
-    for(let i = 0; i < 100; i++) {
+    for (let i = 0; i < 100; i++) {
         sb4.append(str.fromInt(i))
         sb4.append(",")
     }

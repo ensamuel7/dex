@@ -241,6 +241,8 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 		s.handleCodeAction(msg)
 	case "textDocument/semanticTokens/full":
 		s.handleSemanticTokens(msg)
+	case "textDocument/formatting":
+		s.handleFormatting(msg)
 	default:
 		// Unknown method — respond with method not found if it has an ID
 		if msg.ID != nil {
@@ -254,9 +256,10 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 func (s *Server) handleInitialize(msg *jsonrpcMessage) {
 	result := map[string]interface{}{
 		"capabilities": map[string]interface{}{
-			"textDocumentSync":   1, // Full document sync
-			"hoverProvider":      true,
-			"definitionProvider": true,
+			"textDocumentSync":           1, // Full document sync
+			"hoverProvider":              true,
+			"definitionProvider":         true,
+			"documentFormattingProvider": true,
 			"codeActionProvider": map[string]interface{}{
 				"codeActionKinds": []string{codeActionQuickFix},
 			},

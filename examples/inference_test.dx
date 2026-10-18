@@ -20,7 +20,7 @@ fn main(): void {
     assert(arr[2] == 3)
 
     // Type inference in for loop init
-    for(let i = 0; i < 5; i++) {
+    for (let i = 0; i < 5; i++) {
         let doubled = i * 2
     }
 

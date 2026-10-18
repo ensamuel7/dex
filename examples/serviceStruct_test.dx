@@ -124,7 +124,10 @@ fn main(): void {
     assert(b.socketFor(1) == -1)
 
     // A struct literal may also be written out in place, nesting struct and map fields.
-    let direct: Service = Service { label: "direct", reg: Registry { mu: mutex, byId: {}, idByFd: {} } }
+    let direct: Service = Service {
+        label: "direct",
+        reg: Registry { mu: mutex, byId: {}, idByFd: {} }
+    }
     direct.connect(5, 55)
     assert(direct.socketFor(5) == 55)
     assert(direct.label == "direct")

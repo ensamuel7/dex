@@ -12,7 +12,9 @@
 import "str"
 
 struct Inner(label: string) {}
+
 struct Outer(inner: Inner, n: int) {}
+
 struct Pair(first: string, second: string) {}
 
 // The caller still owns `label` once this returns.

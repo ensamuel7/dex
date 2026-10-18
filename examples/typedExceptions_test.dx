@@ -12,6 +12,7 @@
 // literal passed at a throwing call belongs to that statement, and the jump
 // skips its release.
 struct ParseError(message: string, line: int) {}
+
 struct IOError(message: string) {}
 
 fn load(path: string): int throws ParseError, IOError {

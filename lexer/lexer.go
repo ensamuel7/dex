@@ -14,6 +14,12 @@ type Lexer struct {
 	line   int
 	col    int
 	file   string
+
+	// KeepComments makes Tokenize emit a token.TokenComment for every line
+	// comment instead of discarding it. The compiler leaves it off — a comment
+	// is nothing the parser can use — and the formatter turns it on, because a
+	// comment it never sees is a comment it deletes.
+	KeepComments bool
 }
 
 func New(source string) *Lexer {
@@ -46,7 +52,7 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 	var tokens []token.Token
 
 	for {
-		l.skipWhitespaceAndComments()
+		tokens = append(tokens, l.skipWhitespaceAndComments()...)
 
 		if l.pos >= len(l.source) {
 			tokens = append(tokens, token.Token{Kind: token.TokenEOF, Value: "", File: l.file, Line: l.line, Col: l.col})
@@ -480,6 +486,7 @@ func (l *Lexer) scanStringLiteral(startLine, startCol int) ([]token.Token, error
 				// Tokenize the expression
 				subLexer := New(string(exprSource))
 				subLexer.file = l.file
+				subLexer.KeepComments = l.KeepComments
 				subLexer.line = exprLine
 				subLexer.col = exprCol
 				exprTokens, err := subLexer.Tokenize()
@@ -534,7 +541,12 @@ func (l *Lexer) scanStringLiteral(startLine, startCol int) ([]token.Token, error
 	return tokens, nil
 }
 
-func (l *Lexer) skipWhitespaceAndComments() {
+// skipWhitespaceAndComments consumes the run of whitespace and line comments at
+// the cursor. It returns the comments as tokens under KeepComments and nothing
+// otherwise, so the two modes differ in what is kept rather than in what is read.
+func (l *Lexer) skipWhitespaceAndComments() []token.Token {
+	var comments []token.Token
+
 	for l.pos < len(l.source) {
 		ch := l.source[l.pos]
 
@@ -545,12 +557,23 @@ func (l *Lexer) skipWhitespaceAndComments() {
 
 		// Line comments
 		if ch == '/' && l.pos+1 < len(l.source) && l.source[l.pos+1] == '/' {
+			startLine, startCol := l.line, l.col
+			start := l.pos
 			for l.pos < len(l.source) && l.source[l.pos] != '\n' {
 				l.advance()
+			}
+			if l.KeepComments {
+				// The value is the whole comment, '//' included: the formatter
+				// reprints it verbatim rather than reassembling a marker it
+				// would have to guess the width of ('//', '///', '//!').
+				text := strings.TrimRight(string(l.source[start:l.pos]), " \t\r")
+				comments = append(comments, token.Token{Kind: token.TokenComment, Value: text, File: l.file, Line: startLine, Col: startCol})
 			}
 			continue
 		}
 
 		break
 	}
+
+	return comments
 }

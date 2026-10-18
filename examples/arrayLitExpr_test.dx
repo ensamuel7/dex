@@ -1,10 +1,15 @@
 import "json"
 
-struct Point { x: int
-    y: int }
-struct Shape { name: string
+struct Point {
+    x: int
+    y: int
+}
+
+struct Shape {
+    name: string
     origin: Point
-    sides: int[] }
+    sides: int[]
+}
 
 fn main(): void {
     let s: Shape = Shape { name: "square", origin: Point { x: 1, y: 2 }, sides: [4, 4, 4, 4] }
@@ -53,12 +58,14 @@ fn main(): void {
         scores: scores,
         success: true
     })
-    assert(obj == "{\"message\":\"Hello from Dex!\",\"count\":3,\"scores\":[10,20,30],\"success\":true}")
+    assert(
+        obj ==
+        "{\"message\":\"Hello from Dex!\",\"count\":3,\"scores\":[10,20,30],\"success\":true}"
+    )
 
     let headers: string = json.encode({
         "Authorization": "Bearer token",
         "Accept": "application/json"
     })
     assert(headers == "{\"Authorization\":\"Bearer token\",\"Accept\":\"application/json\"}")
-
 }

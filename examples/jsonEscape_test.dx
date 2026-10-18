@@ -19,31 +19,31 @@ struct EscRow {
 
 fn main(): void {
     // A quote must become \" and not end the string early.
-    let quoted: EscRow[] = [ EscRow { id: 1, text: "say \"hi\"" } ]
+    let quoted: EscRow[] = [EscRow { id: 1, text: "say \"hi\"" }]
     assert(json.encode(quoted) == "[{\"id\":1,\"text\":\"say \\\"hi\\\"\"}]")
 
     // A backslash must double.
-    let slashed: EscRow[] = [ EscRow { id: 2, text: "a\\b" } ]
+    let slashed: EscRow[] = [EscRow { id: 2, text: "a\\b" }]
     assert(json.encode(slashed) == "[{\"id\":2,\"text\":\"a\\\\b\"}]")
 
     // Newline and tab take their shorthand forms, not a literal break.
-    let newline: EscRow[] = [ EscRow { id: 3, text: "a\nb" } ]
+    let newline: EscRow[] = [EscRow { id: 3, text: "a\nb" }]
     assert(json.encode(newline) == "[{\"id\":3,\"text\":\"a\\nb\"}]")
 
-    let tabbed: EscRow[] = [ EscRow { id: 4, text: "a\tb" } ]
+    let tabbed: EscRow[] = [EscRow { id: 4, text: "a\tb" }]
     assert(json.encode(tabbed) == "[{\"id\":4,\"text\":\"a\\tb\"}]")
 
     // Non-ASCII is valid UTF-8 already and passes through untouched.
-    let accented: EscRow[] = [ EscRow { id: 5, text: "Simülatör" } ]
+    let accented: EscRow[] = [EscRow { id: 5, text: "Simülatör" }]
     assert(json.encode(accented) == "[{\"id\":5,\"text\":\"Simülatör\"}]")
 
     // An empty string is a pair of quotes, not a null.
-    let blank: EscRow[] = [ EscRow { id: 6, text: "" } ]
+    let blank: EscRow[] = [EscRow { id: 6, text: "" }]
     assert(json.encode(blank) == "[{\"id\":6,\"text\":\"\"}]")
 
     // A JSON document as a field value — the case that first showed the bug,
     // since every quote inside it needs escaping.
-    let payload: EscRow[] = [ EscRow { id: 7, text: "{\"a\": \"b\"}" } ]
+    let payload: EscRow[] = [EscRow { id: 7, text: "{\"a\": \"b\"}" }]
     assert(json.encode(payload) == "[{\"id\":7,\"text\":\"{\\\"a\\\": \\\"b\\\"}\"}]")
 
     // Embedding in a json.Value must yield the array, not null. Before the fix

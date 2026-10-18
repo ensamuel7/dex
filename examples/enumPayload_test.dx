@@ -36,10 +36,18 @@ struct Holder {
 
 fn eval(e: Expr): long {
     switch (e) {
-        case Expr.Lit(v): { return v }
-        case Expr.Add(a, b): { return eval(a) + eval(b) }
-        case Expr.Mul(a, b): { return eval(a) * eval(b) }
-        case Expr.Neg(a): { return 0 - eval(a) }
+        case Expr.Lit(v): {
+            return v
+        }
+        case Expr.Add(a, b): {
+            return eval(a) + eval(b)
+        }
+        case Expr.Mul(a, b): {
+            return eval(a) * eval(b)
+        }
+        case Expr.Neg(a): {
+            return 0 - eval(a)
+        }
     }
     return 0
 }
@@ -54,10 +62,18 @@ fn tree(depth: int): Expr {
 
 fn describe(s: Shape): string {
     switch (s) {
-        case Shape.Empty: { return "-" }
-        case Shape.Label(t): { return t }
-        case Shape.Tags(items): { return str.fromInt(items.len()) }
-        case Shape.Tagged(k, inner): { return k + "/" + describe(inner) }
+        case Shape.Empty: {
+            return "-"
+        }
+        case Shape.Label(t): {
+            return t
+        }
+        case Shape.Tags(items): {
+            return str.fromInt(items.len())
+        }
+        case Shape.Tagged(k, inner): {
+            return k + "/" + describe(inner)
+        }
     }
     return ""
 }
@@ -92,7 +108,7 @@ fn main(): void {
     assert(describe(Shape.Tagged("k", Shape.Label("v"))) == "k/v")
 
     // A struct field, an array element, and reassignment.
-    let h: Holder = Holder{name: "h", body: sum}
+    let h: Holder = Holder { name: "h", body: sum }
     assert(eval(h.body) == 5)
 
     let many: Expr[] = [two, sum, Expr.Lit(7)]
@@ -109,7 +125,9 @@ fn main(): void {
     // `_` discards a binding it does not need.
     let discarded: long = 0
     switch (sum) {
-        case Expr.Add(l, _): { discarded = eval(l) }
+        case Expr.Add(l, _): {
+            discarded = eval(l)
+        }
         default: {}
     }
     assert(discarded == 2)

@@ -47,29 +47,29 @@ struct Mul {
 // declaration, which is the case the hoist used to scope away.
 fn tree(depth: int): Expr {
     if (depth == 0) {
-        let leaf: Expr = Lit{v: 2}
+        let leaf: Expr = Lit { v: 2 }
         return leaf
     }
     let lhs: Expr = tree(depth - 1)
     let rhs: Expr = tree(depth - 1)
-    let node: Expr = Add{left: lhs, right: rhs}
+    let node: Expr = Add { left: lhs, right: rhs }
     return node
 }
 
 fn main(): void {
-    let two: Expr = Lit{v: 2}
-    let three: Expr = Lit{v: 3}
-    let sum: Expr = Add{left: two, right: three}
+    let two: Expr = Lit { v: 2 }
+    let three: Expr = Lit { v: 3 }
+    let sum: Expr = Add { left: two, right: three }
     assert(sum.eval() == 5)
 
     // The declaration is still live after the statement that hoisted a temp.
-    let product: Expr = Mul{left: sum, right: three}
+    let product: Expr = Mul { left: sum, right: three }
     assert(product.eval() == 15)
     assert(sum.eval() == 5)
 
     // Nested one level deeper: an interface field holding a value that itself
     // holds interface fields, released through the box's destructor.
-    let nested: Expr = Add{left: product, right: sum}
+    let nested: Expr = Add { left: product, right: sum }
     assert(nested.eval() == 20)
 
     // 2^8 leaves of 2, summed.
@@ -79,7 +79,7 @@ fn main(): void {
     // Reassignment. A minted right-hand side hands over its only reference, so
     // the variable must not take another: the retain used to be emitted for any
     // interface-typed right-hand side, which leaked one box per assignment.
-    let slot: Expr = Lit{v: 1}
+    let slot: Expr = Lit { v: 1 }
     slot = tree(2)
     assert(slot.eval() == 8)
     slot = tree(3)
@@ -87,7 +87,7 @@ fn main(): void {
 
     // A borrowed right-hand side is the case that does need the retain: both
     // names stay live and neither frees what the other holds.
-    let shared: Expr = Lit{v: 9}
+    let shared: Expr = Lit { v: 9 }
     slot = shared
     assert(slot.eval() == 9)
     assert(shared.eval() == 9)

@@ -16,7 +16,10 @@ fn main(): void {
         return
     }
 
-    db.exec(conn, "CREATE TABLE IF NOT EXISTS people (id BIGSERIAL PRIMARY KEY, name TEXT, age BIGINT)")
+    db.exec(
+        conn,
+        "CREATE TABLE IF NOT EXISTS people (id BIGSERIAL PRIMARY KEY, name TEXT, age BIGINT)"
+    )
 
     // Values travel beside the statement, never inside it. Postgres parses the
     // SQL once and treats every parameter as data, so the quote and the
@@ -26,8 +29,11 @@ fn main(): void {
 
     // RETURNING comes back through the query path, like any other result.
     let second: string[] = ["Ada", "36"]
-    let created: int = db.queryParams(conn,
-        "INSERT INTO people (name, age) VALUES ($1, $2) RETURNING id", second)
+    let created: int = db.queryParams(
+        conn,
+        "INSERT INTO people (name, age) VALUES ($1, $2) RETURNING id",
+        second
+    )
     if (db.next(created)) {
         let id: int = db.col(created, 0)
         fmt.println("inserted id " + str.fromInt(id))

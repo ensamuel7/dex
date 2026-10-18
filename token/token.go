@@ -99,6 +99,10 @@ const (
 	TokenDefer
 	TokenMutex
 	TokenThrows // `throws` in a signature — the effect, not the `throw` statement
+	// TokenComment is emitted only in the lexer's KeepComments mode, which the
+	// formatter uses and the compiler does not: a comment the parser had to skip
+	// over is a comment the formatter would delete.
+	TokenComment
 	TokenEOF
 )
 
@@ -294,6 +298,8 @@ func (k TokenKind) String() string {
 		return "defer"
 	case TokenMutex:
 		return "mutex"
+	case TokenComment:
+		return "comment"
 	case TokenEOF:
 		return "end of file"
 	default:

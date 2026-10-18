@@ -16,7 +16,9 @@ fn main(): void {
     // Many-to-one: channel
     let ch = channel(int)
     for (let i = 0; i < 5; i++) {
-        spawn { send(ch, i * 10) }
+        spawn {
+            send(ch, i * 10)
+        }
     }
     let total = 0
     for (let i = 0; i < 5; i++) {
@@ -25,5 +27,7 @@ fn main(): void {
     assert(total == 100)
 
     // Fire-and-forget
-    spawn { multiply2(1) }
+    spawn {
+        multiply2(1)
+    }
 }

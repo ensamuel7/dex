@@ -99,6 +99,11 @@ func main() {
 		return
 	}
 
+	if command == "format" {
+		runFormat(args)
+		return
+	}
+
 	if command == "update" {
 		selfUpdate(forceUpdate)
 		return

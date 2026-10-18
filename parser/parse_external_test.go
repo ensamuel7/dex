@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ensamuel7/dex/ast"
@@ -89,5 +90,57 @@ func TestParseExternalRequiresModuleKeyword(t *testing.T) {
 	_, errs := New(toks).Parse()
 	if len(errs) == 0 {
 		t.Fatal("expected an error for a missing 'module'")
+	}
+}
+
+func parseExternalFails(t *testing.T, src, substr string) {
+	t.Helper()
+	toks, err := lexer.New(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	_, errs := New(toks).Parse()
+	if len(errs) == 0 {
+		t.Fatalf("expected an error containing %q, got none", substr)
+	}
+	if !strings.Contains(errs[0].Error(), substr) {
+		t.Fatalf("error = %q, want it to contain %q", errs[0], substr)
+	}
+}
+
+// #[owned] already means something else on a variable, so the old spelling
+// points at the new one rather than being quietly accepted.
+func TestExternalRejectsOwnedAnnotation(t *testing.T) {
+	parseExternalFails(t, `external module z {
+		#[owned]
+		fn f(s: string): string
+	}
+	fn main(): void {}`, "write the return type as 'owned string'")
+}
+
+func TestExternalRejectsAnnotations(t *testing.T) {
+	parseExternalFails(t, `external module z {
+		#[noEscape]
+		fn f(s: string): string
+	}
+	fn main(): void {}`, "takes no annotations")
+}
+
+func TestParseExternalOwnedReturn(t *testing.T) {
+	prog := parseExtern(t, `external module cstr {
+		include "<string.h>"
+		fn errorText(n: int): string = "strerror"
+		fn dup(s: string): owned string = "strdup"
+	}
+	fn main(): void {}`)
+	fns := prog.Externals[0].Funcs
+	if fns[0].OwnedReturn {
+		t.Error("errorText should not be owned")
+	}
+	if !fns[1].OwnedReturn {
+		t.Error("dup should be owned")
+	}
+	if fns[1].ReturnType != ast.TypeString {
+		t.Errorf("dup return = %v, want string", fns[1].ReturnType)
 	}
 }

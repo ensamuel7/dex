@@ -66,10 +66,22 @@ compiling many files, so a module registered there would outlive the file that
 declared it and could shadow a real one. Codegen therefore resolves module
 functions through `g.lookupFunc`, not the global `stdlib.LookupFunc`.
 
-Stage one is scalars only (`externalTypeSupported`). Strings, opaque handles
-and callbacks are each unsolved for their own reason — ownership of the bytes,
-a destructor wired into scope exit, and the fact that `throw` is `longjmp` so a
-C frame between a throw and its catch has its cleanup skipped.
+Scalars and `string` cross (`externalTypeSupported`). A returned string has two
+conventions and the declaration picks one: `string` copies and leaves the
+pointer alone (`dex_string_copy_cstr`), `owned string` copies and then frees it
+(`dex_string_from_cstr`). The default matters — `dex_string_from_cstr` frees,
+which is right for the stdlib, where every CName function returning a string
+hands over malloc'd memory, and heap corruption for a user binding `getenv`.
+
+`owned` is a soft keyword in the return position, not an annotation: `#[owned]`
+already means no-aliasing on a variable, and a marker deciding whether `free`
+runs is semantics rather than advice. There is no `#[raw]` for parameters —
+bytes cross as a pointer and a length, because a linked library cannot see the
+`DexString` layout that the stdlib's `RawParams` relies on.
+
+Opaque handles and callbacks remain unsolved, each for its own reason: a handle
+needs a destructor wired into scope exit, and `throw` is `longjmp` so a C frame
+between a throw and its catch has its cleanup skipped.
 
 ## Naming Conventions
 

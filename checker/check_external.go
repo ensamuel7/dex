@@ -69,15 +69,10 @@ func (c *Checker) checkExternals(program *ast.Program) {
 						em.Name, f.Name, f.ParamNames[j], typeName(pt)))
 				}
 			}
-			for _, a := range f.Annotations {
-				if a != ast.AnnotOwned {
-					c.addError(c.errAt(f.Pos, "unknown annotation '#[%s]' on %s.%s() — an external declaration takes only #[owned]", a, em.Name, f.Name))
-				}
-			}
-			// #[owned] says the callee malloc'd the string it returned, so it
-			// means nothing anywhere else.
+			// `owned` says the callee malloc'd the string it returned, so it
+			// means nothing on any other type.
 			if f.OwnedReturn && f.ReturnType != ast.TypeString {
-				c.addError(c.errAt(f.Pos, "#[owned] on %s.%s() needs a string return, not %s — it says the C function malloc'd the string and Dex should free it",
+				c.addError(c.errAt(f.Pos, "'owned' on %s.%s() needs a string return, not %s — it says the C function malloc'd the string and Dex should free it",
 					em.Name, f.Name, typeName(f.ReturnType)))
 			}
 

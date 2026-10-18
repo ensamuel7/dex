@@ -164,8 +164,7 @@ func TestExternalAcceptsStrings(t *testing.T) {
 		include "<string.h>"
 		fn length(s: string): long = "strlen"
 		fn errorText(n: int): string = "strerror"
-		#[owned]
-		fn dup(s: string): string = "strdup"
+		fn dup(s: string): owned string = "strdup"
 	}
 	fn main(): void {
 		let n: long = cstr.length("hi")
@@ -176,18 +175,17 @@ func TestExternalAcceptsStrings(t *testing.T) {
 
 func TestExternalOwnedNeedsAStringReturn(t *testing.T) {
 	mustFail(t, `external module z {
-		#[owned]
-		fn f(n: int): int
+		fn f(n: int): owned int
 	}
 	fn main(): void {}`, "needs a string return")
 }
 
-func TestExternalRejectsUnknownAnnotation(t *testing.T) {
-	mustFail(t, `external module z {
-		#[raw]
-		fn f(s: string): string
-	}
-	fn main(): void {}`, "takes only #[owned]")
+// `owned` is soft: only meaningful in an external return position.
+func TestOwnedStaysUsableAsAName(t *testing.T) {
+	mustCheck(t, `fn owned(): int { return 3 }
+	fn main(): void {
+		let owned: int = 5
+	}`)
 }
 
 func TestExternalStillRejectsNonScalarContainers(t *testing.T) {

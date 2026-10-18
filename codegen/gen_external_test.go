@@ -73,13 +73,12 @@ func TestCodegenExternalStringReturnIsCopied(t *testing.T) {
 	}
 }
 
-// #[owned] is the other case: the callee malloc'd it and Dex frees it, which
+// `owned` is the other case: the callee malloc'd it and Dex frees it, which
 // is also what every stdlib CName function returning a string does.
 func TestCodegenExternalOwnedStringReturnIsTakenOver(t *testing.T) {
 	out := generate(t, `external module cstr {
 		include "<string.h>"
-		#[owned]
-		fn dup(s: string): string = "strdup"
+		fn dup(s: string): owned string = "strdup"
 	}
 	fn main(): void {
 		let d: string = cstr.dup("hi")

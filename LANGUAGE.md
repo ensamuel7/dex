@@ -4056,24 +4056,30 @@ A `string` parameter crosses as a `const char*`. A `string` **return** is the
 one place an external declaration has to say something, because C has two
 conventions and guessing wrong corrupts the heap rather than merely leaking:
 
-| Declaration | The C function | What Dex does |
+| Return type | The C function | What Dex does |
 |-------------|----------------|---------------|
-| (default) | returns a pointer it keeps — `getenv`, `strerror`, `zlibVersion` | copies the bytes, leaves the pointer alone |
-| `#[owned]` | `malloc`'d the buffer and hands it over — `strdup` | copies the bytes, then frees the original |
+| `string` | returns a pointer it keeps — `getenv`, `strerror`, `zlibVersion` | copies the bytes, leaves the pointer alone |
+| `owned string` | `malloc`'d the buffer and hands it over — `strdup` | copies the bytes, then frees the original |
 
 ```dex
 external module cstr {
     include "<string.h>"
 
-    fn errorText(n: int): string = "strerror"   // copied
-
-    #[owned]
-    fn dup(s: string): string = "strdup"        // taken over and freed
+    fn errorText(n: int): string = "strerror"        // copied
+    fn dup(s: string): owned string = "strdup"       // taken over and freed
 }
 ```
 
-The default is the safe one. `#[owned]` on a non-string return is an error,
-since it has nothing to say about an `int`.
+The default is the safe one, because the pointer-it-keeps convention is the
+common one and freeing such a pointer corrupts the heap rather than leaking.
+
+`owned` is a modifier on the return type rather than an annotation, for two
+reasons. `#[owned]` already means something else — on a variable it forbids
+aliasing — and a marker that decides whether `free` is called is semantics
+rather than the advice an annotation carries. It is also **soft**: `owned` is
+only a keyword in this position, so it stays usable as an ordinary name.
+`owned` on anything but a string return is an error, since it has nothing to
+say about an `int`.
 
 ### Bytes, and why there is no raw marker
 

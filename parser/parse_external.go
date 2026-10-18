@@ -54,21 +54,11 @@ func (p *Parser) parseExternalModule() (*ast.ExternalModule, error) {
 			p.advance()
 
 		case p.check(token.TokenAnnotation):
-			annots := p.collectAnnotations()
-			if !p.check(token.TokenFn) && !p.check(token.TokenFunction) {
-				return nil, p.errorf("an annotation in external module '%s' must sit on an 'fn' declaration", name)
+			a := p.current().Value
+			if a == ast.AnnotOwned {
+				return nil, p.errorf("write the return type as 'owned string' rather than #[owned] — #[owned] on a variable already means something else")
 			}
-			fn, err := p.parseExternalFunc(name)
-			if err != nil {
-				return nil, err
-			}
-			fn.Annotations = annots
-			for _, a := range annots {
-				if a == ast.AnnotOwned {
-					fn.OwnedReturn = true
-				}
-			}
-			mod.Funcs = append(mod.Funcs, *fn)
+			return nil, p.errorf("external module '%s' takes no annotations, and '#[%s]' is not one it knows", name, a)
 
 		case p.check(token.TokenFn), p.check(token.TokenFunction):
 			fn, err := p.parseExternalFunc(name)
@@ -131,6 +121,12 @@ func (p *Parser) parseExternalFunc(moduleName string) (*ast.ExternalFunc, error)
 	}
 
 	if p.match(token.TokenColon) {
+		// `owned` says the C function malloc'd what it returned, so Dex frees
+		// it. Soft, so `owned` stays usable as an ordinary name.
+		if p.softKeyword("owned") {
+			p.advance()
+			fn.OwnedReturn = true
+		}
 		fn.ReturnType, err = p.parseType()
 		if err != nil {
 			return nil, err

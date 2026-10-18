@@ -345,14 +345,12 @@ the type, rather than left to produce a C error about the generated code.
 A returned string is the one place a declaration has to say something, because
 C has two conventions and guessing wrong corrupts the heap rather than leaking.
 By default the bytes are copied and the pointer left alone, which is what
-`getenv` and `strerror` need. `#[owned]` says the callee `malloc`'d it, so Dex
-frees it after copying — what `strdup` needs:
+`getenv` and `strerror` need. `owned` on the return type says the callee
+`malloc`'d it, so Dex frees it after copying — what `strdup` needs:
 
 ```dex
-fn errorText(n: int): string = "strerror"   // copied
-
-#[owned]
-fn dup(s: string): string = "strdup"        // taken over and freed
+fn errorText(n: int): string = "strerror"        // copied
+fn dup(s: string): owned string = "strdup"       // taken over and freed
 ```
 
 Bytes that may contain a NUL cross as a pointer and a length, which is how the

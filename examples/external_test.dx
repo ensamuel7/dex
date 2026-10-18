@@ -42,8 +42,7 @@ external module cstr {
     fn errorText(n: int): string = "strerror"
 
     // strdup malloc'd it, so Dex takes ownership and frees it.
-    #[owned]
-    fn dup(s: string): string = "strdup"
+    fn dup(s: string): owned string = "strdup"
 }
 
 fn main(): void {

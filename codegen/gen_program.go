@@ -118,6 +118,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 			break
 		}
 	}
+	g.usesExternal = len(program.Externals) > 0
 	for i := range program.Externals {
 		if len(program.Externals[i].Types) > 0 {
 			g.usesHandle = true
@@ -147,6 +148,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 			}
 		}
 	}
+
+	// A module that named no header has its C functions declared from the
+	// signatures written in Dex, so a library with no header to point at — a
+	// Rust staticlib, say — needs no hand-written one.
+	g.emitExternalPrototypes(&out, program)
 
 	if g.usesBool || g.usesOptional {
 		inc := "#include <stdbool.h>"

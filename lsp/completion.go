@@ -91,6 +91,7 @@ func (s *Server) completionsAt(text string, pos Position, uri string) []Completi
 		{"null", "Null value"},
 		{"mutex", "Mutual exclusion lock"},
 		{"weak", "Weak reference, not counted for ownership"},
+		{"external", "Declare a module of C-ABI functions"},
 	} {
 		items = append(items, CompletionItem{
 			Label:  kw.label,

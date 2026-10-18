@@ -139,3 +139,36 @@ func TestCodegenExternalHandleRidesTheCleanupStack(t *testing.T) {
 	}`)
 	assertContains(t, out, "_dex_cleanup_push(h)")
 }
+
+// A module that names no header has its C functions declared from the
+// signatures written in Dex, so a library with no header to point at — a Rust
+// staticlib exporting C-ABI symbols — needs no hand-written one.
+func TestCodegenExternalPrototypesWhenNoHeader(t *testing.T) {
+	out := generate(t, `external module ml {
+		link "-lmathlib"
+		fn add(a: int, b: int): int = "ml_add"
+		fn scale(x: double, by: int): double = "ml_scale"
+		fn name(): string = "ml_name"
+	}
+	fn main(): void {
+		let n: int = ml.add(1, 2)
+	}`)
+	assertContains(t, out, "extern int ml_add(int, int);")
+	assertContains(t, out, "extern double ml_scale(double, int);")
+	assertContains(t, out, "extern const char* ml_name(void);")
+}
+
+// Naming a header is the default and keeps the C compiler's cross-check, so
+// nothing is declared for it.
+func TestCodegenNoPrototypesWhenHeaderNamed(t *testing.T) {
+	out := generate(t, `external module cmath {
+		include "<math.h>"
+		fn hypot(x: double, y: double): double
+	}
+	fn main(): void {
+		let d: double = cmath.hypot(3.0, 4.0)
+	}`)
+	if strings.Contains(out, "extern double hypot(") {
+		t.Error("declared a function the named header already declares")
+	}
+}

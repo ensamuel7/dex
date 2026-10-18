@@ -365,7 +365,7 @@ func (g *Generator) isStringExpr(expr ast.Expr) bool {
 		// made the operand look non-string, and the non-string append path has no
 		// release, so `return tag.toUpper() + "/" + x` leaked one string a call.
 		if e.Module != "" {
-			recvIsString := g.strVars[e.Module]
+			recvIsString := g.isStringVar(e.Module)
 			if !recvIsString && strings.Contains(e.Module, ".") {
 				recvIsString = g.resolveFieldChainType(e.Module) == ast.TypeString
 			}

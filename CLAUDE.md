@@ -94,6 +94,14 @@ Refcounting does not model dependency: a statement handle outliving its
 connection handle is a use-after-free the language cannot catch. Documented
 rather than implied away.
 
+An external module naming no `include` gets C prototypes emitted from its Dex
+signatures (`emitExternalPrototypes`), so a header-less library binds without a
+hand-written one. Naming a header is the default and keeps the compiler's
+cross-check; omitting one is the opt-out and an ABI mismatch nothing catches.
+`-Wno-pointer-sign` is added only for a program that declares an external,
+because a string crosses as `char*` and byte APIs are declared `unsigned char*`;
+`-Werror=incompatible-pointer-types` stays fatal.
+
 Callbacks remain unsolved: `throw` is `longjmp`, so a C frame between a throw
 and its catch has its cleanup skipped.
 

@@ -704,3 +704,15 @@ func ResetHandleTypes() {
 	handleTypes = nil
 	handleByName = map[string]Type{}
 }
+
+// WiderNumericType is the result type of an arithmetic expression over two
+// numeric types. It lives here rather than in the checker because codegen needs
+// the same answer: the checker records the operand types on the node and
+// codegen reads them back, and two copies of this rank would drift.
+func WiderNumericType(a, b Type) Type {
+	rank := map[Type]int{TypeChar: 0, TypeInt: 1, TypeLong: 2, TypeDouble: 3}
+	if rank[a] >= rank[b] {
+		return a
+	}
+	return b
+}

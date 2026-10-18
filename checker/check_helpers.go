@@ -48,13 +48,7 @@ func isValidFieldType(t ast.Type) bool {
 	}
 }
 
-func widerNumericType(a, b ast.Type) ast.Type {
-	rank := map[ast.Type]int{ast.TypeChar: 0, ast.TypeInt: 1, ast.TypeLong: 2, ast.TypeDouble: 3}
-	if rank[a] >= rank[b] {
-		return a
-	}
-	return b
-}
+func widerNumericType(a, b ast.Type) ast.Type { return ast.WiderNumericType(a, b) }
 
 func isNumericType(t ast.Type) bool {
 	return t == ast.TypeChar || t == ast.TypeInt || t == ast.TypeLong || t == ast.TypeDouble

@@ -28,6 +28,10 @@ external module zlib {
 
     fn compressBound(sourceLen: long): long
     fn compileFlags(): long = "zlibCompileFlags"
+
+    // Declared const Bytef* in zlib, which is unsigned char*. A string crosses
+    // as char*, so this is the case -Wno-pointer-sign exists for.
+    fn crc32(crc: long, buf: string, len: int): long
 }
 
 // An opaque handle: a C pointer the program passes around but never
@@ -116,6 +120,10 @@ fn main(): void {
 
     // strlen stops at the NUL, which is exactly why a byte API takes a length.
     assert(cstr.length(a) == 2)
+
+    // And a real byte API over the whole buffer, NUL included.
+    assert(zlib.crc32(0, a, a.len()) == 4149218125)
+    assert(zlib.crc32(0, "hello world", 11) == 222957957)
 
     // A handle round-trips through C and closes at scope exit.
     let f: File? = cio.open("examples/external_test.dx", "r")

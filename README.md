@@ -393,6 +393,11 @@ What cannot cross is anything the C ABI has no word for: classes, methods,
 templates, overloads, exceptions, traits, generics. Those need a flat
 `extern "C"` shim, which is also the only shape this syntax can describe.
 
+A library with no header to point at needs none: name no `include` and the C
+functions are declared from the signatures written in Dex. Naming a header
+stays the better path, because the C compiler then cross-checks your
+declaration against the real one.
+
 ## Error Handling
 
 Exceptions carry a type. Any struct with a `message: string` can be thrown,
@@ -579,10 +584,10 @@ Releases are automated via GitHub Actions. When you push a version tag, the work
 **To cut a release:**
 
 ```bash
-make release VERSION=0.9.3
+make release VERSION=0.9.4
 ```
 
-This creates an annotated tag `v0.9.3` and pushes it. The tag push triggers the workflow which:
+This creates an annotated tag `v0.9.4` and pushes it. The tag push triggers the workflow which:
 - Builds `dex` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
 - Creates a GitHub Release with all 4 tarballs attached
 - Deploys docs to GitHub Pages
@@ -590,7 +595,7 @@ This creates an annotated tag `v0.9.3` and pushes it. The tag push triggers the 
 **To also publish Docker images** (separate from the GitHub release):
 
 ```bash
-make docker-publish DEX_VERSION=0.9.3
+make docker-publish DEX_VERSION=0.9.4
 ```
 
 `make release` and `make docker-publish` are independent — run either or both.

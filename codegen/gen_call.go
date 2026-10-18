@@ -759,7 +759,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	// it is rendered as the C that reads that field.
 	if e.Module != "" {
 		recv := e.Module
-		isString := g.strVars[e.Module]
+		isString := g.isStringVar(e.Module)
 		if !isString && strings.Contains(e.Module, ".") && g.resolveFieldChainType(e.Module) == ast.TypeString {
 			isString = true
 			recv = g.fieldChainC(e.Module)

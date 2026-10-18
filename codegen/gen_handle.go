@@ -45,3 +45,64 @@ func (g *Generator) emitHandleClosers(out *strings.Builder, program *ast.Program
 		}
 	}
 }
+
+// externalCType is the C spelling of a type crossing the boundary, used only
+// for a prototype this compiler writes itself.
+func externalCType(t ast.Type) string {
+	switch t {
+	case ast.TypeInt:
+		return "int"
+	case ast.TypeLong:
+		return "long"
+	case ast.TypeDouble:
+		return "double"
+	case ast.TypeBool:
+		return "_Bool"
+	case ast.TypeChar:
+		return "unsigned char"
+	case ast.TypeString:
+		return "const char*"
+	case ast.TypeVoid:
+		return "void"
+	}
+	if _, ok := handleOf(t); ok {
+		return "void*"
+	}
+	return "int"
+}
+
+// emitExternalPrototypes declares the C functions of any external module that
+// named no header.
+//
+// A header is the better path and stays the default, because the C compiler
+// then cross-checks the declaration against the real one and a signature that
+// disagrees is an error rather than a silent ABI mismatch. But a library in
+// another language often has no header to point at — a Rust staticlib exports
+// C-ABI symbols and nothing else — and writing one by hand to satisfy
+// -Werror=implicit-function-declaration is friction without a benefit.
+//
+// Declaring no header is therefore the opt-out: the signature written in Dex
+// is taken at its word, and getting it wrong is an ABI mismatch nothing will
+// catch.
+func (g *Generator) emitExternalPrototypes(out *strings.Builder, program *ast.Program) {
+	for i := range program.Externals {
+		em := &program.Externals[i]
+		if len(em.Includes) > 0 {
+			continue
+		}
+		for _, t := range em.Types {
+			out.WriteString(fmt.Sprintf("extern void %s(void*);\n", t.Closer))
+		}
+		for _, f := range em.Funcs {
+			params := make([]string, 0, len(f.Params))
+			for _, pt := range f.Params {
+				params = append(params, externalCType(pt))
+			}
+			sig := "void"
+			if len(params) > 0 {
+				sig = strings.Join(params, ", ")
+			}
+			out.WriteString(fmt.Sprintf("extern %s %s(%s);\n", externalCType(f.ReturnType), f.CName, sig))
+		}
+	}
+}

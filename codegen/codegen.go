@@ -42,6 +42,7 @@ type Generator struct {
 	usesSafety        bool
 	usesRefcount      bool
 	usesHandle        bool
+	usesExternal      bool
 	usesArena         bool
 	usesDebugCycles   bool
 	usesWeakRef       bool
@@ -227,10 +228,38 @@ func (g *Generator) CompilerFlags() []string {
 	if g.usesConcurrency {
 		flags = append(flags, "-pthread")
 	}
+	// A string crosses to C as char*, and plenty of byte-oriented C functions
+	// are declared unsigned char* or Bytef* — zlib's crc32 is one. The
+	// representation is identical and the conversion is well defined, so the
+	// warning is noise on every such binding, and there is no unsigned-char
+	// type to declare instead.
+	//
+	// Scoped to a program that declares an external, because that is the only
+	// place it can fire: the rest of the generated C is internally consistent.
+	// It also costs nothing real — a genuinely wrong declaration is an
+	// incompatible-pointer-types error, which stays fatal.
+	if g.usesExternal {
+		flags = append(flags, "-Wno-pointer-sign")
+	}
 	for _, mod := range g.importedModules {
 		flags = append(flags, mod.CFlags...)
 	}
 	return flags
+}
+
+// isStringVar reports whether a receiver name holds a string. A variable
+// declared string? is a string inside a null-guarded block, and narrowing
+// records that — but strVars only holds what was declared string, so every
+// site testing strVars directly missed a narrowed optional. `n.len()` inside
+// the guard fell through to a user-function call and emitted a bare len(...),
+// and the method's return type was unknown so fmt.println chose %d for a
+// DexString*.
+func (g *Generator) isStringVar(name string) bool {
+	if g.strVars[name] {
+		return true
+	}
+	t, ok := g.narrowedTypes[name]
+	return ok && t == ast.TypeString
 }
 
 // lookupFunc resolves a qualified call against the modules this program

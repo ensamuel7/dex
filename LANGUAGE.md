@@ -4090,13 +4090,31 @@ methods, templates, overloads and exceptions, Rust traits and generics. Those
 need a flat `extern "C"` shim on the far side, which is also the only form the
 declaration syntax here can describe.
 
-One practical requirement: the C compiler must see a declaration for the symbol,
-because `-Werror=implicit-function-declaration` is on. A header is how it does,
-even for a library written in another language — hand-written for a couple of
-functions, or generated (cbindgen and the like) for more. The upside of
-requiring it is that the compiler cross-checks your declaration against the
-real one, so a signature that disagrees is an error rather than a silent ABI
-mismatch.
+#### With no header at all
+
+A library in another language often has no header to point at — a Rust
+staticlib exports C-ABI symbols and nothing else. Name no `include` and the C
+functions are declared from the signatures written in Dex:
+
+```dex
+external module ml {
+    link "-lmathlib"
+
+    fn add(a: int, b: int): int = "ml_add"
+    fn name(): string = "ml_name"
+}
+```
+
+```c
+extern int ml_add(int, int);
+extern const char* ml_name(void);
+```
+
+Naming a header is still the better path and stays the default, because the C
+compiler then cross-checks your declaration against the real one and a
+signature that disagrees is an error rather than a silent ABI mismatch.
+Declaring no header is the opt-out: the signature is taken at its word, and
+getting it wrong is an ABI mismatch nothing will catch.
 
 The declared name need not match the C symbol. `= "symbol"` names it, which is
 how a C function whose name reads badly in Dex gets a better one:

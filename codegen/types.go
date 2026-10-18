@@ -448,7 +448,7 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			}
 		}
 		// String method calls reached through a field chain, e.g. cmd.action.isEmpty()
-		if e.Module != "" && !g.strVars[e.Module] && strings.Contains(e.Module, ".") &&
+		if e.Module != "" && !g.isStringVar(e.Module) && strings.Contains(e.Module, ".") &&
 			g.resolveFieldChainType(e.Module) == ast.TypeString {
 			switch e.Name {
 			case "len", "indexOf":
@@ -487,7 +487,7 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 				}
 			}
 		}
-		if e.Module != "" && g.strVars[e.Module] {
+		if e.Module != "" && g.isStringVar(e.Module) {
 			switch e.Name {
 			case "len", "indexOf":
 				return ast.TypeInt
@@ -561,6 +561,16 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			ast.BinLt, ast.BinGt, ast.BinLte, ast.BinGte,
 			ast.BinAnd, ast.BinOr:
 			return ast.TypeBool
+		}
+		// Arithmetic promotes, so the result is not the left operand's type
+		// whenever the operands differ. The checker worked this out and
+		// recorded both types on the node; taking the left one made
+		// fmt.println(a + b) over an int and a double choose %d for a double
+		// and print 0. Strict arithmetic means the operands can now only
+		// differ through an adapted literal, but the answer still has to be
+		// the promoted type.
+		if e.HasMixedTypes {
+			return ast.WiderNumericType(e.LeftType, e.RightType)
 		}
 		return g.typeOfExpr(e.Left)
 	case *ast.UnaryExpr:

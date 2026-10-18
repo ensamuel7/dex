@@ -390,6 +390,7 @@ func frontend(filename string) (*ast.Program, error) {
 	ast.ResetFuncTypes()
 	ast.ResetMapTypes()
 	ast.ResetEnumTypes()
+	ast.ResetHandleTypes()
 
 	// Register module-provided struct types (e.g. HttpResponse)
 	stdlib.RegisterAllModuleTypes()

@@ -608,6 +608,7 @@ func (s *Server) diagnose(uri string, text string) {
 	ast.ResetFuncTypes()
 	ast.ResetMapTypes()
 	ast.ResetEnumTypes()
+	ast.ResetHandleTypes()
 	stdlib.RegisterAllModuleTypes()
 	ast.RegisterExceptionType()
 

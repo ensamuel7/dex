@@ -97,3 +97,45 @@ func TestCodegenExternalStringParamPassesTheBytes(t *testing.T) {
 	}`)
 	assertContains(t, out, "strlen(s->data)")
 }
+
+// A handle is boxed on the way out and unboxed on the way in, so the C
+// function sees its own pointer and Dex sees a refcounted object.
+func TestCodegenExternalHandleBoxesAndUnboxes(t *testing.T) {
+	out := generate(t, `external module cio {
+		include "<stdio.h>"
+		type File closed by "fclose"
+		fn open(path: string, mode: string): File? = "fopen"
+		fn readByte(f: File): int = "fgetc"
+	}
+	fn main(): void {
+		let f: File? = cio.open("x", "r")
+		if (f != null) {
+			let b: int = cio.readByte(f)
+		}
+	}`)
+	assertContains(t, out, "dex_handle_new(fopen(")
+	assertContains(t, out, "dex_handle_close_cio_File")
+	assertContains(t, out, "fgetc(dex_handle_ptr(f))")
+	// The closing shim takes the box and must not free it; the runtime does.
+	assertContains(t, out, "if (h->ptr) fclose(h->ptr);")
+}
+
+// A handle is a heap type, so the cleanup stack closes one when an exception
+// unwinds past the frame holding it. That is what refcounting buys over
+// move-only semantics here.
+func TestCodegenExternalHandleRidesTheCleanupStack(t *testing.T) {
+	out := generate(t, `external module cio {
+		include "<stdio.h>"
+		type File closed by "fclose"
+		fn open(path: string, mode: string): File? = "fopen"
+	}
+	struct Boom(message: string) {}
+	fn f(): void throws Boom {
+		let h: File? = cio.open("x", "r")
+		throw Boom("x")
+	}
+	fn main(): void {
+		try { f() } catch (e: Boom) { }
+	}`)
+	assertContains(t, out, "_dex_cleanup_push(h)")
+}

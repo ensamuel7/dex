@@ -118,8 +118,13 @@ func (g *Generator) Generate(program *ast.Program) string {
 			break
 		}
 	}
+	for i := range program.Externals {
+		if len(program.Externals[i].Types) > 0 {
+			g.usesHandle = true
+		}
+	}
 	g.usesRefcount = g.usesString || g.usesArray || g.usesConcurrency || g.usesClosure ||
-		len(program.Interfaces) > 0 || usesPayloadEnum
+		len(program.Interfaces) > 0 || usesPayloadEnum || g.usesHandle
 
 	// Guarded on usesString because the pool's definitions and the macro behind
 	// them come from the string runtime, which is emitted only under that flag.
@@ -231,6 +236,13 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit closure runtime (needs the refcount header, nothing else)
 	if g.usesClosure {
 		out.WriteString(ClosureRuntime)
+	}
+
+	// A handle box needs the refcount header and nothing else, and its closing
+	// shims have to follow the includes that declare the C functions they call.
+	if g.usesHandle {
+		out.WriteString(HandleRuntime)
+		g.emitHandleClosers(&out, program)
 	}
 
 	// Emit weak reference runtime (must come after refcount runtime)

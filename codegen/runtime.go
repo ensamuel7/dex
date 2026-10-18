@@ -2,6 +2,9 @@ package codegen
 
 import _ "embed"
 
+//go:embed cruntime/handle.c
+var HandleRuntime string
+
 //go:embed cruntime/refcount.c
 var RefcountRuntime string
 

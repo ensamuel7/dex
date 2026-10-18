@@ -30,6 +30,36 @@ external module zlib {
     fn compileFlags(): long = "zlibCompileFlags"
 }
 
+// An opaque handle: a C pointer the program passes around but never
+// dereferences. It is a refcounted box, so it can be stored and returned, and
+// the closing function runs when the last reference goes — including when an
+// exception unwinds past the frame holding it.
+external module cio {
+    include "<stdio.h>"
+
+    type File closed by "fclose"
+
+    // fopen returns NULL on failure, so the declaration is optional and a
+    // failed open reads as null rather than a box wrapping nothing.
+    fn open(path: string, mode: string): File? = "fopen"
+    fn readByte(f: File): int = "fgetc"
+    fn atEnd(f: File): int = "feof"
+}
+
+struct OpenFailed(message: string) {}
+
+// Opens the file and throws past it, so the only thing that can close the
+// handle is the unwind. Run under make memcheck a leaked box is reported, and
+// under a low descriptor limit a skipped fclose exhausts fopen within fifty
+// iterations.
+fn openThenThrow(path: string): void throws OpenFailed {
+    let f: File? = cio.open(path, "r")
+    if (f == null) {
+        throw OpenFailed("could not open — a previous handle was not closed")
+    }
+    throw OpenFailed("deliberate")
+}
+
 external module cstr {
     include "<string.h>"
     include "<stdlib.h>"
@@ -86,6 +116,28 @@ fn main(): void {
 
     // strlen stops at the NUL, which is exactly why a byte API takes a length.
     assert(cstr.length(a) == 2)
+
+    // A handle round-trips through C and closes at scope exit.
+    let f: File? = cio.open("examples/external_test.dx", "r")
+    assert(f != null)
+    if (f != null) {
+        assert(cio.readByte(f) > 0)
+    }
+
+    // A failed open is null, not a box around NULL.
+    let missing: File? = cio.open("/no/such/path/at/all", "r")
+    assert(missing == null)
+
+    // The close runs even when an exception unwinds past the handle.
+    let round: int = 0
+    while (round < 200) {
+        try {
+            openThenThrow("examples/external_test.dx")
+        } catch (e: OpenFailed) {
+            assert(e.message == "deliberate")
+        }
+        round = round + 1
+    }
 
     fmt.println("external_test: all assertions passed")
 }

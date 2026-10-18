@@ -21,6 +21,15 @@ func externalTypeSupported(t ast.Type) bool {
 	case ast.TypeInt, ast.TypeLong, ast.TypeDouble, ast.TypeBool, ast.TypeChar, ast.TypeString:
 		return true
 	}
+	// An opaque handle crosses as the C pointer inside its box. An optional one
+	// crosses too: NULL is its absent value, which is what the C function
+	// returning it already means by NULL.
+	if ast.IsHandleType(t) {
+		return true
+	}
+	if ast.IsOptionalType(t) && ast.IsHandleType(ast.OptionalInnerType(t)) {
+		return true
+	}
 	return false
 }
 
@@ -52,6 +61,21 @@ func (c *Checker) checkExternals(program *ast.Program) {
 		for _, l := range em.Links {
 			if !validLinkFlag(l) {
 				c.addError(c.errAt(em.Pos, "link %q is not allowed: only -l<name>, -L<path> and a bare library name are, so that a module cannot pass arbitrary flags to the C compiler", l))
+			}
+		}
+
+		typeSeen := map[string]bool{}
+		for _, t := range em.Types {
+			if typeSeen[t.Name] {
+				c.addError(c.errAt(t.Pos, "external module '%s' declares type '%s' twice", em.Name, t.Name))
+				continue
+			}
+			typeSeen[t.Name] = true
+			if t.Closer == "" {
+				c.addError(c.errAt(t.Pos, "type %s.%s needs a closing function, as in closed by \"fclose\"", em.Name, t.Name))
+			}
+			if _, taken := ast.LookupStructType(t.Name); taken {
+				c.addError(c.errAt(t.Pos, "external type '%s' collides with a struct of the same name", t.Name))
 			}
 		}
 

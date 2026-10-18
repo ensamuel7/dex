@@ -4045,10 +4045,9 @@ z.f() parameter 'a' is string[], which cannot cross the C boundary yet —
 only int, long, double, bool, char and string can
 ```
 
-Containers, opaque handles and callbacks are each their own problem and are not
-supported yet. A handle needs a destructor wired into scope exit, and a
-callback cannot be unwound through, because `throw` is `longjmp` and a C frame
-in between would have its cleanup skipped.
+Also an **opaque handle**, declared in the block — see below. Containers and
+callbacks are not supported: a callback cannot be unwound through, because
+`throw` is `longjmp` and a C frame in between would have its cleanup skipped.
 
 ### Who owns a returned string
 
@@ -4107,6 +4106,63 @@ C helper is compiled into the same translation unit and can take a `DexString*`
 directly, while a library you link against has no access to that layout. The
 pointer-and-length form is the only one that could work, and it is the form
 those functions are already written in.
+
+### Opaque handles
+
+Most C libraries are handle-based — `FILE*`, `sqlite3*`, `z_stream*`. Declare
+one with the function that closes it:
+
+```dex
+external module cio {
+    include "<stdio.h>"
+
+    type File closed by "fclose"
+
+    fn open(path: string, mode: string): File? = "fopen"
+    fn readByte(f: File): int = "fgetc"
+}
+```
+
+A handle is a pointer the program passes around and never dereferences. There
+is no way to read through one, construct one, or do arithmetic on it; the only
+thing that can be done with a handle is hand it back to the module that made
+it.
+
+**It is refcounted, not move-only.** The pointer itself gets no header — it
+came from a C library and may not be memory we allocated — so it is held in a
+box, which is an ordinary refcounted object. The closing function is the box's
+destructor, which means it runs when the last reference goes: at scope exit,
+when the variable is overwritten, when the container holding it is released,
+and when an exception unwinds past the frame. That last one is the case a
+handle most needs, and it is why refcounting rather than move semantics: a
+`defer` can be forgotten, and this cannot.
+
+Rust reaches move-only semantics here, but because move is its default for any
+type with a destructor, not because handles call for it. Refcounting is this
+language's default, so a handle follows it and no new ownership rule has to be
+invented or enforced.
+
+**A failed open is `null`.** A C function returning a handle usually returns
+NULL on failure, so declare the return optional and NULL arrives as `null`
+rather than a box wrapping nothing:
+
+```dex
+let f: File? = cio.open(path, "r")
+if (f != null) {
+    let b: int = cio.readByte(f)   // narrowed to File
+}
+```
+
+A handle is a pointer, so the optional needs no extra representation: NULL is
+the absent value, which is the same thing the C function already meant by it.
+
+#### What refcounting does not solve
+
+Refcounting tracks how many references a handle has, not what it depends on. A
+`sqlite3_stmt*` that outlives the `sqlite3*` it was prepared on is a
+use-after-free, and keeping the statement alive will not keep the connection
+alive. Rust expresses that with lifetimes; there is no way to say it here. So
+nested handles remain a sharp edge, and the language will not catch it for you.
 
 ### A known wart
 

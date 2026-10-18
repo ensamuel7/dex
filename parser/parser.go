@@ -19,6 +19,7 @@ type Parser struct {
 	structNames    map[string]bool
 	enumNames      map[string]bool
 	interfaceNames map[string]bool
+	handleNames    map[string]ast.Type
 	errors         []error
 	maxErrors      int
 	lastArgNames   []string // set by parseArgs when named arguments are used
@@ -48,6 +49,7 @@ func New(tokens []token.Token) *Parser {
 		pos:                 0,
 		structNames:         make(map[string]bool),
 		enumNames:           make(map[string]bool),
+		handleNames:         make(map[string]ast.Type),
 		interfaceNames:      make(map[string]bool),
 		maxErrors:           20,
 		candidates:          make(map[string][]string),
@@ -979,6 +981,9 @@ func (p *Parser) parseType() (ast.Type, error) {
 		} else if name == "StringBuilder" {
 			p.advance()
 			base = ast.TypeStringBuilder
+		} else if t, ok := p.handleNames[name]; ok {
+			p.advance()
+			base = t
 		} else if p.knownTypeName(name) && !p.enumNames[name] && !p.interfaceNames[name] {
 			p.advance()
 			flat, err := p.resolveTypeName(name)

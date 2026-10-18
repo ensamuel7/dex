@@ -628,3 +628,79 @@ func InterfaceName(t Type) string {
 	}
 	return def.Name
 }
+
+// A handle is an opaque C pointer the program may pass around but never
+// dereference. It is a refcounted box rather than a bare pointer: a box can be
+// stored, returned and captured, and the release machinery already closes one
+// when its last reference goes — including when an exception unwinds past the
+// frame holding it, which is the case that otherwise leaks a connection.
+//
+// Rust reaches move-only semantics here because move is its default for any
+// type with a destructor. Refcounting is this language's default, so a handle
+// follows it, and no new ownership rule has to be invented or enforced.
+type handleInfo struct {
+	Module string
+	Name   string
+	Closer string // the C function that closes it
+}
+
+var (
+	handleTypes  []handleInfo
+	handleByName = map[string]Type{}
+)
+
+// HandleTypeOf registers or returns the type for a module's handle.
+func HandleTypeOf(module, name, closer string) Type {
+	key := module + "." + name
+	if id, ok := handleByName[key]; ok {
+		return id
+	}
+	id := TypeHandleBase + Type(len(handleTypes))
+	handleByName[key] = id
+	handleTypes = append(handleTypes, handleInfo{Module: module, Name: name, Closer: closer})
+	return id
+}
+
+func LookupHandleType(module, name string) (Type, bool) {
+	id, ok := handleByName[module+"."+name]
+	return id, ok
+}
+
+func IsHandleType(t Type) bool {
+	return t >= TypeHandleBase && t < TypeHandleBase+1000
+}
+
+func HandleName(t Type) string {
+	idx := int(t - TypeHandleBase)
+	if idx < 0 || idx >= len(handleTypes) {
+		return ""
+	}
+	return handleTypes[idx].Name
+}
+
+func HandleModule(t Type) string {
+	idx := int(t - TypeHandleBase)
+	if idx < 0 || idx >= len(handleTypes) {
+		return ""
+	}
+	return handleTypes[idx].Module
+}
+
+// HandleCloser is the C function that closes the handle, which becomes the
+// box's destroy hook.
+func HandleCloser(t Type) string {
+	idx := int(t - TypeHandleBase)
+	if idx < 0 || idx >= len(handleTypes) {
+		return ""
+	}
+	return handleTypes[idx].Closer
+}
+
+// ResetHandleTypes clears the registry between compilations, the way the other
+// per-program type registries are cleared: a handle belongs to the external
+// block that declared it, and the language server compiles many files in one
+// process.
+func ResetHandleTypes() {
+	handleTypes = nil
+	handleByName = map[string]Type{}
+}

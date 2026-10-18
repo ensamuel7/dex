@@ -357,6 +357,29 @@ Bytes that may contain a NUL cross as a pointer and a length, which is how the
 C functions taking them are already written — `.len()` is the byte length, so
 nothing truncates.
 
+Handle-based libraries declare the function that closes the handle:
+
+```dex
+external module cio {
+    include "<stdio.h>"
+
+    type File closed by "fclose"
+
+    fn open(path: string, mode: string): File? = "fopen"
+    fn readByte(f: File): int = "fgetc"
+}
+```
+
+A handle is a pointer the program passes around and never dereferences. It is
+refcounted rather than move-only, so the close runs when the last reference
+goes — at scope exit, on overwrite, and when an exception unwinds past the
+frame holding it. `fopen` returns NULL on failure, so the return is optional
+and a failed open reads as `null`.
+
+What refcounting does not give you is dependency: a statement handle that
+outlives its connection handle is still a use-after-free, and nothing here
+catches that.
+
 `link` accepts `-l<name>`, `-L<path>` and a bare library name, and refuses the
 rest: a block that could hand arbitrary flags to the C compiler would be code
 execution at build time.

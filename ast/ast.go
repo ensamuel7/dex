@@ -86,6 +86,9 @@ const TypeInterfaceBase Type = 11000
 // one is a compiler bug rather than a language feature.
 const TypeParamBase Type = 12000
 
+// Opaque C handle system: dynamic IDs starting at 13000.
+const TypeHandleBase Type = 13000
+
 type StructField struct {
 	Name        string
 	Type        Type
@@ -224,7 +227,7 @@ func IsHeapType(t Type) bool {
 	// release, scope cleanup, the unwind stack, array elements and struct
 	// fields without a single one of those sites knowing about enums. A plain
 	// enum is still an integer and still answers false.
-	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t) || IsFuncType(t) || IsPayloadEnumType(t)
+	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t) || IsFuncType(t) || IsPayloadEnumType(t) || IsHandleType(t)
 }
 
 func NeedsRelease(t Type) bool {
@@ -383,7 +386,17 @@ type ExternalModule struct {
 	Name     string
 	Includes []string
 	Links    []string
+	Types    []ExternalType
 	Funcs    []ExternalFunc
+}
+
+// ExternalType is `type Name closed by "cfunc"`: an opaque C pointer the
+// program passes around but never dereferences. Closer is the C function that
+// closes it, which becomes the box's destroy hook.
+type ExternalType struct {
+	Pos    Pos
+	Name   string
+	Closer string
 }
 
 // ExternalFunc is one declaration inside an external block. CName is the symbol to

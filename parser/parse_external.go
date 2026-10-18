@@ -45,6 +45,13 @@ func (p *Parser) parseExternalModule() (*ast.ExternalModule, error) {
 			mod.Includes = append(mod.Includes, p.current().Value)
 			p.advance()
 
+		case p.softKeyword("type"):
+			t, err := p.parseExternalType(name)
+			if err != nil {
+				return nil, err
+			}
+			mod.Types = append(mod.Types, *t)
+
 		case p.softKeyword("link"):
 			p.advance()
 			if !p.check(token.TokenString) {
@@ -143,4 +150,35 @@ func (p *Parser) parseExternalFunc(moduleName string) (*ast.ExternalFunc, error)
 		p.advance()
 	}
 	return fn, nil
+}
+
+// parseExternalType reads `type Name closed by "cfunc"`. The name is registered
+// as a type immediately, so the fn declarations below it in the same block can
+// use it — the language's declare-before-use rule, which falls out of reading
+// the block top to bottom.
+func (p *Parser) parseExternalType(moduleName string) (*ast.ExternalType, error) {
+	pos := p.nodePos()
+	p.advance() // consume 'type'
+
+	name, err := p.expectDeclName("a type name")
+	if err != nil {
+		return nil, err
+	}
+
+	if !p.softKeyword("closed") {
+		return nil, p.errorf("expected 'closed by \"<function>\"' after type %s.%s — a handle needs the C function that closes it", moduleName, name)
+	}
+	p.advance()
+	if !p.softKeyword("by") {
+		return nil, p.errorf("expected 'by' after 'closed' on type %s.%s", moduleName, name)
+	}
+	p.advance()
+	if !p.check(token.TokenString) {
+		return nil, p.errorf("expected the closing function in quotes on type %s.%s, as in closed by \"fclose\"", moduleName, name)
+	}
+	closer := p.current().Value
+	p.advance()
+
+	p.handleNames[name] = ast.HandleTypeOf(moduleName, name, closer)
+	return &ast.ExternalType{Pos: pos, Name: name, Closer: closer}, nil
 }

@@ -64,6 +64,9 @@ func (g *Generator) cType(t ast.Type) string {
 			// Heap types (string, arrays, channels, etc.) — same pointer type, NULL = absent
 			return g.cType(inner)
 		}
+		if ast.IsHandleType(t) {
+			return "DexHandle*"
+		}
 		if ast.IsStructArrayType(t) {
 			return "DexArrayStruct*"
 		}

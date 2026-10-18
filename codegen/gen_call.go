@@ -840,6 +840,22 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					g.genStdlibArg(out, arg, funcDef, i)
 				}
 				out.WriteString("))")
+			} else if ht, isHandle := handleOf(funcDef.ReturnType); isHandle {
+				// The C function hands back a raw pointer; box it so it is
+				// refcounted and closed when its last reference goes. A NULL
+				// means the call failed, and dex_handle_new yields NULL for it.
+				out.WriteString("dex_handle_new(")
+				out.WriteString(funcDef.CName)
+				out.WriteString("(")
+				for i, arg := range e.Args {
+					if i > 0 {
+						out.WriteString(", ")
+					}
+					g.genStdlibArg(out, arg, funcDef, i)
+				}
+				out.WriteString("), ")
+				out.WriteString(handleCloserName(ast.HandleModule(ht), ast.HandleName(ht)))
+				out.WriteString(")")
 			} else {
 				out.WriteString(funcDef.CName)
 				out.WriteString("(")
@@ -1021,6 +1037,14 @@ func (g *Generator) genStrMethodWithArgs(out *strings.Builder, cFunc, receiver s
 // bridging DexString* to const char* when the stdlib expects it.
 func (g *Generator) genStdlibArg(out *strings.Builder, arg ast.Expr, funcDef *stdlib.FuncDef, idx int) {
 	argType := g.typeOfExpr(arg)
+	if _, isHandle := handleOf(argType); isHandle {
+		// What crosses is the C pointer, not the box. Borrowed: the callee has
+		// no reference to release, exactly as for a const char*.
+		out.WriteString("dex_handle_ptr(")
+		g.genBorrowed(out, arg)
+		out.WriteString(")")
+		return
+	}
 	if argType == ast.TypeString && funcDef.IsRawParam(idx) {
 		// Handed over whole, so the callee can read ->len. Borrowed, because the
 		// callee only reads it: an argument that allocates is released once the

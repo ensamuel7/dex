@@ -144,3 +144,32 @@ func TestParseExternalOwnedReturn(t *testing.T) {
 		t.Errorf("dup return = %v, want string", fns[1].ReturnType)
 	}
 }
+
+func TestParseExternalHandleType(t *testing.T) {
+	prog := parseExtern(t, `external module cio {
+		include "<stdio.h>"
+		type File closed by "fclose"
+		fn open(path: string, mode: string): File? = "fopen"
+	}
+	fn main(): void {}`)
+	em := prog.Externals[0]
+	if len(em.Types) != 1 {
+		t.Fatalf("got %d types, want 1", len(em.Types))
+	}
+	if em.Types[0].Name != "File" || em.Types[0].Closer != "fclose" {
+		t.Errorf("type = %q closed by %q", em.Types[0].Name, em.Types[0].Closer)
+	}
+	// The handle resolves in type position, as an optional here.
+	ret := em.Funcs[0].ReturnType
+	if !ast.IsOptionalType(ret) || !ast.IsHandleType(ast.OptionalInnerType(ret)) {
+		t.Errorf("open return = %v, want an optional handle", ret)
+	}
+}
+
+func TestParseExternalHandleNeedsACloser(t *testing.T) {
+	parseExternalFails(t, `external module cio {
+		type File
+		fn f(n: int): int
+	}
+	fn main(): void {}`, "closed by")
+}

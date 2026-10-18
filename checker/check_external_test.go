@@ -194,3 +194,36 @@ func TestExternalStillRejectsNonScalarContainers(t *testing.T) {
 	}
 	fn main(): void {}`, "cannot cross the C boundary yet")
 }
+
+func TestExternalHandleTypeAndUse(t *testing.T) {
+	mustCheck(t, `external module cio {
+		include "<stdio.h>"
+		type File closed by "fclose"
+		fn open(path: string, mode: string): File? = "fopen"
+		fn readByte(f: File): int = "fgetc"
+	}
+	fn main(): void {
+		let f: File? = cio.open("x", "r")
+		if (f != null) {
+			let b: int = cio.readByte(f)
+		}
+	}`)
+}
+
+func TestExternalHandleRejectsDuplicateType(t *testing.T) {
+	mustFail(t, `external module cio {
+		type File closed by "fclose"
+		type File closed by "fclose"
+		fn f(n: int): int
+	}
+	fn main(): void {}`, "declares type 'File' twice")
+}
+
+func TestExternalHandleCollidesWithStruct(t *testing.T) {
+	mustFail(t, `struct File { x: int }
+	external module cio {
+		type File closed by "fclose"
+		fn f(n: int): int
+	}
+	fn main(): void {}`, "collides with a struct")
+}

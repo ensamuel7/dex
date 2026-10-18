@@ -79,9 +79,23 @@ runs is semantics rather than advice. There is no `#[raw]` for parameters —
 bytes cross as a pointer and a length, because a linked library cannot see the
 `DexString` layout that the stdlib's `RawParams` relies on.
 
-Opaque handles and callbacks remain unsolved, each for its own reason: a handle
-needs a destructor wired into scope exit, and `throw` is `longjmp` so a C frame
-between a throw and its catch has its cleanup skipped.
+An opaque handle (`type X closed by "f"`) is a refcounted box: `DexHandle` in
+`cruntime/handle.c` holds the C pointer, and the closing function is the box's
+destroy hook, so one struct serves every handle type. `IsHeapType` is true for
+a handle, which is what gives it retain/release, scope cleanup and the unwind
+stack with no site knowing about handles — `_dex_cleanup_push` on a handle is
+emitted by the existing path. `dex_handle_new` yields NULL for a NULL pointer,
+so `X?` falls out of the existing heap-pointer optional representation with no
+new codegen. The destroy shim must not free the box: destroy releases contents,
+the runtime frees the object, the same contract `dex_string_destroy` follows.
+`ast.ResetHandleTypes` is wired into both reset sites for the LSP.
+
+Refcounting does not model dependency: a statement handle outliving its
+connection handle is a use-after-free the language cannot catch. Documented
+rather than implied away.
+
+Callbacks remain unsolved: `throw` is `longjmp`, so a C frame between a throw
+and its catch has its cleanup skipped.
 
 ## Naming Conventions
 

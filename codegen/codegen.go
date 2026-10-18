@@ -41,6 +41,7 @@ type Generator struct {
 	usesConcurrency   bool
 	usesSafety        bool
 	usesRefcount      bool
+	usesHandle        bool
 	usesArena         bool
 	usesDebugCycles   bool
 	usesWeakRef       bool

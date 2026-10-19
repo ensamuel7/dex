@@ -21,8 +21,10 @@ fn main(): void {
     assert(crypto.hmacSha256B64Url(secret, "abc") == "cKcSs_wlTuxW_AV8_3UC3JnAieYpHy93QzBhPUTTKlU")
     assert(crypto.hmacSha256B64Url(secret, "hello world") == "EqWg7k_REJB-gy4BDDnWmDFjRQrHhfaI0eTIOW-Sizs")
 
+    // The key matters as much as the message.
     assert(crypto.hmacSha256B64Url("other-secret", signingInput) != sig)
 
+    // A verify compares without leaking how long a prefix matched.
     assert(crypto.secureEquals(sig, "cwzJrot3uVQhgRkwF46jBFVRM-zpa81nzYTlZDRQ5aA"))
     assert(!crypto.secureEquals(sig, "cwzJrot3uVQhgRkwF46jBFVRM-zpa81nzYTlZDRQ5aB"))
 

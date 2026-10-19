@@ -44,15 +44,18 @@ fn main(): void {
 
     assert(signature.len() == 342)
 
+    // Base64url, not base64: a JWS carries no '+', '/' or '='.
     assert(!signature.contains("+"))
     assert(!signature.contains("/"))
     assert(!signature.contains("="))
 
+    // The point of the whole thing: the verifier accepts it.
     let modulus: string = crypto.base64UrlDecode(TEST_MODULUS_B64)
     let exponent: string = crypto.base64UrlDecode(TEST_EXPONENT_B64)
     let raw: string = crypto.base64UrlDecode(signature)
     assert(crypto.verifyRs256(SIGNING_INPUT, raw, modulus, exponent))
 
+    // And rejects a signature over anything else.
     let tampered: string = SIGNING_INPUT + "x"
     assert(!crypto.verifyRs256(tampered, raw, modulus, exponent))
 

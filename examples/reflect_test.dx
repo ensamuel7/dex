@@ -64,6 +64,7 @@ fn main(): void {
     fmt.println(reflect.has(unit, "nope"))
     fmt.println(reflect.indexOf(unit, "nope"))
 
+    // A name chosen at runtime searches the name table instead.
     let picked: string = "sco" + "re"
     fmt.println(reflect.asDouble(unit, reflect.indexOf(unit, picked)))
 

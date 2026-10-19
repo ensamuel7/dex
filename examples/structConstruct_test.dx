@@ -6,6 +6,7 @@ struct Outer(inner: Inner, n: int) {}
 
 struct Pair(first: string, second: string) {}
 
+// The caller still owns `label` once this returns.
 fn viaConstructor(label: string): Inner {
     return Inner(label)
 }
@@ -14,6 +15,7 @@ fn viaBraces(label: string): Inner {
     return Inner { label: label }
 }
 
+// A nested literal, both ways round.
 fn nestedConstructor(label: string): Outer {
     return Outer(Inner(label), 1)
 }
@@ -47,6 +49,7 @@ fn main(): void {
         let e: Inner = minted(i)
         assert(e.label == "minted " + str.fromInt(i))
 
+        // Both fields borrowed from the same local.
         let p: Pair = Pair(held, held)
         assert(p.first == p.second)
 

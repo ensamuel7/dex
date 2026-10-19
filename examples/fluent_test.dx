@@ -59,6 +59,7 @@ struct Counter {
 }
 
 fn main(): void {
+    // A chain over a named variable mutates that variable.
     let s: Stmt = blank()
     s.into("users").col("id").col("email").col("name").where("active = true").limit(25)
     assert(s.table == "users")
@@ -66,12 +67,15 @@ fn main(): void {
     assert(s.lim == 25)
     fmt.println(s.text())
 
+    // A chain over a temporary, ending in a method that reads it.
     fmt.println(insertInto("posts").col("title").col("views").text())
 
+    // The chain returns the same instance, not a copy.
     let c: Counter = Counter { n: 0 }
     c.bump().bump().bump()
     assert(c.n == 3)
 
+    // The result of a chain can be bound as a reference.
     let r: &Counter = c.bump()
     assert(c.n == 4)
     assert(r.n == 4)
@@ -84,6 +88,7 @@ fn main(): void {
         let b: Stmt = blank()
         b.into("t").col("a").col("b").where("x = 1").limit(i)
         total = total + b.text().len()
+        // And the same over a temporary.
         total = total + insertInto("u").col("c").text().len()
         i = i + 1
     }

@@ -14,21 +14,26 @@ enum Direction {
 }
 
 fn main(): void {
+    // Basic enum creation and comparison
     let c: Color = Color.Red
     assert(c == Color.Red)
     assert(c != Color.Green)
     assert(c != Color.Blue)
 
+    // Assign different variant
     let g: Color = Color.Green
     assert(g == Color.Green)
     assert(g != Color.Red)
 
+    // Enum in if statement
     if (c == Color.Red) {
         fmt.println("red")
     }
 
+    // Enum comparison between same type
     assert(c != g)
 
+    // Enum in switch statement
     let d: Direction = Direction.East
     switch (d) {
         case Direction.North: {
@@ -42,6 +47,7 @@ fn main(): void {
         }
     }
 
+    // Multiple enums in switch with default
     let c2: Color = Color.Blue
     switch (c2) {
         case Color.Red: {
@@ -55,11 +61,13 @@ fn main(): void {
         }
     }
 
+    // Enum reassignment
     let mut: Color = Color.Red
     mut = Color.Blue
     assert(mut == Color.Blue)
     assert(mut != Color.Red)
 
+    // Enum arrays
     let colors: Color[] = []
     colors.push(Color.Red)
     colors.push(Color.Green)
@@ -71,6 +79,7 @@ fn main(): void {
     assert(colors[1] == Color.Green)
     assert(colors[2] == Color.Blue)
 
+    // Enum array pop and remove
     colors.remove(1)
     assert(colors.len() == 2)
     assert(colors[0] == Color.Red)

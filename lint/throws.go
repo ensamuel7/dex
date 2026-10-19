@@ -372,7 +372,7 @@ func (l *linter) reportThrowFindings(e *effects, all map[string]*effects) {
 			continue
 		}
 		sort.Strings(uncovered)
-		what := "'" + displayName(esc.callee) + "' may throw " + strings.Join(uncovered, ", ")
+		what := "'" + l.displayName(esc.callee) + "' may throw " + strings.Join(uncovered, ", ")
 		if raisedAt != "" {
 			what += " (raised at " + raisedAt + ")"
 		}
@@ -391,10 +391,10 @@ func (l *linter) reportEscape(fn *ast.Function, pos ast.Pos, what string, types 
 		l.report(RuleUncaughtThrow, pos, "%s, and nothing above main can catch it — wrap it in try/catch", what)
 	case len(fn.ThrowsTypes) > 0:
 		l.report(RuleUndeclaredThrow, pos, "%s, which '%s' does not declare — add %s to its throws, or catch it here",
-			what, displayName(fn.Name), strings.Join(types, ", "))
+			what, l.displayName(fn.Name), strings.Join(types, ", "))
 	default:
 		l.report(RuleUncaughtThrow, pos, "%s, and '%s' does not declare throws — wrap it in try/catch, or declare the signature throws %s",
-			what, displayName(fn.Name), strings.Join(types, ", "))
+			what, l.displayName(fn.Name), strings.Join(types, ", "))
 	}
 }
 
@@ -406,7 +406,7 @@ func (l *linter) reportUnnecessaryThrows(e *effects) {
 	if len(fn.ThrowsTypes) == 0 {
 		if len(e.body) == 0 {
 			l.report(RuleUnneededThrows, fn.Pos,
-				"'%s' is declared throws but nothing in it can throw", displayName(fn.Name))
+				"'%s' is declared throws but nothing in it can throw", l.displayName(fn.Name))
 		}
 		return
 	}
@@ -419,7 +419,7 @@ func (l *linter) reportUnnecessaryThrows(e *effects) {
 			continue
 		}
 		l.report(RuleUnneededThrows, fn.Pos,
-			"'%s' declares throws %s but nothing in it throws %s", displayName(fn.Name), typ, typ)
+			"'%s' declares throws %s but nothing in it throws %s", l.displayName(fn.Name), typ, typ)
 	}
 }
 
@@ -457,9 +457,19 @@ func (l *linter) checkCatchClauses() {
 
 // displayName turns the flat name of a method back into something a reader
 // recognises: Box_risky is written Box.risky.
-func displayName(flat string) string {
+func (l *linter) displayName(flat string) string {
 	if structName, method, ok := splitMethodName(flat); ok {
-		return structName + "." + method
+		return ast.DisplayStructName(structName) + "." + method
+	}
+	for _, module := range l.program.UserModules {
+		rest, ok := strings.CutPrefix(flat, module+"_")
+		if !ok {
+			continue
+		}
+		if structName, method, ok := splitMethodName(rest); ok {
+			return ast.DisplayStructName(structName) + "." + method
+		}
+		return module + "." + rest
 	}
 	return flat
 }

@@ -33,6 +33,7 @@ fn main(): void {
     let secure: Page = make(false, "secure")
     let plain: Page = make(true, "plain")
 
+    // Declared from a borrow, which retains two levels down.
     let page: Page = secure
     assert(page.headers.index.key == "server-secure")
 
@@ -40,6 +41,7 @@ fn main(): void {
         page = plain
     }
 
+    // Both names still hold live strings, at every depth.
     assert(page.ok)
     assert(page.url == "https://plain")
     assert(page.headers.raw == "Server: plain")
@@ -52,9 +54,11 @@ fn main(): void {
     assert(plain.headers.index.key == "server-plain")
     assert(plain.headers.index.values[1] == "b-plain")
 
+    // The one that was replaced is untouched too.
     assert(secure.headers.index.key == "server-secure")
     assert(secure.headers.raw == "Server: secure")
 
+    // Reassigned again, from the other direction.
     page = secure
     assert(page.headers.index.key == "server-secure")
     assert(plain.headers.index.key == "server-plain")

@@ -99,9 +99,13 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 	}
 	// Special case for array literal value
 	if arrLit, ok := s.Value.(*ast.ArrayLitExpr); ok {
-		if ast.IsStructArrayType(s.Type) {
+		arrType := s.Type
+		if ast.IsOptionalType(arrType) {
+			arrType = ast.OptionalInnerType(arrType)
+		}
+		if ast.IsStructArrayType(arrType) {
 			// Struct array: use generic DexArrayStruct
-			elemType := ast.ElementType(s.Type)
+			elemType := ast.ElementType(arrType)
 			elemCType := g.cType(elemType)
 			cleanupFn := g.structArrayCleanupFunc(elemType)
 			out.WriteString(fmt.Sprintf("%sDexArrayStruct* %s = dex_array_struct_new(sizeof(%s), %s);\n", prefix, s.Name, elemCType, cleanupFn))
@@ -113,11 +117,11 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 			g.registerScopeVar(out, prefix, s.Name, s.Type)
 			return
 		}
-		cNewFn := g.arrayNewFunc(s.Type)
-		out.WriteString(fmt.Sprintf("%s%s %s = %s();\n", prefix, g.cType(s.Type), s.Name, cNewFn))
+		cNewFn := g.arrayNewFunc(arrType)
+		out.WriteString(fmt.Sprintf("%s%s %s = %s();\n", prefix, g.cType(arrType), s.Name, cNewFn))
 		for _, elem := range arrLit.Elems {
 			out.WriteString(prefix)
-			g.genArrayLitElem(out, s.Name, s.Type, elem)
+			g.genArrayLitElem(out, s.Name, arrType, elem)
 			out.WriteString("\n")
 		}
 		g.registerScopeVar(out, prefix, s.Name, s.Type)

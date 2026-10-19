@@ -21,6 +21,7 @@ fn open(path: string): Database {
     return Database { handle: db }
 }
 
+// Runs a statement to completion. SQLITE_DONE is 101.
 fn exec(d: Database, sql: string): bool {
     let h: Db? = d.handle
     if (h == null) {

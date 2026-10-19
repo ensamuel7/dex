@@ -19,6 +19,7 @@ fn makeGreeter(name: string): fn(): string {
 }
 
 fn main(): void {
+    // capture a local
     let base: int = 10
     let addBase: fn(int): int = fn(x: int): int {
         return x + base
@@ -30,15 +31,18 @@ fn main(): void {
     assert(add7(1) == 8)
     assert(add7(10) == 17)
 
+    // capturing a heap value: the string must survive its scope
     let greet: fn(): string = makeGreeter("dex")
     assert(greet() == "hello dex")
     assert(call0(greet) == "hello dex")
 
+    // two closures over different values stay independent
     let a: fn(int): int = makeAdder(1)
     let b: fn(int): int = makeAdder(100)
     assert(a(0) == 1)
     assert(b(0) == 100)
 
+    // capture several variables at once
     let x: int = 2
     let y: int = 3
     let sum: fn(): int = fn(): int {
@@ -46,6 +50,7 @@ fn main(): void {
     }
     assert(sum() == 5)
 
+    // a plain function still works as a value
     let f: fn(int): int = twice
     assert(f(21) == 42)
     assert(apply(twice, 4) == 8)

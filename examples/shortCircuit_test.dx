@@ -38,6 +38,7 @@ fn main(): void {
     }
     assert(calls == 4)
 
+    // The guard this exists for.
     let empty: string = ""
     if (!empty.isEmpty() && empty.substring(0, 1) == "a") {
         assert(false)

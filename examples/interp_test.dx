@@ -27,12 +27,16 @@ fn main(): void {
     let s = "dex"
     assert("string ${s}" == "string dex")
 
+    // An expression, not just a name.
     assert("sum ${i + 1}" == "sum 8")
 
+    // Two interpolations and text on both sides.
     assert("a${i}b${i}c" == "a7b7c")
 
+    // Interpolation with nothing around it.
     assert("${i}" == "7")
 
+    // A call in an interpolation runs exactly once.
     assert(describe(3) == "n=3")
 
     let p = Point { x: 1, y: 2 }

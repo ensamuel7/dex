@@ -1,3 +1,4 @@
+// Imports its own library's util by the plain name.
 import "util"
 
 fn run(label: string): string {

@@ -27,6 +27,7 @@ fn guarded(n: int): int {
     }
 }
 
+// A break out of a try body is the same jump.
 fn breaksOut(limit: int): int {
     let seen = 0
     for (let i = 0; i < limit; i = i + 1) {

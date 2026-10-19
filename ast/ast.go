@@ -583,6 +583,7 @@ type ForeachStmt struct {
 	Iterable Expr
 	IndexVar string
 	ValueVar string
+	ElemType Type
 	Body     []Stmt
 }
 

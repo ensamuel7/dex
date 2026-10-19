@@ -18,6 +18,7 @@ fn applyTwice(f: fn(int): void, n: int): void {
 }
 
 fn main(): void {
+    // Each module keeps its own state.
     counter.reset()
     assert(counter.value() == 0)
     assert(tally.value() == 1000)
@@ -35,9 +36,11 @@ fn main(): void {
     assert(counter.LABEL == "counter")
     assert(tally.LABEL == "tally")
 
+    // A function referenced as a value, not called.
     applyTwice(counter.add, 10)
     assert(counter.value() == 25)
 
+    // A local named after a module shadows it.
     assert(shadowing() == 2)
 
     counter.reset()

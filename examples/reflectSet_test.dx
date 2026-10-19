@@ -43,6 +43,7 @@ fn fill(out: &Pending, seed: int): void {
 fn main(): void {
     let p: Pending = Pending {}
 
+    // Each setter writes its own kind and reports that it did.
     assert(reflect.setInt(p, 0, 7))
     assert(reflect.setLong(p, 1, 1234))
     assert(reflect.setDouble(p, 2, 2.5))
@@ -67,6 +68,7 @@ fn main(): void {
     assert(reflect.setString(p, reflect.indexOf(p, picked), "USD"))
     assert(p.currency == "USD")
 
+    // A nested struct is a subject in its own right.
     let o: Outer = Outer { tag: "t", detail: Inner { label: "before", n: 1 } }
     assert(reflect.setString(o.detail, 0, "after"))
     assert(reflect.setInt(o.detail, 1, 9))

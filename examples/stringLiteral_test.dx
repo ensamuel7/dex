@@ -32,6 +32,7 @@ fn main(): void {
     b = "one"
     assert(b == "one")
 
+    // Borrowed into a call that only reads, and returned back out.
     assert(echo("borrowed") == "borrowed")
     assert(echo(a) == "alpha")
 
@@ -48,6 +49,7 @@ fn main(): void {
     assert(arr[2] == "alpha")
     assert(arr.indexOf("second") == 1)
 
+    // A map key is read-only, a map value is owned.
     let m: map[string, int] = {}
     m["k"] = 1
     assert(m["k"] == 1)

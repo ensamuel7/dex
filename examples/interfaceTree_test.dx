@@ -55,6 +55,7 @@ fn main(): void {
     let nested: Expr = Add { left: product, right: sum }
     assert(nested.eval() == 20)
 
+    // 2^8 leaves of 2, summed.
     let deep: Expr = tree(8)
     assert(deep.eval() == 512)
 

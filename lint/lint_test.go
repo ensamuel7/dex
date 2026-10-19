@@ -999,3 +999,18 @@ fn main(): void {
 }
 `)
 }
+
+func TestDisplayNameReadsModuleNames(t *testing.T) {
+	ast.RegisterStructType(ast.StructDef{Name: "query_Columns", Module: "query"})
+	l := &linter{program: &ast.Program{UserModules: []string{"query"}}}
+	for flat, want := range map[string]string{
+		"query_query_Columns_override": "query.Columns.override",
+		"query_aliasFor":               "query.aliasFor",
+		"query_Columns_index":          "query.Columns.index",
+		"plain":                        "plain",
+	} {
+		if got := l.displayName(flat); got != want {
+			t.Errorf("displayName(%q) = %q, want %q", flat, got, want)
+		}
+	}
+}

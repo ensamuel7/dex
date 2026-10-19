@@ -53,6 +53,7 @@ fn innerOfCallers(holder: Holder): Inner {
     return holder.inner
 }
 
+// A whole by-value parameter handed straight back.
 fn passedThrough(holder: Holder): Holder {
     return holder
 }
@@ -62,6 +63,7 @@ fn plainOf(values: Plain[]): Plain {
 }
 
 fn main(): void {
+    // Out of an array the callee owned.
     let own: Holder = fromOwnArray()
     assert(own.id == "H1")
     let ownItems: Inner[] = own.items
@@ -78,17 +80,20 @@ fn main(): void {
     let borrowedSecond: Inner = borrowedItems[1]
     assert(borrowedSecond.tag == "B")
 
+    // A nested struct field, from each side.
     let fromOwn: Inner = innerOfOwn()
     assert(fromOwn.tag == "core")
     let source: Holder = fromOwnArray()
     let fromCaller: Inner = innerOfCallers(source)
     assert(fromCaller.tag == "core")
 
+    // A parameter returned whole.
     let through: Holder = passedThrough(source)
     assert(through.id == "H1")
     let throughItems: Inner[] = through.items
     assert(throughItems.len() == 2)
 
+    // Plain data, which needs no retain and must still work.
     let plains: Plain[] = []
     let p: Plain = Plain { count: 3, ratio: 0.5 }
     plains.push(p)

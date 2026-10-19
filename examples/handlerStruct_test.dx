@@ -45,6 +45,7 @@ struct SocketHandler {
 
 fn main(): void {
     let api: ApiHandler = ApiHandler { greeting: "hi", version: 2 }
+    // Registered from outside the struct, as method values.
     http.route("GET", "/outside", api.hello)
     http.route("GET", "/outside/:id", api.show)
     api.routes()
@@ -53,6 +54,7 @@ fn main(): void {
     ws.handleMessage(sock.onMessage)
     sock.register()
 
+    // The methods still work as ordinary calls.
     assert(api.count() == 2)
     assert(api.hello() == "{\"message\":\"hi\",\"version\":2}")
 }

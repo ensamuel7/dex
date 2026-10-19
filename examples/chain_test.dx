@@ -8,26 +8,32 @@ struct Q {
 }
 
 fn main(): void {
+    // A method on a method's result.
     let sb = StringBuilder()
     sb.append("hello")
     assert(sb.toString().len() == 5)
 
+    // A method on a module call's result.
     assert(str.fromInt(42).len() == 2)
     assert(str.fromInt(7).trim().len() == 1)
 
+    // Three links deep, each minting a string.
     assert("  Mixed  ".trim().toUpper().len() == 5)
 
     let csv: string = "a,bb,ccc"
     assert(csv.split(",").len() == 3)
     assert(csv.split(",").contains("bb"))
 
+    // Indexing a call's result, then a method on the element.
     assert(csv.split(",")[2].len() == 3)
 
+    // A map method returning an array, chained.
     let m: map[string, int] = {}
     m.set("x", 1)
     m.set("y", 2)
     assert(m.keys().len() == 2)
 
+    // Reflection's array result, chained.
     let q: Q = Q { a: 1, b: "xy" }
     assert(reflect.fields(q).len() == 2)
 

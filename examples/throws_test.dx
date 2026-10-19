@@ -23,6 +23,7 @@ struct Validator {
 }
 
 fn main(): void {
+    // The happy path through two declared-throws frames.
     try {
         assert(ageOrThrow("42") == 42)
     } catch (e: Exception) {
@@ -39,6 +40,7 @@ fn main(): void {
     }
     assert(caught)
 
+    // A method declaring throws behaves the same way.
     let v = Validator { min: 18 }
     try {
         assert(v.check(21) == 21)

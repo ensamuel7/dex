@@ -22,6 +22,7 @@ fn main(): void {
     assert(guardedOr("Apple"))
     assert(!guardedOr("pear"))
 
+    // The comparison still works in every other position.
     let s: string = "  Hello  "
     assert(s.trim() == "Hello")
     assert(s.trim() != "hello")

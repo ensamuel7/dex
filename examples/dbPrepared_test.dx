@@ -58,6 +58,7 @@ fn main(): void {
     db.finalize(lookup)
     db.exec(conn, "DELETE FROM people WHERE id = 9007199254740993")
 
+    // Every reader, against a statement handle.
     let one: int = db.prepare(conn, "SELECT id, name, age, score, active FROM people WHERE id = ?")
     db.bindInt(one, 1, 1)
     assert(db.step(one))
@@ -87,7 +88,9 @@ fn main(): void {
         assert(p.age > 31)
         assert(!p.name.isEmpty())
     }
+    // ages 44, 32, 33, 34 — every row is over 31
     assert(seen == 4)
+    // free() on a statement handle finalizes it.
     db.free(sel)
 
     let gone: int = db.prepare(conn, "SELECT 7")

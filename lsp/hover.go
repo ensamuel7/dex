@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/checker"
 	"github.com/ensamuel7/dex/lexer"
 	"github.com/ensamuel7/dex/parser"
 	"github.com/ensamuel7/dex/resolve"
@@ -143,6 +144,9 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 	// Resolve user modules for cross-module hover info
 	resolve.FlattenStructMethods(program)
 	_ = resolve.ResolveUserModules(program, sourceDir)
+	ch := checker.New()
+	ch.SetGenerics(program.GenericFuncs, resolve.Instantiator{Parser: p, Aliases: program.ModuleAliases})
+	ch.Check(program)
 
 	name := tok.Value
 
@@ -153,6 +157,11 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 		if objTok.Kind == token.TokenIdent {
 			if result := s.hoverFieldAccess(program, objTok.Value, name); result != "" {
 				return result
+			}
+			if t, ok := findVariableTypeID(program, objTok.Value); ok && isArray(t) {
+				if sig, ok := arrayMethod(t, name); ok {
+					return fmt.Sprintf("```dex\n(method) %s.%s\n```\n\n%s", typeName(t), sig.sig, sig.doc)
+				}
 			}
 			if result := hoverUserModuleFunc(program, objTok.Value, name); result != "" {
 				return result
@@ -221,85 +230,19 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 	}
 
 	// Try to find as a local variable by walking function bodies
-	varType := findVariableType(program, name)
-	if varType != "" {
-		return fmt.Sprintf("**variable** `%s`\n\nType: `%s`", name, varType)
+	if t, ok := findVariableTypeID(program, name); ok {
+		if isArray(t) {
+			return formatArrayHover(program, name, t)
+		}
+		return fmt.Sprintf("**variable** `%s`\n\nType: `%s`", name, typeName(t))
 	}
 
 	return ""
 }
 
 func findVariableType(program *ast.Program, name string) string {
-	for _, fn := range program.Functions {
-		// Check params
-		for _, p := range fn.Params {
-			if p.Name == name {
-				return typeName(p.Type)
-			}
-		}
-		// Check let statements
-		if t := findLetInStmts(fn.Body, name); t != "" {
-			return t
-		}
-	}
-	return ""
-}
-
-func findLetInStmts(stmts []ast.Stmt, name string) string {
-	for _, stmt := range stmts {
-		switch s := stmt.(type) {
-		case *ast.LetStmt:
-			if s.Name == name {
-				return typeName(s.Type)
-			}
-			for _, n := range s.Names {
-				if n == name {
-					return typeName(s.Type)
-				}
-			}
-		case *ast.IfStmt:
-			if t := findLetInStmts(s.Then, name); t != "" {
-				return t
-			}
-			if t := findLetInStmts(s.Else, name); t != "" {
-				return t
-			}
-		case *ast.WhileStmt:
-			if t := findLetInStmts(s.Body, name); t != "" {
-				return t
-			}
-		case *ast.BlockStmt:
-			if t := findLetInStmts(s.Stmts, name); t != "" {
-				return t
-			}
-		case *ast.TryCatchStmt:
-			// A catch binding has the type its clause names.
-			for i := range s.Catches {
-				if s.Catches[i].VarName == name {
-					return s.Catches[i].TypeName
-				}
-			}
-			if t := findLetInStmts(s.Body, name); t != "" {
-				return t
-			}
-			for i := range s.Catches {
-				if t := findLetInStmts(s.Catches[i].Body, name); t != "" {
-					return t
-				}
-			}
-			if t := findLetInStmts(s.FinallyBody, name); t != "" {
-				return t
-			}
-		case *ast.SwitchStmt:
-			for _, sc := range s.Cases {
-				if t := findLetInStmts(sc.Body, name); t != "" {
-					return t
-				}
-			}
-			if t := findLetInStmts(s.Default, name); t != "" {
-				return t
-			}
-		}
+	if t, ok := findVariableTypeID(program, name); ok {
+		return typeName(t)
 	}
 	return ""
 }
@@ -561,69 +504,107 @@ func findVariableTypeID(program *ast.Program, name string) (ast.Type, bool) {
 				return p.Type, true
 			}
 		}
-		if t, ok := findLetTypeIDInStmts(fn.Body, name); ok {
-			return t, true
+		var found ast.Type
+		ok := false
+		set := func(t ast.Type) {
+			if !ok {
+				found, ok = t, true
+			}
+		}
+		resolve.VisitStmts(fn.Body, func(st ast.Stmt) {
+			switch s := st.(type) {
+			case *ast.LetStmt:
+				if s.Name == name {
+					set(s.Type)
+				}
+				for _, n := range s.Names {
+					if n == name {
+						set(s.Type)
+					}
+				}
+			case *ast.ForeachStmt:
+				if s.ValueVar == name {
+					set(s.ElemType)
+				} else if s.IndexVar == name {
+					set(ast.TypeInt)
+				}
+			case *ast.TryCatchStmt:
+				for i := range s.Catches {
+					if s.Catches[i].VarName == name {
+						if t, ok := ast.LookupStructType(s.Catches[i].TypeName); ok {
+							set(t)
+						}
+					}
+				}
+			}
+		}, nil)
+		if ok {
+			return found, true
 		}
 	}
 	return 0, false
 }
 
-func findLetTypeIDInStmts(stmts []ast.Stmt, name string) (ast.Type, bool) {
-	for _, stmt := range stmts {
-		switch s := stmt.(type) {
-		case *ast.LetStmt:
-			if s.Name == name {
-				return s.Type, true
-			}
-			for _, n := range s.Names {
-				if n == name {
-					return s.Type, true
-				}
-			}
-		case *ast.IfStmt:
-			if t, ok := findLetTypeIDInStmts(s.Then, name); ok {
-				return t, true
-			}
-			if t, ok := findLetTypeIDInStmts(s.Else, name); ok {
-				return t, true
-			}
-		case *ast.WhileStmt:
-			if t, ok := findLetTypeIDInStmts(s.Body, name); ok {
-				return t, true
-			}
-		case *ast.BlockStmt:
-			if t, ok := findLetTypeIDInStmts(s.Stmts, name); ok {
-				return t, true
-			}
-		case *ast.TryCatchStmt:
-			for i := range s.Catches {
-				if s.Catches[i].VarName == name {
-					if t, ok := ast.LookupStructType(s.Catches[i].TypeName); ok {
-						return t, true
-					}
-				}
-			}
-			if t, ok := findLetTypeIDInStmts(s.Body, name); ok {
-				return t, true
-			}
-			for i := range s.Catches {
-				if t, ok := findLetTypeIDInStmts(s.Catches[i].Body, name); ok {
-					return t, true
-				}
-			}
-			if t, ok := findLetTypeIDInStmts(s.FinallyBody, name); ok {
-				return t, true
-			}
-		case *ast.SwitchStmt:
-			for _, sc := range s.Cases {
-				if t, ok := findLetTypeIDInStmts(sc.Body, name); ok {
-					return t, true
-				}
-			}
-			if t, ok := findLetTypeIDInStmts(s.Default, name); ok {
-				return t, true
-			}
+func isArray(t ast.Type) bool {
+	return ast.IsArrayType(t) || ast.IsStructArrayType(t)
+}
+
+type arraySig struct {
+	sig string
+	doc string
+}
+
+func arrayMethods(t ast.Type) []struct {
+	name string
+	arraySig
+} {
+	elem := typeName(ast.ElementType(t))
+	structElem := ast.IsStructArrayType(t)
+	type entry = struct {
+		name string
+		arraySig
+	}
+	out := []entry{
+		{"len", arraySig{"len(): int", "The number of elements."}},
+		{"push", arraySig{"push(value: " + elem + "): void", "Append an element."}},
+		{"pop", arraySig{"pop(): " + elem, "Remove and return the last element."}},
+		{"remove", arraySig{"remove(index: int): void", "Remove the element at index."}},
+	}
+	if !structElem {
+		out = append(out,
+			entry{"contains", arraySig{"contains(value: " + elem + "): bool", "Whether the array holds the value."}},
+			entry{"indexOf", arraySig{"indexOf(value: " + elem + "): int", "The index of the value, or -1."}},
+		)
+	}
+	out = append(out, entry{"reverse", arraySig{"reverse(): void", "Reverse the array in place."}})
+	if !structElem && ast.ElementType(t) != ast.TypeBool {
+		out = append(out, entry{"sort", arraySig{"sort(direction: string): void", "Sort in place: \"asc\" or \"desc\"."}})
+	}
+	return out
+}
+
+func arrayMethod(t ast.Type, name string) (arraySig, bool) {
+	for _, m := range arrayMethods(t) {
+		if m.name == name {
+			return m.arraySig, true
 		}
 	}
-	return 0, false
+	return arraySig{}, false
+}
+
+func formatArrayHover(program *ast.Program, name string, t ast.Type) string {
+	elemType := ast.ElementType(t)
+	out := fmt.Sprintf("```dex\n(variable) %s: %s\n```\n\nArray of `%s`.", name, typeName(t), typeName(elemType))
+	if def := structDeclByName(program, ast.StructName(elemType)); ast.IsStructType(elemType) && def != nil && len(def.Fields) > 0 {
+		var fields []string
+		for _, f := range def.Fields {
+			fields = append(fields, fmt.Sprintf("- `%s`: `%s`", f.Name, typeName(f.Type)))
+		}
+		out += "\n\n**Element fields:**\n" + strings.Join(fields, "\n")
+	}
+	var methods []string
+	for _, m := range arrayMethods(t) {
+		methods = append(methods, fmt.Sprintf("- `%s` — %s", m.sig, m.doc))
+	}
+	return out + "\n\n**Methods:**\n" + strings.Join(methods, "\n")
 }

@@ -1,5 +1,7 @@
 import "fmt"
 
+// --- Generic functions ---
+
 fn identity<T>(x: T): T {
     return x
 }
@@ -22,6 +24,8 @@ fn firstElem<T>(xs: T[]): T {
 fn twice<T>(x: T): T {
     return identity(identity(x))
 }
+
+// --- Generic structs ---
 
 struct Box<T> {
     value: T
@@ -51,6 +55,7 @@ fn wrap(label: string): string {
 }
 
 fn main(): void {
+    // A type parameter binds to whatever the argument is.
     assert(identity(42) == 42)
     assert(identity("hi") == "hi")
     assert(identity(true) == true)
@@ -59,6 +64,7 @@ fn main(): void {
     assert(identity(1) == 1)
     assert(identity(2) == 2)
 
+    // Several parameters of the same type parameter.
     assert(pick(1, 2, true) == 1)
     assert(pick("a", "b", false) == "b")
 
@@ -66,14 +72,17 @@ fn main(): void {
     assert(describeTwo("s", 9) == "s/9")
     assert(describeTwo(true, 2.5) == "true/2.5")
 
+    // Inferred through an array.
     let nums: int[] = [10, 20, 30]
     assert(firstElem(nums) == 10)
     let strs: string[] = ["x", "y"]
     assert(firstElem(strs) == "x")
 
+    // A generic that calls one.
     assert(twice(5) == 5)
     assert(twice("s") == "s")
 
+    // A generic struct, two instantiations of the same template.
     let bi: Box<int> = Box<int> { value: 42 }
     assert(bi.get() == 42)
     assert(bi.replace(7) == 7)
@@ -85,6 +94,7 @@ fn main(): void {
     let bi2: Box<int> = Box<int> { value: 1 }
     assert(bi2.get() == 1)
 
+    // Two type parameters on a struct.
     let pr: Pair<string, int> = Pair<string, int> { key: "a", value: 2 }
     assert(pr.key == "a")
     assert(pr.value == 2)

@@ -24,6 +24,7 @@ fn openAndThrow(): void throws Failed {
     throw Failed { message: "unwound" }
 }
 
+// Runs one statement to completion. SQLITE_DONE is 101.
 fn run(db: Db, sql: string): int {
     let st: Stmt? = null
     let rc: int = sq.prepare(db, sql, -1, st, null)

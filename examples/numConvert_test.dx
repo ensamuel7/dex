@@ -7,14 +7,17 @@ fn main(): void {
     let b: long = num.toLong(a)
     assert(b == 42)
 
+    // char -> int, by character code
     let d: char = '7'
     let code: int = num.toInt(d)
     assert(code == 55)
     assert(num.toInt(d) - num.toInt('0') == 7)
 
+    // int -> char, the other direction
     let c: char = num.toChar(65)
     assert(c == 'A')
 
+    // widening and narrowing across every numeric type
     assert(num.toDouble(a) == 42.0)
     assert(num.toInt(3.99) == 3)
     assert(num.toInt(-3.99) == -3)
@@ -25,6 +28,7 @@ fn main(): void {
     let n: long = num.toLong(s.len())
     assert(n == 5)
 
+    // digit parsing, which is what made the benchmark verbose
     let total: int = 0
     let digits: string = "90210"
     let i: int = 0

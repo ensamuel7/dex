@@ -111,10 +111,14 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 
 		// Handle empty array literal: infer element type from declared type
 		if arrLit, ok := s.Value.(*ast.ArrayLitExpr); ok && len(arrLit.Elems) == 0 {
-			if !ast.IsArrayType(s.Type) {
+			arrType := s.Type
+			if ast.IsOptionalType(arrType) {
+				arrType = ast.OptionalInnerType(arrType)
+			}
+			if !ast.IsArrayType(arrType) {
 				return c.errAt(s.Pos, "cannot assign empty array literal to non-array type %s", typeName(s.Type))
 			}
-			arrLit.ElemType = ast.ElementType(s.Type)
+			arrLit.ElemType = ast.ElementType(arrType)
 			c.define(s.Name, s.Type)
 			c.defineAnnotations(s.Name, s.Annotations)
 			if s.IsConst {
@@ -305,6 +309,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			return c.errAt(s.Pos, "foreach requires an array type, got %s", typeName(iterType))
 		}
 		elemType := ast.ElementType(iterType)
+		s.ElemType = elemType
 		c.pushScope()
 		if s.IndexVar != "" {
 			c.define(s.IndexVar, ast.TypeInt)

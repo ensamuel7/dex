@@ -486,6 +486,7 @@ func build(filename string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	resolve.RenameCCollisions(program)
 
 	// Generate C
 	gen := codegen.New()
@@ -582,6 +583,7 @@ func generateC(filename string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	resolve.RenameCCollisions(program)
 	gen := codegen.New()
 	// DEX_MEM_CHECK=1 builds in the debug memory checker: every retain and
 	// release is validated against the object's header, a freed object is kept

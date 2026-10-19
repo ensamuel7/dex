@@ -818,7 +818,10 @@ func containsImport(imports []ast.Import, path string) bool {
 // Rewrites every reference to one of this module's own top-level names into the
 // flat, prefixed name it is merged under.
 func prefixCallsInStmt(stmt ast.Stmt, moduleName string, modNames map[string]bool) {
-	prefix := func(name string) string { return moduleName + "_" + name }
+	renameInStmt(stmt, modNames, func(name string) string { return moduleName + "_" + name })
+}
+
+func renameInStmt(stmt ast.Stmt, modNames map[string]bool, prefix func(string) string) {
 
 	stmtFn := func(st ast.Stmt) {
 		// Assignment targets and increment/decrement targets are bare names
@@ -1244,4 +1247,59 @@ func (in Instantiator) InstantiateFunc(name string, args []ast.Type) (*ast.Funct
 		renameModuleRefs(fn, in.Aliases)
 	}
 	return fn, structs, err
+}
+
+func RenameCCollisions(program *ast.Program) {
+	taken := map[string]bool{}
+	for _, fn := range program.Functions {
+		taken[fn.Name] = true
+	}
+	for _, gl := range program.GlobalLets {
+		taken[gl.Name] = true
+	}
+	renames := map[string]string{}
+	pick := func(name string) {
+		if name == "main" || !cLibraryNames[name] {
+			return
+		}
+		to := "dx_" + name
+		for taken[to] || cLibraryNames[to] {
+			to += "_"
+		}
+		taken[to] = true
+		renames[name] = to
+	}
+	for _, fn := range program.Functions {
+		pick(fn.Name)
+	}
+	for _, gl := range program.GlobalLets {
+		pick(gl.Name)
+	}
+	if len(renames) == 0 {
+		return
+	}
+	names := make(map[string]bool, len(renames))
+	for k := range renames {
+		names[k] = true
+	}
+	rename := func(name string) string { return renames[name] }
+	for i := range program.Functions {
+		fn := &program.Functions[i]
+		visible := withoutShadowed(names, fn)
+		for _, stmt := range fn.Body {
+			renameInStmt(stmt, visible, rename)
+		}
+		if to, ok := renames[fn.Name]; ok {
+			fn.Name = to
+		}
+	}
+	for i := range program.GlobalLets {
+		gl := &program.GlobalLets[i]
+		if gl.Value != nil {
+			renameInStmt(&ast.ExprStmt{Expr: gl.Value}, names, rename)
+		}
+		if to, ok := renames[gl.Name]; ok {
+			gl.Name = to
+		}
+	}
 }

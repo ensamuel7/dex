@@ -16,6 +16,7 @@ fn main(): void {
         assert(redis.del(r, "dex:test:key") == 1)
         assert(!redis.exists(r, "dex:test:key"))
 
+        // A key that expires reports the time it has left.
         assert(redis.setex(r, "dex:test:ttl", "soon", 60))
         assert(redis.ttl(r, "dex:test:ttl") > 0)
         assert(redis.ttl(r, "dex:test:missing") == -2)
@@ -41,11 +42,13 @@ fn main(): void {
         assert(members.len() == 2)
         assert(redis.srem(r, "dex:test:set", "one") == 1)
 
+        // Anything not wrapped, spelled as its arguments.
         redis.del(r, "dex:test:z")
         let zadd: string[] = ["ZADD", "dex:test:z", "1", "member"]
         assert(redis.command(r, zadd) == "1")
         redis.del(r, "dex:test:z")
 
+        // Nothing is subscribed, so nobody receives it.
         assert(redis.publish(r, "dex:test:channel", "hello") == 0)
 
         redis.close(r)

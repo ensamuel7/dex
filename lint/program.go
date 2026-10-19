@@ -268,7 +268,7 @@ func (l *linter) checkAllowAnnotations() {
 	}
 	for i := range l.program.Functions {
 		fn := &l.program.Functions[i]
-		seen(fn.Annotations, fn.Pos, "'"+displayName(fn.Name)+"'")
+		seen(fn.Annotations, fn.Pos, "'"+l.displayName(fn.Name)+"'")
 		for j := range fn.Params {
 			seen(fn.Params[j].Annotations, fn.Params[j].Pos, "parameter '"+fn.Params[j].Name+"'")
 		}

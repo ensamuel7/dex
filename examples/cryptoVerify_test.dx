@@ -5,12 +5,14 @@ const SIGNED: string = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0In0"
 const MODULUS: string =
     "s0Jx290Ynsmy0735bS7q9ROcCBB2DpYPYRmeZTuccAOJbzWvhNAJyh2eiAjZfMyY3WtG0UsEFmN5N6-552uc6tPb2PpqYTomDATM189642Uup0RrHP3_FpdVyZXki5Vgv9Xk2ogV7mRYNsfkRDO23F07jIquo8PpSbDzpXEibyLVqOQKyKLzC2zux4JlhaZRdL09wsdlBazPcYg4LNJUTM6bmyqtY9e8ZNQ_tc_I2TQL__ddUOUAnCEjsQfK08ORYxaHTVMPgW-BeoQ3vrNCl0UsFcGtd3LHOdPVlWrYfgmu7vPUiwxvTLlTcnHdcgnAvL5v75ieNTGRkAwWPi9eww"
 
+// 65537, the exponent every provider in practice uses.
 const EXPONENT: string = "AQAB"
 
 const SIGNATURE: string =
     "oGsueaySL-V4O71FpP4hfE9ifmtkOn6of-CIj5rGPEcfUGf7I_mWTYOJUzfn6yngaf1SJtiLkp923YKehdduvVTXSeIPqBtvn8PwyARJN8l1MrDPvVHtbUqwhFizap1-Gu1BoiBddmVT5JkVDK3Oq3aJMkqy_bneLeXxUmLoIjzFYIeMYPbsdmwEUIhsWjXi80Wa2cw1X2pA0AwVdoMzG5GtOgRDsPGX-aRPU1IkXRy7eLaaHmRwab_uW7BFhO9enOErGvjK7AI87c9kuel5Hc41pZI-VXS2uMp9oI56bGeUcLpCH0hjAXlo7KVCJkTGKXvVXX1OdFMRhHzK9lni5g"
 
 fn main(): void {
+    // --- base64url ---
 
     let urlBytes: string = crypto.base64UrlDecode("-_8")
     assert(urlBytes.len() == 2)
@@ -24,10 +26,13 @@ fn main(): void {
 
     assert(crypto.base64UrlDecode("aGVsbG8gd29ybGQ=") == "hello world")
 
+    // Binary-safe: NUL at both ends of the run survives.
     let binary: string = crypto.base64UrlDecode("AAECA_8A")
     assert(binary.len() == 6)
 
     assert(crypto.base64UrlDecode("") == "")
+
+    // --- RS256 ---
 
     let modulus: string = crypto.base64UrlDecode(MODULUS)
     let exponent: string = crypto.base64UrlDecode(EXPONENT)
@@ -42,6 +47,7 @@ fn main(): void {
 
         assert(!crypto.verifyRs256(SIGNED + "x", signature, modulus, exponent))
 
+        // A signature that is the right length and the wrong bytes.
         let forged: string = crypto.base64UrlDecode("AAAA" + SIGNATURE.substring(4, SIGNATURE.len()))
         assert(!crypto.verifyRs256(SIGNED, forged, modulus, exponent))
 

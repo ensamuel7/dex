@@ -48,19 +48,23 @@ fn labelOf(step: int, label: string): fn(): string {
 fn main(): void {
     let c: Counter = Counter { step: 5, label: "five" }
 
+    // Bound to its receiver, called through a variable.
     let bump: fn(int): int = c.bump
     assert(bump(10) == 15)
     assert(bump(0) == 5)
 
+    // Passed straight to something taking a function value.
     assert(apply(c.bump, 1) == 6)
     assert(applyTwice(c.bump, 0) == 10)
 
+    // A no-argument method, and one taking several.
     let name: fn(): string = c.describe
     assert(name() == "five")
     assert(callNoArgs(c.describe) == "five")
     let scale: fn(int, int): int = c.scaled
     assert(scale(1, 2) == 12)
 
+    // Two receivers give two independent values.
     let small: Counter = Counter { step: 1, label: "one" }
     let big: Counter = Counter { step: 100, label: "hundred" }
     let bumpSmall: fn(int): int = small.bump
@@ -86,6 +90,7 @@ fn main(): void {
     assert(add(2) == 42)
     assert(apply(acc.plus, 2) == 42)
 
+    // Reassigning a function value swaps which receiver is bound.
     let f: fn(int): int = c.bump
     assert(f(0) == 5)
     f = acc.plus

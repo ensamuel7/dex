@@ -1,5 +1,6 @@
 import "modules/grade"
 
+// A qualified enum in a parameter type and a return type.
 fn promote(b: grade.Band): grade.Band {
     if (b == grade.Band.Pass) {
         return grade.Band.Merit
@@ -24,10 +25,12 @@ fn main(): void {
         }
     }
 
+    // Compared, passed, and returned.
     assert(promote(grade.Band.Pass) == grade.Band.Merit)
     assert(promote(grade.Band.Merit) == grade.Band.Distinction)
     assert(grade.best() == grade.Band.Distinction)
 
+    // Held in an array, which needs the element type to resolve.
     let all: grade.Band[] = [grade.Band.Pass, grade.Band.Merit, grade.Band.Distinction]
     assert(all.len() == 3)
     let total: int = 0

@@ -113,3 +113,77 @@ func TestHoverFieldOnValue(t *testing.T) {
 		t.Errorf("hover over a field did not describe it:\n%s", got)
 	}
 }
+
+const arrayHoverSource = `struct User {
+    name: string
+}
+
+fn main(): void {
+    let nums: int[] = [1, 2]
+    let inferred = [1, 2, 3]
+    let users: User[] = [User { name: "a" }]
+    foreach (users as person) {
+        let n: int = person.name.len()
+    }
+    let c: int = nums.len()
+    users.push(User { name: "b" })
+}
+`
+
+func arrayHover(t *testing.T, needle, word string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.dx")
+	if err := os.WriteFile(path, []byte(arrayHoverSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uri := pathToURI(path)
+	s := &Server{documents: map[string]string{uri: arrayHoverSource}}
+	for i, line := range strings.Split(arrayHoverSource, "\n") {
+		if strings.Contains(line, needle) {
+			return s.hoverAt(uri, arrayHoverSource, Position{Line: i, Character: strings.Index(line, word)})
+		}
+	}
+	t.Fatalf("no line holds %q", needle)
+	return ""
+}
+
+func TestHoverArrayVariable(t *testing.T) {
+	got := arrayHover(t, "let nums", "nums")
+	for _, want := range []string{"(variable) nums: int[]", "Array of `int`", "push(value: int): void", "sort(direction: string): void"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("hover missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestHoverInferredArray(t *testing.T) {
+	if got := arrayHover(t, "let inferred", "inferred"); !strings.Contains(got, "(variable) inferred: int[]") {
+		t.Errorf("an inferred array should hover with its type:\n%s", got)
+	}
+}
+
+func TestHoverStructArrayListsElementFields(t *testing.T) {
+	got := arrayHover(t, "let users", "users")
+	if !strings.Contains(got, "**Element fields:**") || !strings.Contains(got, "`name`: `string`") {
+		t.Errorf("hover should list the element's fields:\n%s", got)
+	}
+	if strings.Contains(got, "contains(") || strings.Contains(got, "sort(") {
+		t.Errorf("a struct array has no contains or sort:\n%s", got)
+	}
+}
+
+func TestHoverForeachVariable(t *testing.T) {
+	if got := arrayHover(t, "foreach (users as person)", "person"); !strings.Contains(got, "Type: `User`") {
+		t.Errorf("the loop variable should hover with the element type:\n%s", got)
+	}
+}
+
+func TestHoverArrayMethod(t *testing.T) {
+	if got := arrayHover(t, "let c: int = nums.len()", "len"); !strings.Contains(got, "(method) int[].len(): int") {
+		t.Errorf("got:\n%s", got)
+	}
+	if got := arrayHover(t, "users.push", "push"); !strings.Contains(got, "(method) User[].push(value: User): void") {
+		t.Errorf("got:\n%s", got)
+	}
+}

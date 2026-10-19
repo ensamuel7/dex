@@ -5,6 +5,7 @@ struct OptPoint {
     label: string
 }
 
+// Returns a struct optional — null for negative input
 fn makePoint(x: int): OptPoint? {
     if (x < 0) {
         return null
@@ -12,11 +13,13 @@ fn makePoint(x: int): OptPoint? {
     return OptPoint { x: x, label: "p" + x }
 }
 
+// Test 1: int? with null
 fn testIntOptionalNull(): void {
     let x: int?
     assert(x == null)
 }
 
+// Test 2: int? with value
 fn testIntOptionalValue(): void {
     let x: int? = 5
     assert(x != null)
@@ -25,11 +28,13 @@ fn testIntOptionalValue(): void {
     }
 }
 
+// Test 3: string? with null
 fn testStringOptionalNull(): void {
     let s: string? = null
     assert(s == null)
 }
 
+// Test 4: string? with value
 fn testStringOptionalValue(): void {
     let s: string? = "hello"
     assert(s != null)
@@ -38,6 +43,7 @@ fn testStringOptionalValue(): void {
     }
 }
 
+// Test 5: reassignment to null
 fn testReassignToNull(): void {
     let x: int? = 5
     assert(x != null)
@@ -45,6 +51,7 @@ fn testReassignToNull(): void {
     assert(x == null)
 }
 
+// Test 6: reassignment from null to value
 fn testReassignFromNull(): void {
     let x: int? = null
     assert(x == null)
@@ -55,6 +62,7 @@ fn testReassignFromNull(): void {
     }
 }
 
+// Test 7: bool? optional
 fn testBoolOptional(): void {
     let b: bool? = true
     assert(b != null)
@@ -65,6 +73,7 @@ fn testBoolOptional(): void {
     assert(b == null)
 }
 
+// Test 8: double? optional
 fn testDoubleOptional(): void {
     let d: double? = 3.14
     assert(d != null)
@@ -72,6 +81,7 @@ fn testDoubleOptional(): void {
     assert(d == null)
 }
 
+// Test 9: function returning optional
 fn maybeInt(flag: bool): int? {
     if (flag) {
         return 42
@@ -90,6 +100,7 @@ fn testFunctionReturningOptional(): void {
     assert(b == null)
 }
 
+// Test 10: function returning string?
 fn maybeString(flag: bool): string? {
     if (flag) {
         return "yes"
@@ -108,6 +119,7 @@ fn testFunctionReturningStringOptional(): void {
     assert(b == null)
 }
 
+// Test 11: null check with reversed order (null != x)
 fn testReversedNullCheck(): void {
     let x: int? = 10
     if (null != x) {
@@ -115,6 +127,7 @@ fn testReversedNullCheck(): void {
     }
 }
 
+// Test 12: function accepting optional parameter
 fn showOptional(val: int?): bool {
     if (val != null) {
         return true
@@ -127,6 +140,7 @@ fn testOptionalParam(): void {
     assert(showOptional(null) == false)
 }
 
+// Test 13: long? optional
 fn testLongOptional(): void {
     let l: long? = 1000000
     assert(l != null)
@@ -137,6 +151,7 @@ fn testLongOptional(): void {
     assert(l == null)
 }
 
+// Test 14: string? reassignment
 fn testStringReassign(): void {
     let s: string? = "first"
     assert(s != null)
@@ -166,6 +181,7 @@ fn main(): void {
     testStringReassign()
     fmt.println("All optional tests passed!")
 
+    // Optional structs: value, null, and narrowing through fields
     let some: OptPoint? = makePoint(3)
     assert(some != null)
     if (some != null) {

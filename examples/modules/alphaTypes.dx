@@ -6,6 +6,7 @@ enum Kind {
 }
 
 fn make(label: string): Response {
+    // Unqualified inside the module that declares it.
     return Response(true, label)
 }
 

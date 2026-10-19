@@ -6,6 +6,7 @@ struct Response {
 }
 
 fn main(): void {
+    // The bare name is the local one.
     let local: Response = Response { mine: 7 }
     assert(local.mine == 7)
 
@@ -18,9 +19,11 @@ fn main(): void {
     assert(alphaTypes.kindOf(a) == alphaTypes.Kind.Fast)
     assert(betaTypes.kindOf(b) == betaTypes.Kind.Red)
 
+    // A constructor reached through its module.
     let direct: betaTypes.Response = betaTypes.Response(500)
     assert(direct.code == 500)
 
+    // A struct literal, qualified.
     let lit: alphaTypes.Response = alphaTypes.Response { ok: false, label: "lit" }
     assert(!lit.ok)
     assert(lit.label == "lit")

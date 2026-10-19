@@ -118,6 +118,7 @@ fn main(): void {
     let p = Person { name: "Ada" }
     let r = Robot { id: 7 }
 
+    // Dispatch reaches the right concrete method.
     assert(greetingOf(p) == "Hi Ada")
     assert(greetingOf(r) == "UNIT-7")
 
@@ -126,6 +127,7 @@ fn main(): void {
     let g2: Greeter = r
     assert(g2.greet() == "UNIT-7")
 
+    // Methods with parameters and non-void returns.
     let c = Circle { radius: 2.0 }
     let sq = Square { side: 3.0 }
     assert(areaOf(sq) == 9.0)
@@ -140,16 +142,20 @@ fn main(): void {
     assert(counts.total() == 7)
     assert(t.n == 0)
 
+    // Several interface parameters in one call.
     assert(describe(p, 2, sq) == "Hi Ada x2 area 9")
 
+    // Forwarding an interface value rather than a struct.
     assert(forwarded(p) == "Hi Ada")
 
+    // An interface parameter on a struct method.
     let svc = Service { label: "svc" }
     assert(svc.announce(p) == "svc: Hi Ada")
     assert(svc.announce(r) == "svc: UNIT-7")
 
     assert(greetingOf(Person { name: "Grace" }) == "Hi Grace")
 
+    // Reassigning the interface to a different concrete type.
     let who: Greeter = p
     assert(who.greet() == "Hi Ada")
     who = r

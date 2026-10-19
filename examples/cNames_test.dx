@@ -1,0 +1,45 @@
+import "fmt"
+
+struct Box {
+    name: string
+    index: int
+}
+
+let time: int = 7
+let counter: int = 0
+
+fn read(b: Box): int {
+    return b.name.len()
+}
+
+fn write(n: int): void {
+    counter = counter + n
+}
+
+fn open(): Box {
+    return Box { name: "abc", index: 2 }
+}
+
+fn apply(f: fn(Box): int, b: Box): int {
+    return f(b)
+}
+
+fn shadowed(): int {
+    let read: int = 5
+    return read
+}
+
+fn main(): void {
+    let b: Box = open()
+    assert(read(b) == 3)
+    write(4)
+    assert(counter == 4)
+    assert(apply(read, b) == 3)
+    assert(time == 7)
+    time = time + 1
+    assert(time == 8)
+    assert(b.index == 2)
+    assert(shadowed() == 5)
+    spawn read(b)
+    fmt.println("cNames_test: all assertions passed")
+}

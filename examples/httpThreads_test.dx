@@ -6,6 +6,7 @@ fn feed(req: http.HttpRequest): http.HttpResponse {
 }
 
 fn main(): void {
+    // One core, one lock, no blocking in a handler: two is plenty.
     http.threads(2)
 
     http.threads(0)

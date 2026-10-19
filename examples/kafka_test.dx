@@ -19,6 +19,7 @@ fn main(): void {
             }
 
             assert(kafka.produce(p, "dex.test", "order-1", "{\"event\":\"boot\"}"))
+            // Everything queued has left by the time flush returns.
             assert(kafka.flush(p, 10000) == 0)
             kafka.close(p)
 

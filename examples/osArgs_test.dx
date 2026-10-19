@@ -7,6 +7,7 @@ fn main(): void {
 
     assert(a.len() == 0)
 
+    // An empty result still behaves like any other array.
     let joined = StringBuilder()
     let i: int = 0
     while (i < a.len()) {

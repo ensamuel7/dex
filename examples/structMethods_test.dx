@@ -96,6 +96,7 @@ fn main(): void {
     assert(o.middle.inner.label.contains("ee"))
     assert(o.middle.inner.label.replace("d", "b") == "beep")
 
+    // The same, reached through the receiver inside a method
     let l: Labelled = Labelled { tag: "cp1", outer: o }
     assert(l.describe() == "CP1/deep")
     assert(l.tagged())

@@ -2390,6 +2390,10 @@ local called `users` is a variable, not the module.
 Declarations may appear in any order within a file — a `const` above the struct
 it describes, a function above the type it returns.
 
+A top-level function or variable may share a name with a C library function —
+`read`, `write`, `open`, `time`. It is renamed in the generated C, so the name
+is yours to use.
+
 ### Modules and dex.mod
 
 A project that shares code with other projects has a `dex.mod` at its root. It

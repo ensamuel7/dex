@@ -30,10 +30,12 @@ fn main(): void {
         let result: Outcome = build(dir)
         assert(result.ok)
         assert(result.output == "find /tmp/scratch -mindepth 1")
+        // The borrowed string is still the caller's, and still intact.
         assert(dir == "/tmp/scratch")
         i = i + 1
     }
 
+    // Longer than the initial capacity of eight.
     let many: string[] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
     assert(many.len() == 12)
     assert(many[11] == "l")
@@ -41,6 +43,7 @@ fn main(): void {
     assert(numbers.len() == 12)
     assert(numbers[11] == 12)
 
+    // A literal mixing owned and borrowed elements.
     let name: string = "dex"
     let greeting: string = "hello " + name
     let parts: string[] = [name, greeting, "literal", name]
@@ -59,6 +62,7 @@ fn main(): void {
     names[1] = "four"
     assert(names[1] == "four")
 
+    // In expression position rather than bound to a name.
     let direct: string = join(["x", name, "z"])
     assert(direct == "x dex z")
     assert(name == "dex")

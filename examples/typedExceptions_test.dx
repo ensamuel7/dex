@@ -54,6 +54,7 @@ fn main(): void {
     }
     assert(parseLine == 12)
 
+    // A different type reaches a different clause.
     let sawIO = false
     try {
         assert(load(empty) == 0)
@@ -65,6 +66,7 @@ fn main(): void {
     }
     assert(sawIO)
 
+    // Nothing thrown: no clause runs.
     try {
         assert(loadTwice(good) == 14)
     } catch (e: ParseError) {
@@ -82,6 +84,7 @@ fn main(): void {
     }
     assert(caughtAny)
 
+    // An exception no clause claimed propagates, payload intact.
     let rethrownLine = 0
     try {
         assert(declining(bad) == 0)
@@ -96,6 +99,7 @@ fn main(): void {
         assert(false)
     }
 
+    // A method throws and is caught the same way.
     let v = Validator { min: 18 }
     let rejected = 0
     try {

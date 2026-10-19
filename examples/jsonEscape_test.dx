@@ -6,9 +6,11 @@ struct EscRow {
 }
 
 fn main(): void {
+    // A quote must become \" and not end the string early.
     let quoted: EscRow[] = [EscRow { id: 1, text: "say \"hi\"" }]
     assert(json.encode(quoted) == "[{\"id\":1,\"text\":\"say \\\"hi\\\"\"}]")
 
+    // A backslash must double.
     let slashed: EscRow[] = [EscRow { id: 2, text: "a\\b" }]
     assert(json.encode(slashed) == "[{\"id\":2,\"text\":\"a\\\\b\"}]")
 
@@ -21,6 +23,7 @@ fn main(): void {
     let accented: EscRow[] = [EscRow { id: 5, text: "Simülatör" }]
     assert(json.encode(accented) == "[{\"id\":5,\"text\":\"Simülatör\"}]")
 
+    // An empty string is a pair of quotes, not a null.
     let blank: EscRow[] = [EscRow { id: 6, text: "" }]
     assert(json.encode(blank) == "[{\"id\":6,\"text\":\"\"}]")
 
@@ -30,6 +33,7 @@ fn main(): void {
     let doc: json.Value = { items: payload }
     assert(json.encode(doc) == "{\"items\":[{\"id\":7,\"text\":\"{\\\"a\\\": \\\"b\\\"}\"}]}")
 
+    // Round trip: decode must undo exactly what encode did.
     let back: EscRow[] = json.decode("[{\"id\":8,\"text\":\"q\\\"s\\\\b\\nl\\tt\"}]")
     assert(back.len() == 1)
     let row: EscRow = back[0]

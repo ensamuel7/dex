@@ -279,3 +279,40 @@ fn main(): void {}
 		t.Errorf("instantiation calls %s.make, want lib.make", call.Module)
 	}
 }
+
+func TestRenameCCollisions(t *testing.T) {
+	program, err := resolveProject(t, map[string]string{
+		"main.dx": `let time: int = 1
+fn read(): int { return time }
+fn dx_read(): int { return 2 }
+fn keep(): int { return read() }
+fn shadow(): int {
+    let read: int = 3
+    return read
+}
+fn main(): void {}
+`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	RenameCCollisions(program)
+	byName := map[string]*ast.Function{}
+	for i := range program.Functions {
+		byName[program.Functions[i].Name] = &program.Functions[i]
+	}
+	for _, want := range []string{"dx_read_", "dx_read", "keep", "shadow", "main"} {
+		if byName[want] == nil {
+			t.Fatalf("no function %s; have %v", want, byName)
+		}
+	}
+	if call := byName["keep"].Body[0].(*ast.ReturnStmt).Value.(*ast.CallExpr); call.Name != "dx_read_" {
+		t.Errorf("keep calls %s, want dx_read_", call.Name)
+	}
+	if id := byName["shadow"].Body[1].(*ast.ReturnStmt).Value.(*ast.Ident); id.Name != "read" {
+		t.Errorf("a local named read was renamed to %s", id.Name)
+	}
+	if program.GlobalLets[0].Name != "dx_time" {
+		t.Errorf("global time is %s, want dx_time", program.GlobalLets[0].Name)
+	}
+}

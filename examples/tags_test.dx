@@ -11,6 +11,7 @@ struct Book {
     note: string
 }
 
+// A struct with no tags at all answers "" for every key.
 struct Point {
     x: int
     y: int
@@ -50,9 +51,11 @@ fn columnsFor(bk: Book, alias: string): string[] {
 fn main(): void {
     let bk: Book = Book { id: 1, pages: 2, authorName: "a", releasedOn: "r", priceMinor: 5, note: "n" }
 
+    // A tagged field reports its tag; an untagged one reports "".
     assert(reflect.fieldTag(bk, 2, "db") == "COALESCE(a.name, '')")
     assert(reflect.fieldTag(bk, 0, "db") == "")
 
+    // Several namespaces on one field, each read independently.
     assert(reflect.fieldTag(bk, 4, "db") == "b.price_minor")
     assert(reflect.fieldTag(bk, 4, "json") == "price")
 
@@ -69,6 +72,7 @@ fn main(): void {
     fmt.println(cols[2])
     fmt.println(cols[4])
 
+    // A key chosen at runtime works too.
     let key: string = "js" + "on"
     assert(reflect.fieldTag(bk, 4, key) == "price")
 
@@ -94,6 +98,7 @@ fn projection(names: string[], tags: string[], alias: string): string[] {
     while (i < names.len()) {
         let tag: string = tags[i]
         if (tag == "-") {
+            // A convention of this function, not of the compiler.
         } else if (tag.isEmpty()) {
             out.push(alias + "." + snake(names[i]))
         } else {
@@ -118,10 +123,12 @@ fn checkFieldTags(): void {
     assert(tags[0] == "")
     assert(tags[2] == "COALESCE(a.name, '')")
     assert(tags[4] == "b.price_minor")
+    // A key no field defines gives "" for every one of them.
     assert(reflect.fieldTags(bk, "nope")[2] == "")
     let key: string = "js" + "on"
     assert(reflect.fieldTags(bk, key)[4] == "price")
 
+    // The struct named once, the rule written once.
     let cols: string[] = projection(reflect.fields(bk), tags, "b")
     assert(cols.len() == 6)
     assert(cols[0] == "b.id")

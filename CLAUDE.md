@@ -289,6 +289,16 @@ be gone. The consequence is that arguments are evaluated at the `defer` rather
 than at the exit, which is also what Go does. `examples/defer_test.dx` pins all
 of it.
 
+## Names the C library already uses
+
+A top-level function or global named like a C library symbol (`read`, `time`)
+would collide in the generated C. `resolve.RenameCCollisions` runs after
+checking, so diagnostics keep the written name, and renames just those to
+`dx_<name>` through the shadow-aware renamer the module prefixer uses.
+`resolve/cnames.go` is the set: every function, variable and typedef the system
+headers the runtime includes declare (from clang's AST dump), their lowercase
+macros, and a few Linux-only names.
+
 ## dex.mod
 
 `resolve/mod.go` reads a `dex.mod` (`module`, `require`, `replace`, with go.mod's

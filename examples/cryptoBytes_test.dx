@@ -6,11 +6,13 @@ fn main(): void {
     assert(binary.len() == 6)
     assert(crypto.base64Encode(binary) == "AAECA/8A")
 
+    // Text, and a multi-byte UTF-8 string.
     assert(crypto.base64Encode("hello world") == "aGVsbG8gd29ybGQ=")
     assert(crypto.base64Decode("aGVsbG8gd29ybGQ=") == "hello world")
     let utf8: string = "Simülatör æøå"
     assert(crypto.base64Decode(crypto.base64Encode(utf8)) == utf8)
 
+    // Empty in, empty out.
     assert(crypto.base64Encode("") == "")
     assert(crypto.base64Decode("") == "")
 
@@ -19,12 +21,14 @@ fn main(): void {
         assert(emptyDigest == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
         assert(crypto.sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
 
+        // --- HMAC-SHA-256, RFC 4231 test case 2 ---
         assert(
             crypto.hmacSha256Hex("Jefe", "what do ya want for nothing?") ==
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         )
     }
 
+    // --- a file containing a NUL survives the round trip ---
     assert(file.mkdirp("/tmp/dex_crypto_test"))
     let path: string = "/tmp/dex_crypto_test/blob.bin"
     assert(file.writeBytes(path, binary))
@@ -38,6 +42,7 @@ fn main(): void {
         assert(file.sha256Hex(path) == crypto.sha256Hex(back))
     }
 
+    // Appending is binary-safe too.
     assert(file.appendBytes(path, binary))
     assert(file.size(path) == 12)
 

@@ -11,6 +11,7 @@ fn labelled<T>(value: T, label: string): string {
 }
 
 fn main(): void {
+    // Each front reaches its own library's util.
     assert(afront.run("x") == "alpha:x")
     assert(bfront.run("x") == "beta:x")
     assert(afront.isSmall("x"))

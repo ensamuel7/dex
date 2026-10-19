@@ -3,14 +3,17 @@ fn multiply2(n: int): int {
 }
 
 fn main(): void {
+    // 1-to-1: spawn block
     let t1 = spawn {
         send(42)
     }
     assert(receive(t1) == 42)
 
+    // spawn function call
     let t2 = spawn multiply2(21)
     assert(receive(t2) == 42)
 
+    // Many-to-one: channel
     let ch = channel(int)
     for (let i = 0; i < 5; i++) {
         spawn {
@@ -23,6 +26,7 @@ fn main(): void {
     }
     assert(total == 100)
 
+    // Fire-and-forget
     spawn {
         multiply2(1)
     }

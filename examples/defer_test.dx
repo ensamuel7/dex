@@ -30,6 +30,7 @@ fn unwound(): void throws {
     note("not reached")
 }
 
+// Most recent first, like every other defer.
 fn ordered(): void {
     defer note("first registered")
     defer note("second registered")

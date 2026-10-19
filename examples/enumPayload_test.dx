@@ -69,9 +69,11 @@ fn describe(s: Shape): string {
 }
 
 fn main(): void {
+    // A plain enum is still an integer constant.
     let c: Color = Color.Red
     assert(c == Color.Red)
 
+    // Construction and destructuring.
     let two: Expr = Expr.Lit(2)
     let three: Expr = Expr.Lit(3)
     let sum: Expr = Expr.Add(two, three)
@@ -82,8 +84,10 @@ fn main(): void {
     assert(eval(two) == 2)
     assert(eval(sum) == 5)
 
+    // 2^8 leaves of 2, returned up through eight frames.
     assert(eval(tree(8)) == 512)
 
+    // Heap payloads, including one built on the spot.
     assert(describe(Shape.Empty) == "-")
     assert(describe(Shape.Label("hi")) == "hi")
     assert(describe(Shape.Tags(["a", "b", "c"])) == "3")
@@ -91,6 +95,7 @@ fn main(): void {
     assert(describe(Shape.Label(built)) == "made-up")
     assert(describe(Shape.Tagged("k", Shape.Label("v"))) == "k/v")
 
+    // A struct field, an array element, and reassignment.
     let h: Holder = Holder { name: "h", body: sum }
     assert(eval(h.body) == 5)
 
@@ -105,6 +110,7 @@ fn main(): void {
     assert(eval(slot) == 5)
     assert(eval(sum) == 5)
 
+    // `_` discards a binding it does not need.
     let discarded: long = 0
     switch (sum) {
         case Expr.Add(l, _): {

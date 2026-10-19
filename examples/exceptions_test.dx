@@ -13,6 +13,7 @@ fn literalMessage(): void {
     throw Exception("literal")
 }
 
+// Thrown as a struct rather than built in the throw.
 fn structForm(n: int): void {
     let e: Exception = Exception("struct " + str.fromInt(n))
     throw e
@@ -63,6 +64,7 @@ fn main(): void {
     }
     assert(caught == 2000)
 
+    // The borrowed message was never the throw's to release.
     assert(held == "borrowed message")
 
     let ok: int = 0
@@ -77,6 +79,7 @@ fn main(): void {
     }
     assert(ok == 2500)
 
+    // finally runs on both paths.
     let ran: int = 0
     let k: int = 0
     while (k < 200) {

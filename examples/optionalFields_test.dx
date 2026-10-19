@@ -1,5 +1,9 @@
 import "fmt"
 
+struct Point {
+    x: int
+}
+
 struct Box {
     name: string?
     tags: string[]?
@@ -7,8 +11,7 @@ struct Box {
 
 fn make(): Box {
     let n: string? = "a" + "b"
-    let list: string[] = ["x", "y"]
-    let t: string[]? = list
+    let t: string[]? = ["x", "y"]
     return Box { name: n, tags: t }
 }
 
@@ -36,6 +39,16 @@ fn main(): void {
         assert(tagCount(b) == 2)
         i = i + 1
     }
+    let none: int[]? = []
+    if (none != null) {
+        none.push(3)
+        assert(none.len() == 1)
+    }
+    let points: Point[]? = [Point { x: 1 }]
+    if (points != null) {
+        assert(points[0].x == 1)
+    }
+
     let empty: Box = Box { name: null, tags: null }
     assert(nameLength(empty) == 0)
     assert(tagCount(empty) == 0)

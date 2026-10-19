@@ -213,6 +213,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
         <a onclick="show('structs')">Structs</a>
         <a onclick="show('interfaces')">Interfaces</a>
         <a onclick="show('generics')">Generics</a>
+        <a onclick="show('dex-mod')">Modules &amp; dex.mod</a>
         <a onclick="show('calling-c')">Calling C</a>
         <a onclick="show('enums')">Enums</a>
         <a onclick="show('maps')">Maps</a>
@@ -1422,6 +1423,27 @@ let many: Box&lt;int&gt;[] = [inner, boxed(4)]</code></pre>
 <h3>How It Works</h3>
 <p>Generics are monomorphised by <strong>re-parsing</strong>. A generic declaration is captured as the tokens it was written as and skipped rather than parsed; instantiating it re-parses those tokens with its type parameters bound to concrete types and its own name mangled to <code>Box_int</code> or <code>max_int</code>. What comes out is an ordinary function or struct, which is why the code generator needs no knowledge of generics at all.</p>
 <p>A struct's instantiation happens in the parser, where the type arguments are written. A function's happens in the type checker, because inferring them needs the argument types and only the checker has those; the checker asks the parser to re-parse, registers the result, and appends it to the program, where the body-checking pass reaches it like any other function.</p>
+</section>
+
+<!-- Modules and dex.mod -->
+<section id="dex-mod" class="page-section">
+<h2>Modules &amp; dex.mod</h2>
+<p>A project that shares code with other projects has a <code>dex.mod</code> at its root. It names the project by its URL and lists the libraries it uses. Create one with <code>dex mod init github.com/acme/web</code>; a project without one works exactly as before.</p>
+<pre><code>module github.com/acme/web
+
+require github.com/acme/greet v0.1.0
+replace github.com/acme/greet => ../greet</code></pre>
+
+<h3>Imports</h3>
+<p>An import whose first segment looks like a host name names a module; anything else is a file relative to the importing one.</p>
+<pre><code>import "service/users"                      // beside this file
+import "github.com/acme/web/service/users"  // the same file, from anywhere in the project
+import "github.com/acme/greet"              // a library: greet.dx at its root
+import "github.com/acme/greet/internal/shout"</code></pre>
+
+<h3>require and replace</h3>
+<p><code>require</code> names a library and the version used &mdash; a git tag its author pushed. <code>replace</code> says where to read it from instead of downloading it: a folder on your machine, written <code>./dir</code> or <code>../dir</code> relative to the <code>dex.mod</code>. That is how a monorepo works, and how you change a library alongside the program using it. Delete the <code>replace</code> once the library is published and the same imports read the downloaded copy.</p>
+<p>Until <code>dex get</code> exists, a module that is required but not replaced is an error that shows the <code>replace</code> line to add.</p>
 </section>
 
 <!-- Calling C -->

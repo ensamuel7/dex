@@ -424,7 +424,10 @@ func moduleFiles(filePath string, text string) map[string]string {
 			if stdlib.Lookup(imp) != nil {
 				continue
 			}
-			target := filepath.Join(dir, imp+".dx")
+			target, err := resolve.ImportFile(filepath.Dir(filePath), dir, imp)
+			if err != nil {
+				continue
+			}
 			name := filepath.Base(imp)
 			if _, seen := out[name]; !seen {
 				out[name] = target
@@ -1009,9 +1012,12 @@ func extractUserImportPaths(tokens []token.Token, sourceDir string) []string {
 			if stdlib.Lookup(importPath) != nil {
 				continue
 			}
-			// Resolve to absolute .dx file path
-			modFile := importPath + ".dx"
-			absPath := filepath.Join(sourceDir, modFile)
+			// A module path goes through the dex.mod; an import it cannot place
+			// is reported by resolution, with its position.
+			absPath, err := resolve.ImportFile(sourceDir, sourceDir, importPath)
+			if err != nil {
+				continue
+			}
 			paths = append(paths, absPath)
 		}
 	}

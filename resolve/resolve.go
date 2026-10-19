@@ -92,12 +92,17 @@ type ModuleType struct {
 func PreRegisterUserStructs(imports []ImportRef, sourceDir string) []ModuleType {
 	var found []ModuleType
 	visited := map[string]bool{}
-	ids := moduleIdentities(imports, sourceDir)
+	// A broken dex.mod is reported by resolution, with its line; here it only
+	// means the module imports cannot be found ahead of parsing.
+	mod, _ := FindMod(sourceDir)
+	ids := moduleIdentities(mod, imports, sourceDir)
 	for _, ref := range imports {
 		if stdlib.Lookup(ref.Path) != nil {
 			continue
 		}
-		preRegisterStructsFromFile(filepath.Join(sourceDir, ref.Path+".dx"), ids, visited, &found)
+		if file, err := importFile(mod, sourceDir, ref.Path); err == nil {
+			preRegisterStructsFromFile(mod, file, ids, visited, &found)
+		}
 	}
 	return found
 }
@@ -126,7 +131,7 @@ func localName(ref ImportRef) string {
 //
 // The walk is depth first, in the order imports are written, so every caller —
 // pre-registration, resolution, the language server — assigns the same names.
-func moduleIdentities(imports []ImportRef, sourceDir string) map[string]string {
+func moduleIdentities(mod *Mod, imports []ImportRef, sourceDir string) map[string]string {
 	ids := map[string]string{}
 	taken := map[string]bool{}
 	var visit func(refs []ImportRef, dir string)
@@ -135,7 +140,11 @@ func moduleIdentities(imports []ImportRef, sourceDir string) map[string]string {
 			if stdlib.Lookup(ref.Path) != nil {
 				continue
 			}
-			abs, err := filepath.Abs(filepath.Join(dir, ref.Path+".dx"))
+			file, err := importFile(mod, dir, ref.Path)
+			if err != nil {
+				continue
+			}
+			abs, err := filepath.Abs(file)
 			if err != nil {
 				continue
 			}
@@ -171,14 +180,18 @@ func moduleIdentities(imports []ImportRef, sourceDir string) map[string]string {
 //
 // Two imports in one file under the same name, naming different files, are an
 // error: nothing in the file could say which one a reference means.
-func fileAliases(refs []ImportRef, dir, file string, ids map[string]string) (map[string]string, error) {
+func fileAliases(mod *Mod, refs []ImportRef, dir, file string, ids map[string]string) (map[string]string, error) {
 	aliases := map[string]string{}
 	byName := map[string]string{}
 	for _, ref := range refs {
 		if stdlib.Lookup(ref.Path) != nil {
 			continue
 		}
-		abs, err := filepath.Abs(filepath.Join(dir, ref.Path+".dx"))
+		target, err := importFile(mod, dir, ref.Path)
+		if err != nil {
+			continue
+		}
+		abs, err := filepath.Abs(target)
 		if err != nil {
 			continue
 		}
@@ -199,10 +212,14 @@ func fileAliases(refs []ImportRef, dir, file string, ids map[string]string) (map
 // before it is parsed: a qualified type, struct literal or enum variant is
 // resolved there rather than afterwards.
 func ModuleAliases(imports []ImportRef, sourceDir, file string) (map[string]string, error) {
-	return fileAliases(imports, sourceDir, file, moduleIdentities(imports, sourceDir))
+	mod, err := FindMod(sourceDir)
+	if err != nil {
+		return nil, err
+	}
+	return fileAliases(mod, imports, sourceDir, file, moduleIdentities(mod, imports, sourceDir))
 }
 
-func preRegisterStructsFromFile(filePath string, ids map[string]string, visited map[string]bool, found *[]ModuleType) {
+func preRegisterStructsFromFile(mod *Mod, filePath string, ids map[string]string, visited map[string]bool, found *[]ModuleType) {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil || visited[absPath] {
 		return
@@ -249,7 +266,9 @@ func preRegisterStructsFromFile(filePath string, ids map[string]string, visited 
 		if stdlib.Lookup(ref.Path) != nil {
 			continue
 		}
-		preRegisterStructsFromFile(filepath.Join(modDir, ref.Path+".dx"), ids, visited, found)
+		if file, err := importFile(mod, modDir, ref.Path); err == nil {
+			preRegisterStructsFromFile(mod, file, ids, visited, found)
+		}
 	}
 }
 
@@ -319,8 +338,12 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 			mainFile = imp.Pos.File
 		}
 	}
-	ids := moduleIdentities(refs, sourceDir)
-	aliases, err := fileAliases(refs, sourceDir, mainFile, ids)
+	mod, err := FindMod(sourceDir)
+	if err != nil {
+		return err
+	}
+	ids := moduleIdentities(mod, refs, sourceDir)
+	aliases, err := fileAliases(mod, refs, sourceDir, mainFile, ids)
 	if err != nil {
 		return err
 	}
@@ -344,7 +367,7 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 	}
 
 	mainGlobals := len(program.GlobalLets)
-	r := &resolver{program: program, ids: ids, visited: visited, processing: processing, owners: owners, mainExternals: mainExternals}
+	r := &resolver{program: program, mod: mod, ids: ids, visited: visited, processing: processing, owners: owners, mainExternals: mainExternals}
 	if err := r.resolveImports(sourceDir); err != nil {
 		return err
 	}
@@ -365,6 +388,7 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 // merged twice or importing itself.
 type resolver struct {
 	program       *ast.Program
+	mod           *Mod
 	ids           map[string]string
 	visited       map[string]bool
 	processing    map[string]bool
@@ -518,7 +542,10 @@ func (r *resolver) resolveImports(sourceDir string) error {
 	program.Imports = stdlibImports
 
 	for _, imp := range userImports {
-		filePath := filepath.Join(sourceDir, imp.Path+".dx")
+		filePath, err := importFile(r.mod, sourceDir, imp.Path)
+		if err != nil {
+			return posError(imp.Pos, err)
+		}
 		absPath, err := filepath.Abs(filePath)
 		if err != nil {
 			return fmt.Errorf("cannot resolve path for import '%s': %v", imp.Path, err)
@@ -579,7 +606,7 @@ func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error
 	}
 
 	modDir := filepath.Dir(absPath)
-	aliases, err := fileAliases(subImports, modDir, filePath, r.ids)
+	aliases, err := fileAliases(r.mod, subImports, modDir, filePath, r.ids)
 	if err != nil {
 		return err
 	}
@@ -592,7 +619,10 @@ func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error
 		if stdlib.Lookup(subPath) != nil {
 			continue
 		}
-		subFilePath := filepath.Join(modDir, subPath+".dx")
+		subFilePath, err := importFile(r.mod, modDir, subPath)
+		if err != nil {
+			return posError(ast.Pos{File: filePath, Line: ref.Line, Col: ref.Col}, err)
+		}
 		subAbsPath, err := filepath.Abs(subFilePath)
 		if err != nil {
 			return fmt.Errorf("cannot resolve path for import '%s': %v", subPath, err)
@@ -763,7 +793,11 @@ func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error
 		if stdlib.Lookup(ref.Path) != nil {
 			continue
 		}
-		subAbs, err := filepath.Abs(filepath.Join(modDir, ref.Path+".dx"))
+		subFile, err := importFile(r.mod, modDir, ref.Path)
+		if err != nil {
+			continue
+		}
+		subAbs, err := filepath.Abs(subFile)
 		if err != nil {
 			continue
 		}
@@ -777,6 +811,15 @@ func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error
 	}
 
 	return nil
+}
+
+// posError puts an import's position in front of an error about it, in the
+// file:line:col form the CLI and the language server both route by.
+func posError(pos ast.Pos, err error) error {
+	if pos.File == "" || pos.Line == 0 {
+		return err
+	}
+	return fmt.Errorf("%s:%d:%d: %v", pos.File, pos.Line, pos.Col, err)
 }
 
 // refuseForeignExternals reports a module calling into an external module the

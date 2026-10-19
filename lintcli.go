@@ -20,6 +20,7 @@ Commands:
   test     run *_test.dx files
   check    run cppcheck over the generated C
   format   lay files out the one canonical way
+  mod      mod init <path>: start a dex.mod naming this module
   lint     report what compiles but is probably not meant
   lsp      start the language server
   docs     regenerate docs/index.html

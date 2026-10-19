@@ -114,6 +114,11 @@ func main() {
 		return
 	}
 
+	if command == "mod" {
+		runMod(args)
+		return
+	}
+
 	if command == "lint" && listRules {
 		printRules()
 		return
@@ -812,4 +817,23 @@ func keepLastOccurrence(flags []string) []string {
 		}
 	}
 	return out
+}
+
+// runMod is `dex mod`. Only init exists yet; fetching arrives with dex get.
+func runMod(args []string) {
+	if len(args) != 2 || args[0] != "init" {
+		fmt.Fprintln(os.Stderr, "usage: dex mod init <module path>\n\nA module is named by its URL, as in: dex mod init github.com/acme/app")
+		os.Exit(1)
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	file, err := resolve.InitMod(dir, args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Created %s\n", file)
 }

@@ -314,6 +314,35 @@ The call is registered when the `defer` statement runs, not where it is written
 in the file — one in a branch nothing took registers nothing, and one in a loop
 registers per iteration. Its arguments are evaluated at the `defer`.
 
+## Sharing Code Between Projects
+
+A project that uses libraries from other projects has a `dex.mod` at its root,
+naming the project by its URL and listing what it uses:
+
+```bash
+dex mod init github.com/acme/web
+```
+
+```
+module github.com/acme/web
+
+require github.com/acme/greet v0.1.0
+replace github.com/acme/greet => ../greet
+```
+
+```dex
+import "github.com/acme/greet"              // greet.dx at the library's root
+import "github.com/acme/web/service/users"  // this project's own file, from anywhere in it
+import "service/users"                      // a plain path is still relative, as always
+```
+
+`require` names a library and the version used. `replace` says where to read it
+from instead of downloading it — a folder on your machine — which is how a
+monorepo, or a library you are changing alongside the app that uses it, works
+today. Downloading published versions (`dex get`) is the next step; see
+[design/package-management.md](design/package-management.md) and the
+[Language Reference](LANGUAGE.md#modules-and-dexmod).
+
 ## Calling C
 
 An `external module` block declares C functions, the headers they need, and the

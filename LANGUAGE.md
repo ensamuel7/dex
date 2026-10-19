@@ -12,6 +12,7 @@ dex test [file_test.dx]   # runs test files (*_test.dx)
 dex format [path...]      # lays files out the one canonical way
 dex lint <file.dx>        # reports lint findings without building
 dex check <file.dx>       # runs cppcheck over the generated C
+dex mod init <path>       # starts a dex.mod naming this project — see Modules and dex.mod
 ```
 
 `build`, `run` and `dev` report lint findings alongside the build unless given
@@ -2388,6 +2389,71 @@ local called `users` is a variable, not the module.
 
 Declarations may appear in any order within a file — a `const` above the struct
 it describes, a function above the type it returns.
+
+### Modules and dex.mod
+
+A project that shares code with other projects has a `dex.mod` at its root. It
+names the project, and lists the libraries it uses:
+
+```
+module github.com/acme/web
+
+require github.com/acme/greet v0.1.0
+replace github.com/acme/greet => ../greet
+```
+
+Create one with `dex mod init github.com/acme/web` in the project's root
+directory. A project with no `dex.mod` keeps working exactly as before; it only
+becomes necessary once an import names a module.
+
+**The name is a URL.** `module github.com/acme/web` says what this project is
+called, and it is where the code lives — the way Go names modules. Two people's
+libraries cannot collide, because two people do not own the same URL.
+
+**An import is either a path or a module.** An import whose first segment
+looks like a host name — `github.com/...`, `example.org/...` — names a module.
+Anything else is a file relative to the importing one, as it always was:
+
+```dex
+import "service/users"                      // service/users.dx beside this file
+import "github.com/acme/web/service/users"  // the same file, from anywhere in the project
+import "github.com/acme/greet"              // a library: greet.dx at its root
+import "github.com/acme/greet/internal/shout"
+```
+
+The project's own module path reaches any file from any other, without `../`
+chains. Importing a module path whole — `github.com/acme/greet` — reads the file
+at that module's root named after its last segment, `greet.dx`, because an
+import names a file and a module is a folder of them.
+
+**`require` says which library, and which version.** `require
+github.com/acme/greet v0.1.0` means this project uses that library at that
+version. A version is a git tag the library's author pushed.
+
+**`replace` says where to read it from instead.** Normally a required library
+would be downloaded — that is what `dex get` will do. `replace` says: don't
+download it, use this folder on my machine. It is how you use a library that is
+not published yet, or one you are changing alongside the program that uses it:
+
+```
+replace github.com/acme/greet => ../greet
+```
+
+means every `import "github.com/acme/greet..."` reads from the `greet` folder
+next to this project. When the library is published, delete the line and the
+same imports read the downloaded copy. A replaced module must still be required,
+so that removing the `replace` leaves a complete `dex.mod`. The path is relative
+to the `dex.mod`, written `./dir` or `../dir`.
+
+Until `dex get` exists, `replace` is the only way to reach another module:
+importing a module that is required but not replaced is an error that says so
+and shows the `replace` line to add. That already covers the common cases — a
+monorepo, where every library is a folder in one repository, and colleagues
+working on a library and an app side by side.
+
+Only the main program's `dex.mod` is read, including for imports inside the
+libraries it uses: a library's own module path, and anything it requires, are
+resolved through the program's `require` and `replace` lines.
 
 ### fmt
 

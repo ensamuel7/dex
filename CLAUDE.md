@@ -19,6 +19,7 @@
   `test` only with `--lint`
 - Generate docs: `go run . docs`
 - Start LSP: `go run . lsp`
+- Start a dex.mod: `go run . mod init <module path>`
 
 ## Project Structure
 
@@ -287,6 +288,22 @@ and owned where the defer is written, rather than read out of a frame that may
 be gone. The consequence is that arguments are evaluated at the `defer` rather
 than at the exit, which is also what Go does. `examples/defer_test.dx` pins all
 of it.
+
+## dex.mod
+
+`resolve/mod.go` reads a `dex.mod` (`module`, `require`, `replace`, with go.mod's
+block form) and `importFile` turns an import into a file: a path whose first
+segment holds a dot is a module path (Go's rule), anything else is relative to
+the importing file as it always was. Every site that used to join a path with
+`.dx` goes through it — pre-registration, `moduleIdentities`, `fileAliases`,
+resolution, and the three LSP lookups via `resolve.ImportFile`.
+
+Only the main program's `dex.mod` is read, found by walking up from the main
+file; a library's imports, its own module path included, resolve through the
+program's `require` and `replace`. A replace names a directory only, and must be
+required, so deleting it leaves a complete file. A required module that is not
+replaced is an error pointing at `replace`, because nothing fetches yet. A
+module path imported whole reads `<root>/<last segment>.dx`.
 
 ## A module is a file, and its names are its own
 

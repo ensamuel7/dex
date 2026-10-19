@@ -10,6 +10,7 @@ import (
 	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/lexer"
 	"github.com/ensamuel7/dex/parser"
+	"github.com/ensamuel7/dex/resolve"
 	"github.com/ensamuel7/dex/stdlib"
 	"github.com/ensamuel7/dex/token"
 )
@@ -446,8 +447,10 @@ func (s *Server) userModuleCompletions(moduleName string, text string, uri strin
 	// Resolve to absolute .dx file path
 	filePath := uriToPath(uri)
 	sourceDir := filepath.Dir(filePath)
-	modFile := filepath.Join(sourceDir, importPath+".dx")
-
+	modFile, err := resolve.ImportFile(sourceDir, sourceDir, importPath)
+	if err != nil {
+		return nil
+	}
 	if _, err := os.Stat(modFile); err != nil {
 		return nil
 	}

@@ -170,7 +170,13 @@ file that declares it. A library calls its own bindings as it does now, an app
 never sees them, and two libraries can use the same name. Sharing a set of
 bindings is done by making them a library and importing it like any other.
 
-### 2. Imports resolve through `dex.mod`
+### 2. Imports resolve through `dex.mod` — done
+
+`dex mod init`, `module`, `require` and `replace` (to a directory) work, and an
+import whose first segment is a host name resolves through them. Two choices the
+sketch above left open: importing a module path whole reads
+`<root>/<last segment>.dx`, and a `replace` must be backed by a `require`. See
+LANGUAGE.md, "Modules and dex.mod".
 
 A non-relative import path is looked up in `dex.mod` and read from the cache,
 or from a `replace` directory.
@@ -186,8 +192,8 @@ this moves from deliberately unsupported to required.
 ## Order of work
 
 1. ~~Package-scoped names and file-scoped external modules.~~ Done.
-2. `dex.mod` and import resolution, with `replace` only. Sharing from local
-   directories and monorepos works from here.
+2. ~~`dex.mod` and import resolution, with `replace` only.~~ Done: sharing
+   from local directories and monorepos works.
 3. `dex get`: fetching tags into the cache and writing `dex.sum`.
 4. Generics in user modules.
 5. A registry or proxy, only once git hosting is not enough.

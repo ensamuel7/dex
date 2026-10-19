@@ -1,4 +1,3 @@
-// A module exporting an interface, plus a struct that satisfies it.
 interface Handler {
     fn run(): int
 }

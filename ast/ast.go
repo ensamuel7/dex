@@ -244,9 +244,6 @@ func IsHeapType(t Type) bool {
 	return t == TypeString || t == TypeStringBuilder || t == TypeJsonValue || IsArrayType(t) || IsChanType(t) || IsTaskType(t) || IsWeakType(t) || IsMapType(t) || IsFuncType(t) || IsPayloadEnumType(t) || IsHandleType(t)
 }
 
-// IsHeapOptionalType reports an optional whose value is a nullable pointer to a
-// refcounted object — string?, Db? — so it is retained and released exactly as
-// the heap type is, with NULL as the absent value.
 func IsHeapOptionalType(t Type) bool {
 	return IsOptionalType(t) && IsHeapType(OptionalInnerType(t))
 }
@@ -377,15 +374,13 @@ type Import struct {
 }
 
 type Program struct {
-	Imports     []Import
-	Structs     []StructDef
-	Enums       []EnumDef
-	GlobalLets  []LetStmt // module-level let/const declarations
-	Functions   []Function
-	Interfaces  []InterfaceDef
-	UserModules []string // identities of resolved user imports: see resolve.moduleIdentities
-	// ModuleAliases maps a name the main program imports a module by to that
-	// module's identity, where the two differ.
+	Imports       []Import
+	Structs       []StructDef
+	Enums         []EnumDef
+	GlobalLets    []LetStmt // module-level let/const declarations
+	Functions     []Function
+	Interfaces    []InterfaceDef
+	UserModules   []string // module identities of resolved user imports
 	ModuleAliases map[string]string
 	StructModule  map[string]string // structName -> moduleName (for cross-module structs)
 	// Generic declarations are kept as the tokens they were written as rather
@@ -406,18 +401,11 @@ type Program struct {
 // ExternalModule is an `external module` block: a set of C functions to call, the
 // headers they need, and the flags to link against.
 type ExternalModule struct {
-	Pos Pos
-	// Name is what the block is registered under. In the main program it is
-	// the name written; in a user module it is scoped to that module —
-	// alpha__cstr — so an external module is visible only in the file that
-	// declares it, and two files can each declare a `cstr`.
-	Name string
-	// Local is the name as written, for diagnostics.
+	Pos      Pos
+	Name     string
 	Local    string
 	Includes []string
 	Links    []string
-	// Packages are `pkg "name"` lines: libraries whose flags come from
-	// pkg-config rather than being written out.
 	Packages []string
 	Types    []ExternalType
 	Funcs    []ExternalFunc
@@ -446,8 +434,6 @@ type ExternalFunc struct {
 	// malloc'd the string it returned and Dex frees it. Without it the buffer
 	// is copied and left alone, which is what getenv and strerror need.
 	OwnedReturn bool
-	// ReturnFreer is the `freed by "f"` clause after `owned string`: the
-	// library's own deallocator, for memory plain free must not touch.
 	ReturnFreer string
 }
 

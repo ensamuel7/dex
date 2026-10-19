@@ -1,4 +1,3 @@
-// The other `Response`, with different fields entirely.
 struct Response(code: int) {}
 
 enum Kind {

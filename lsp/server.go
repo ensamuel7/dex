@@ -601,19 +601,7 @@ func (s *Server) diagnose(uri string, text string) {
 	crossFileDiags := map[string][]Diagnostic{}
 
 	// Reset and register module types
-	ast.ResetStructTypes()
-	ast.ResetChanTypes()
-	ast.ResetTaskTypes()
-	ast.ResetWeakTypes()
-	ast.ResetStructArrayTypes()
-	ast.ResetOptionalTypes()
-	ast.ResetRefTypes()
-	ast.ResetFuncTypes()
-	ast.ResetMapTypes()
-	ast.ResetEnumTypes()
-	ast.ResetHandleTypes()
-	stdlib.RegisterAllModuleTypes()
-	ast.RegisterExceptionType()
+	resetTypeRegistries()
 
 	// Lex
 	lex := lexer.New(text)
@@ -636,6 +624,7 @@ func (s *Server) diagnose(uri string, text string) {
 			crossFileDiags[impURI] = append(crossFileDiags[impURI], impDiags...)
 		}
 	}
+	resetTypeRegistries()
 
 	// Parse
 	p := parser.New(tokens)
@@ -978,8 +967,6 @@ func seedParserModuleTypes(p *parser.Parser, tokens []token.Token, sourceDir str
 		for _, mt := range resolve.PreRegisterUserStructs(resolve.ExtractImports(tokens), sourceDir) {
 			p.AddModuleType(mt.Module, mt.Name, mt.Kind)
 		}
-		// Two imports under one name is reported by ResolveUserModules, with
-		// its position; here it only means no aliases to seed.
 		if aliases, err := resolve.ModuleAliases(resolve.ExtractImports(tokens), sourceDir, ""); err == nil {
 			p.SetModuleAliases(aliases)
 		}
@@ -1012,8 +999,7 @@ func extractUserImportPaths(tokens []token.Token, sourceDir string) []string {
 			if stdlib.Lookup(importPath) != nil {
 				continue
 			}
-			// A module path goes through the dex.mod; an import it cannot place
-			// is reported by resolution, with its position.
+			// Resolve to absolute .dx file path
 			absPath, err := resolve.ImportFile(sourceDir, sourceDir, importPath)
 			if err != nil {
 				continue
@@ -1153,4 +1139,20 @@ func resolveAliasToPath(alias string, text string) string {
 		}
 	}
 	return ""
+}
+
+func resetTypeRegistries() {
+	ast.ResetStructTypes()
+	ast.ResetChanTypes()
+	ast.ResetTaskTypes()
+	ast.ResetWeakTypes()
+	ast.ResetStructArrayTypes()
+	ast.ResetOptionalTypes()
+	ast.ResetRefTypes()
+	ast.ResetFuncTypes()
+	ast.ResetMapTypes()
+	ast.ResetEnumTypes()
+	ast.ResetHandleTypes()
+	stdlib.RegisterAllModuleTypes()
+	ast.RegisterExceptionType()
 }

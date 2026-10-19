@@ -48,8 +48,6 @@ type FuncDef struct {
 	// external declaration without #[owned].
 	BorrowedReturn bool
 
-	// ReturnFreer is the C function that frees an owned string return in
-	// place of free. Set only from an external declaration's `freed by`.
 	ReturnFreer string
 }
 
@@ -149,8 +147,6 @@ func FromExternal(em ast.ExternalModule) *Module {
 		includes.WriteString("#include " + h + "\n")
 	}
 	m.CIncludes = includes.String()
-	// A pkg-config failure is reported by the checker, at the pkg line; here
-	// it contributes no flags.
 	for _, name := range em.Packages {
 		if ValidPkgName(name) {
 			if flags, err := PkgConfig(name); err == nil {

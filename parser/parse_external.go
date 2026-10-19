@@ -10,8 +10,8 @@ func (p *Parser) isExternalModuleAhead() bool {
 }
 
 // softKeyword reports whether the current token is an identifier spelled word.
-// `module`, `include`, `link` and `pkg` are only keywords inside an external
-// block, so they stay usable as ordinary names everywhere else.
+// `module`, `include` and `link` are only keywords inside an external block, so
+// they stay usable as ordinary names everywhere else.
 func (p *Parser) softKeyword(word string) bool {
 	return p.check(token.TokenIdent) && p.current().Value == word
 }
@@ -34,9 +34,6 @@ func (p *Parser) parseExternalModule() (*ast.ExternalModule, error) {
 		return nil, err
 	}
 
-	// A module's external block is registered under a name scoped to that
-	// module, so it is visible only there; resolve renames the module's calls
-	// to match. The main program's keeps the name written.
 	key := name
 	if p.module != "" {
 		key = p.module + "__" + name
@@ -126,10 +123,6 @@ func (p *Parser) parseExternalFunc(moduleName string) (*ast.ExternalFunc, error)
 			if err := p.expect(token.TokenColon); err != nil {
 				return nil, err
 			}
-			// `&T` is a parameter the C function writes through. Parsed here
-			// rather than by parseType, which allows & only on structs and
-			// scalars: a handle is neither, and an out-parameter is the one
-			// place a reference to one means something.
 			out := p.match(token.TokenAmpersand)
 			ptype, err := p.parseType()
 			if err != nil {
@@ -161,8 +154,6 @@ func (p *Parser) parseExternalFunc(moduleName string) (*ast.ExternalFunc, error)
 		if err != nil {
 			return nil, err
 		}
-		// `freed by "f"` names the library's own deallocator, for a string
-		// that plain free must not touch: sqlite3_free, xmlFree, OPENSSL_free.
 		if p.softKeyword("freed") {
 			p.advance()
 			if !p.softKeyword("by") {

@@ -1,8 +1,3 @@
-// A library wrapping a C library: the external module is private to this
-// file, and what it exports is ordinary Dex — a struct holding the connection
-// and functions taking it. A program importing this never sees sqlite's C
-// names, and the connection closes when the last Database holding it goes.
-
 external module c {
     include "<sqlite3.h>"
     pkg "sqlite3"
@@ -26,7 +21,6 @@ fn open(path: string): Database {
     return Database { handle: db }
 }
 
-// Runs a statement to completion. SQLITE_DONE is 101.
 fn exec(d: Database, sql: string): bool {
     let h: Db? = d.handle
     if (h == null) {
@@ -40,7 +34,6 @@ fn exec(d: Database, sql: string): bool {
     return c.step(st) == 101
 }
 
-// The first column of the first row as an int. SQLITE_ROW is 100.
 fn queryInt(d: Database, sql: string): int {
     let h: Db? = d.handle
     if (h == null) {

@@ -1,16 +1,3 @@
-// Typed exceptions: a throw names a type, a catch clause chooses one, and what
-// no clause claims carries on outward.
-//
-// A struct is throwable when it has a `message: string` and nothing that would
-// need releasing. The reason is the longjmp: frames between the throw and the
-// catch never run their releases, so the message is staged into the runtime
-// before the jump and the remaining fields ride along as bytes. An int or a
-// bool survives that; a second string could only arrive already freed, which is
-// why the compiler refuses one.
-//
-// Nothing here throws through a statement holding a heap temporary — a string
-// literal passed at a throwing call belongs to that statement, and the jump
-// skips its release.
 struct ParseError(message: string, line: int) {}
 
 struct IOError(message: string) {}
@@ -25,13 +12,10 @@ fn load(path: string): int throws ParseError, IOError {
     return 7
 }
 
-// Declares what it propagates without catching anything itself.
 fn loadTwice(path: string): int throws ParseError, IOError {
     return load(path) + load(path)
 }
 
-// Declines a ParseError, so one raised inside carries on outward — after the
-// finally has run.
 fn declining(path: string): int throws ParseError {
     try {
         return load(path)
@@ -59,7 +43,6 @@ fn main(): void {
     let empty = ""
     let bad = "bad"
 
-    // The clause whose type matches runs, and reads its own fields.
     let parseLine = 0
     try {
         assert(load(bad) == 0)
@@ -71,7 +54,6 @@ fn main(): void {
     }
     assert(parseLine == 12)
 
-    // A different type reaches a different clause.
     let sawIO = false
     try {
         assert(load(empty) == 0)
@@ -83,7 +65,6 @@ fn main(): void {
     }
     assert(sawIO)
 
-    // Nothing thrown: no clause runs.
     try {
         assert(loadTwice(good) == 14)
     } catch (e: ParseError) {
@@ -92,8 +73,6 @@ fn main(): void {
         assert(false)
     }
 
-    // Exception is the catch-all: it takes a ParseError too, with only the
-    // message — the fields of a type it does not name are not its to read.
     let caughtAny = false
     try {
         assert(load(bad) == 0)
@@ -103,7 +82,6 @@ fn main(): void {
     }
     assert(caughtAny)
 
-    // An exception no clause claimed propagates, payload intact.
     let rethrownLine = 0
     try {
         assert(declining(bad) == 0)
@@ -112,14 +90,12 @@ fn main(): void {
     }
     assert(rethrownLine == 12)
 
-    // The IOError that same function does catch never reaches here.
     try {
         assert(declining(empty) == 0)
     } catch (e: ParseError) {
         assert(false)
     }
 
-    // A method throws and is caught the same way.
     let v = Validator { min: 18 }
     let rejected = 0
     try {

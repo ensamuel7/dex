@@ -203,20 +203,14 @@ func TestCodegenExternalOutParams(t *testing.T) {
 		let m: double = sq.frexp(8.0, e)
 		let skipped: int = sq.open(":memory:", null)
 	}`)
-	// A handle is written into a raw local, read back as characters, and boxed
-	// into the variable, releasing what it held.
 	assertContains(t, out, `sqlite3_open(":memory:", (void*)&`)
 	assertContains(t, out, "memcpy(&_dex_written")
 	assertContains(t, out, "db = dex_handle_new(_dex_written, dex_handle_close_sq_Db)")
 	assertContains(t, out, "if (_dex_old) { dex_release(_dex_old); }")
-	// A scalar is just the variable's address, uncast so the header checks it.
 	assertContains(t, out, "frexp(8, &e)")
-	// null skips the output.
 	assertContains(t, out, `sqlite3_open(":memory:", NULL)`)
 }
 
-// With no header, the prototype is written from the Dex signature, so an
-// out-parameter needs a pointer type there too.
 func TestCodegenExternalOutParamPrototypes(t *testing.T) {
 	out := generate(t, `external module z {
 		type H closed by "h_close"
@@ -231,8 +225,6 @@ func TestCodegenExternalOutParamPrototypes(t *testing.T) {
 	assertContains(t, out, "extern double z_modf(double, double*);")
 }
 
-// A discarded result would otherwise be a statement expression whose value is
-// unused, which clang warns about.
 func TestCodegenExternalOutParamDiscardedResult(t *testing.T) {
 	out := generate(t, `external module sq {
 		include "<sqlite3.h>"
@@ -246,8 +238,6 @@ func TestCodegenExternalOutParamDiscardedResult(t *testing.T) {
 	assertContains(t, out, "(void)({ void*")
 }
 
-// An optional heap field is a heap field: a struct literal storing a borrowed
-// one and a let reading one back out both take a reference.
 func TestCodegenOptionalHeapFieldsAreRetained(t *testing.T) {
 	out := generate(t, `struct Box {
 		name: string?

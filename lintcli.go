@@ -52,12 +52,6 @@ var (
 	fmtCheck    bool
 )
 
-// lintOnByDefault decides whether a command reports lint findings. Building is
-// where a mistake is cheapest to hear about, so build, run and dev report them
-// unless --no-lint says otherwise; findings never fail the build without
-// --lint=strict, so this costs a few lines of output and nothing else. `dex
-// test` leaves them off unless --lint is given: it builds every test file, and
-// a suite's output is for its failures.
 func lintOnByDefault(command string) bool {
 	if lintAsked {
 		return true

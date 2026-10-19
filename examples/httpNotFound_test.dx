@@ -1,34 +1,18 @@
-// The fallback for a path no route matched.
-//
-// Route matching is per-segment, so a wildcard route cannot express "nothing
-// matched": "/:x" matches one segment and "/a/:x" matches two, and neither
-// covers the rest. http.notFound() is the only way to say it, which is what a
-// program with an error shape of its own needs — the built-in 404 body is
-// Dex's, not the program's.
-//
-// The handler takes the shapes http.route() accepts, because it is the same
-// rule: either the request or nothing, returning something.
-//
-//   go run . run examples/httpNotFound_test.dx
-
 import "http"
 import "fmt"
 
 struct Api {
     name: string
 
-    // A method value carries the struct holding its dependencies.
     fn handle(req: http.HttpRequest): http.HttpResponse {
         return http.response(404, "{\"error\":\"not found\",\"api\":\"" + name + "\"}", "application/json")
     }
 }
 
-// Takes the request: the path it could not match is worth reporting.
 fn missing(req: http.HttpRequest): http.HttpResponse {
     return http.response(404, "{\"error\":\"not found\",\"path\":\"" + req.path + "\"}", "application/json")
 }
 
-// Takes nothing, returns a bare string: adapted, exactly as a route's would be.
 fn terse(): string {
     return "nothing here"
 }
@@ -40,14 +24,11 @@ fn feed(req: http.HttpRequest): http.HttpResponse {
 fn main(): void {
     http.route("GET", "/feed", feed)
 
-    // Each registration replaces the last, and dropping the reference the
-    // previous one held is what keeps a double registration from stranding it.
     http.notFound(terse)
 
     let api = Api { name: "feed" }
     http.notFound(api.handle)
 
-    // The one that would answer, if this test called listen().
     http.notFound(missing)
 
     fmt.println("not-found fallback registered")

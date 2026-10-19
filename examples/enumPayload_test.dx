@@ -1,12 +1,3 @@
-// Payload-carrying enums: a tagged union, matched by destructuring.
-//
-// A variant that carries fields makes the enum a refcounted box rather than an
-// integer constant, because `Add(Expr, Expr)` has no finite size as a value.
-// Dispatch is a switch on the tag — one compare and a jump, with no vtable and
-// no indirect call.
-//
-// A plain enum is untouched by all of this and is still an integer.
-
 import "fmt"
 import "str"
 
@@ -52,7 +43,6 @@ fn eval(e: Expr): long {
     return 0
 }
 
-// Built in a function and returned, so the box outlives the frame that made it.
 fn tree(depth: int): Expr {
     if (depth == 0) {
         return Expr.Lit(2)
@@ -79,11 +69,9 @@ fn describe(s: Shape): string {
 }
 
 fn main(): void {
-    // A plain enum is still an integer constant.
     let c: Color = Color.Red
     assert(c == Color.Red)
 
-    // Construction and destructuring.
     let two: Expr = Expr.Lit(2)
     let three: Expr = Expr.Lit(3)
     let sum: Expr = Expr.Add(two, three)
@@ -91,15 +79,11 @@ fn main(): void {
     assert(eval(Expr.Mul(sum, three)) == 15)
     assert(eval(Expr.Neg(sum)) == -5)
 
-    // The operands stay valid after being built into a variant: the box took
-    // its own reference rather than consuming theirs.
     assert(eval(two) == 2)
     assert(eval(sum) == 5)
 
-    // 2^8 leaves of 2, returned up through eight frames.
     assert(eval(tree(8)) == 512)
 
-    // Heap payloads, including one built on the spot.
     assert(describe(Shape.Empty) == "-")
     assert(describe(Shape.Label("hi")) == "hi")
     assert(describe(Shape.Tags(["a", "b", "c"])) == "3")
@@ -107,7 +91,6 @@ fn main(): void {
     assert(describe(Shape.Label(built)) == "made-up")
     assert(describe(Shape.Tagged("k", Shape.Label("v"))) == "k/v")
 
-    // A struct field, an array element, and reassignment.
     let h: Holder = Holder { name: "h", body: sum }
     assert(eval(h.body) == 5)
 
@@ -122,7 +105,6 @@ fn main(): void {
     assert(eval(slot) == 5)
     assert(eval(sum) == 5)
 
-    // `_` discards a binding it does not need.
     let discarded: long = 0
     switch (sum) {
         case Expr.Add(l, _): {

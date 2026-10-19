@@ -1,9 +1,3 @@
-// Reflection: reading a struct's fields by position rather than by name.
-//
-// The metadata behind this is emitted by the compiler for the structs named
-// here and for no others, and every read goes through a generated accessor that
-// lists only the fields of its own type — so a mismatched read returns a zero
-// value instead of reinterpreting bytes.
 import "fmt"
 import "reflect"
 import "num"
@@ -23,13 +17,10 @@ struct User {
     detail: Inner
 }
 
-// A struct no reflect call names, to show metadata is per struct.
 struct Untouched {
     ignored: string
 }
 
-// A generic helper takes its subject by reference, and reflection sees through
-// the &T the same as it sees a value.
 fn describe(c: &User): string {
     let sb = StringBuilder()
     let i: int = 0
@@ -58,15 +49,12 @@ fn main(): void {
     fmt.println(reflect.typeName(unit))
     fmt.println(reflect.fieldCount(unit))
 
-    // Walk every field, rendering whatever type it happens to be. A struct
-    // field has no single-line rendering and reports "".
     let i: int = 0
     while (i < reflect.fieldCount(unit)) {
         fmt.println(reflect.fieldName(unit, i) + " (" + reflect.fieldKind(unit, i) + ") = " + reflect.toString(unit, i))
         i = i + 1
     }
 
-    // A literal name folds to a constant index, so this is a direct field read.
     fmt.println(reflect.asString(unit, reflect.indexOf(unit, "email")))
     fmt.println(reflect.asLong(unit, 0))
     fmt.println(reflect.asDouble(unit, 3))
@@ -76,12 +64,9 @@ fn main(): void {
     fmt.println(reflect.has(unit, "nope"))
     fmt.println(reflect.indexOf(unit, "nope"))
 
-    // A name chosen at runtime searches the name table instead.
     let picked: string = "sco" + "re"
     fmt.println(reflect.asDouble(unit, reflect.indexOf(unit, picked)))
 
-    // Reading a field as the wrong type yields a zero value. The long accessor
-    // has no case for a string field, so there is nothing to misread.
     fmt.println(reflect.asLong(unit, 1))
     fmt.println(reflect.asString(unit, 0))
 
@@ -89,7 +74,6 @@ fn main(): void {
     fmt.println(names.len())
     fmt.println(names[1])
 
-    // A nested struct is a subject in its own right, as is an array element.
     fmt.println(reflect.typeName(unit.detail))
     fmt.println(reflect.asString(unit.detail, 0))
     fmt.println(reflect.toString(unit.detail, 1))
@@ -98,8 +82,6 @@ fn main(): void {
 
     fmt.println(describe(unit))
 
-    // Repeated reads, so a reference minted and never released would show in a
-    // leak check rather than passing unnoticed.
     let total: long = 0
     let r: int = 0
     while (r < 500) {

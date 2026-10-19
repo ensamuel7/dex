@@ -1,5 +1,4 @@
 fn main(): void {
-    // Integer switch
     let x: int = 2
     let result: int = 0
 
@@ -19,7 +18,6 @@ fn main(): void {
     }
     assert(result == 20)
 
-    // String switch
     let action: string = "Heartbeat"
     let handled: int = 0
 
@@ -36,7 +34,6 @@ fn main(): void {
     }
     assert(handled == 2)
 
-    // Default case
     let unknown: string = "Unknown"
     let fallback: int = 0
 
@@ -50,7 +47,6 @@ fn main(): void {
     }
     assert(fallback == 99)
 
-    // Char switch
     let grade: char = 'B'
     let score: int = 0
 

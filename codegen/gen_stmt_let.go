@@ -282,11 +282,6 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 
 }
 
-// emitRetainIfBorrowed gives a heap optional local its own reference when its
-// initial value is borrowed. It asked only whether the value was a bare name,
-// and only for a string, so `let n: string? = b.name` — and any optional array,
-// map or handle read out of a field or an element — shared the owner's reference
-// and released it at scope exit.
 func (g *Generator) emitRetainIfBorrowed(out *strings.Builder, prefix, name string, value ast.Expr) {
 	if g.borrowsHeapValue(value) {
 		out.WriteString(fmt.Sprintf("%sdex_retain(%s);\n", prefix, name))

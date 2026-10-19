@@ -1,5 +1,3 @@
-// One of two modules that each declare a `Response`. A type declared in a
-// module belongs to it, the way a function does, so both can exist.
 struct Response(ok: bool, label: string) {}
 
 enum Kind {
@@ -8,7 +6,6 @@ enum Kind {
 }
 
 fn make(label: string): Response {
-    // Unqualified inside the module that declares it.
     return Response(true, label)
 }
 

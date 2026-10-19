@@ -305,10 +305,7 @@ func headIdentName(expr ast.Expr) string {
 
 // isReassigned reports whether the function being generated ever assigns to a
 // name after its declaration. A compound assignment counts, and so does one
-// inside a lambda that captured it, and so does passing it to a C function that
-// writes through an out-parameter: the write replaces the value exactly as an
-// assignment does, and a variable with no unwind slot would leave the cleanup
-// stack naming what it held before.
+// inside a lambda that captured it.
 func (g *Generator) isReassigned(name string) bool {
 	if g.currentFn == nil {
 		return true
@@ -598,10 +595,6 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 			continue
 		}
 		switch {
-		// An optional heap field is the same pointer, possibly NULL, which
-		// dex_retain ignores. Leaving it out stored `Box { name: n }` with no
-		// reference of its own, and releasing n at scope exit freed the
-		// string the returned struct still held.
 		case ast.IsHeapType(ft) || ast.IsHeapOptionalType(ft):
 			out.WriteString(fmt.Sprintf("%sdex_retain(%s.%s);\n", prefix, target, name))
 		case ast.IsInterfaceType(ft):

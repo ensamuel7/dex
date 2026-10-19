@@ -23,10 +23,8 @@ type CodeAction struct {
 
 const codeActionQuickFix = "quickfix"
 
-// The errors an import fixes: a qualified call into a module the file never
-// imported, a bare call to a name some module exports, and a type some module
-// declares. The type's message can carry a suffix — "in catch clause" — so it
-// is anchored at the start only, and a qualified name is left to the first.
+// The checker errors an import fixes: a qualified call into a module the
+// file never imported, a bare call to a name some module exports, and a type.
 var (
 	missingModuleRe = regexp.MustCompile(`^module '([^']+)' is not imported$`)
 	missingFuncRe   = regexp.MustCompile(`^undefined function '([^']+)'$`)
@@ -95,9 +93,6 @@ func (s *Server) importCodeActions(uri, text string, rng Range, diags []Diagnost
 			continue
 		}
 
-		// `fn f(c: Columns)` where Columns is declared in query.dx: importing
-		// the module is the whole fix, because a bare type name reaches an
-		// imported module's type.
 		if m := missingTypeRe.FindStringSubmatch(d.Message); m != nil {
 			for _, path := range modulesDeclaringType(m[1], sourceDir, filePath) {
 				if isModuleImported(path, text) {

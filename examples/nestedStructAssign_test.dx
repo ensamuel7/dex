@@ -1,15 +1,3 @@
-// Reassigning a struct that holds another struct.
-//
-// A struct owns its heap fields, and the release pass descends into a nested
-// struct field to release what *it* owns. The retain on a reassignment has to
-// descend the same way, and did not: a nested struct is not a heap type, so a
-// flat loop over the heap fields retained the outer strings and skipped the
-// inner ones, leaving them one reference short. Both locals then released them
-// at scope exit, which is a use-after-free produced by an ordinary assignment.
-//
-// The declaration path one line away was already correct, which is why this
-// only showed up on the reassignment.
-
 import "fmt"
 import "str"
 
@@ -45,16 +33,13 @@ fn main(): void {
     let secure: Page = make(false, "secure")
     let plain: Page = make(true, "plain")
 
-    // Declared from a borrow, which retains two levels down.
     let page: Page = secure
     assert(page.headers.index.key == "server-secure")
 
-    // Reassigned from a borrow, which has to retain two levels down as well.
     if (!secure.ok) {
         page = plain
     }
 
-    // Both names still hold live strings, at every depth.
     assert(page.ok)
     assert(page.url == "https://plain")
     assert(page.headers.raw == "Server: plain")
@@ -67,11 +52,9 @@ fn main(): void {
     assert(plain.headers.index.key == "server-plain")
     assert(plain.headers.index.values[1] == "b-plain")
 
-    // The one that was replaced is untouched too.
     assert(secure.headers.index.key == "server-secure")
     assert(secure.headers.raw == "Server: secure")
 
-    // Reassigned again, from the other direction.
     page = secure
     assert(page.headers.index.key == "server-secure")
     assert(plain.headers.index.key == "server-plain")

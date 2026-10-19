@@ -92,8 +92,6 @@ type ModuleType struct {
 func PreRegisterUserStructs(imports []ImportRef, sourceDir string) []ModuleType {
 	var found []ModuleType
 	visited := map[string]bool{}
-	// A broken dex.mod is reported by resolution, with its line; here it only
-	// means the module imports cannot be found ahead of parsing.
 	mod, _ := FindMod(sourceDir)
 	ids := moduleIdentities(mod, imports, sourceDir)
 	for _, ref := range imports {
@@ -107,8 +105,8 @@ func PreRegisterUserStructs(imports []ImportRef, sourceDir string) []ModuleType 
 	return found
 }
 
-// localName is the name an import is known by in the file that writes it: its
-// alias, or its file's base name.
+// localName is the name an import is known by: its alias, or its file's
+// base name.
 func localName(ref ImportRef) string {
 	if ref.Alias != "" {
 		return ref.Alias
@@ -116,21 +114,6 @@ func localName(ref ImportRef) string {
 	return filepath.Base(ref.Path)
 }
 
-// moduleIdentities gives every user module reachable from imports the name it
-// is merged under, keyed by absolute path. A module's identity is what prefixes
-// its functions, globals and types in the generated C — `util_make`,
-// `util_Columns` — so it has to be unique per file, not per spelling.
-//
-// It was the file's base name, shared by every file with that base name, so two
-// libraries each with a util.dx merged into one module and a function both
-// declared was an error the program's author could not fix: the clash was in
-// code they did not own, and an alias could not reach it. Now a file keeps the
-// name it is first imported by, and a different file wanting the same name gets
-// the first free util_2, util_3. A program with no such clash is named exactly
-// as before.
-//
-// The walk is depth first, in the order imports are written, so every caller —
-// pre-registration, resolution, the language server — assigns the same names.
 func moduleIdentities(mod *Mod, imports []ImportRef, sourceDir string) map[string]string {
 	ids := map[string]string{}
 	taken := map[string]bool{}
@@ -172,14 +155,6 @@ func moduleIdentities(mod *Mod, imports []ImportRef, sourceDir string) map[strin
 	return ids
 }
 
-// fileAliases maps each name a file imports a module by to that module's
-// identity, for the names that differ — an alias, or a module renamed because
-// another file took its name first. Everything else is spelled the same in the
-// file as in the merged program, which is the usual case and leaves the map
-// empty.
-//
-// Two imports in one file under the same name, naming different files, are an
-// error: nothing in the file could say which one a reference means.
 func fileAliases(mod *Mod, refs []ImportRef, dir, file string, ids map[string]string) (map[string]string, error) {
 	aliases := map[string]string{}
 	byName := map[string]string{}
@@ -208,9 +183,6 @@ func fileAliases(mod *Mod, refs []ImportRef, dir, file string, ids map[string]st
 	return aliases, nil
 }
 
-// ModuleAliases is fileAliases for the main program, for seeding its parser
-// before it is parsed: a qualified type, struct literal or enum variant is
-// resolved there rather than afterwards.
 func ModuleAliases(imports []ImportRef, sourceDir, file string) (map[string]string, error) {
 	mod, err := FindMod(sourceDir)
 	if err != nil {
@@ -347,8 +319,6 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 	if err != nil {
 		return err
 	}
-	// Kept for the checker's generic instantiations, which re-parse the main
-	// program's templates after this pass has already renamed its calls.
 	program.ModuleAliases = aliases
 	for i := range program.Functions {
 		renameModuleRefs(&program.Functions[i], aliases)
@@ -357,10 +327,6 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 		renameModuleRefsInExpr(program.GlobalLets[i].Value, aliases)
 	}
 
-	// The main program's external modules keep their names. A module reaching
-	// one without declaring it would otherwise still compile, because the name
-	// is in the program's import map — which is the leak that made a library's
-	// C bindings everyone's.
 	mainExternals := map[string]bool{}
 	for _, em := range program.Externals {
 		mainExternals[em.Name] = true
@@ -371,11 +337,6 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 	if err := r.resolveImports(sourceDir); err != nil {
 		return err
 	}
-	// Globals are defined in this order, and a module's are appended after the
-	// main program's — so `let TOP: int = counter.LIMIT + 1` read a module
-	// constant that was not defined yet. Modules merge dependencies first, so
-	// moving the main program's to the end puts every global after what it can
-	// name.
 	ordered := make([]ast.LetStmt, 0, len(program.GlobalLets))
 	ordered = append(ordered, program.GlobalLets[mainGlobals:]...)
 	program.GlobalLets = append(ordered, program.GlobalLets[:mainGlobals]...)
@@ -383,9 +344,6 @@ func ResolveUserModules(program *ast.Program, sourceDir string) error {
 	return nil
 }
 
-// resolver carries what every file's resolution shares: the program being
-// merged into, each file's identity, and the bookkeeping that stops a file being
-// merged twice or importing itself.
 type resolver struct {
 	program       *ast.Program
 	mod           *Mod
@@ -396,11 +354,6 @@ type resolver struct {
 	mainExternals map[string]bool
 }
 
-// renameModuleRefs rewrites a function's qualified references whose head is a
-// key of names into its value: a call `local.f()`, including the head of a
-// dotted receiver chain, and a field access `local.x`. A parameter or local of
-// the same name wins inside the function that declares it, as it does for the
-// module prefixer.
 func renameModuleRefs(fn *ast.Function, names map[string]string) {
 	if len(names) == 0 {
 		return
@@ -447,8 +400,6 @@ func renameModuleRef(expr ast.Expr, names map[string]string, visible map[string]
 	}
 }
 
-// splitModuleHead splits a call's Module into its first segment and the dotted
-// rest: "svc.repo" is "svc" and ".repo".
 func splitModuleHead(module string) (string, string) {
 	if dot := strings.Index(module, "."); dot >= 0 {
 		return module[:dot], module[dot:]
@@ -571,9 +522,6 @@ func (r *resolver) resolveImports(sourceDir string) error {
 	return nil
 }
 
-// identity is a file's merged name. Every reachable file was named up front, so
-// the fallback only covers a file the walk could not read — which then fails
-// to open with its own error.
 func (r *resolver) identity(absPath string, ref ImportRef) string {
 	if id, ok := r.ids[absPath]; ok {
 		return id
@@ -678,10 +626,6 @@ func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error
 
 	FlattenStructMethods(modProgram)
 
-	// What this file calls its imports and its external modules is local to
-	// it: an import whose identity differs from the name written, and an
-	// external module, which the parser registered under a name scoped to this
-	// file, are renamed here so the merged program has one spelling for each.
 	names := map[string]string{}
 	for local, id := range aliases {
 		names[local] = id
@@ -813,8 +757,6 @@ func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error
 	return nil
 }
 
-// posError puts an import's position in front of an error about it, in the
-// file:line:col form the CLI and the language server both route by.
 func posError(pos ast.Pos, err error) error {
 	if pos.File == "" || pos.Line == 0 {
 		return err
@@ -822,10 +764,6 @@ func posError(pos ast.Pos, err error) error {
 	return fmt.Errorf("%s:%d:%d: %v", pos.File, pos.Line, pos.Col, err)
 }
 
-// refuseForeignExternals reports a module calling into an external module the
-// main program declares. The main program's keep their names, so without this
-// the call would resolve: an external module is visible only in the file that
-// declares it, and a module that wants the same C functions declares them too.
 func (r *resolver) refuseForeignExternals(modProgram *ast.Program, own map[string]string, imports map[string]bool) error {
 	if len(r.mainExternals) == 0 {
 		return nil
@@ -1295,10 +1233,6 @@ func containsInterface(list []ast.InterfaceDef, name string) bool {
 	return false
 }
 
-// Instantiator is the parser's generic instantiation with the main program's
-// module renames applied to what it produces. A template is re-parsed by the
-// checker after ResolveUserModules has already renamed the main program's calls,
-// so without this a generic calling an aliased module named it by the alias.
 type Instantiator struct {
 	*parser.Parser
 	Aliases map[string]string

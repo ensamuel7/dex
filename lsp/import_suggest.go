@@ -184,9 +184,6 @@ func modulesExporting(fnName, sourceDir, selfPath string) []importCandidate {
 	return out
 }
 
-// modulesDeclaringType returns the import paths of the modules that declare a
-// struct, enum or interface named typeName: a stdlib module that provides it,
-// or a user .dx file beside or below the source.
 func modulesDeclaringType(typeName, sourceDir, selfPath string) []string {
 	var out []string
 	modNames := make([]string, 0, len(stdlib.AllModules()))

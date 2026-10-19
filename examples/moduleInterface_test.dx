@@ -1,11 +1,3 @@
-// An interface declared in a user module belongs to that module, the way its
-// structs and enums do, so a library can export one.
-//
-// Before this the declaration parsed and was then dropped on the way into the
-// program: the importing file reported "unknown type" for a name it could see
-// in the source, and a library had no way to state a contract its callers
-// implement.
-
 import "fmt"
 import "modules/alphaIface"
 import "modules/betaIface"
@@ -19,18 +11,14 @@ struct Local {
 }
 
 fn main(): void {
-    // Qualified, and they are different types with different return types.
     let a: alphaIface.Handler = alphaIface.make(41)
     let b: betaIface.Handler = betaIface.make("x")
     assert(a.run() == 42)
     assert(b.run() == "beta:x")
 
-    // A struct declared here satisfies the module's interface — structural
-    // typing does not care where either was declared.
     let mine: alphaIface.Handler = Local { v: 21 }
     assert(mine.run() == 42)
 
-    // Held in an array, which is what an owning interface value allows.
     let all: alphaIface.Handler[] = [alphaIface.make(1), Local { v: 5 }]
     assert(all.len() == 2)
     assert(all[0].run() == 2)

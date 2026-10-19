@@ -1,7 +1,3 @@
-// Dependency-holding service structs: a struct carries what it needs, is built
-// once, and its methods reach their collaborators through fields rather than
-// through module-level state passed around by hand.
-
 struct Registry {
     mu: mutex
     byId: map[int, int]
@@ -54,7 +50,6 @@ struct Registry {
     }
 }
 
-// A service holds its dependencies and reaches them through fields.
 struct Service {
     label: string
     reg: Registry
@@ -89,7 +84,6 @@ fn newService(label: string): Service {
 }
 
 fn main(): void {
-    // Empty map literals take their type from the field they initialise.
     let svc: Service = newService("records")
     assert(svc.label == "records")
     assert(svc.online() == 0)
@@ -100,11 +94,9 @@ fn main(): void {
     assert(svc.socketFor(7) == 42)
     assert(svc.ownerOf(43) == 8)
 
-    // An unknown id or socket reports absence rather than a stale answer.
     assert(svc.socketFor(99) == -1)
     assert(svc.ownerOf(99) == -1)
 
-    // A reconnect replaces the old socket without leaving the reverse entry stale.
     svc.connect(7, 44)
     assert(svc.socketFor(7) == 44)
     assert(svc.ownerOf(44) == 7)
@@ -115,7 +107,6 @@ fn main(): void {
     assert(svc.online() == 1)
     assert(svc.socketFor(7) == -1)
 
-    // Two services built from the same constructor keep separate state.
     let a: Service = newService("a")
     let b: Service = newService("b")
     a.connect(1, 100)
@@ -123,7 +114,6 @@ fn main(): void {
     assert(b.online() == 0)
     assert(b.socketFor(1) == -1)
 
-    // A struct literal may also be written out in place, nesting struct and map fields.
     let direct: Service = Service { label: "direct", reg: Registry { mu: mutex, byId: {}, idByFd: {} } }
     direct.connect(5, 55)
     assert(direct.socketFor(5) == 55)

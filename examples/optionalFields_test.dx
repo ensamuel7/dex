@@ -1,10 +1,3 @@
-// A struct field holding a string? keeps its own reference.
-//
-// A struct literal took none — `Box { name: n }` shared n's, and n was released
-// at scope exit — and a local read back out of the field took none either, so
-// `let n: string? = b.name` released the struct's string when it went. Both
-// were silent without the memory checker.
-
 import "fmt"
 
 struct Box {

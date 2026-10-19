@@ -1,6 +1,3 @@
-// The other util.dx. Same names, different behaviour, and its external module
-// binds a different C function under the same module and function names.
-
 const NAME: string = "beta"
 
 enum Kind {

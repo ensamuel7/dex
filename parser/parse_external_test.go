@@ -230,8 +230,6 @@ func TestParseExternalOutParams(t *testing.T) {
 	}
 }
 
-// A module's external block is registered under a name scoped to the module,
-// and its handle types with it, so two files can each declare the same one.
 func TestParseExternalInModuleIsScoped(t *testing.T) {
 	toks, err := lexer.New(`external module cstr {
 		type H closed by "h_close"
@@ -255,8 +253,6 @@ func TestParseExternalInModuleIsScoped(t *testing.T) {
 	}
 }
 
-// A qualified name written with an alias resolves to the identity the type is
-// registered under.
 func TestModuleAliasResolvesQualifiedType(t *testing.T) {
 	toks, err := lexer.New(`fn f(i: u.Item): void {}`).Tokenize()
 	if err != nil {

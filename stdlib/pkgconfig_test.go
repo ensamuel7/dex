@@ -14,7 +14,6 @@ func TestValidPkgName(t *testing.T) {
 			t.Errorf("%q should be a valid pkg name", ok)
 		}
 	}
-	// A leading '-' would be read by pkg-config as one of its own options.
 	for _, bad := range []string{"", "--variable=prefix", "-lz", "a b", "x;y", "$(id)"} {
 		if ValidPkgName(bad) {
 			t.Errorf("%q should not be a valid pkg name", bad)
@@ -33,8 +32,6 @@ func TestFilterPkgFlagsKeepsWhatALibraryNeeds(t *testing.T) {
 	}
 }
 
-// pkg-config output reaches the compiler, so anything beyond what a library
-// needs is refused rather than passed through.
 func TestFilterPkgFlagsRefusesTheRest(t *testing.T) {
 	for _, out := range []string{
 		"-I/inc -fplugin=/tmp/evil.so",
@@ -50,8 +47,6 @@ func TestFilterPkgFlagsRefusesTheRest(t *testing.T) {
 	}
 }
 
-// CFlags gains the pkg-config flags by append, so sharing Links' backing array
-// would write them into the block's own declaration.
 func TestFromExternalDoesNotWriteIntoLinks(t *testing.T) {
 	if _, err := PkgConfig("zlib"); err != nil {
 		t.Skip("pkg-config has no zlib here")

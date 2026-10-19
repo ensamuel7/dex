@@ -609,9 +609,6 @@ func RegisterTypeParam(name string) Type {
 	return id
 }
 
-// Bounded above, because handles are numbered after type parameters: an open
-// range made every handle a type parameter, so a function taking one failed
-// the check that no type parameter survives instantiation.
 func IsTypeParamType(t Type) bool {
 	return t >= TypeParamBase && t < TypeHandleBase
 }

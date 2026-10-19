@@ -98,6 +98,9 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			}
 		}
 
+		// The operands of a short-circuit must not be hoisted out of it: the
+		// right-hand side may never be evaluated, and a hoisted declaration
+		// would evaluate it anyway. See genCondition.
 		if e.Op == ast.BinAnd || e.Op == ast.BinOr {
 			g.genShortCircuit(out, e)
 			return

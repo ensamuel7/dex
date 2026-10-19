@@ -235,8 +235,6 @@ func TestExternalFreedByNeedsOwned(t *testing.T) {
 	fn main(): void {}`, "needs an 'owned string' return")
 }
 
-// A symbol is pasted into the generated C as written, so anything that is not
-// an identifier would be code run at build time.
 func TestExternalRejectsSymbolsThatAreNotIdentifiers(t *testing.T) {
 	mustFail(t, `external module z {
 		fn f(): int = "abs(0); exit"
@@ -300,8 +298,6 @@ func TestExternalOutArgMustNotBeConst(t *testing.T) {
 	}`, "is a const")
 }
 
-// C writes the representation it was declared with, so a variable of another
-// type — even a wider one — would be half written.
 func TestExternalOutArgMustMatchExactly(t *testing.T) {
 	mustFail(t, outModule+`fn main(): void {
 		let e: long = 0
@@ -322,9 +318,6 @@ func TestExternalRejectsStringOutParam(t *testing.T) {
 	fn main(): void {}`, "cannot be written by C")
 }
 
-// Handles are numbered after type parameters, and an unbounded range check made
-// every handle a type parameter: a function taking one failed with an internal
-// error about instantiation.
 func TestExternalHandleAsFunctionParameter(t *testing.T) {
 	mustCheck(t, `external module cio {
 		include "<stdio.h>"
@@ -346,7 +339,6 @@ func TestExternalHandleAsFunctionParameter(t *testing.T) {
 	}`)
 }
 
-// A library wrapping C keeps its connection in a struct its callers can name.
 func TestExternalHandleAsStructField(t *testing.T) {
 	mustCheck(t, `external module c {
 		include "<stdio.h>"

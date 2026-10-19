@@ -1,6 +1,3 @@
-// A module with its own state, constants, and functions. Two modules in this
-// example each declare `total` and `label`; they must stay separate.
-
 const LIMIT: int = 100
 const LABEL: string = "counter"
 

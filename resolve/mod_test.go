@@ -107,8 +107,6 @@ func TestImportFile(t *testing.T) {
 	}
 }
 
-// The longest module path wins, so a major version's own path is not read
-// from the module it extends.
 func TestImportFilePrefersLongestModulePath(t *testing.T) {
 	mod := &Mod{
 		Dir:     "/app",
@@ -147,8 +145,6 @@ func TestFindModWalksUpAndInitMod(t *testing.T) {
 	}
 }
 
-// A library replaced by a sibling directory, importing its own internal file by
-// module path, used from an app importing its own code by module path.
 func TestResolveThroughDexMod(t *testing.T) {
 	program, err := resolveProject(t, map[string]string{
 		"dex.mod": `module github.com/acme/web
@@ -193,8 +189,6 @@ fn main(): void {}
 	}
 }
 
-// The language server's entry point finds the dex.mod from the program's
-// directory, wherever the importing file is.
 func TestImportFileFindsTheModFromTheProgram(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ModFileName), []byte("module github.com/acme/web\n"), 0o644); err != nil {

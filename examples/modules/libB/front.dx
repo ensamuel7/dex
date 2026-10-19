@@ -1,4 +1,3 @@
-// The same file shape in the other library: `util` here is libB's util.
 import "util"
 
 fn run(label: string): string {

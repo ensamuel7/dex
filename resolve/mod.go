@@ -10,21 +10,13 @@ import (
 	"strings"
 )
 
-// ModFileName is the file that makes a directory a module's root.
 const ModFileName = "dex.mod"
 
-// Mod is a parsed dex.mod: the module's own path, the modules it requires, and
-// where to read the ones replaced by a local directory.
 type Mod struct {
-	// File is the dex.mod's path, and Dir the directory holding it, which is
-	// the root an import of the module's own path resolves from.
-	File string
-	Dir  string
-	// Path is the module's name, which is its URL: github.com/acme/app.
-	Path string
-	// Require maps a module path to the version required.
+	File    string
+	Dir     string
+	Path    string
 	Require map[string]string
-	// Replace maps a module path to the absolute directory read in its place.
 	Replace map[string]string
 }
 
@@ -33,9 +25,6 @@ var (
 	versionRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
 )
 
-// IsModulePath reports whether an import names a module rather than a file
-// relative to the importing one. The rule is Go's: a first segment holding a
-// dot is a host name. "." and ".." are relative segments, not hosts.
 func IsModulePath(path string) bool {
 	first := path
 	if i := strings.Index(path, "/"); i >= 0 {
@@ -44,9 +33,6 @@ func IsModulePath(path string) bool {
 	return first != "." && first != ".." && strings.Contains(first, ".")
 }
 
-// FindMod returns the dex.mod governing dir: the nearest one in dir or above
-// it. A program with none returns nil and no error — relative imports need
-// no dex.mod, so nothing requires one until an import names a module.
 func FindMod(dir string) (*Mod, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -65,17 +51,6 @@ func FindMod(dir string) (*Mod, error) {
 	}
 }
 
-// ParseMod reads a dex.mod. Each line is a directive, and require and replace
-// may also be grouped in parentheses as go.mod allows:
-//
-//	module github.com/acme/app
-//
-//	require github.com/acme/dexsqlite v1.0.0
-//	replace github.com/acme/dexsqlite => ../dexsqlite
-//
-// A replace names a local directory, relative to the dex.mod. Every error names
-// the file and line, because a dex.mod is read on every build and a mistake in
-// it would otherwise surface as an import that cannot be found.
 func ParseMod(file, src string) (*Mod, error) {
 	mod := &Mod{
 		File:    file,
@@ -149,8 +124,6 @@ func ParseMod(file, src string) (*Mod, error) {
 			if _, dup := mod.Replace[path]; dup {
 				return nil, errAt(n, "%s is replaced twice", path)
 			}
-			// Only a directory for now. Go also lets a replace name another
-			// module at a version; that needs fetching, which comes with dex get.
 			if !strings.HasPrefix(target, ".") && !filepath.IsAbs(target) {
 				return nil, errAt(n, "a replace names a local directory, written ./dir or ../dir — %q is neither", target)
 			}
@@ -177,14 +150,6 @@ func ParseMod(file, src string) (*Mod, error) {
 	return mod, nil
 }
 
-// importFile is the .dx file an import names. A relative import is read beside
-// the importing file, as it always was. A module path goes through the dex.mod:
-// the module's own path resolves from its root, and a required module from the
-// directory its replace names.
-//
-// A module path imported whole — github.com/acme/dexsqlite — reads the file at
-// the module's root named after its last segment, dexsqlite.dx, since an import
-// names a file and a module is a directory.
 func importFile(mod *Mod, fromDir, path string) (string, error) {
 	if !IsModulePath(path) {
 		return filepath.Join(fromDir, path+".dx"), nil
@@ -212,8 +177,6 @@ func importFile(mod *Mod, fromDir, path string) (string, error) {
 	return filepath.Join(root, filepath.FromSlash(rest)+".dx"), nil
 }
 
-// ImportFile is importFile for a caller outside this package — the language
-// server — finding the dex.mod from the main program's directory.
 func ImportFile(sourceDir, fromDir, path string) (string, error) {
 	mod, err := FindMod(sourceDir)
 	if err != nil {
@@ -226,8 +189,6 @@ func within(path, module string) bool {
 	return path == module || strings.HasPrefix(path, module+"/")
 }
 
-// longestPrefix is the key of m that path is within, preferring the longest —
-// github.com/acme/kit/v2 over github.com/acme/kit.
 func longestPrefix(path string, m map[string]string) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -242,7 +203,6 @@ func longestPrefix(path string, m map[string]string) string {
 	return ""
 }
 
-// InitMod writes a new dex.mod naming the module at path into dir.
 func InitMod(dir, path string) (string, error) {
 	if !modPathRe.MatchString(path) {
 		return "", fmt.Errorf("%q is not a module path — a module is named by its URL, as in github.com/acme/app", path)

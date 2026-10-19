@@ -832,9 +832,6 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			// length, so wrapping it would strlen away the bytes it exists to
 			// preserve.
 			if funcDef.ReturnType == ast.TypeString && !funcDef.RawReturn && funcDef.ReturnFreer != "" {
-				// A statement expression rather than a runtime helper taking a
-				// function pointer, because a library's deallocator may be a
-				// macro: OPENSSL_free is.
 				ptr := g.nextTemp()
 				str := g.nextTemp()
 				out.WriteString(fmt.Sprintf("({ const char* %s = %s(", ptr, funcDef.CName))
@@ -1058,11 +1055,6 @@ func (g *Generator) genStrMethodWithArgs(out *strings.Builder, cFunc, receiver s
 // bridging DexString* to const char* when the stdlib expects it.
 func (g *Generator) genStdlibArg(out *strings.Builder, arg ast.Expr, funcDef *stdlib.FuncDef, idx int) {
 	if idx < len(funcDef.Params) && ast.IsRefType(funcDef.Params[idx]) {
-		// A handle is written into the raw local genHandleOutCall declared,
-		// cast through void* because C declared the pointee as its own type
-		// and the box hides it. A scalar crosses as the variable's address,
-		// left uncast so the header still checks it — unless the variable is
-		// itself a reference parameter, which already holds an address.
 		if _, isNull := arg.(*ast.NullLit); isNull {
 			out.WriteString("NULL")
 			return

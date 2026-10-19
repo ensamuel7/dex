@@ -11,8 +11,6 @@ import (
 	"github.com/ensamuel7/dex/parser"
 )
 
-// resolveProject writes files into a temporary directory, parses main.dx the
-// way the build does, and resolves its imports.
 func resolveProject(t *testing.T, files map[string]string) (*ast.Program, error) {
 	t.Helper()
 	dir := t.TempDir()
@@ -77,7 +75,6 @@ fn run(): int { return util.make() }
 			t.Errorf("no function %s; have %v", want, names)
 		}
 	}
-	// b/front's call reaches b/util, which took the second name.
 	for _, fn := range program.Functions {
 		if fn.Name != "bfront_run" {
 			continue
@@ -153,7 +150,6 @@ fn size(s: string): long { return cstr.length(s) }
 	}
 }
 
-// A local variable named like a module wins inside the function declaring it.
 func TestAliasRenameRespectsShadowing(t *testing.T) {
 	program, err := resolveProject(t, map[string]string{
 		"main.dx": `import "a/front"
@@ -178,7 +174,6 @@ fn run(): int { return util.make() }
 	if err != nil {
 		t.Fatal(err)
 	}
-	// b/util is util_2 here, because a/front's import took `util` first.
 	for _, fn := range program.Functions {
 		switch fn.Name {
 		case "reach":
@@ -212,7 +207,6 @@ fn main(): void {}
 	if len(order) != 2 || order[0] != "c_LIMIT" || order[1] != "TOP" {
 		t.Fatalf("globals in order %v, want the module's constant first", order)
 	}
-	// The alias in the initialiser was renamed and then flattened.
 	if bin, ok := program.GlobalLets[1].Value.(*ast.BinaryExpr); !ok || bin.Left.(*ast.Ident).Name != "c_LIMIT" {
 		t.Errorf("TOP's initialiser does not read c_LIMIT: %#v", program.GlobalLets[1].Value)
 	}
@@ -257,8 +251,6 @@ fn make(): int { return 2 }
 	}
 }
 
-// A generic is re-parsed after the main program's calls were renamed, so its
-// instantiation has to be renamed the same way.
 func TestInstantiatorRenamesAliasedModules(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "lib.dx"), []byte("fn make(): int { return 1 }\n"), 0o644); err != nil {

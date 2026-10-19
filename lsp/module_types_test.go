@@ -110,3 +110,32 @@ fn main(): void {
 		t.Fatalf("expected 'describe' completion from handler module, got %+v", items)
 	}
 }
+
+// The imported file's standalone syntax check must not leave its types registered bare.
+func TestDiagnoseModuleEnumFieldMatchesQualifiedVariant(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"front.dx": `import "util"
+
+fn isSmall(): bool {
+    return util.make().kind == util.Kind.Small
+}
+`,
+		"util.dx": `enum Kind {
+    Small
+    Large
+}
+
+struct Item {
+    kind: Kind
+}
+
+fn make(): Item {
+    return Item { kind: Kind.Small }
+}
+`,
+	})
+	s, uri, _ := openAndDiagnose(t, dir, "front.dx")
+	if d := s.lastDiags[uri]; len(d) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", d)
+	}
+}

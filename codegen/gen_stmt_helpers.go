@@ -347,12 +347,11 @@ func (g *Generator) emitWithHoists(out *strings.Builder, prefix, stmt string) {
 // placed before the loop would not be. And a release that happens inside the
 // condition cannot be skipped by a `return` or a `break` in the body.
 //
-// Nothing is hoisted out of `&&` or `||`, because the whole point of those is
-// that their right-hand side may not be evaluated at all. In
+// Hoisting is suspended inside `&&` and `||`, because the whole point of those
+// is that their right-hand side may not be evaluated at all. In
 // `if (!s.isEmpty() && s.substring(0, 1) == "a")` the substring must not run on
 // an empty string, and a hoisted declaration would run it unconditionally —
-// turning a leak into a crash. genShortCircuit gives each operand a condition
-// of its own instead, which is this function again.
+// turning a leak into a crash.
 func (g *Generator) genCondition(out *strings.Builder, cond ast.Expr) {
 	savedPrelude := g.stmtPrelude
 	savedTemps := g.stmtTemps
@@ -398,15 +397,6 @@ func (g *Generator) genCondition(out *strings.Builder, cond ast.Expr) {
 	out.WriteString(fmt.Sprintf("%s; })", result))
 }
 
-// genShortCircuit emits && or ||. Its operands must not be hoisted out of it:
-// the right-hand side may never be evaluated, and a hoisted declaration would
-// evaluate it anyway. Nor can hoisting simply be switched off, because then a
-// value an operand mints for a borrowing consumer — `f(name.toLower())` — has
-// no temporary to release it and leaks once per evaluation. So each operand is
-// generated as a condition of its own: whatever it hoists is declared and
-// released inside it, and exists only if that operand runs. An operand needs no
-// parentheses of its own: every operator genCondition can leave bare binds
-// tighter than && and ||, and a nested one brings its own.
 func (g *Generator) genShortCircuit(out *strings.Builder, e *ast.BinaryExpr) {
 	out.WriteString("(")
 	g.genCondition(out, e.Left)

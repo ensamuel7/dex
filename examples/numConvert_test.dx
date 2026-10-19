@@ -1,44 +1,30 @@
-// num: the explicit numeric conversions.
-//
-// Widening is deliberately not implicit for a computed value — `let b: long = a`
-// where a is an int is a type error on purpose, so a narrowing or a loss of
-// precision is always something somebody wrote down. A literal still widens on
-// its own, because its type is chosen by where it is used. These are how you
-// say it when the value is computed.
-
 import "fmt"
 import "num"
 import "str"
 
 fn main(): void {
-    // int -> long, the case that used to need multiplying by a long
     let a: int = 42
     let b: long = num.toLong(a)
     assert(b == 42)
 
-    // char -> int, by character code
     let d: char = '7'
     let code: int = num.toInt(d)
     assert(code == 55)
     assert(num.toInt(d) - num.toInt('0') == 7)
 
-    // int -> char, the other direction
     let c: char = num.toChar(65)
     assert(c == 'A')
 
-    // widening and narrowing across every numeric type
     assert(num.toDouble(a) == 42.0)
     assert(num.toInt(3.99) == 3)
     assert(num.toInt(-3.99) == -3)
     assert(num.toLong(2.5) == 2)
     assert(num.toDouble('A') == 65.0)
 
-    // a length is an int, which is the usual reason to reach for this
     let s: string = "hello"
     let n: long = num.toLong(s.len())
     assert(n == 5)
 
-    // digit parsing, which is what made the benchmark verbose
     let total: int = 0
     let digits: string = "90210"
     let i: int = 0

@@ -1,6 +1,3 @@
-// One of two files named util.dx. Each declares the same function, struct,
-// enum, constant and external module names as the other.
-
 const NAME: string = "alpha"
 
 enum Kind {

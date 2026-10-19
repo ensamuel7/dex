@@ -1,6 +1,3 @@
-// An enum declared in a module, used from another file. The point of this
-// module is the enum crossing the import boundary.
-
 enum Band {
     Pass
     Merit

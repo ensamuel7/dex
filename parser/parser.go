@@ -66,16 +66,10 @@ func (p *Parser) SetModule(name string) {
 	p.module = name
 }
 
-// SetModuleAliases tells the parser which names this file imports a module by
-// differ from the module's identity — an alias, or a module renamed because
-// another file had its name. A qualified type, struct literal or enum variant
-// written with the local name then resolves to the identity it is registered
-// under.
 func (p *Parser) SetModuleAliases(aliases map[string]string) {
 	p.moduleAliases = aliases
 }
 
-// moduleIdentity is the identity a qualifier written in this file refers to.
 func (p *Parser) moduleIdentity(qualifier string) string {
 	if id, ok := p.moduleAliases[qualifier]; ok {
 		return id

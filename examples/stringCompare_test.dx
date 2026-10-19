@@ -1,19 +1,5 @@
-// A string comparison whose operand allocates.
-//
-// `s.trim() == want` mints a reference that only the comparison reads, so the
-// comparison has to release it. In an `if` or `while` condition there was no
-// statement to hoist it into and it was simply leaked, one object per
-// evaluation — which in a loop is one per iteration.
-//
-// The release happens inside a statement expression rather than ahead of the
-// condition, because hoisting out of a condition would evaluate a guarded
-// operand unconditionally. The first two functions here are that guard: on an
-// empty string, substring(0, 1) must not run at all.
-
 import "fmt"
 
-// If the right operand were hoisted ahead of the condition, substring(0, 1) on
-// an empty string would run even when the guard says not to.
 fn guarded(s: string): bool {
     if (!s.isEmpty() && s.substring(0, 1).toLower() == "a") {
         return true
@@ -36,7 +22,6 @@ fn main(): void {
     assert(guardedOr("Apple"))
     assert(!guardedOr("pear"))
 
-    // The comparison still works in every other position.
     let s: string = "  Hello  "
     assert(s.trim() == "Hello")
     assert(s.trim() != "hello")

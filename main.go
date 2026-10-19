@@ -800,11 +800,6 @@ func printWarnings(warnings []error) {
 	}
 }
 
-// keepLastOccurrence drops repeated link flags. Two modules can name the same
-// library — crypto and an external block's pkg "openssl" both bring -lcrypto —
-// and macOS's linker warns on every duplicate. The last occurrence is the one
-// kept because GNU ld resolves a library against what precedes it, so the
-// latest position is the one that satisfies every user of it.
 func keepLastOccurrence(flags []string) []string {
 	last := make(map[string]int, len(flags))
 	for i, f := range flags {
@@ -819,7 +814,6 @@ func keepLastOccurrence(flags []string) []string {
 	return out
 }
 
-// runMod is `dex mod`. Only init exists yet; fetching arrives with dex get.
 func runMod(args []string) {
 	if len(args) != 2 || args[0] != "init" {
 		fmt.Fprintln(os.Stderr, "usage: dex mod init <module path>\n\nA module is named by its URL, as in: dex mod init github.com/acme/app")

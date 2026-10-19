@@ -1,15 +1,3 @@
-// `defer` registers a call when the defer statement runs, and the call happens
-// when the frame is left — however it is left.
-//
-// All three of those matter and none of them used to hold. The deferred
-// expression was collected while compiling and emitted at the function's exit,
-// which meant a defer in a branch nothing took still ran, a defer in a loop ran
-// once however many iterations there were, and an exception unwinding past the
-// frame skipped it entirely — the case that leaves a lock held.
-//
-// Registering per execution does not change when the call happens: a defer in a
-// loop still runs at the function's exit, once per iteration that registered
-// one, most recently registered first.
 import "str"
 
 let order: string[] = []
@@ -25,8 +13,6 @@ fn conditional(run: bool): void {
     note("body")
 }
 
-// Three registrations, all run when looped returns — after its last statement,
-// most recent first.
 fn looped(): void {
     for (let i = 0; i < 3; i = i + 1) {
         defer note("iteration " + str.fromInt(i))
@@ -38,23 +24,18 @@ fn thrower(): void throws {
     throw Exception("boom")
 }
 
-// The defer belongs to a frame the throw unwinds, which is the case a lock
-// depends on: the release has to happen even though nothing here catches.
 fn unwound(): void throws {
     defer note("released")
     thrower()
     note("not reached")
 }
 
-// Most recent first, like every other defer.
 fn ordered(): void {
     defer note("first registered")
     defer note("second registered")
     note("ordered body")
 }
 
-// A deferred call captures what it needs where it is written, so it still works
-// after the frame it came from is gone.
 fn captures(n: int): void throws {
     let tag = "captured " + str.fromInt(n)
     defer note(tag)
@@ -62,8 +43,6 @@ fn captures(n: int): void throws {
 }
 
 fn main(): void {
-    // One accumulating log, asserted as a whole: the order across all of these
-    // is the thing being pinned.
     conditional(true)
     conditional(false)
     looped()

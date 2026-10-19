@@ -1,21 +1,3 @@
-// Filling a struct from a row: db.fill reads column i into field i.
-//
-// The point is that no field name is written twice. A row mapper written by
-// hand names every field once in the struct and again in the mapper, and only
-// the struct side is checked — so a renamed field, or a column inserted in the
-// middle of a projection, goes wrong silently. Here the struct is the only
-// place the shape is written down.
-//
-// Field order is column order, so the projection has to select one column per
-// field in declaration order. A field reflection cannot read — the `tags`
-// array below — is skipped but still consumes its column position, so the
-// fields after it stay aligned.
-//
-// Not a _test.dx file: it needs a database. sqlite needs no server, so this one
-// runs anywhere sqlite is linked.
-//
-//   go run . run examples/dbFill.dx
-
 import "fmt"
 import "db"
 import "str"
@@ -50,15 +32,12 @@ fn main(): void {
         while (db.next(rows)) {
             let p: Person = Person { id: 0, name: "seed", age: 0, score: 0.0, active: false, tags: [], note: "seed" }
             db.fill(p, rows)
-            // A long past 2^31 survives, which dex_db_col_int would not manage.
             assert(p.id == 9007199254740993)
             assert(p.name == "Ada")
             assert(p.age == 36)
             assert(p.score == 1.5)
             assert(p.active)
             assert(p.note == "hello")
-            // The array field is skipped but still holds its column position,
-            // so `note` after it is still right.
             assert(reflect.fieldKind(p, 5) == "array")
         }
         db.free(rows)

@@ -1,44 +1,26 @@
-// A type declared in a module belongs to that module, so two modules can each
-// declare a `Response` and a `Kind` — which is what two modules could already
-// do with a function called `make`.
-//
-// Before this, a struct name was global: the second declaration was rejected
-// outright with "duplicate struct type", and a qualified reference had its
-// qualifier thrown away. The qualifier means something now.
 import "modules/alphaTypes"
 import "modules/betaTypes"
 
-// A local declaration of a name a module also declares. The local wins for the
-// bare name; the module's is still reached by qualifying it. This used to go
-// the other way: the main program has no module prefix, so the rule that
-// prefers a file's own declarations only ran for module files, and the single
-// candidate from the import won — which reported a missing field on a type
-// nobody here wrote.
 struct Response {
     mine: int
 }
 
 fn main(): void {
-    // The bare name is the local one.
     let local: Response = Response { mine: 7 }
     assert(local.mine == 7)
 
-    // Qualified, and they are different types with different fields.
     let a: alphaTypes.Response = alphaTypes.make("first")
     let b: betaTypes.Response = betaTypes.make(404)
     assert(a.ok)
     assert(a.label == "first")
     assert(b.code == 404)
 
-    // Each module's own `make` and its own `Kind`, told apart by the qualifier.
     assert(alphaTypes.kindOf(a) == alphaTypes.Kind.Fast)
     assert(betaTypes.kindOf(b) == betaTypes.Kind.Red)
 
-    // A constructor reached through its module.
     let direct: betaTypes.Response = betaTypes.Response(500)
     assert(direct.code == 500)
 
-    // A struct literal, qualified.
     let lit: alphaTypes.Response = alphaTypes.Response { ok: false, label: "lit" }
     assert(!lit.ok)
     assert(lit.label == "lit")

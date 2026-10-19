@@ -111,9 +111,6 @@ func (g *Generator) emitExternalPrototypes(out *strings.Builder, program *ast.Pr
 	}
 }
 
-// handleOutParams lists the parameters through which a C function writes a
-// handle. Those need a raw pointer for C to write into and a box made
-// afterwards; a scalar out-parameter is just the variable's address.
 func handleOutParams(fd *stdlib.FuncDef, args []ast.Expr) []int {
 	var out []int
 	for i, pt := range fd.Params {
@@ -129,18 +126,6 @@ func handleOutParams(fd *stdlib.FuncDef, args []ast.Expr) []int {
 	return out
 }
 
-// genHandleOutCall wraps a call that writes handles through out-parameters. C
-// writes a raw pointer into a local; once the call returns, each is boxed and
-// stored in the caller's variable the way an assignment stores a value: the old
-// box is released after the new one is in place, and the unwind slot follows.
-// The local starts NULL, so a C function that leaves it untouched on failure
-// leaves the variable null.
-//
-// The local is void*, but C writes it through its own pointer type — sqlite3**,
-// char** — and clang now gives distinct pointer types distinct aliasing classes
-// by default (-pointer-tbaa), so where the C function is inlined from a header
-// the optimiser may assume its store cannot change a void* and keep the NULL.
-// memcpy reads the slot as characters, which alias every store.
 func (g *Generator) genHandleOutCall(out *strings.Builder, e *ast.CallExpr, fd *stdlib.FuncDef, outs []int) {
 	if g.outRaws == nil {
 		g.outRaws = map[ast.Expr]string{}

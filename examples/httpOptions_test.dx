@@ -1,43 +1,25 @@
-// http.requestWith and the invariants a client response has to hold.
-//
-// Offline on purpose: every request here goes to a port on this machine that
-// nothing is listening on, so it fails the same way everywhere and takes
-// milliseconds. What is being tested is not a successful fetch but the shape
-// of a failure, which is the case the client used to get wrong.
-
 import "http"
 import "fmt"
 
-// Nothing is bound here. Connecting fails at once on a normal machine, and the
-// 300ms deadline is what bounds it if a firewall drops the packet instead.
 const DEAD: string = "http://127.0.0.1:9/"
 
 fn main(): void {
     let fast: http.HttpOptions = http.HttpOptions { timeoutMs: 300, connectTimeoutMs: 300 }
     let r: http.HttpResponse = http.requestWith("GET", DEAD, "", "", fast)
 
-    // A request that never got an answer is status 0, and the reason is in the
-    // body so that a caller which only prints the body still learns why.
     assert(r.statusCode == 0)
     assert(!r.body.isEmpty())
 
-    // The four fields are always real strings. Reading `headers` on a client
-    // response used to be reading a NULL DexString*, because only the server
-    // path ever filled it in.
     assert(r.contentType.isEmpty())
     assert(r.headers.isEmpty())
     assert(r.body.len() > 0)
 
-    // An empty literal is the documented way to say "defaults", and every
-    // field's zero value is its default, so it must behave like http.request.
     let plain: http.HttpOptions = http.HttpOptions {}
     assert(plain.timeoutMs == 0)
     assert(plain.connectTimeoutMs == 0)
     assert(plain.maxRedirects == 0)
     assert(!plain.insecureTls)
 
-    // The convenience wrappers carry the same invariant, and now the same
-    // default deadline: without it this call could hang forever.
     let g: http.HttpResponse = http.get(DEAD)
     assert(g.statusCode == 0)
     assert(g.headers.isEmpty())
@@ -47,8 +29,6 @@ fn main(): void {
     assert(p.statusCode == 0)
     assert(p.headers.isEmpty())
 
-    // insecureTls is spelled for the danger, so a zero-valued options struct
-    // verifies certificates. This asserts the field, not the handshake.
     let loose: http.HttpOptions = http.HttpOptions { insecureTls: true, timeoutMs: 300 }
     assert(loose.insecureTls)
     assert(loose.maxRedirects == 0)

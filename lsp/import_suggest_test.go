@@ -278,9 +278,6 @@ private fn hidden(): void {
 	}
 }
 
-// A type declared in another file had no fix at all: the error said "unknown
-// type" and nothing pointed at the file declaring it. Importing the module is
-// the whole fix, since a bare type name reaches an imported module's type.
 func TestCodeActionImportsModuleDeclaringType(t *testing.T) {
 	dir := writeProject(t, map[string]string{
 		"main.dx": `fn describe(c: Columns): string {

@@ -1,4 +1,3 @@
-// A second module declaring the same interface name, which is a different type.
 interface Handler {
     fn run(): string
 }

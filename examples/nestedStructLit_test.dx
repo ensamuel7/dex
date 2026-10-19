@@ -1,11 +1,3 @@
-// A struct literal that stores another struct stores that struct's heap
-// fields too, and must take a reference to each of them.
-//
-// A nested struct field is a value rather than a heap type, so the retain pass
-// used to skip it — while the release pass recursed into it and freed its
-// strings at scope exit. The literal was returned carrying freed pointers: a
-// name came back empty and the allocator was corrupt some calls later.
-
 struct Entry {
     found: bool
     id: string
@@ -22,15 +14,12 @@ fn makeEntry(id: string, label: string): Entry {
     return Entry { found: true, id: id, label: label }
 }
 
-// `entry` is a local, so the literal below only borrows its strings and the
-// scope is about to release them.
 fn wrap(name: string): Result {
     let stem: string = name + "-merged"
     let entry: Entry = makeEntry("an-id", stem)
     return Result { ok: true, output: entry, message: "" }
 }
 
-// Two levels down, to check the recursion rather than one hand-written case.
 struct Envelope {
     result: Result
     note: string
@@ -62,8 +51,6 @@ fn main(): void {
         j = j + 1
     }
 
-    // A nested struct built inline rather than borrowed: ownership moves into
-    // the literal and nothing extra is taken.
     let direct: Result = Result { ok: true, output: makeEntry("x", "y"), message: "fresh" }
     assert(direct.output.label == "y")
     assert(direct.message == "fresh")

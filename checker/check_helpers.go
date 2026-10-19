@@ -44,9 +44,6 @@ func isValidFieldType(t ast.Type) bool {
 	case ast.TypeInt, ast.TypeBool, ast.TypeString, ast.TypeLong, ast.TypeDouble, ast.TypeChar, ast.TypeMutex, ast.TypeJsonValue:
 		return true
 	default:
-		// A handle is a refcounted box like a string, so a struct owns one the
-		// way it owns any heap field — which is how a library wrapping C keeps
-		// a connection inside a type its callers can name.
 		return ast.IsStructType(t) || ast.IsEnumType(t) || ast.IsMapType(t) || ast.IsArrayType(t) || ast.IsInterfaceType(t) || ast.IsHandleType(t)
 	}
 }

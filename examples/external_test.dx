@@ -1,13 +1,3 @@
-// FFI stage one: calling C with scalar arguments and returns.
-//
-// An `external module` block declares the C functions, the headers they need,
-// and the flags to link against. No import is needed — the block is the
-// declaration — and a call goes straight to the C symbol with no wrapper.
-//
-// The scalars cross, and so does string — as a NUL-terminated const char*.
-// Bytes that may contain a NUL cross as a pointer and a length, which is how
-// the C functions taking them are already written.
-
 import "fmt"
 import "crypto"
 
@@ -29,22 +19,14 @@ external module zlib {
     fn compressBound(sourceLen: long): long
     fn compileFlags(): long = "zlibCompileFlags"
 
-    // Declared const Bytef* in zlib, which is unsigned char*. A string crosses
-    // as char*, so this is the case -Wno-pointer-sign exists for.
     fn crc32(crc: long, buf: string, len: int): long
 }
 
-// An opaque handle: a C pointer the program passes around but never
-// dereferences. It is a refcounted box, so it can be stored and returned, and
-// the closing function runs when the last reference goes — including when an
-// exception unwinds past the frame holding it.
 external module cio {
     include "<stdio.h>"
 
     type File closed by "fclose"
 
-    // fopen returns NULL on failure, so the declaration is optional and a
-    // failed open reads as null rather than a box wrapping nothing.
     fn open(path: string, mode: string): File? = "fopen"
     fn readByte(f: File): int = "fgetc"
     fn atEnd(f: File): int = "feof"
@@ -52,10 +34,6 @@ external module cio {
 
 struct OpenFailed(message: string) {}
 
-// Opens the file and throws past it, so the only thing that can close the
-// handle is the unwind. Run under make memcheck a leaked box is reported, and
-// under a low descriptor limit a skipped fclose exhausts fopen within fifty
-// iterations.
 fn openThenThrow(path: string): void throws OpenFailed {
     let f: File? = cio.open(path, "r")
     if (f == null) {
@@ -72,15 +50,11 @@ external module cstr {
     fn compare(a: string, b: string, n: int): int = "memcmp"
     fn toInt(s: string): int = "atoi"
 
-    // strerror returns a pointer it keeps, so Dex copies and leaves it alone.
     fn errorText(n: int): string = "strerror"
 
-    // strdup malloc'd it, so Dex takes ownership and frees it.
     fn dup(s: string): owned string = "strdup"
 }
 
-// A library that hands out memory its own function must free. The macro form
-// is how OPENSSL_free is written, and it has to work as well as a function.
 external module lib {
     include "freer.h"
 
@@ -90,8 +64,6 @@ external module lib {
     fn released(): int = "freer_count"
 }
 
-// C functions that return a result through a pointer argument. A scalar crosses
-// as the variable's address; a handle is written as a raw pointer and boxed.
 external module outs {
     include "<math.h>"
     include "freer.h"
@@ -108,8 +80,6 @@ fn openInto(s: string): int {
     return outs.open(s, t)
 }
 
-// A library outside the default search paths — Homebrew's OpenSSL is one —
-// found through pkg-config, and a deallocator that is a macro.
 external module ossl {
     include "<openssl/crypto.h>"
     pkg "openssl"
@@ -122,45 +92,35 @@ fn main(): void {
     assert(cmath.floorDouble(3.7) == 3.0)
     assert(cmath.ceilDouble(3.2) == 4.0)
 
-    // The declared name need not match the C symbol.
     assert(cmath.absInt(-7) == 7)
     assert(cmath.absLong(-7) == 7)
 
-    // A real library, reached through its link flag.
     assert(zlib.compressBound(1024) == 1037)
     assert(zlib.compileFlags() > 0)
 
-    // An extern call is an ordinary expression.
     let total: double = cmath.hypot(3.0, 4.0) + cmath.floorDouble(1.9)
     assert(total == 6.0)
 
-    // A string crosses as a const char*.
     assert(cstr.length("hello") == 5)
     assert(cstr.toInt("42") == 42)
 
-    // A returned pointer the callee owns is copied, not freed.
     let msg: string = cstr.errorText(2)
     assert(msg.len() > 0)
 
-    // One the callee malloc'd is taken over and released.
     let copied: string = cstr.dup("hello")
     assert(copied == "hello")
 
-    // One the library allocated goes back through the library's own
-    // deallocator, once per call, and never through free.
     let made: string = lib.make("sqlite")
     assert(made == "sqlite")
     assert(lib.released() == 1)
     assert(lib.makeViaMacro("openssl") == "openssl")
     assert(lib.released() == 2)
 
-    // A NULL return is an empty string and is not handed to the deallocator.
     assert(lib.none() == "")
     assert(lib.released() == 2)
 
     assert(ossl.hex("ab", 2) == "61:62")
 
-    // Out-parameters: the variable is written by C.
     let exponent: int = 0
     assert(outs.frexp(8.0, exponent) == 0.5)
     assert(exponent == 4)
@@ -168,9 +128,6 @@ fn main(): void {
     assert(outs.modf(3.25, whole) == 0.25)
     assert(whole == 3.0)
 
-    // A handle written through an out-parameter is boxed and closed by its
-    // closing function: when replaced, at scope exit, and not at all when C
-    // never wrote one.
     let before: int = lib.released()
     let t: Token? = null
     assert(outs.open("first", t) == 0)
@@ -182,14 +139,10 @@ fn main(): void {
     let untouched: Token? = null
     assert(outs.open("", untouched) == 1)
     assert(untouched == null)
-    // null tells C to skip the output, the way sqlite3_prepare_v2's pzTail is.
     let skippedBefore: int = lib.released()
     assert(outs.open("skipped", null) == 0)
     assert(lib.released() == skippedBefore)
 
-    // Bytes with an interior NUL cross as a pointer and a length, so nothing
-    // truncates at the NUL the way strlen would. These two differ only in
-    // their last byte, which is past the NUL.
     let a: string = crypto.base64Decode("YWIAY2Q=")
     let b: string = crypto.base64Decode("YWIAY2U=")
     assert(a.len() == 5)
@@ -197,25 +150,20 @@ fn main(): void {
     assert(cstr.compare(a, b, 5) != 0)
     assert(cstr.compare(a, b, 2) == 0)
 
-    // strlen stops at the NUL, which is exactly why a byte API takes a length.
     assert(cstr.length(a) == 2)
 
-    // And a real byte API over the whole buffer, NUL included.
     assert(zlib.crc32(0, a, a.len()) == 4149218125)
     assert(zlib.crc32(0, "hello world", 11) == 222957957)
 
-    // A handle round-trips through C and closes at scope exit.
     let f: File? = cio.open("examples/external_test.dx", "r")
     assert(f != null)
     if (f != null) {
         assert(cio.readByte(f) > 0)
     }
 
-    // A failed open is null, not a box around NULL.
     let missing: File? = cio.open("/no/such/path/at/all", "r")
     assert(missing == null)
 
-    // The close runs even when an exception unwinds past the handle.
     let round: int = 0
     while (round < 200) {
         try {

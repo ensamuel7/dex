@@ -21,24 +21,10 @@ var (
 	pkgNameRe   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+@-]*$`)
 )
 
-// ValidPkgName reports whether name can be handed to pkg-config. It is passed
-// as an argument rather than through a shell, so the one thing to refuse is a
-// leading '-', which pkg-config would read as an option.
 func ValidPkgName(name string) bool {
 	return pkgNameRe.MatchString(name)
 }
 
-// PkgConfig returns the compiler and linker flags pkg-config gives for a
-// library: the header path a library outside the default search paths needs —
-// all of Homebrew on Apple Silicon — alongside its -L and -l.
-//
-// Only the flag kinds a library legitimately needs are passed on. The name
-// comes from an external block that may have been fetched from somewhere else,
-// so letting pkg-config's output through unfiltered would reopen the hole
-// validLinkFlag closes for `link`.
-//
-// The result is cached for the life of the process, because the language
-// server checks a file on every edit and pkg-config does not change under it.
 func PkgConfig(name string) ([]string, error) {
 	pkgMu.Lock()
 	defer pkgMu.Unlock()

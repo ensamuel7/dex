@@ -1,10 +1,3 @@
-// Bound SQL parameters.
-//
-// Not a _test.dx file on purpose: it needs a live PostgreSQL, and the example
-// suite has to run on a machine that has none.
-//
-//   go run . run examples/dbParams.dx
-
 import "fmt"
 import "db"
 import "str"
@@ -18,13 +11,9 @@ fn main(): void {
 
     db.exec(conn, "CREATE TABLE IF NOT EXISTS people (id BIGSERIAL PRIMARY KEY, name TEXT, age BIGINT)")
 
-    // Values travel beside the statement, never inside it. Postgres parses the
-    // SQL once and treats every parameter as data, so the quote and the
-    // statement terminator below are a name — not syntax.
     let insert: string[] = ["O'Brien; DROP TABLE people; --", "44"]
     db.execParams(conn, "INSERT INTO people (name, age) VALUES ($1, $2)", insert)
 
-    // RETURNING comes back through the query path, like any other result.
     let second: string[] = ["Ada", "36"]
     let created: int = db.queryParams(conn, "INSERT INTO people (name, age) VALUES ($1, $2) RETURNING id", second)
     if (db.next(created)) {
@@ -33,8 +22,6 @@ fn main(): void {
     }
     db.free(created)
 
-    // Parameters are text, and the server infers each one's type from where it
-    // sits — $1 here is compared against a bigint column.
     let older: string[] = ["40"]
     let rows: int = db.queryParams(conn, "SELECT name, age FROM people WHERE age > $1", older)
     while (db.next(rows)) {
@@ -44,7 +31,6 @@ fn main(): void {
     }
     db.free(rows)
 
-    // A statement with no parameters still works; pass an empty array.
     let none: string[] = []
     let counted: int = db.queryParams(conn, "SELECT count(*) FROM people", none)
     if (db.next(counted)) {

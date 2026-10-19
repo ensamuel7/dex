@@ -1,17 +1,3 @@
-// RS256 signing, and the verifier it has to agree with.
-//
-// `verifyRs256` came first, for checking what Google and Apple sign. This is
-// the other half, for signing what *they* will check: a service account's
-// assertion, which is the only way to an OAuth2 access token and therefore the
-// only way to Firebase Cloud Messaging v1.
-//
-// The two are tested against each other rather than against a recorded
-// signature, because RSASSA-PKCS1-v1_5 is deterministic and a fixture would
-// only prove this build still produces what it produced before. Agreeing with
-// the verifier proves it produces what *anyone else* will accept.
-//
-// The key below is a throwaway generated for this file. It signs nothing real
-// and protects nothing; it is here so the test needs no files beside it.
 import "fmt"
 import "str"
 import "crypto"
@@ -46,46 +32,33 @@ const TEST_KEY: string =
     "uB6QiDs1JhMyD5w1v1yc5A==\n" +
     "-----END PRIVATE KEY-----\n"
 
-// The public half, as a JWK writes it: the modulus and the exponent, base64url.
 const TEST_MODULUS_B64: string =
     "ktxM3d8nIJR_Vpgp29eylyTbTbTnrmz_hdpjyefSyVbCGJithNT5v16MyvGv23CwqMryfKQARfks7pAwZy8TGZShjnWkiYBM9PxEB7TpDkZ3PXvsk1NLwV_BRyM8sLIsIvKstSOuragP36JnPgyEKBH4amr6oI6GofOJ9dmQdUN-5NeFSdlO_rB_vtkjdrX_wGyf2lj--A-SdW89GcW4n4M2K1B6IHZEiGj90j-Y02mGl1q0WRbJ6wMcaCc6gGF8jYE3e83fFYLu8OF6rkKFTf_cMKcKe161_43da1pUYDYcmRi0AEWaROXcxt24gdyE-AxBu8IZuUP8ihGNvAH-Hw"
 const TEST_EXPONENT_B64: string = "AQAB"
 
-// A JWT's first two segments, which is exactly what gets signed.
 const SIGNING_INPUT: string =
     "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdmNAcHJvamVjdC5pYW0iLCJzY29wZSI6ImZjbSJ9"
 
 fn main(): void {
     let signature: string = crypto.signRs256(SIGNING_INPUT, TEST_KEY)
 
-    // 2048 bits of signature is 256 bytes, which is 342 base64 characters with
-    // the padding left off.
     assert(signature.len() == 342)
 
-    // Base64url, not base64: a JWS carries no '+', '/' or '='.
     assert(!signature.contains("+"))
     assert(!signature.contains("/"))
     assert(!signature.contains("="))
 
-    // The point of the whole thing: the verifier accepts it.
     let modulus: string = crypto.base64UrlDecode(TEST_MODULUS_B64)
     let exponent: string = crypto.base64UrlDecode(TEST_EXPONENT_B64)
     let raw: string = crypto.base64UrlDecode(signature)
     assert(crypto.verifyRs256(SIGNING_INPUT, raw, modulus, exponent))
 
-    // And rejects a signature over anything else.
     let tampered: string = SIGNING_INPUT + "x"
     assert(!crypto.verifyRs256(tampered, raw, modulus, exponent))
 
-    // Deterministic, so the same input signs the same way twice. Worth
-    // asserting because a signer that quietly salted would still verify and
-    // would break any caller that caches a token by its signature.
     let again: string = crypto.signRs256(SIGNING_INPUT, TEST_KEY)
     assert(again == signature)
 
-    // Every failure is an empty string rather than something that looks like a
-    // signature. A caller cannot tell a wrong signature from a right one, so
-    // the only safe answer is one it can test.
     let noKey: string = crypto.signRs256(SIGNING_INPUT, "")
     assert(noKey.isEmpty())
     let notPem: string = crypto.signRs256(SIGNING_INPUT, "hello")
@@ -94,15 +67,10 @@ fn main(): void {
         crypto.signRs256(SIGNING_INPUT, "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n")
     assert(wrongBody.isEmpty())
 
-    // The mistake a JSON key file invites. Google's service account holds its
-    // key with the newlines escaped, and a caller that forgets to turn them
-    // back gets this — refused, rather than signing with something else.
     let escaped: string = TEST_KEY.replace("\n", "\\n")
     let unparsed: string = crypto.signRs256(SIGNING_INPUT, escaped)
     assert(unparsed.isEmpty())
 
-    // An empty message is still signable: it is a message of no bytes, not a
-    // missing argument, and the verifier agrees about it.
     let overNothing: string = crypto.signRs256("", TEST_KEY)
     assert(!overNothing.isEmpty())
     let rawEmpty: string = crypto.base64UrlDecode(overNothing)

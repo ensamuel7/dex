@@ -383,13 +383,16 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		}
 
 	case *ast.CompoundAssignStmt:
+		g.beginStmtHoist()
+		var body strings.Builder
 		if t, ok := g.varTypes[s.Name]; ok && isPrimitiveRef(t) {
-			out.WriteString(fmt.Sprintf("%s(*%s) %s= ", prefix, s.Name, g.cBinOp(s.Op)))
+			body.WriteString(fmt.Sprintf("(*%s) %s= ", s.Name, g.cBinOp(s.Op)))
 		} else {
-			out.WriteString(fmt.Sprintf("%s%s %s= ", prefix, s.Name, g.cBinOp(s.Op)))
+			body.WriteString(fmt.Sprintf("%s %s= ", s.Name, g.cBinOp(s.Op)))
 		}
-		g.genExpr(out, s.Value)
-		out.WriteString(";\n")
+		g.genExpr(&body, s.Value)
+		body.WriteString(";\n")
+		g.emitWithHoists(out, prefix, body.String())
 
 	case *ast.IndexAssignStmt:
 		arrType := g.typeOfExpr(s.Array)

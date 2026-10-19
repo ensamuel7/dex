@@ -940,6 +940,10 @@ func (g *Generator) genOptionalArg(out *strings.Builder, arg ast.Expr, paramType
 
 	// If the argument is already the optional type, emit directly
 	if argType == paramType {
+		if ast.IsHeapOptionalType(paramType) {
+			g.genBorrowed(out, arg)
+			return
+		}
 		g.genExpr(out, arg)
 		return
 	}
@@ -957,6 +961,8 @@ func (g *Generator) genOptionalArg(out *strings.Builder, arg ast.Expr, paramType
 		// Heap/struct optional: NULL for null, value otherwise
 		if isNull {
 			out.WriteString("NULL")
+		} else if ast.IsHeapType(inner) {
+			g.genBorrowed(out, arg)
 		} else {
 			g.genExpr(out, arg)
 		}

@@ -51,6 +51,20 @@ fn field(h: H): U? {
     return h.u
 }
 
+fn maybe(s: string): string? {
+    if (s == "") {
+        return null
+    }
+    return s + "!"
+}
+
+fn lenOf(s: string?): int {
+    if (s == null) {
+        return -1
+    }
+    return s.len()
+}
+
 fn names(): string[] {
     return ["a" + "1", "b" + "2", "c" + "3"]
 }
@@ -110,6 +124,15 @@ fn main(): void {
     assert(find("b2") == 1)
     assert(find("none") == -1)
     assert(firstTwo() == 2)
+
+    let total: int = 0
+    for (let i: int = 0; i < 10; i++) {
+        total += lenOf(maybe("ab"))
+        total += lenOf(maybe(""))
+        total += lenOf("x" + "y")
+    }
+    assert(total == 40)
+    assert(lenOf(maybe("abc")) == 4)
 
     fmt.println("returnOwnership_test: all assertions passed")
 }

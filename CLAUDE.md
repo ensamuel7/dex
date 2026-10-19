@@ -679,6 +679,11 @@ or a use-after-free, so change them deliberately:
 - **A `foreach` over a minted array evaluates it once.** A literal or a call is
   bound to `_foreach_arr_N` in a scope of its own and released after the loop;
   inlined, it was rebuilt on every iteration and leaked each time.
+- **An optional argument is borrowed like any other.** `genOptionalArg` goes
+  through `genBorrowed` for a heap inner type, and `genBorrowed` hoists a minted
+  `T?` as well as a `T`: `lenOf(maybe(s))` and a C handle passed straight into
+  a Dex function leaked one reference per call. A compound assignment gets a
+  statement prelude too, or `total += f(g())` had nowhere to hoist into.
 - **An optional return retains what it borrows.** `return u.name` as `string?`,
   and `return U { name: name }` as `U?` (boxed), take the same references the
   non-optional paths do.

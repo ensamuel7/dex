@@ -259,7 +259,7 @@ func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
 	// struct built on the spot owns its heap fields, so it is hoisted too.
 	var owned bool
 	switch {
-	case ast.IsHeapType(t):
+	case ast.IsHeapType(t), ast.IsHeapOptionalType(t):
 		owned = g.isNewAlloc(expr)
 	case ast.IsStructType(t) && ast.NeedsRelease(t):
 		owned = !g.borrowsHeapValue(expr)

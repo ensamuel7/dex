@@ -321,13 +321,13 @@ naming the project by its URL and listing what it uses:
 
 ```bash
 dex mod init github.com/acme/web
+dex get github.com/acme/greet          # the latest release, or @v0.1.0
 ```
 
 ```
 module github.com/acme/web
 
 require github.com/acme/greet v0.1.0
-replace github.com/acme/greet => ../greet
 ```
 
 ```dex
@@ -336,12 +336,23 @@ import "github.com/acme/web/service/users"  // this project's own file, from any
 import "service/users"                      // a plain path is still relative, as always
 ```
 
-`require` names a library and the version used. `replace` says where to read it
-from instead of downloading it — a folder on your machine — which is how a
-monorepo, or a library you are changing alongside the app that uses it, works
-today. Downloading published versions (`dex get`) is the next step; see
-[design/package-management.md](design/package-management.md) and the
-[Language Reference](LANGUAGE.md#modules-and-dexmod).
+`require` names a library and the version used, and a version is a git tag.
+`dex get` downloads it into a shared cache (`~/.dex/pkg/mod`) and records its
+checksum in `dex.sum`; commit both files. `dex mod download` fetches everything
+`dex.mod` requires, which is what a Dockerfile or CI runs before building.
+
+`replace github.com/acme/greet => ../greet` reads a library from a folder on
+your machine instead of downloading it, which is how a monorepo, or a library
+you are changing alongside the app that uses it, works. See the
+[Language Reference](LANGUAGE.md#modules-and-dexmod) and
+[design/package-management.md](design/package-management.md).
+
+First-party libraries — SQLite and a Redis client over C libraries — live in
+[dex-modules](https://github.com/ensamuel7/dex-modules):
+
+```bash
+dex get github.com/ensamuel7/dex-modules/redis
+```
 
 ## Calling C
 
@@ -629,8 +640,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md#project-structure) for the full directory 
 
 Proposals for work that is designed but not built live in [`design/`](design/):
 
-- [Package management](design/package-management.md) — sharing Dex libraries
-  through git URLs, `dex.mod` and `dex get`, the way Go modules work.
+- [Package management](design/package-management.md) — what remains:
+  generics in user modules, and a registry once git hosting is not enough.
 
 ## Releasing
 

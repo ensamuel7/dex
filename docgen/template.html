@@ -1438,11 +1438,12 @@ let many: Box&lt;int&gt;[] = [inner, boxed(4)]</code></pre>
 <!-- Modules and dex.mod -->
 <section id="dex-mod" class="page-section">
 <h2>Modules &amp; dex.mod</h2>
-<p>A project that shares code with other projects has a <code>dex.mod</code> at its root. It names the project by its URL and lists the libraries it uses. Create one with <code>dex mod init github.com/acme/web</code>; a project without one works exactly as before.</p>
+<p>A project that shares code with other projects has a <code>dex.mod</code> at its root. It names the project by its URL and lists the libraries it uses. Create one with <code>dex mod init</code> and add libraries with <code>dex get</code>; a project without one works exactly as before.</p>
+<pre><code>dex mod init github.com/acme/web
+dex get github.com/acme/greet</code></pre>
 <pre><code>module github.com/acme/web
 
-require github.com/acme/greet v0.1.0
-replace github.com/acme/greet => ../greet</code></pre>
+require github.com/acme/greet v0.1.0</code></pre>
 
 <h3>Imports</h3>
 <p>An import whose first segment looks like a host name names a module; anything else is a file relative to the importing one.</p>
@@ -1453,7 +1454,14 @@ import "github.com/acme/greet/internal/shout"</code></pre>
 
 <h3>require and replace</h3>
 <p><code>require</code> names a library and the version used &mdash; a git tag its author pushed. <code>replace</code> says where to read it from instead of downloading it: a folder on your machine, written <code>./dir</code> or <code>../dir</code> relative to the <code>dex.mod</code>. That is how a monorepo works, and how you change a library alongside the program using it. Delete the <code>replace</code> once the library is published and the same imports read the downloaded copy.</p>
-<p>Until <code>dex get</code> exists, a module that is required but not replaced is an error that shows the <code>replace</code> line to add.</p>
+
+<h3>dex get</h3>
+<pre><code>dex get github.com/acme/greet              # the latest release
+dex get github.com/acme/greet@v1.2.0       # that release
+dex mod download                           # everything dex.mod requires, for CI and Docker
+dex mod verify                             # check the cache against dex.sum</code></pre>
+<p>A release is a git tag: <code>v1.2.0</code> for a library at the root of its repository, or <code>redis/v0.1.0</code> for one in a <code>redis</code> folder of a repository that holds several modules. <code>dex get</code> downloads the release into the module cache (<code>~/.dex/pkg/mod</code>, or <code>DEX_MODCACHE</code>), writes the <code>require</code> line, fetches what the library itself requires, and records a checksum in <code>dex.sum</code> &mdash; commit it. A release that changes after it was first downloaded fails with both checksums named.</p>
+<p>A build never downloads: a required module missing from the cache is an error at its import that says to run <code>dex mod download</code>. Fetching uses <code>git</code>, so a private repository works wherever <code>git clone</code> of it does.</p>
 </section>
 
 <!-- Calling C -->

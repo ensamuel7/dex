@@ -20,7 +20,9 @@ Commands:
   test     run *_test.dx files
   check    run cppcheck over the generated C
   format   lay files out the one canonical way
-  mod      mod init <path>: start a dex.mod naming this module
+  mod      mod init <path>: start a dex.mod; mod download: fetch what it
+           requires; mod verify: check the cache against dex.sum
+  get      get <module>[@version]: add a module to dex.mod and download it
   lint     report what compiles but is probably not meant
   lsp      start the language server
   docs     regenerate docs/index.html

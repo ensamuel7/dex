@@ -73,6 +73,7 @@ func TestParseModErrors(t *testing.T) {
 }
 
 func TestImportFile(t *testing.T) {
+	t.Setenv("DEX_MODCACHE", t.TempDir())
 	mod := &Mod{
 		File:    "/app/dex.mod",
 		Dir:     "/app",
@@ -92,7 +93,7 @@ func TestImportFile(t *testing.T) {
 		}
 	}
 	for path, want := range map[string]string{
-		"github.com/acme/far":  "required but not downloaded",
+		"github.com/acme/far":  "not downloaded — run: dex mod download",
 		"github.com/other/lib": "in no module",
 	} {
 		if _, err := importFile(mod, "/app", path); err == nil || !strings.Contains(err.Error(), want) {

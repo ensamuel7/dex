@@ -19,7 +19,8 @@
   `test` only with `--lint`
 - Generate docs: `go run . docs`
 - Start LSP: `go run . lsp`
-- Start a dex.mod: `go run . mod init <module path>`
+- Start a dex.mod: `go run . mod init <module path>`; add a library:
+  `go run . get <module>[@version]`; fetch everything: `go run . mod download`
 
 ## Project Structure
 
@@ -317,9 +318,23 @@ resolution, and the three LSP lookups via `resolve.ImportFile`.
 Only the main program's `dex.mod` is read, found by walking up from the main
 file; a library's imports, its own module path included, resolve through the
 program's `require` and `replace`. A replace names a directory only, and must be
-required, so deleting it leaves a complete file. A required module that is not
-replaced is an error pointing at `replace`, because nothing fetches yet. A
-module path imported whole reads `<root>/<last segment>.dx`.
+required, so deleting it leaves a complete file. A module path imported whole
+reads `<root>/<last segment>.dx`.
+
+A required module that is not replaced is read from the module cache
+(`resolve/get.go`): `ModuleDir` is `<cache>/<path>@<version>`, the cache is
+`~/.dex/pkg/mod` or `DEX_MODCACHE`. A build never fetches; `CheckModuleImports`
+runs before pre-registration so a missing one is reported at its import rather
+than as an unknown type. `dex get` finds the repository (three segments on a
+known host, else the shortest prefix `git ls-remote` accepts), lists tags, and
+walks the subdirectory upward until a folder-prefixed tag matches, so a file
+path inside a module still finds it. `fetch` shallow-clones the tag, copies the
+folder into the cache read-only, and refuses a `dex.mod` whose module line
+disagrees with where it was found. `dex.sum` is an `h1:` hash over every file's
+sha256 and path, checked on every `get` and `mod download`. A library's own
+requirements are added to the program's `dex.mod` as `// indirect`, skipped
+when the program already requires an equal or newer version. `repoURL` is a
+package variable so the tests fetch from local `file://` repositories.
 
 ## A module is a file, and its names are its own
 

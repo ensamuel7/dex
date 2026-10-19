@@ -2469,11 +2469,15 @@ names the project, and lists the libraries it uses:
 module github.com/acme/web
 
 require github.com/acme/greet v0.1.0
-replace github.com/acme/greet => ../greet
 ```
 
 Create one with `dex mod init github.com/acme/web` in the project's root
-directory. A project with no `dex.mod` keeps working exactly as before; it only
+directory, and add a library with `dex get`:
+
+```
+dex mod init github.com/acme/web
+dex get github.com/acme/greet
+``` A project with no `dex.mod` keeps working exactly as before; it only
 becomes necessary once an import names a module.
 
 **The name is a URL.** `module github.com/acme/web` says what this project is
@@ -2498,11 +2502,12 @@ import names a file and a module is a folder of them.
 
 **`require` says which library, and which version.** `require
 github.com/acme/greet v0.1.0` means this project uses that library at that
-version. A version is a git tag the library's author pushed.
+version. A version is a git tag the library's author pushed. `dex get` writes
+the line; you can also write it by hand and run `dex mod download`.
 
 **`replace` says where to read it from instead.** Normally a required library
-would be downloaded — that is what `dex get` will do. `replace` says: don't
-download it, use this folder on my machine. It is how you use a library that is
+is downloaded. `replace` says: don't download it, use this folder on my
+machine. It is how you use a library that is
 not published yet, or one you are changing alongside the program that uses it:
 
 ```
@@ -2515,11 +2520,49 @@ same imports read the downloaded copy. A replaced module must still be required,
 so that removing the `replace` leaves a complete `dex.mod`. The path is relative
 to the `dex.mod`, written `./dir` or `../dir`.
 
-Until `dex get` exists, `replace` is the only way to reach another module:
-importing a module that is required but not replaced is an error that says so
-and shows the `replace` line to add. That already covers the common cases — a
-monorepo, where every library is a folder in one repository, and colleagues
-working on a library and an app side by side.
+#### Getting a library
+
+```
+dex get github.com/acme/greet              # the latest release
+dex get github.com/acme/greet@v1.2.0       # that release
+dex get github.com/acme/greet@latest       # move to the latest release
+```
+
+`dex get` finds the release, downloads it into the module cache, adds or updates
+the `require` line, and records a checksum in `dex.sum`. Run it again with
+another version to move to that version. Anything the library itself requires
+is fetched too and added with an `// indirect` comment, because only the
+program's `dex.mod` is read when building.
+
+**A release is a git tag.** For a library at the root of its repository the tag
+is the version, `v1.2.0`. A repository can hold several modules, one per
+folder, each with its own `dex.mod` and its own releases; then the tag starts
+with the folder, so `github.com/acme/libs/redis` at `v0.1.0` is the tag
+`redis/v0.1.0`. A version without a `-` suffix wins `@latest`; `v1.3.0-beta` is
+only chosen when asked for, or when it is the only release there is.
+
+**The module cache** is `~/.dex/pkg/mod`, or wherever `DEX_MODCACHE` points,
+holding one read-only folder per module and version —
+`github.com/acme/greet@v1.2.0`. Every project shares it. A build never
+downloads: a required module missing from the cache is an error at its import
+that says to run `dex mod download`.
+
+**`dex.sum`** holds a checksum of every module version the project has used,
+and belongs in version control. A release that changes after it was first
+downloaded — a tag moved, or a cached file edited — fails with both checksums
+named, rather than building something nobody reviewed.
+
+```
+dex mod download   # fetch everything dex.mod requires — what CI and a Dockerfile run
+dex mod verify     # check the cache against dex.sum
+```
+
+Fetching uses `git`, so it must be installed, and a private repository works
+wherever `git clone` of it already works. `dex get` never asks for a password.
+
+A required module with a `replace` is never downloaded: the folder wins, which
+is what makes a monorepo, or a library being changed alongside the program that
+uses it, work.
 
 Only the main program's `dex.mod` is read, including for imports inside the
 libraries it uses: a library's own module path, and anything it requires, are

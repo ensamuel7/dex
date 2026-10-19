@@ -1,7 +1,9 @@
 # Package management
 
-**Status: proposed. None of this is implemented.** `LANGUAGE.md` describes what
-the compiler does today; this describes what it should do next, and why.
+**Status: steps 1–3 are built** — module names per file, `dex.mod` with
+`replace`, and `dex get` with the module cache and `dex.sum`. Generics in user
+modules and a registry are not. `LANGUAGE.md` describes what the compiler does
+today; this records why it works the way it does.
 
 ## The problem
 
@@ -71,7 +73,7 @@ dex get github.com/acme/dexsqlite@v1.0.0
 This:
 
 1. downloads the repository at that tag into the module cache,
-   `~/.dex/pkg/github.com/acme/dexsqlite@v1.0.0/`, shared by every project and
+   `~/.dex/pkg/mod/github.com/acme/dexsqlite@v1.0.0/`, shared by every project and
    never edited in place;
 2. adds `require github.com/acme/dexsqlite v1.0.0` to the project's `dex.mod`;
 3. records a hash of the downloaded source in `dex.sum`. A build whose source
@@ -115,7 +117,7 @@ a monorepo where several packages are built together and never published.
 |---|---|---|---|
 | `dex.mod` | every project | its name and what it requires | `dex get`, or by hand |
 | `dex.sum` | every project | hashes of downloaded source; commit it | `dex get` only |
-| `~/.dex/pkg/` | each machine | downloaded source | Dex only |
+| `~/.dex/pkg/mod/` | each machine | downloaded source | Dex only |
 | tags (`v1.0.0`) | the git host | releases | the library author |
 
 ## Libraries that wrap C
@@ -194,7 +196,10 @@ this moves from deliberately unsupported to required.
 1. ~~Package-scoped names and file-scoped external modules.~~ Done.
 2. ~~`dex.mod` and import resolution, with `replace` only.~~ Done: sharing
    from local directories and monorepos works.
-3. `dex get`: fetching tags into the cache and writing `dex.sum`.
+3. ~~`dex get`: fetching tags into the cache and writing `dex.sum`.~~ Done,
+   with `dex mod download` for CI and Docker and `dex mod verify`. A
+   repository may hold several modules, released with folder-prefixed tags
+   (`redis/v0.1.0`), which is how `github.com/ensamuel7/dex-modules` ships.
 4. Generics in user modules.
 5. A registry or proxy, only once git hosting is not enough.
 

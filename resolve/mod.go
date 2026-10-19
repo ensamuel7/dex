@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/ensamuel7/dex/ast"
 )
 
 const ModFileName = "dex.mod"
@@ -164,10 +166,17 @@ func importFile(mod *Mod, fromDir, path string) (string, error) {
 	} else if m := longestPrefix(path, mod.Replace); m != "" {
 		root, modulePath = mod.Replace[m], m
 	} else if m := longestPrefix(path, mod.Require); m != "" {
-		return "", fmt.Errorf("import %q is in %s %s, which is required but not downloaded — fetching arrives with dex get; until then point it at a local copy in %s: replace %s => ../path/to/it",
-			path, m, mod.Require[m], mod.File, m)
+		cache, err := ModCache()
+		if err != nil {
+			return "", err
+		}
+		dir := ModuleDir(cache, m, mod.Require[m])
+		if _, err := os.Stat(dir); err != nil {
+			return "", fmt.Errorf("import %q is in %s %s, which is not downloaded — run: dex mod download", path, m, mod.Require[m])
+		}
+		root, modulePath = dir, m
 	} else {
-		return "", fmt.Errorf("import %q is in no module %s requires — add the module that provides it: require <module> <version>", path, mod.File)
+		return "", fmt.Errorf("import %q is in no module %s requires — add it with: dex get %s", path, mod.File, path)
 	}
 
 	rest := strings.TrimPrefix(strings.TrimPrefix(path, modulePath), "/")
@@ -175,6 +184,26 @@ func importFile(mod *Mod, fromDir, path string) (string, error) {
 		rest = filepath.Base(modulePath)
 	}
 	return filepath.Join(root, filepath.FromSlash(rest)+".dx"), nil
+}
+
+func CheckModuleImports(imports []ImportRef, sourceDir, filename string) error {
+	var mod *Mod
+	for _, ref := range imports {
+		if !IsModulePath(ref.Path) {
+			continue
+		}
+		if mod == nil {
+			found, err := FindMod(sourceDir)
+			if err != nil {
+				return err
+			}
+			mod = found
+		}
+		if _, err := importFile(mod, sourceDir, ref.Path); err != nil {
+			return posError(ast.Pos{File: filename, Line: ref.Line, Col: ref.Col}, err)
+		}
+	}
+	return nil
 }
 
 func ImportFile(sourceDir, fromDir, path string) (string, error) {

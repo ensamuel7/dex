@@ -17,9 +17,12 @@ RUN go build -ldflags "-s -w -X main.Version=${DEX_VERSION}" -o /usr/local/bin/d
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     gcc \
+    git \
     libc6-dev \
     libcurl4-openssl-dev \
+    libhiredis-dev \
     libsqlite3-dev \
     libssl-dev \
     libpq-dev \

@@ -119,6 +119,11 @@ func main() {
 		return
 	}
 
+	if command == "get" {
+		runGet(args)
+		return
+	}
+
 	if command == "lint" && listRules {
 		printRules()
 		return
@@ -431,6 +436,9 @@ func frontend(filename string) (*ast.Program, error) {
 		sourceDir = "."
 	}
 	absSourceDir, _ := filepath.Abs(sourceDir)
+	if err := resolve.CheckModuleImports(resolve.ExtractImports(tokens), absSourceDir, filename); err != nil {
+		return nil, err
+	}
 	moduleTypes := resolve.PreRegisterUserStructs(resolve.ExtractImports(tokens), absSourceDir)
 	aliases, err := resolve.ModuleAliases(resolve.ExtractImports(tokens), absSourceDir, filename)
 	if err != nil {
@@ -817,19 +825,67 @@ func keepLastOccurrence(flags []string) []string {
 }
 
 func runMod(args []string) {
-	if len(args) != 2 || args[0] != "init" {
-		fmt.Fprintln(os.Stderr, "usage: dex mod init <module path>\n\nA module is named by its URL, as in: dex mod init github.com/acme/app")
+	if len(args) == 2 && args[0] == "init" {
+		dir, err := os.Getwd()
+		exitOn(err)
+		file, err := resolve.InitMod(dir, args[1])
+		exitOn(err)
+		fmt.Printf("Created %s\n", file)
+		return
+	}
+	if len(args) == 1 && (args[0] == "download" || args[0] == "verify") {
+		mod := currentMod()
+		fetched, err := resolve.Download(mod)
+		exitOn(err)
+		for _, f := range fetched {
+			fmt.Printf("%s %s\n", f.Path, f.Version)
+		}
+		if args[0] == "verify" {
+			fmt.Println("all modules verified")
+		}
+		return
+	}
+	fmt.Fprintln(os.Stderr, `usage:
+  dex mod init <module path>   start a dex.mod naming this module, as in github.com/acme/app
+  dex mod download             fetch every module dex.mod requires into the module cache
+  dex mod verify               check the cached modules against dex.sum`)
+	os.Exit(1)
+}
+
+func runGet(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: dex get <module>[@version]\n\nAdds the module to dex.mod and downloads it, as in: dex get github.com/acme/greet@v1.2.0")
 		os.Exit(1)
 	}
+	mod := currentMod()
+	for _, arg := range args {
+		fetched, err := resolve.Get(mod, arg)
+		exitOn(err)
+		for _, f := range fetched {
+			note := ""
+			if f.Indirect {
+				note = " (needed by another module)"
+			}
+			fmt.Printf("added %s %s%s\n", f.Path, f.Version, note)
+		}
+	}
+}
+
+func currentMod() *resolve.Mod {
 	dir, err := os.Getwd()
+	exitOn(err)
+	mod, err := resolve.FindMod(dir)
+	exitOn(err)
+	if mod == nil {
+		fmt.Fprintln(os.Stderr, "no dex.mod here or above — create one with: dex mod init <module path>")
+		os.Exit(1)
+	}
+	return mod
+}
+
+func exitOn(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	file, err := resolve.InitMod(dir, args[1])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	fmt.Printf("Created %s\n", file)
 }

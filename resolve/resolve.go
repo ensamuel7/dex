@@ -919,6 +919,7 @@ func FlattenStructMethods(program *ast.Program) {
 				IsPrivate:   method.IsPrivate,
 				Throws:      method.Throws,
 				ThrowsTypes: method.ThrowsTypes,
+				Annotations: method.Annotations,
 			}
 
 			// A pointer receiver, not a copy. A method that assigned to a field

@@ -267,6 +267,18 @@ static inline void* dex_retained(void* ptr) {
     return ptr;
 }
 
+static inline void* dex_optbox_new(size_t size, void (*destroy)(void*)) {
+    return (char*)dex_obj_alloc(sizeof(DexObjHeader) + size, destroy) + sizeof(DexObjHeader);
+}
+
+static inline void dex_optbox_retain(void* value) {
+    if (value) dex_retain((char*)value - sizeof(DexObjHeader));
+}
+
+static inline void dex_optbox_release(void* value) {
+    if (value) dex_release((char*)value - sizeof(DexObjHeader));
+}
+
 static inline void dex_owned_free(void* ptr) {
     if (!ptr) return;
     DexObjHeader* obj = (DexObjHeader*)ptr;

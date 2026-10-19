@@ -125,7 +125,8 @@ func (g *Generator) Generate(program *ast.Program) string {
 		}
 	}
 	g.usesRefcount = g.usesString || g.usesArray || g.usesConcurrency || g.usesClosure ||
-		len(program.Interfaces) > 0 || usesPayloadEnum || g.usesHandle
+		len(program.Interfaces) > 0 || usesPayloadEnum || g.usesHandle ||
+		(g.usesOptional && len(program.Structs) > 0)
 
 	// Guarded on usesString because the pool's definitions and the macro behind
 	// them come from the string runtime, which is emitted only under that flag.
@@ -429,6 +430,9 @@ func (g *Generator) Generate(program *ast.Program) string {
 			}
 			out.WriteString("}\n")
 		}
+	}
+	if g.usesRefcount {
+		g.emitOptionalBoxes(&out, program)
 	}
 
 	// Emit global variable declarations as static C variables

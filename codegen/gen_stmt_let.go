@@ -193,20 +193,9 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 			}
 		} else if ast.IsStructType(inner) {
 			ctyp := g.cType(s.Type) // Dex_Foo*
-			if isNull {
-				out.WriteString(fmt.Sprintf("%s%s %s = NULL;\n", prefix, ctyp, s.Name))
-			} else if valIsOptional {
-				// RHS already produces the optional pointer — take it as-is
-				out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
-				g.genExpr(out, s.Value)
-				out.WriteString(";\n")
-			} else {
-				innerCType := "Dex_" + ast.StructName(inner)
-				out.WriteString(fmt.Sprintf("%s%s %s = (%s*)malloc(sizeof(%s));\n", prefix, ctyp, s.Name, innerCType, innerCType))
-				out.WriteString(fmt.Sprintf("%s*%s = ", prefix, s.Name))
-				g.genExpr(out, s.Value)
-				out.WriteString(";\n")
-			}
+			out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, ctyp, s.Name))
+			g.genOptionalStructOwned(out, s.Value, s.Type)
+			out.WriteString(";\n")
 		} else {
 			// Heap type (string, array, etc.) — same pointer, NULL = absent
 			ctyp := g.cType(s.Type)

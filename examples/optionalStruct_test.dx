@@ -1,0 +1,126 @@
+import "fmt"
+import "json"
+
+struct Tally {
+    n: int
+
+    fn bump(): int {
+        self.n = self.n + 1
+        return self.n
+    }
+}
+
+struct Named {
+    label: string
+    tags: string[]
+
+    fn size(): int {
+        return self.label.len()
+    }
+}
+
+struct Holder {
+    named: Named?
+    tally: Tally?
+
+    fn current(): Named? {
+        return self.named
+    }
+}
+
+struct Wrapper {
+    holder: Holder
+    inner: Holder?
+}
+
+struct Config {
+    host: string
+    port: int
+}
+
+fn named(s: string): Named? {
+    return Named { label: s + "!", tags: [s] }
+}
+
+fn sizeOf(n: Named?): int {
+    if (n == null) {
+        return 0
+    }
+    return n.size()
+}
+
+fn read(h: Holder): int {
+    let r: Named? = h.named
+    if (r == null) {
+        return 0
+    }
+    return r.size()
+}
+
+fn rebuilt(h: Holder): Holder {
+    return Holder { named: h.named, tally: h.tally }
+}
+
+fn fromValue(label: string): Holder {
+    let n: Named = Named { label: label, tags: [] }
+    return Holder { named: n, tally: Tally { n: 0 } }
+}
+
+fn main(): void {
+    let h: Holder = Holder { named: named("abc"), tally: null }
+    let i: int = 0
+    while (i < 50) {
+        assert(read(h) == 4)
+        assert(sizeOf(h.current()) == 4)
+        i = i + 1
+    }
+
+    let copy: Holder = h
+    assert(read(copy) == 4)
+    let again: Holder = rebuilt(h)
+    assert(read(again) == 4)
+
+    let label: string = "xy" + "z"
+    let made: Holder = fromValue(label)
+    assert(read(made) == 3)
+    assert(sizeOf(Named { label: label, tags: [] }) == 3)
+
+    let t: Tally? = made.tally
+    if (t != null) {
+        assert(t.bump() == 1)
+    }
+    let t2: Tally? = made.tally
+    if (t2 != null) {
+        assert(t2.n == 1)
+    }
+
+    let slot: Named? = null
+    slot = named("q")
+    assert(sizeOf(slot) == 2)
+    slot = h.named
+    assert(sizeOf(slot) == 4)
+    slot = null
+    assert(sizeOf(slot) == 0)
+
+    h.named = named("hello")
+    assert(read(h) == 6)
+    assert(read(copy) == 4)
+    h.named = null
+    assert(read(h) == 0)
+
+    let w: Wrapper = Wrapper { holder: copy, inner: copy }
+    let wi: Holder? = w.inner
+    if (wi != null) {
+        assert(read(wi) == 4)
+    }
+    let holders: Holder[] = [copy, again, made]
+    assert(read(holders[2]) == 3)
+
+    let good: Config? = json.decode("{\"host\": \"db\", \"port\": 5432}")
+    if (good != null) {
+        assert(good.host == "db")
+    }
+    let bad: Config? = json.decode("not json")
+    assert(bad == null)
+    fmt.println("optionalStruct_test: all assertions passed")
+}

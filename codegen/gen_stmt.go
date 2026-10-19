@@ -106,17 +106,9 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 					out.WriteString("};\n")
 				}
 			} else if ast.IsStructType(inner) {
-				if isNull {
-					innerCType := "Dex_" + ast.StructName(inner)
-					out.WriteString(fmt.Sprintf("%sif (%s) { free(%s); } %s = NULL;\n", prefix, s.Name, s.Name, s.Name))
-					_ = innerCType
-				} else {
-					innerCType := "Dex_" + ast.StructName(inner)
-					out.WriteString(fmt.Sprintf("%sif (!%s) { %s = (%s*)malloc(sizeof(%s)); }\n", prefix, s.Name, s.Name, innerCType, innerCType))
-					out.WriteString(fmt.Sprintf("%s*%s = ", prefix, s.Name))
-					g.genExpr(out, s.Value)
-					out.WriteString(";\n")
-				}
+				out.WriteString(fmt.Sprintf("%s{ %s _dex_old = %s; %s = ", prefix, g.cType(varType), s.Name, s.Name))
+				g.genOptionalStructOwned(out, s.Value, varType)
+				out.WriteString("; dex_optbox_release(_dex_old); }\n")
 			} else {
 				// Heap type optional (string, array, etc.)
 				if isNull {
@@ -474,9 +466,23 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 	case *ast.FieldAssignStmt:
 		objType := g.typeOfExpr(s.Object)
 		fieldType := g.typeOfExpr(s.Value)
-		// For ref-type objects (&Struct), retain/release heap-typed fields
-		// to keep proper reference counts when the struct outlives the function scope
-		if ast.IsHeapType(fieldType) {
+		declaredType := g.typeOfExpr(&ast.FieldAccessExpr{Pos: s.Pos, Object: s.Object, Field: s.Field})
+		if ast.IsStructOptionalType(declaredType) {
+			accessOp := "."
+			if ast.IsRefType(objType) {
+				accessOp = "->"
+			}
+			tmpVal := g.nextTemp()
+			out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(declaredType), tmpVal))
+			g.genOptionalStructOwned(out, s.Value, declaredType)
+			out.WriteString(";\n")
+			out.WriteString(fmt.Sprintf("%sdex_optbox_release(", prefix))
+			g.genExpr(out, s.Object)
+			out.WriteString(fmt.Sprintf("%s%s);\n", accessOp, s.Field))
+			out.WriteString(prefix)
+			g.genExpr(out, s.Object)
+			out.WriteString(fmt.Sprintf("%s%s = %s;\n", accessOp, s.Field, tmpVal))
+		} else if ast.IsHeapType(fieldType) {
 			// A struct field owns its reference, whether the struct is behind a ref or
 			// held by value. Evaluate once into a temp to avoid double-evaluating side
 			// effects, retain a borrowed value (an owned temporary already carries the

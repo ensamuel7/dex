@@ -353,18 +353,7 @@ func (g *Generator) emitReleaseVar(out *strings.Builder, prefix, name string, ty
 			return
 		}
 		if ast.IsStructType(inner) {
-			// Struct-type optional: free heap fields then free pointer
-			def := ast.GetStructDef(inner)
-			if def != nil {
-				out.WriteString(fmt.Sprintf("%sif (%s) {\n", prefix, name))
-				for _, f := range def.Fields {
-					if ast.NeedsRelease(f.Type) {
-						g.emitReleaseVar(out, prefix+"    ", name+"->"+f.Name, f.Type)
-					}
-				}
-				out.WriteString(fmt.Sprintf("%s    free(%s);\n", prefix, name))
-				out.WriteString(fmt.Sprintf("%s}\n", prefix))
-			}
+			out.WriteString(fmt.Sprintf("%sdex_optbox_release(%s);\n", prefix, name))
 			return
 		}
 		return
@@ -570,7 +559,7 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 			break
 		}
 		ft, ok := fieldTypes[name]
-		if !ok || !ast.NeedsRelease(ft) {
+		if !ok || !ast.NeedsRelease(ft) || ast.IsStructOptionalType(ft) {
 			continue
 		}
 		val := litValues[i]
@@ -642,6 +631,8 @@ func (g *Generator) emitRetainStructLitFields(out *strings.Builder, prefix, targ
 // struct is a value and the references it holds are the ones that matter.
 func (g *Generator) emitRetainValue(out *strings.Builder, prefix, target string, typ ast.Type) {
 	switch {
+	case ast.IsStructOptionalType(typ):
+		out.WriteString(fmt.Sprintf("%sdex_optbox_retain(%s);\n", prefix, target))
 	case ast.IsOptionalType(typ):
 		// dex_retain is NULL-safe, which is what absent looks like.
 		if ast.IsHeapType(ast.OptionalInnerType(typ)) {
@@ -667,6 +658,8 @@ func (g *Generator) emitRetainBorrowedStructFields(out *strings.Builder, prefix,
 		}
 		field := target + "." + f.Name
 		switch {
+		case ast.IsStructOptionalType(f.Type):
+			out.WriteString(fmt.Sprintf("%sdex_optbox_retain(%s);\n", prefix, field))
 		case ast.IsOptionalType(f.Type):
 			// Only the heap-backed optionals are released, so only those are
 			// retained. dex_retain is NULL-safe, which is what absent looks like.
@@ -691,4 +684,63 @@ func (g *Generator) hasHeapVarsInScope() bool {
 		}
 	}
 	return false
+}
+
+func (g *Generator) emitOptionalBoxes(out *strings.Builder, program *ast.Program) {
+	for _, sd := range program.Structs {
+		structType, ok := ast.LookupStructType(sd.Name)
+		if !ok {
+			continue
+		}
+		var fields strings.Builder
+		g.emitReleaseVar(&fields, "    ", "(*v)", structType)
+		destroy := "NULL"
+		if fields.Len() > 0 {
+			destroy = "dex_optfree_" + sd.Name
+			out.WriteString(fmt.Sprintf("static void %s(void* ptr) {\n", destroy))
+			out.WriteString(fmt.Sprintf("    Dex_%s* v = (Dex_%s*)((char*)ptr + sizeof(DexObjHeader));\n", sd.Name, sd.Name))
+			out.WriteString(fields.String())
+			out.WriteString("}\n")
+		}
+		out.WriteString(fmt.Sprintf("static inline Dex_%s* %s(Dex_%s v) {\n", sd.Name, optBoxName(sd.Name), sd.Name))
+		out.WriteString(fmt.Sprintf("    _Static_assert(_Alignof(Dex_%s) <= _Alignof(DexObjHeader), \"optional box alignment\");\n", sd.Name))
+		out.WriteString(fmt.Sprintf("    Dex_%s* p = (Dex_%s*)dex_optbox_new(sizeof(Dex_%s), %s);\n", sd.Name, sd.Name, sd.Name, destroy))
+		out.WriteString("    *p = v;\n    return p;\n}\n")
+	}
+}
+
+func optBoxName(structName string) string {
+	return "dex_optbox_" + structName
+}
+
+func (g *Generator) genOptionalStructOwned(out *strings.Builder, expr ast.Expr, optType ast.Type) {
+	inner := ast.OptionalInnerType(optType)
+	if _, isNull := expr.(*ast.NullLit); isNull {
+		out.WriteString("NULL")
+		return
+	}
+	if g.typeOfExpr(expr) == optType {
+		if !g.borrowsHeapValue(expr) {
+			g.genExpr(out, expr)
+			return
+		}
+		ctyp := g.cType(optType)
+		tmp := g.nextTemp()
+		out.WriteString(fmt.Sprintf("({ %s %s = ", ctyp, tmp))
+		g.genExpr(out, expr)
+		out.WriteString(fmt.Sprintf("; dex_optbox_retain(%s); %s; })", tmp, tmp))
+		return
+	}
+	tmp := g.nextTemp()
+	out.WriteString(fmt.Sprintf("({ %s %s = %s(", g.cType(optType), tmp, optBoxName(ast.StructName(inner))))
+	g.genExpr(out, expr)
+	out.WriteString("); ")
+	var retains strings.Builder
+	if _, _, isLit := structAssignments(expr); isLit {
+		g.emitRetainStructLitFields(&retains, "", "(*"+tmp+")", inner, expr)
+	} else if g.borrowsHeapValue(expr) {
+		g.emitRetainBorrowedStructFields(&retains, "", "(*"+tmp+")", inner)
+	}
+	out.WriteString(strings.ReplaceAll(retains.String(), "\n", " "))
+	out.WriteString(tmp + "; })")
 }

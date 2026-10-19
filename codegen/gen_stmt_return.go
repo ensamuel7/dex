@@ -89,25 +89,13 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 					g.emitCleanupAll(out, prefix, "")
 					g.emitReturn(out, prefix, "_ret_tmp")
 				}
-			} else if ast.IsStructType(inner) && g.typeOfExpr(s.Value) != retType {
-				// Bare struct value returned as T? — box it so the caller
-				// receives the Dex_Foo* that the optional representation expects.
-				innerCType := "Dex_" + ast.StructName(inner)
-				out.WriteString(fmt.Sprintf("%s%s* _ret_tmp = (%s*)malloc(sizeof(%s));\n", prefix, innerCType, innerCType, innerCType))
-				out.WriteString(fmt.Sprintf("%s*_ret_tmp = ", prefix))
-				g.genExpr(out, s.Value)
+			} else if ast.IsStructType(inner) {
+				out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, g.cType(retType)))
+				g.genOptionalStructOwned(out, s.Value, retType)
 				out.WriteString(";\n")
-				exceptVar := ""
-				if ident, ok := s.Value.(*ast.Ident); ok {
-					exceptVar = ident.Name
-				} else if _, _, isLit := structAssignments(s.Value); isLit {
-					g.emitRetainStructLitFields(out, prefix, "(*_ret_tmp)", inner, s.Value)
-				} else if g.borrowsHeapValue(s.Value) {
-					g.emitRetainBorrowedStructFields(out, prefix, "(*_ret_tmp)", inner)
-				}
 				g.emitHoistReleases(out, prefix)
 				g.emitDeferredCalls(out, prefix)
-				g.emitCleanupAll(out, prefix, exceptVar)
+				g.emitCleanupAll(out, prefix, "")
 				g.emitReturn(out, prefix, "_ret_tmp")
 			} else {
 				g.emitHoistReleases(out, prefix)

@@ -60,6 +60,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				} else {
 					g.genExpr(out, e.Args[i])
 				}
+			} else if ast.IsStructOptionalType(cp.Type) {
+				g.genOptionalStructOwned(out, e.Args[i], cp.Type)
 			} else {
 				g.genExpr(out, e.Args[i])
 			}
@@ -87,7 +89,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		// self is a pointer, so a value instance has its address taken and one
 		// that is already a reference is passed straight through.
 		instanceType := g.resolveFieldChainType(e.Module)
-		if !ast.IsRefType(instanceType) {
+		if !ast.IsRefType(instanceType) && !ast.IsOptionalType(instanceType) {
 			out.WriteString("&")
 		}
 		// Rendered rather than written through: the receiver may be a dotted
@@ -938,9 +940,19 @@ func (g *Generator) genOptionalArg(out *strings.Builder, arg ast.Expr, paramType
 	_, isNull := arg.(*ast.NullLit)
 	argType := g.typeOfExpr(arg)
 
+	if ast.IsStructOptionalType(paramType) && !isNull && argType != paramType && g.hoistingEnabled() {
+		var boxed strings.Builder
+		g.genOptionalStructOwned(&boxed, arg, paramType)
+		tmp := g.nextTemp()
+		g.stmtPrelude.WriteString(fmt.Sprintf("%s %s = %s; ", g.cType(paramType), tmp, boxed.String()))
+		g.stmtTemps = append(g.stmtTemps, scopeVar{name: tmp, typ: paramType})
+		out.WriteString(tmp)
+		return
+	}
+
 	// If the argument is already the optional type, emit directly
 	if argType == paramType {
-		if ast.IsHeapOptionalType(paramType) {
+		if ast.IsHeapOptionalType(paramType) || ast.IsStructOptionalType(paramType) {
 			g.genBorrowed(out, arg)
 			return
 		}

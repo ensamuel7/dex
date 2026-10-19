@@ -4,6 +4,30 @@ struct Point {
     x: int
 }
 
+struct Counter {
+    n: int
+
+    fn bump(): int {
+        self.n = self.n + 1
+        return self.n
+    }
+}
+
+struct Holder {
+    counter: Counter?
+}
+
+fn counterAt(n: int): Counter? {
+    return Counter { n: n }
+}
+
+fn bumpIfPresent(c: Counter?): int {
+    if (c == null) {
+        return 0
+    }
+    return c.bump()
+}
+
 struct Box {
     name: string?
     tags: string[]?
@@ -48,6 +72,14 @@ fn main(): void {
     if (points != null) {
         assert(points[0].x == 1)
     }
+
+    let held: Holder = Holder { counter: counterAt(1) }
+    let c: Counter? = held.counter
+    if (c != null) {
+        assert(c.bump() == 2)
+    }
+    assert(bumpIfPresent(held.counter) == 3)
+    assert(bumpIfPresent(null) == 0)
 
     let empty: Box = Box { name: null, tags: null }
     assert(nameLength(empty) == 0)

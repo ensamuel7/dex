@@ -190,6 +190,9 @@ fn greet(name: string?): void {
 **Rules:**
 - `null` can only be assigned to optional types (`T?`), not plain types (`T`).
 - A value of type `T` can be assigned to a variable of type `T?` (automatic wrapping).
+- Wrapping a struct copies it, but copying a `Struct?` shares it: `let b: Point? = a`
+  names the same struct as `a`, so a method that changes it through one is seen
+  through the other. The struct is freed when the last `Struct?` holding it goes.
 - Double-optional types (`T??`) are not allowed.
 - There is no force-unwrap operator; use null checks for safe access.
 

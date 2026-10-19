@@ -226,11 +226,11 @@ func (g *Generator) jsonDecodeFromString(out *strings.Builder, e *ast.CallExpr) 
 		structType := ast.OptionalInnerType(e.ResolvedType)
 		def := ast.GetStructDef(structType)
 		innerCType := g.cType(structType)
-		out.WriteString(fmt.Sprintf("({ %s* _jopt_tmp = (%s*)calloc(1, sizeof(%s)); if (!dex_json_decode_struct_checked(", innerCType, innerCType, innerCType))
+		out.WriteString(fmt.Sprintf("({ %s* _jopt_tmp = %s((%s){0}); if (!dex_json_decode_struct_checked(", innerCType, optBoxName(ast.StructName(structType)), innerCType))
 		g.genStringData(out, e.Args[0])
 		out.WriteString(fmt.Sprintf(", _jopt_tmp, %d, ", len(def.Fields)))
 		g.genStructFieldDescs(out, structType, 0)
-		out.WriteString(")) { free(_jopt_tmp); _jopt_tmp = NULL; } _jopt_tmp; })")
+		out.WriteString(")) { dex_optbox_release(_jopt_tmp); _jopt_tmp = NULL; } _jopt_tmp; })")
 		return
 	}
 	structType := e.ResolvedType

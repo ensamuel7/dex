@@ -248,7 +248,14 @@ func IsHeapOptionalType(t Type) bool {
 	return IsOptionalType(t) && IsHeapType(OptionalInnerType(t))
 }
 
+func IsStructOptionalType(t Type) bool {
+	return IsOptionalType(t) && IsStructType(OptionalInnerType(t))
+}
+
 func NeedsRelease(t Type) bool {
+	if IsStructOptionalType(t) {
+		return true
+	}
 	if IsOptionalType(t) {
 		return NeedsRelease(OptionalInnerType(t))
 	}

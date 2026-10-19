@@ -622,6 +622,29 @@ fn main(): void {
 `, RuleUncaughtThrow)
 }
 
+func TestAllowOnAMethodSilencesIt(t *testing.T) {
+	assertRules(t, `
+struct Columns {
+    fn index(field: string): int {
+        return field.len()
+    }
+
+    #[allow(uncaught-throw)]
+    fn require(field: string): int {
+        if (field == "") {
+            throw Exception("no projected column")
+        }
+        return 1
+    }
+}
+
+fn main(): void {
+    let c = Columns {}
+    assert(c.index("a") + c.require("a") == 2)
+}
+`)
+}
+
 func TestFindingFormatMatchesCompilerDiagnostics(t *testing.T) {
 	// The CLI colours and the LSP locates findings by parsing this shape, so
 	// it has to stay file:line:col: message [rule].

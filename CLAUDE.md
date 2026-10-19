@@ -611,6 +611,27 @@ element owns its box. Two containers still refuse one and say why: a map holds
 only the six scalar value types (a struct value is refused identically), and an
 optional has no spelling for absent because an interface value is not a pointer.
 
+## An optional struct is a refcounted box
+
+`T?` for a struct is a `Dex_T*` into a box laid out `{ DexObjHeader; Dex_T }`,
+allocated by the per-struct `dex_optbox_<T>` and released through
+`dex_optbox_release`, which steps back over the header. The pointer addresses
+the value rather than the header so field access and method calls through it are
+unchanged; the cost is that `dex_retain`/`dex_release` must never be called on it
+directly, which is why `IsStructOptionalType` sites call the `dex_optbox_*`
+helpers instead of joining the `IsHeapOptionalType` ones.
+
+It was a plain `malloc` with one owner, and every copy copied the pointer:
+`let r: T? = h.field`, a struct holding one copied by value, `return self.c`
+each made a second owner, and the second release was a use-after-free. A `T?`
+of a struct with no heap fields was never freed at all, because `NeedsRelease`
+asked only about the fields. `genOptionalStructOwned` is now the one place a
+`T?` is produced owned: it boxes a `T` (retaining what a borrowed source holds)
+and retains a borrowed `T?`. `examples/optionalStruct_test.dx` covers each path.
+
+The box is not on the cleanup stack, so a throw past a frame still leaks a
+`T?` local there, as it did before.
+
 ## Maps reject what they cannot represent
 
 The map runtime is generated per key/value suffix pair, and `mapKeySuffix` /

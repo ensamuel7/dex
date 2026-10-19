@@ -26,6 +26,9 @@ func (c *Checker) checkStructMethodCall(e *ast.CallExpr, structType ast.Type, di
 	}
 	e.IsMethodCall = true
 	e.StructType = structType
+	if err := c.bindArgs(e, sig); err != nil {
+		return 0, true, err
+	}
 	if len(e.Args) != len(sig.Params) {
 		return 0, true, c.errAt(e.Pos, "%s.%s() takes exactly %d argument(s), got %d", display, e.Name, len(sig.Params), len(e.Args))
 	}

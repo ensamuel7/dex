@@ -2422,6 +2422,51 @@ fn main(): void {
 }`, "duplicate argument for parameter 'name'")
 }
 
+func TestNamedArgumentsOnMethod(t *testing.T) {
+	mustCheck(t, `
+struct Pager {
+	size: int
+	fn page(number: int, size: int = 0): int {
+		return number + size
+	}
+}
+fn main(): void {
+	let p: Pager = Pager { size: 1 }
+	let n: int = p.page(size: 2, number: 3)
+	let m: int = p.page(number: 3)
+}`)
+}
+
+func TestNamedArgumentsOnMethodUnknownParam(t *testing.T) {
+	mustFail(t, `
+struct Pager {
+	size: int
+	fn page(number: int): int {
+		return number
+	}
+}
+fn main(): void {
+	let p: Pager = Pager { size: 1 }
+	let n: int = p.page(count: 3)
+}`, "unknown parameter name 'count'")
+}
+
+func TestNamedArgumentsRejectedOnStdlib(t *testing.T) {
+	mustFail(t, `
+import "str"
+fn main(): void {
+	let s: string = str.fromInt(n: 3)
+}`, "str.fromInt() does not take named arguments")
+}
+
+func TestNamedArgumentsRejectedOnFunctionValue(t *testing.T) {
+	mustFail(t, `
+fn main(): void {
+	let f: fn(int): int = fn(x: int): int { return x }
+	let n: int = f(x: 3)
+}`, "f() does not take named arguments")
+}
+
 // =============================================================================
 // Default parameters (fillDefaultArgs)
 // =============================================================================

@@ -1279,6 +1279,53 @@ fmt.println(42)
 let doc: json.Value = json.decode(text)
 ```
 
+### Default parameters
+
+A parameter can declare a default with `= value`. A call may leave it out, and
+the default is used in its place:
+
+```dex
+fn page(from: string, to: string, limit: int = 25, offset: int = 0): Row[] { ... }
+
+page("2026-01-01", "2026-01-31")
+page("2026-01-01", "2026-01-31", 10)
+```
+
+The first call pages with a limit of 25, the second with 10; both start at
+offset 0.
+
+A parameter with no default must always be passed.
+
+### Named arguments
+
+An argument can name the parameter it is for. Named arguments can be given in
+any order, so a call reads as what it passes rather than where each value
+sits:
+
+```dex
+page(from: start, to: end, limit: 10, offset: 0)
+page(start, end, offset: 50)
+sessionStore.list(db, filter, limit: 10, offset: 0)
+p.page(number: 3, size: 20)
+```
+
+`page(start, end, offset: 50)` names only the offset, so `limit` keeps its
+default.
+
+Positional arguments come first and fill parameters from the left; named ones
+fill the rest, and anything still unfilled takes its default. Passing a value
+that is just `0`, `""` or `false` is where a name earns its place — `list(db, f,
+10, 0)` gives no hint which number is the limit.
+
+The compiler rejects a name that matches no parameter, one given twice, a
+positional argument after a named one, and a required parameter left unfilled.
+
+Named arguments work on any function or method declared in Dex — in the same
+file, in an imported module, or on a struct. A standard library function, a C
+function from an `external module`, a struct constructor, and a call through a
+function value have no parameter names to match, so naming an argument there is
+an error rather than being ignored.
+
 ### Method chaining
 
 A call is not the end of an expression. Its result can be indexed, have a field

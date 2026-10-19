@@ -1,0 +1,31 @@
+import "modules/window"
+
+struct Pager {
+    size: int
+
+    fn page(number: int, size: int = 0): int {
+        if (size > 0) {
+            return number * size
+        }
+        return number * self.size
+    }
+}
+
+fn span(start: int, end: int, step: int = 1): int {
+    return (end - start) / step
+}
+
+fn main(): void {
+    assert(span(start: 0, end: 10) == 10)
+    assert(span(end: 10, start: 0, step: 2) == 5)
+    assert(span(0, 10, step: 5) == 2)
+
+    assert(window.describe(from: 1, to: 9) == "1-9 limit 25 offset 0")
+    assert(window.describe(1, 9, offset: 50, limit: 10) == "1-9 limit 10 offset 50")
+    assert(window.describe(to: 9, from: 1, limit: 10) == "1-9 limit 10 offset 0")
+    assert(window.describe(1, 9) == "1-9 limit 25 offset 0")
+
+    let p: Pager = Pager { size: 20 }
+    assert(p.page(number: 3) == 60)
+    assert(p.page(size: 5, number: 3) == 15)
+}

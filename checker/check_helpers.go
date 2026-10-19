@@ -293,6 +293,18 @@ func (c *Checker) resolveNamedArgs(e *ast.CallExpr, sig funcSig) error {
 	return nil
 }
 
+func (c *Checker) bindArgs(e *ast.CallExpr, sig funcSig) error {
+	if len(e.ArgNames) > 0 {
+		if err := c.resolveNamedArgs(e, sig); err != nil {
+			return err
+		}
+	}
+	if len(e.Args) < len(sig.Params) {
+		return c.fillDefaultArgs(e, sig)
+	}
+	return nil
+}
+
 // fillDefaultArgs appends default values for missing trailing arguments.
 func (c *Checker) fillDefaultArgs(e *ast.CallExpr, sig funcSig) error {
 	for i := len(e.Args); i < len(sig.Params); i++ {

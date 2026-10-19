@@ -8,6 +8,25 @@ import (
 )
 
 func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
+	call, isCall := expr.(*ast.CallExpr)
+	if !isCall || len(call.ArgNames) == 0 {
+		return c.checkExprKind(expr)
+	}
+	t, err := c.checkExprKind(expr)
+	if err == nil && len(call.ArgNames) > 0 {
+		return 0, c.errAt(call.Pos, "%s() does not take named arguments; only a function or method declared in Dex does", callDisplayName(call))
+	}
+	return t, err
+}
+
+func callDisplayName(e *ast.CallExpr) string {
+	if e.Module != "" {
+		return e.Module + "." + e.Name
+	}
+	return e.Name
+}
+
+func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 	switch e := expr.(type) {
 	case *ast.IntLit:
 		return ast.TypeInt, nil
@@ -890,6 +909,9 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 				if sig.IsPrivate {
 					return 0, c.errAt(e.Pos, "function '%s' in module '%s' is private", e.Name, e.Module)
 				}
+				if err := c.bindArgs(e, sig); err != nil {
+					return 0, err
+				}
 				if len(e.Args) != len(sig.Params) {
 					return 0, c.errAt(e.Pos, "%s.%s() takes exactly %d argument(s), got %d", e.Module, e.Name, len(sig.Params), len(e.Args))
 				}
@@ -1035,17 +1057,8 @@ func (c *Checker) checkExpr(expr ast.Expr) (ast.Type, error) {
 		if !ok {
 			return 0, c.errAt(e.Pos, "undefined function '%s'", e.Name)
 		}
-		// Handle named arguments: reorder args to match parameter order
-		if len(e.ArgNames) > 0 {
-			if err := c.resolveNamedArgs(e, sig); err != nil {
-				return 0, err
-			}
-		}
-		// Handle default parameters: fill in missing args
-		if len(e.Args) < len(sig.Params) {
-			if err := c.fillDefaultArgs(e, sig); err != nil {
-				return 0, err
-			}
+		if err := c.bindArgs(e, sig); err != nil {
+			return 0, err
 		}
 		if len(e.Args) != len(sig.Params) {
 			return 0, c.errAt(e.Pos, "function '%s' expects %d arguments, got %d", e.Name, len(sig.Params), len(e.Args))

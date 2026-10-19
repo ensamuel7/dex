@@ -580,6 +580,16 @@ function main(): void {
   fmt.println("hello")
 }</code></pre>
 
+<h3>Default Parameters &amp; Named Arguments</h3>
+<p>A parameter can declare a default with <code>= value</code>, and a call may leave it out. An argument can name the parameter it is for, in any order, so a call reads as what it passes:</p>
+<pre><code>fn page(from: string, to: string, limit: int = 25, offset: int = 0): Row[] { ... }
+
+page(start, end)
+page(from: start, to: end, limit: 10, offset: 0)
+page(start, end, offset: 50)
+sessionStore.list(db, filter, limit: 10, offset: 0)</code></pre>
+<p><code>page(start, end)</code> takes both defaults, and <code>page(start, end, offset: 50)</code> keeps the default limit. Positional arguments come first; named ones fill the rest and anything unfilled takes its default. An unknown name, a duplicate, or a missing required parameter is a compile error. Named arguments work on any function or method declared in Dex, including one in an imported module; a stdlib function, an external C function, a constructor or a function value has no parameter names, so naming an argument there is an error rather than being silently ignored.</p>
+
 <h3>Control Flow</h3>
 
 <h4>if / else</h4>

@@ -1,0 +1,3 @@
+fn describe(from: int, to: int, limit: int = 25, offset: int = 0): string {
+    return "${from}-${to} limit ${limit} offset ${offset}"
+}

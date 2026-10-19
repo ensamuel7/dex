@@ -220,7 +220,7 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 	case "initialize":
 		s.handleInitialize(msg)
 	case "initialized":
-		// no-op
+		s.registerFileWatcher()
 	case "shutdown":
 		s.sendResponse(msg.ID, nil)
 	case "exit":
@@ -231,6 +231,10 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 		s.handleDidChange(msg)
 	case "textDocument/didClose":
 		s.handleDidClose(msg)
+	case "textDocument/didSave":
+		s.handleDidSave(msg)
+	case "workspace/didChangeWatchedFiles":
+		s.recheckOpen("")
 	case "textDocument/hover":
 		s.handleHover(msg)
 	case "textDocument/completion":
@@ -245,7 +249,7 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 		s.handleFormatting(msg)
 	default:
 		// Unknown method — respond with method not found if it has an ID
-		if msg.ID != nil {
+		if msg.ID != nil && msg.Method != "" {
 			s.sendResponse(msg.ID, nil)
 		}
 	}
@@ -256,7 +260,11 @@ func (s *Server) handleMessage(msg *jsonrpcMessage) {
 func (s *Server) handleInitialize(msg *jsonrpcMessage) {
 	result := map[string]interface{}{
 		"capabilities": map[string]interface{}{
-			"textDocumentSync":           1, // Full document sync
+			"textDocumentSync": map[string]interface{}{
+				"openClose": true,
+				"change":    1,
+				"save":      map[string]interface{}{"includeText": false},
+			},
 			"hoverProvider":              true,
 			"definitionProvider":         true,
 			"documentFormattingProvider": true,
@@ -311,6 +319,49 @@ func (s *Server) handleDidChange(msg *jsonrpcMessage) {
 		s.documents[params.TextDocument.URI] = text
 		s.diagnose(params.TextDocument.URI, text)
 	}
+}
+
+func (s *Server) handleDidSave(msg *jsonrpcMessage) {
+	var params struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+	}
+	json.Unmarshal(msg.Params, &params)
+	s.recheckOpen(params.TextDocument.URI)
+}
+
+func (s *Server) recheckOpen(except string) {
+	uris := make([]string, 0, len(s.documents))
+	for uri := range s.documents {
+		if uri != except {
+			uris = append(uris, uri)
+		}
+	}
+	sort.Strings(uris)
+	for _, uri := range uris {
+		s.diagnose(uri, s.documents[uri])
+	}
+}
+
+func (s *Server) registerFileWatcher() {
+	s.writeJSON(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      "dex-watch",
+		"method":  "client/registerCapability",
+		"params": map[string]interface{}{
+			"registrations": []map[string]interface{}{{
+				"id":     "dex-watch",
+				"method": "workspace/didChangeWatchedFiles",
+				"registerOptions": map[string]interface{}{
+					"watchers": []map[string]interface{}{
+						{"globPattern": "**/*.dx"},
+						{"globPattern": "**/dex.mod"},
+					},
+				},
+			}},
+		},
+	})
 }
 
 func (s *Server) handleDidClose(msg *jsonrpcMessage) {

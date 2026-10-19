@@ -18,9 +18,38 @@ function resolveCommand(cmd) {
         return cmd;
     }
 }
+function parseVersion(text) {
+    const m = text.match(/(\d+)\.(\d+)\.(\d+)/);
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+function olderThan(a, b) {
+    for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) {
+            return a[i] < b[i];
+        }
+    }
+    return false;
+}
+function checkCompilerVersion(dexPath, context) {
+    const wanted = parseVersion(context.extension.packageJSON.version);
+    (0, child_process_1.execFile)(dexPath, ["version"], (err, stdout) => {
+        if (err) {
+            vscode_1.window.showErrorMessage(`Dex: could not run '${dexPath}'. Install dex or set dex.path.`);
+            return;
+        }
+        const found = parseVersion(stdout);
+        if (!wanted || !found || !olderThan(found, wanted)) {
+            return;
+        }
+        vscode_1.window.showWarningMessage(`Dex: the compiler on your PATH is ${found.join(".")}, older than this ` +
+            `extension (${wanted.join(".")}). Diagnostics come from the compiler, ` +
+            `so run 'dex update' and reload the window.`);
+    });
+}
 function activate(context) {
     const config = vscode_1.workspace.getConfiguration("dex");
     const dexPath = resolveCommand(config.get("path", "dex"));
+    checkCompilerVersion(dexPath, context);
     const serverOptions = {
         command: dexPath,
         args: ["lsp"],

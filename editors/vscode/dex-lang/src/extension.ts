@@ -4,7 +4,7 @@ import {
   LanguageClientOptions,
   ServerOptions,
 } from "vscode-languageclient/node";
-import { execSync } from "child_process";
+import { execFile, execSync } from "child_process";
 
 let client: LanguageClient;
 
@@ -20,9 +20,46 @@ function resolveCommand(cmd: string): string {
   }
 }
 
+function parseVersion(text: string): number[] | undefined {
+  const m = text.match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+
+function olderThan(a: number[], b: number[]): boolean {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) {
+      return a[i] < b[i];
+    }
+  }
+  return false;
+}
+
+function checkCompilerVersion(dexPath: string, context: ExtensionContext) {
+  const wanted = parseVersion(context.extension.packageJSON.version);
+  execFile(dexPath, ["version"], (err, stdout) => {
+    if (err) {
+      window.showErrorMessage(
+        `Dex: could not run '${dexPath}'. Install dex or set dex.path.`
+      );
+      return;
+    }
+    const found = parseVersion(stdout);
+    if (!wanted || !found || !olderThan(found, wanted)) {
+      return;
+    }
+    window.showWarningMessage(
+      `Dex: the compiler on your PATH is ${found.join(".")}, older than this ` +
+        `extension (${wanted.join(".")}). Diagnostics come from the compiler, ` +
+        `so run 'dex update' and reload the window.`
+    );
+  });
+}
+
 export function activate(context: ExtensionContext) {
   const config = workspace.getConfiguration("dex");
   const dexPath = resolveCommand(config.get<string>("path", "dex"));
+
+  checkCompilerVersion(dexPath, context);
 
   const serverOptions: ServerOptions = {
     command: dexPath,

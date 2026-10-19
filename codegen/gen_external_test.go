@@ -245,3 +245,27 @@ func TestCodegenExternalOutParamDiscardedResult(t *testing.T) {
 	}`)
 	assertContains(t, out, "(void)({ void*")
 }
+
+// An optional heap field is a heap field: a struct literal storing a borrowed
+// one and a let reading one back out both take a reference.
+func TestCodegenOptionalHeapFieldsAreRetained(t *testing.T) {
+	out := generate(t, `struct Box {
+		name: string?
+	}
+	fn make(n: string?): Box {
+		return Box { name: n }
+	}
+	fn read(b: Box): int {
+		let n: string? = b.name
+		if (n == null) {
+			return 0
+		}
+		return n.len()
+	}
+	fn main(): void {
+		let b: Box = make("x")
+		let k: int = read(b)
+	}`)
+	assertContains(t, out, "dex_retain(_ret_tmp.name);")
+	assertContains(t, out, "DexString* n = b.name;\n    dex_retain(n);")
+}

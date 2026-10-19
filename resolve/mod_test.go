@@ -192,3 +192,16 @@ fn main(): void {}
 		t.Fatalf("got %v", err)
 	}
 }
+
+// The language server's entry point finds the dex.mod from the program's
+// directory, wherever the importing file is.
+func TestImportFileFindsTheModFromTheProgram(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ModFileName), []byte("module github.com/acme/web\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ImportFile(dir, filepath.Join(dir, "deep", "er"), "github.com/acme/web/service/users")
+	if err != nil || got != filepath.Join(dir, "service", "users.dx") {
+		t.Errorf("got %q, %v", got, err)
+	}
+}

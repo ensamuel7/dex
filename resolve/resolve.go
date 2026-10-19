@@ -722,6 +722,7 @@ func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error
 	// An external block declared in a module has to reach the program, or the
 	// module's own calls into it report the module as not imported.
 	for _, em := range modProgram.Externals {
+		em.Dir = filepath.Dir(absPath)
 		if !containsExternal(program.Externals, em.Name) {
 			program.Externals = append(program.Externals, em)
 		}

@@ -1,0 +1,115 @@
+import "fmt"
+
+struct U {
+    name: string
+    tags: string[]
+}
+
+struct H {
+    u: U
+}
+
+struct C {
+    n: int
+
+    fn make(s: string): U {
+        return U { name: s + "!", tags: [s] }
+    }
+
+    fn fire(s: string): void {
+        self.make(s)
+    }
+}
+
+fn make(s: string): U {
+    return U { name: s + "!", tags: [] }
+}
+
+fn fieldText(s: string): string? {
+    let u: U = make(s)
+    if (u.name == "") {
+        return null
+    }
+    return u.name
+}
+
+fn lit(n: string): U? {
+    let name: string = n + "!"
+    return U { name: name, tags: [name] }
+}
+
+fn ident(n: string): U? {
+    let u: U = U { name: n + "?", tags: [] }
+    return u
+}
+
+fn field(h: H): U? {
+    let pad: string = "pad" + "!"
+    if (pad == "") {
+        return null
+    }
+    return h.u
+}
+
+fn names(): string[] {
+    return ["a" + "1", "b" + "2", "c" + "3"]
+}
+
+fn find(want: string): int {
+    foreach (names() as i, n) {
+        if (n == want) {
+            return i
+        }
+    }
+    return -1
+}
+
+fn firstTwo(): int {
+    let count: int = 0
+    foreach (names() as n) {
+        if (count == 2 || n == "") {
+            break
+        }
+        count++
+    }
+    return count
+}
+
+fn main(): void {
+    let t: string? = fieldText("hello")
+    if (t != null) {
+        assert(t == "hello!")
+    }
+
+    make("a")
+    let c: C = C { n: 1 }
+    c.make("b")
+    c.fire("c")
+
+    let a: U? = lit("a")
+    if (a != null) {
+        assert(a.name == "a!")
+        assert(a.tags[0] == "a!")
+    }
+    let b: U? = ident("b")
+    if (b != null) {
+        assert(b.name == "b?")
+    }
+    let h: H = H { u: U { name: "in" + "ner", tags: ["t" + "1"] } }
+    let f: U? = field(h)
+    if (f != null) {
+        assert(f.tags[0] == "t1")
+    }
+    assert(h.u.name == "inner")
+
+    let seen: string = ""
+    foreach (["x", "y" + "z"] as s) {
+        seen = seen + s
+    }
+    assert(seen == "xyz")
+    assert(find("b2") == 1)
+    assert(find("none") == -1)
+    assert(firstTwo() == 2)
+
+    fmt.println("returnOwnership_test: all assertions passed")
+}

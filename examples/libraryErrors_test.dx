@@ -1,0 +1,36 @@
+import "fmt"
+import "modules/shim/shim"
+
+fn quarter(n: int): int throws shim.ShimError {
+    let h: shim.Halver = shim.Halver { calls: 0 }
+    return h.twice(n)
+}
+
+fn main(): void {
+    try {
+        assert(shim.half(8) == 4)
+        assert(quarter(8) == 2)
+    } catch (e: shim.ShimError) {
+        assert(false)
+    }
+
+    let caught: int = 0
+    try {
+        quarter(6)
+    } catch (e: shim.ShimError) {
+        caught = e.input
+        assert(e.message == "odd input")
+    }
+    assert(caught == 3)
+
+    try {
+        shim.half(5)
+        assert(false)
+    } catch (e: shim.ShimError) {
+        assert(e.input == 5)
+    } catch (e: Exception) {
+        assert(false)
+    }
+
+    fmt.println("libraryErrors_test: all assertions passed")
+}

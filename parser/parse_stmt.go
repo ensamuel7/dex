@@ -531,7 +531,7 @@ func (p *Parser) parseTryStmt() (ast.Stmt, error) {
 			return nil, err
 		}
 
-		typeName, err := p.expectIdent()
+		typeName, err := p.expectTypeRef()
 		if err != nil {
 			return nil, err
 		}

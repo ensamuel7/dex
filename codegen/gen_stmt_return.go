@@ -81,6 +81,9 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 					out.WriteString(fmt.Sprintf("%s%s _ret_tmp = ", prefix, ctyp))
 					g.genExpr(out, s.Value)
 					out.WriteString(";\n")
+					if g.borrowsHeapValue(s.Value) {
+						out.WriteString(fmt.Sprintf("%sdex_retain(_ret_tmp);\n", prefix))
+					}
 					g.emitHoistReleases(out, prefix)
 					g.emitDeferredCalls(out, prefix)
 					g.emitCleanupAll(out, prefix, "")
@@ -94,9 +97,17 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 				out.WriteString(fmt.Sprintf("%s*_ret_tmp = ", prefix))
 				g.genExpr(out, s.Value)
 				out.WriteString(";\n")
+				exceptVar := ""
+				if ident, ok := s.Value.(*ast.Ident); ok {
+					exceptVar = ident.Name
+				} else if _, _, isLit := structAssignments(s.Value); isLit {
+					g.emitRetainStructLitFields(out, prefix, "(*_ret_tmp)", inner, s.Value)
+				} else if g.borrowsHeapValue(s.Value) {
+					g.emitRetainBorrowedStructFields(out, prefix, "(*_ret_tmp)", inner)
+				}
 				g.emitHoistReleases(out, prefix)
 				g.emitDeferredCalls(out, prefix)
-				g.emitCleanupAll(out, prefix, "")
+				g.emitCleanupAll(out, prefix, exceptVar)
 				g.emitReturn(out, prefix, "_ret_tmp")
 			} else {
 				g.emitHoistReleases(out, prefix)

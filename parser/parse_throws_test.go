@@ -103,3 +103,40 @@ func TestModuleScopedTypeResolution(t *testing.T) {
 		t.Errorf("a module's own type should win over an import: %v", err)
 	}
 }
+
+func TestCatchAndThrowsResolveModuleTypes(t *testing.T) {
+	ast.ResetStructTypes()
+	ast.RegisterStructType(ast.StructDef{Name: "db2_DbError", Module: "db2"})
+	src := `
+fn load(): int throws db2.DbError, Oops {
+    try {
+        return 1
+    } catch (e: db2.DbError) {
+        return 2
+    }
+}
+`
+	tokens, err := lexer.New(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lexer error: %v", err)
+	}
+	p := New(tokens)
+	p.AddModuleType("db2", "DbError", "struct")
+	program, errs := p.Parse()
+	if len(errs) > 0 {
+		t.Fatalf("parser error: %v", errs[0])
+	}
+	fn := program.Functions[0]
+	if strings.Join(fn.ThrowsTypes, ",") != "db2_DbError,Oops" {
+		t.Errorf("throws = %v, want [db2_DbError Oops]", fn.ThrowsTypes)
+	}
+	try := fn.Body[0].(*ast.TryCatchStmt)
+	if try.Catches[0].TypeName != "db2_DbError" {
+		t.Errorf("catch type = %q, want db2_DbError", try.Catches[0].TypeName)
+	}
+
+	tokens, _ = lexer.New("fn f(): void throws nope.Missing {\n}\n").Tokenize()
+	if _, errs := New(tokens).Parse(); len(errs) == 0 || !strings.Contains(errs[0].Error(), "unknown type 'nope.Missing'") {
+		t.Errorf("an unknown qualified type should be reported, got %v", errs)
+	}
+}

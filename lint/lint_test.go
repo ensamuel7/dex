@@ -1014,3 +1014,20 @@ func TestDisplayNameReadsModuleNames(t *testing.T) {
 		}
 	}
 }
+
+func TestModuleMethodCallReachesItsFlatName(t *testing.T) {
+	ast.ResetStructTypes()
+	st := ast.RegisterStructType(ast.StructDef{Name: "sqlite_Statement", Module: "sqlite"})
+	plain := ast.RegisterStructType(ast.StructDef{Name: "Box"})
+	ast.RegisterStructType(ast.StructDef{Name: "sqlite_SqliteError", Module: "sqlite"})
+	l := &linter{program: &ast.Program{UserModules: []string{"sqlite"}}}
+	if got := l.calleeName(&ast.CallExpr{Name: "check", IsMethodCall: true, StructType: st}); got != "sqlite_sqlite_Statement_check" {
+		t.Errorf("module method callee = %q", got)
+	}
+	if got := l.calleeName(&ast.CallExpr{Name: "risky", IsMethodCall: true, StructType: plain}); got != "Box_risky" {
+		t.Errorf("main program method callee = %q", got)
+	}
+	if got := typeList([]string{"sqlite_SqliteError", "Exception"}); got != "sqlite.SqliteError, Exception" {
+		t.Errorf("typeList = %q", got)
+	}
+}

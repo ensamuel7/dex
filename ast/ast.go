@@ -404,6 +404,7 @@ type ExternalModule struct {
 	Pos      Pos
 	Name     string
 	Local    string
+	Dir      string
 	Includes []string
 	Links    []string
 	Packages []string

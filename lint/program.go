@@ -102,7 +102,11 @@ func (l *linter) calleeName(e *ast.CallExpr) string {
 	// A method call carries the struct the checker resolved it against, which is
 	// what makes the flattened name recoverable.
 	if e.IsMethodCall && ast.IsStructType(e.StructType) {
-		return ast.StructName(e.StructType) + "_" + e.Name
+		name := ast.StructName(e.StructType) + "_" + e.Name
+		if def := ast.GetStructDef(e.StructType); def != nil && def.Module != "" {
+			return def.Module + "_" + name
+		}
+		return name
 	}
 	if e.Module == "" {
 		return e.Name

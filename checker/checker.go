@@ -301,13 +301,13 @@ func (c *Checker) checkThrowsDeclaration(fn ast.Function) error {
 	for _, name := range fn.ThrowsTypes {
 		t, ok := ast.LookupStructType(name)
 		if !ok {
-			return c.errAt(fn.Pos, "unknown type '%s' in the throws declaration of '%s'", name, fn.Name)
+			return c.errAt(fn.Pos, "unknown type '%s' in the throws declaration of '%s'", ast.DisplayStructName(name), fn.Name)
 		}
 		if throwable, reason := ast.ThrowableStruct(t); !throwable {
-			return c.errAt(fn.Pos, "'%s' cannot be thrown: %s", name, reason)
+			return c.errAt(fn.Pos, "'%s' cannot be thrown: %s", ast.DisplayStructName(name), reason)
 		}
 		if seen[name] {
-			return c.errAt(fn.Pos, "'%s' is named twice in the throws declaration of '%s'", name, fn.Name)
+			return c.errAt(fn.Pos, "'%s' is named twice in the throws declaration of '%s'", ast.DisplayStructName(name), fn.Name)
 		}
 		seen[name] = true
 	}

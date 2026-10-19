@@ -2,6 +2,7 @@ package stdlib
 
 import (
 	_ "embed"
+	"path/filepath"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -141,8 +142,8 @@ func FromExternal(em ast.ExternalModule) *Module {
 	}
 	var includes strings.Builder
 	for _, h := range em.Includes {
-		if h != "" && h[0] != '<' && h[0] != '"' {
-			h = `"` + h + `"`
+		if h != "" && h[0] != '<' {
+			h = `"` + localHeader(em.Dir, strings.Trim(h, `"`)) + `"`
 		}
 		includes.WriteString("#include " + h + "\n")
 	}
@@ -166,4 +167,11 @@ func FromExternal(em ast.ExternalModule) *Module {
 		}
 	}
 	return m
+}
+
+func localHeader(dir, h string) string {
+	if dir == "" || strings.ContainsAny(dir, "\"\n\\") {
+		return h
+	}
+	return filepath.ToSlash(filepath.Join(dir, h))
 }

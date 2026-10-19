@@ -143,6 +143,26 @@ func (p *Parser) resolveTypeName(name string) (string, error) {
 	}
 }
 
+func (p *Parser) expectTypeRef() (string, error) {
+	name, err := p.expectIdent()
+	if err != nil {
+		return "", err
+	}
+	if !p.check(token.TokenDot) || p.pos+1 >= len(p.tokens) || p.tokens[p.pos+1].Kind != token.TokenIdent {
+		return p.resolveTypeName(name)
+	}
+	p.advance()
+	member := p.current().Value
+	p.advance()
+	if flat := ast.QualifiedStructName(p.moduleIdentity(name), member); p.structNames[flat] {
+		return flat, nil
+	}
+	if p.structNames[member] {
+		return member, nil
+	}
+	return "", p.errorf("unknown type '%s.%s'", name, member)
+}
+
 // modulesOf lists the modules a set of candidates came from, for the message.
 func modulesOf(flats []string) string {
 	names := make([]string, 0, len(flats))
@@ -751,7 +771,7 @@ func (p *Parser) parseFunction() (*ast.Function, error) {
 	var throwsTypes []string
 	if throws {
 		for p.check(token.TokenIdent) {
-			name, err := p.expectIdent()
+			name, err := p.expectTypeRef()
 			if err != nil {
 				return nil, err
 			}

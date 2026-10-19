@@ -478,3 +478,21 @@ func TestHttpResponseStructFieldOrder(t *testing.T) {
 		t.Errorf("headers must be the final field so http.response() can omit it")
 	}
 }
+
+func TestExternalLocalHeaderIsFoundBesideItsModule(t *testing.T) {
+	m := FromExternal(ast.ExternalModule{
+		Name:     "c",
+		Dir:      "/lib/dexsqlite",
+		Includes: []string{"<sqlite3.h>", "shim.h", `"other.h"`},
+	})
+	want := "#include <sqlite3.h>\n#include \"/lib/dexsqlite/shim.h\"\n#include \"/lib/dexsqlite/other.h\"\n"
+	if m.CIncludes != want {
+		t.Errorf("CIncludes = %q, want %q", m.CIncludes, want)
+	}
+	if got := FromExternal(ast.ExternalModule{Name: "c", Includes: []string{"shim.h"}}).CIncludes; got != "#include \"shim.h\"\n" {
+		t.Errorf("main program include = %q", got)
+	}
+	if got := localHeader("/odd\"dir", "shim.h"); got != "shim.h" {
+		t.Errorf("a directory that cannot be quoted should fall back, got %q", got)
+	}
+}

@@ -38,6 +38,17 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 				g.emitWithHoists(out, prefix, body.String())
 				break
 			}
+			if ast.NeedsRelease(callRetType) && !g.isHandleOutCall(call) {
+				g.beginStmtHoist()
+				var body strings.Builder
+				body.WriteString(fmt.Sprintf("{ %s _dex_discard = ", g.cType(callRetType)))
+				g.genExpr(&body, s.Expr)
+				body.WriteString(";\n")
+				g.emitReleaseVar(&body, prefix+"    ", "_dex_discard", callRetType)
+				body.WriteString(prefix + "}\n")
+				g.emitWithHoists(out, prefix, body.String())
+				break
+			}
 		}
 		g.beginStmtHoist()
 		var exprBody strings.Builder
@@ -282,6 +293,21 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		elemType := ast.ElementType(arrType)
 		elemCType := g.cType(elemType)
 
+		ownsIterable := ast.IsHeapType(arrType) && !g.borrowsHeapValue(s.Iterable)
+		if ownsIterable {
+			arrExpr = fmt.Sprintf("_foreach_arr_%d", idx)
+			out.WriteString(fmt.Sprintf("%s{\n%s%s %s;\n", prefix, prefix, g.cType(arrType), arrExpr))
+			g.pushScope()
+			g.beginStmtHoist()
+			var init strings.Builder
+			init.WriteString(arrExpr + " = ")
+			g.genExpr(&init, s.Iterable)
+			init.WriteString(";\n")
+			g.emitWithHoists(out, prefix, init.String())
+			g.varTypes[arrExpr] = arrType
+			g.registerScopeVar(out, prefix, arrExpr, arrType)
+		}
+
 		out.WriteString(fmt.Sprintf("%sfor (int %s = 0; %s < %s->len; %s++) {\n",
 			prefix, idxVar, idxVar, arrExpr, idxVar))
 		savedLoop := g.isInLoop
@@ -321,6 +347,10 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		g.loopDepth = savedDepth
 		g.loopTryDepth = savedTryDepth
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
+		if ownsIterable {
+			g.popScope(out, prefix)
+			out.WriteString(prefix + "}\n")
+		}
 
 	case *ast.BreakStmt:
 		if g.isInLoop {

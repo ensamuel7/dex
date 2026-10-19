@@ -1,0 +1,29 @@
+external module c {
+    include "shim.h"
+
+    fn half(n: int): int = "shimc_half"
+}
+
+struct ShimError(message: string, input: int) {}
+
+struct Halver {
+    calls: int
+
+    fn check(n: int): int throws ShimError {
+        self.calls = self.calls + 1
+        let h: int = c.half(n)
+        if (h < 0) {
+            throw ShimError("odd input", n)
+        }
+        return h
+    }
+
+    fn twice(n: int): int throws ShimError {
+        return self.check(self.check(n))
+    }
+}
+
+fn half(n: int): int throws ShimError {
+    let h: Halver = Halver { calls: 0 }
+    return h.check(n)
+}

@@ -294,7 +294,11 @@ func throwsClause(fn *ast.Function) string {
 	if len(fn.ThrowsTypes) == 0 {
 		return " throws"
 	}
-	return " throws " + strings.Join(fn.ThrowsTypes, ", ")
+	names := make([]string, len(fn.ThrowsTypes))
+	for i, t := range fn.ThrowsTypes {
+		names[i] = ast.DisplayStructName(t)
+	}
+	return " throws " + strings.Join(names, ", ")
 }
 
 func formatModuleHover(path string) string {

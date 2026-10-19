@@ -2305,6 +2305,25 @@ try {
 // exception propagates here
 ```
 
+### Exceptions From a Module
+
+A module's exception types are named the way its other types are, qualified by
+the module, in a `catch` and in a `throws` alike:
+
+```dex
+import "github.com/acme/sqlite"
+
+fn load(): sqlite.Database throws sqlite.SqliteError {
+    return sqlite.open("app.db")
+}
+
+try {
+    load()
+} catch (e: sqlite.SqliteError) {
+    fmt.println(e.message)
+}
+```
+
 ### Cross-Function Exceptions
 
 Exceptions propagate through function calls:
@@ -4158,7 +4177,9 @@ fn main(): void {
 A call compiles to a direct call to the C symbol — no wrapper, no marshalling
 layer. `include` takes a system header in angle brackets or a bare name for one
 beside the source; the directory holding the `.dx` file is on the include path,
-so a header you wrote is found without configuration. `link` takes `-l<name>`,
+so a header you wrote is found without configuration. In a library the header
+is looked for beside the library's own file, wherever the program importing it
+lives, so a library can ship the small C shims it needs next to its `.dx`. `link` takes `-l<name>`,
 `-L<path>`, or a bare library name; anything else is refused, because an
 external block that could pass arbitrary flags to the C compiler would be code
 execution at build time.

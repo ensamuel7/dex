@@ -135,6 +135,12 @@ cross-check; omitting one is the opt-out and an ABI mismatch nothing catches.
 because a string crosses as `char*` and byte APIs are declared `unsigned char*`;
 `-Werror=incompatible-pointer-types` stays fatal.
 
+A local `include` in a user module is emitted as an absolute path to the
+header beside that module (`ExternalModule.Dir`, set in resolve, read by
+`FromExternal`), because only the main file's directory is on `-I`. A library's
+C helpers must not be named `<module>_<fn>`: that is the C name of the module's
+own Dex function `fn`.
+
 Callbacks remain unsolved: `throw` is `longjmp`, so a C frame between a throw
 and its catch has its cleanup skipped.
 
@@ -667,6 +673,15 @@ or a use-after-free, so change them deliberately:
   `let n: string? = b.name` released the struct's string at scope exit. Both
   were silent until the memory checker ran, and both blocked a library holding
   a C connection in a struct. `examples/optionalFields_test.dx` covers them.
+- **A discarded result is still owned.** A call used as a statement whose
+  result needs releasing — a struct with heap fields, an interface, an optional
+  — is bound to `_dex_discard` and released, not only a bare heap type.
+- **A `foreach` over a minted array evaluates it once.** A literal or a call is
+  bound to `_foreach_arr_N` in a scope of its own and released after the loop;
+  inlined, it was rebuilt on every iteration and leaked each time.
+- **An optional return retains what it borrows.** `return u.name` as `string?`,
+  and `return U { name: name }` as `U?` (boxed), take the same references the
+  non-optional paths do.
 - **A container owns its elements.** `dex_array_string_push` retains what it is
   given and the array's destructor releases every slot, so an array literal
   built from a borrowed expression must let push take that reference and an

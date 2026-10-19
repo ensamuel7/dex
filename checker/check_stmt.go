@@ -541,10 +541,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			clause := &s.Catches[i]
 			clauseType, ok := ast.LookupStructType(clause.TypeName)
 			if !ok {
-				return c.errAt(clause.Pos, "unknown type '%s' in catch clause", clause.TypeName)
+				return c.errAt(clause.Pos, "unknown type '%s' in catch clause", ast.DisplayStructName(clause.TypeName))
 			}
 			if throwable, reason := ast.ThrowableStruct(clauseType); !throwable {
-				return c.errAt(clause.Pos, "'%s' cannot be caught: %s", clause.TypeName, reason)
+				return c.errAt(clause.Pos, "'%s' cannot be caught: %s", ast.DisplayStructName(clause.TypeName), reason)
 			}
 			clause.Type = clauseType
 

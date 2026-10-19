@@ -333,7 +333,7 @@ func (l *linter) reportThrowFindings(e *effects, all map[string]*effects) {
 		if declared.covers(t.typ) {
 			continue
 		}
-		l.reportEscape(fn, t.pos, "this throws "+t.typ, []string{t.typ})
+		l.reportEscape(fn, t.pos, "this throws "+ast.DisplayStructName(t.typ), []string{t.typ})
 	}
 
 	// A call that can raise something neither caught here nor declared — and
@@ -372,7 +372,7 @@ func (l *linter) reportThrowFindings(e *effects, all map[string]*effects) {
 			continue
 		}
 		sort.Strings(uncovered)
-		what := "'" + l.displayName(esc.callee) + "' may throw " + strings.Join(uncovered, ", ")
+		what := "'" + l.displayName(esc.callee) + "' may throw " + typeList(uncovered)
 		if raisedAt != "" {
 			what += " (raised at " + raisedAt + ")"
 		}
@@ -391,10 +391,10 @@ func (l *linter) reportEscape(fn *ast.Function, pos ast.Pos, what string, types 
 		l.report(RuleUncaughtThrow, pos, "%s, and nothing above main can catch it — wrap it in try/catch", what)
 	case len(fn.ThrowsTypes) > 0:
 		l.report(RuleUndeclaredThrow, pos, "%s, which '%s' does not declare — add %s to its throws, or catch it here",
-			what, l.displayName(fn.Name), strings.Join(types, ", "))
+			what, l.displayName(fn.Name), typeList(types))
 	default:
 		l.report(RuleUncaughtThrow, pos, "%s, and '%s' does not declare throws — wrap it in try/catch, or declare the signature throws %s",
-			what, l.displayName(fn.Name), strings.Join(types, ", "))
+			what, l.displayName(fn.Name), typeList(types))
 	}
 }
 
@@ -419,7 +419,7 @@ func (l *linter) reportUnnecessaryThrows(e *effects) {
 			continue
 		}
 		l.report(RuleUnneededThrows, fn.Pos,
-			"'%s' declares throws %s but nothing in it throws %s", l.displayName(fn.Name), typ, typ)
+			"'%s' declares throws %s but nothing in it throws %s", l.displayName(fn.Name), ast.DisplayStructName(typ), ast.DisplayStructName(typ))
 	}
 }
 
@@ -440,11 +440,11 @@ func (l *linter) checkCatchClauses() {
 				case catchAllAt != "":
 					l.report(RuleUnreachableCatch, clause.Pos,
 						"catch (%s: %s) can never run: the clause at %s catches everything",
-						clause.VarName, clause.TypeName, catchAllAt)
+						clause.VarName, ast.DisplayStructName(clause.TypeName), catchAllAt)
 				case seen[clause.TypeName]:
 					l.report(RuleUnreachableCatch, clause.Pos,
 						"catch (%s: %s) can never run: %s is already caught above",
-						clause.VarName, clause.TypeName, clause.TypeName)
+						clause.VarName, ast.DisplayStructName(clause.TypeName), ast.DisplayStructName(clause.TypeName))
 				}
 				seen[clause.TypeName] = true
 				if clause.IsCatchAll() && catchAllAt == "" {
@@ -472,4 +472,12 @@ func (l *linter) displayName(flat string) string {
 		return module + "." + rest
 	}
 	return flat
+}
+
+func typeList(types []string) string {
+	names := make([]string, len(types))
+	for i, t := range types {
+		names[i] = ast.DisplayStructName(t)
+	}
+	return strings.Join(names, ", ")
 }

@@ -158,9 +158,9 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 			if result := s.hoverFieldAccess(program, objTok.Value, name); result != "" {
 				return result
 			}
-			if t, ok := findVariableTypeID(program, objTok.Value); ok && isArray(t) {
-				if sig, ok := arrayMethod(t, name); ok {
-					return fmt.Sprintf("```dex\n(method) %s.%s\n```\n\n%s", typeName(t), sig.sig, sig.doc)
+			if t, ok := findVariableTypeID(program, objTok.Value); ok {
+				if m, ok := builtinMethodOf(t, name); ok {
+					return fmt.Sprintf("```dex\n(method) %s.%s\n```\n\n%s", typeName(t), m.sig, m.doc)
 				}
 			}
 			if result := hoverUserModuleFunc(program, objTok.Value, name); result != "" {
@@ -233,6 +233,11 @@ func (s *Server) hoverIdent(uri string, text string, tokens []token.Token, tok *
 	if t, ok := findVariableTypeID(program, name); ok {
 		if isArray(t) {
 			return formatArrayHover(program, name, t)
+		}
+		// A string has too many methods to list on every hover; hovering one of
+		// them shows its signature instead.
+		if ast.IsMapType(t) || t == ast.TypeStringBuilder {
+			return formatReceiverHover(name, t)
 		}
 		return fmt.Sprintf("**variable** `%s`\n\nType: `%s`", name, typeName(t))
 	}
@@ -549,53 +554,6 @@ func findVariableTypeID(program *ast.Program, name string) (ast.Type, bool) {
 	return 0, false
 }
 
-func isArray(t ast.Type) bool {
-	return ast.IsArrayType(t) || ast.IsStructArrayType(t)
-}
-
-type arraySig struct {
-	sig string
-	doc string
-}
-
-func arrayMethods(t ast.Type) []struct {
-	name string
-	arraySig
-} {
-	elem := typeName(ast.ElementType(t))
-	structElem := ast.IsStructArrayType(t)
-	type entry = struct {
-		name string
-		arraySig
-	}
-	out := []entry{
-		{"len", arraySig{"len(): int", "The number of elements."}},
-		{"push", arraySig{"push(value: " + elem + "): void", "Append an element."}},
-		{"pop", arraySig{"pop(): " + elem, "Remove and return the last element."}},
-		{"remove", arraySig{"remove(index: int): void", "Remove the element at index."}},
-	}
-	if !structElem {
-		out = append(out,
-			entry{"contains", arraySig{"contains(value: " + elem + "): bool", "Whether the array holds the value."}},
-			entry{"indexOf", arraySig{"indexOf(value: " + elem + "): int", "The index of the value, or -1."}},
-		)
-	}
-	out = append(out, entry{"reverse", arraySig{"reverse(): void", "Reverse the array in place."}})
-	if !structElem && ast.ElementType(t) != ast.TypeBool {
-		out = append(out, entry{"sort", arraySig{"sort(direction: string): void", "Sort in place: \"asc\" or \"desc\"."}})
-	}
-	return out
-}
-
-func arrayMethod(t ast.Type, name string) (arraySig, bool) {
-	for _, m := range arrayMethods(t) {
-		if m.name == name {
-			return m.arraySig, true
-		}
-	}
-	return arraySig{}, false
-}
-
 func formatArrayHover(program *ast.Program, name string, t ast.Type) string {
 	elemType := ast.ElementType(t)
 	out := fmt.Sprintf("```dex\n(variable) %s: %s\n```\n\nArray of `%s`.", name, typeName(t), typeName(elemType))
@@ -606,9 +564,24 @@ func formatArrayHover(program *ast.Program, name string, t ast.Type) string {
 		}
 		out += "\n\n**Element fields:**\n" + strings.Join(fields, "\n")
 	}
+	return out + "\n\n" + formatMethodList(t)
+}
+
+// formatReceiverHover is the variable hover for a map or a StringBuilder: its
+// type, then the methods it has with that type's key and value filled in.
+func formatReceiverHover(name string, t ast.Type) string {
+	desc := "A growable string buffer."
+	if ast.IsMapType(t) {
+		desc = fmt.Sprintf("Map from `%s` to `%s`.", typeName(ast.MapKeyType(t)), typeName(ast.MapValueType(t)))
+	}
+	return fmt.Sprintf("```dex\n(variable) %s: %s\n```\n\n%s\n\n%s", name, typeName(t), desc, formatMethodList(t))
+}
+
+func formatMethodList(t ast.Type) string {
+	builtins, _ := builtinMethods(t)
 	var methods []string
-	for _, m := range arrayMethods(t) {
+	for _, m := range builtins {
 		methods = append(methods, fmt.Sprintf("- `%s` — %s", m.sig, m.doc))
 	}
-	return out + "\n\n**Methods:**\n" + strings.Join(methods, "\n")
+	return "**Methods:**\n" + strings.Join(methods, "\n")
 }

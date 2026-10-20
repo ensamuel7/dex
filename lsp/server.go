@@ -977,6 +977,13 @@ func typeName(t ast.Type) string {
 		return "char"
 	case ast.TypeArrayChar:
 		return "char[]"
+	// Spelled as the checker spells them, so a hover reads like a diagnostic.
+	case ast.TypeStringBuilder:
+		return "StringBuilder"
+	case ast.TypeJsonValue:
+		return "json.Value"
+	case ast.TypeMutex:
+		return "mutex"
 	default:
 		if ast.IsOptionalType(t) {
 			return typeName(ast.OptionalInnerType(t)) + "?"

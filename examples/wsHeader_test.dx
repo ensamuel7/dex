@@ -1,0 +1,24 @@
+import "ws"
+import "time"
+import "os"
+
+fn onMessage(conn: ws.Conn, msg: string): void {
+    ws.send(conn, ws.header(conn, "upgrade") + "|" + ws.header(conn, "X-Absent") + "|" + msg)
+}
+
+fn serve(): void {
+    ws.handleMessage(onMessage)
+    ws.listen(19417)
+}
+
+fn main(): void {
+    spawn { serve() }
+    time.sleep(200)
+    let conn: ws.Conn = ws.connect("ws://127.0.0.1:19417/ocpp/CP-1")
+    ws.send(conn, "ping")
+    let reply: string = ws.receive(conn)
+    assert(reply == "websocket||ping")
+    assert(ws.header(conn, "Upgrade") == "")
+    ws.close(conn)
+    os.exit(0)
+}

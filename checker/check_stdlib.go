@@ -336,6 +336,31 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return ast.TypeString, true, nil
 	}
 
+	if e.Module == "ws" && e.Name == "header" {
+		if len(e.Args) != 2 {
+			return 0, true, c.errAt(e.Pos, "ws.header() takes exactly 2 arguments, got %d", len(e.Args))
+		}
+		wsConnType, ok := ast.LookupStructType("Conn")
+		if !ok {
+			return 0, true, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+		}
+		arg0Type, err := c.checkExpr(e.Args[0])
+		if err != nil {
+			return 0, true, err
+		}
+		if arg0Type != wsConnType {
+			return 0, true, c.errAt(e.Pos, "ws.header() argument 1 must be ws.Conn, got %s", typeName(arg0Type))
+		}
+		arg1Type, err := c.checkExpr(e.Args[1])
+		if err != nil {
+			return 0, true, err
+		}
+		if arg1Type != ast.TypeString {
+			return 0, true, c.errAt(e.Pos, "ws.header() argument 2 must be string, got %s", typeName(arg1Type))
+		}
+		return ast.TypeString, true, nil
+	}
+
 	// Special case: ws.close(conn)
 	if e.Module == "ws" && e.Name == "close" {
 		if len(e.Args) != 1 {

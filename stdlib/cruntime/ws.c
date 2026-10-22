@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <errno.h>
 #include <unistd.h>
@@ -1278,7 +1279,7 @@ DexString* dex_ws_receive(Dex_Conn conn) {
     int opcode = 0;
     int n = dex_ws_frame_recv(conn.fd, (SSL*)conn.ssl, buf, sizeof(buf), &opcode);
     if (n < 0) return dex_string_from_lit("");
-    return dex_string_from_cstr(buf);
+    return dex_string_new(buf, (size_t)n);
 }
 
 void dex_ws_close(Dex_Conn conn) {
@@ -1308,4 +1309,26 @@ void dex_ws_close(Dex_Conn conn) {
 #endif
     shutdown(conn.fd, SHUT_RDWR);
     close(conn.fd);
+}
+
+DexString* dex_ws_header(Dex_Conn conn, const char* name) {
+    if (!conn.isServer || conn.fd < 0 || conn.fd >= DEX_WS_MAX_FD) return dex_string_new("", 0);
+    DexWsConn* wc = dex_ws_conn_table[conn.fd];
+    if (!wc || wc->state == WS_HANDSHAKE_READ || !wc->read_buf) return dex_string_new("", 0);
+    size_t nlen = strlen(name);
+    const char* line = strstr(wc->read_buf, "\r\n");
+    while (line) {
+        line += 2;
+        if (line[0] == '\r' && line[1] == '\n') break;
+        if (strncasecmp(line, name, nlen) == 0 && line[nlen] == ':') {
+            const char* v = line + nlen + 1;
+            while (*v == ' ' || *v == '\t') v++;
+            const char* end = strstr(v, "\r\n");
+            if (!end) end = v + strlen(v);
+            while (end > v && (end[-1] == ' ' || end[-1] == '\t')) end--;
+            return dex_string_new(v, (size_t)(end - v));
+        }
+        line = strstr(line, "\r\n");
+    }
+    return dex_string_new("", 0);
 }

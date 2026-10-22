@@ -103,6 +103,15 @@ func (g *Generator) genWebCall(out *strings.Builder, e *ast.CallExpr) bool {
 		return true
 	}
 
+	if e.Module == "ws" && e.Name == "header" {
+		out.WriteString("dex_ws_header(")
+		g.genExpr(out, e.Args[0])
+		out.WriteString(", ")
+		g.genStringArg(out, e.Args[1])
+		out.WriteString(")")
+		return true
+	}
+
 	// ws.close(conn)
 	if e.Module == "ws" && e.Name == "close" {
 		out.WriteString("dex_ws_close(")

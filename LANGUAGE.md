@@ -3379,9 +3379,15 @@ struct Conn {
 | `handleConnect`    | `handleConnect(fn): void`         | Register connect handler (called with path) |
 | `handleDisconnect` | `handleDisconnect(fn): void`      | Register disconnect handler               |
 | `setProtocol`      | `setProtocol(protocol: string): void` | Set the subprotocol offered by this thread's handshakes |
+| `header`           | `header(conn: ws.Conn, name: string): string` | A header from the client's opening handshake, matched case-insensitively; `""` if absent |
 | `listen`           | `listen(port: int): void`         | Start a server on `port`, capturing this thread's registration; blocks |
 
 Message handlers must take `(conn: ws.Conn, msg: string)` and return `void`. Connect handlers take `(conn: ws.Conn, path: string)`. Disconnect handlers take `(conn: ws.Conn)`.
+
+`ws.header` reads the request that opened a server-side connection, so a connect
+handler can authenticate a client before accepting it — an `Authorization`
+header, say — and reject it with `ws.close`. On a client connection it returns
+`""`.
 
 ```dex
 import "ws"

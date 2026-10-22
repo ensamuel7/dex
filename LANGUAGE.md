@@ -3385,8 +3385,8 @@ struct Conn {
 Message handlers must take `(conn: ws.Conn, msg: string)` and return `void`. Connect handlers take `(conn: ws.Conn, path: string)`. Disconnect handlers take `(conn: ws.Conn)`.
 
 `ws.header` reads the request that opened a server-side connection, so a connect
-handler can authenticate a client before accepting it — an `Authorization`
-header, say — and reject it with `ws.close`. On a client connection it returns
+handler can authenticate a client before accepting it (by its `Authorization`
+header, say) and reject it with `ws.close`. On a client connection it returns
 `""`.
 
 ```dex

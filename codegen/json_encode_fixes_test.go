@@ -59,3 +59,13 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// A string variable's isEmpty() is a bool in an object literal, as a field's is.
+func TestCodegenStringVarIsEmptyInObjectLiteral(t *testing.T) {
+	out := generate(t, `import "json"
+fn main(): void {
+    let s: string = ""
+    let text: string = json.encode({ empty: s.isEmpty() })
+}`)
+	assertContains(t, out, `dex_jv_put_cstr(_jo, "empty", dex_jv_bool(`)
+}

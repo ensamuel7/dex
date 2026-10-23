@@ -266,6 +266,13 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		for _, elem := range e.Elems {
 			g.scanExpr(elem)
 		}
+	case *ast.ObjectLitExpr:
+		// Its values are expressions like any other. Unscanned, a runtime used
+		// only inside a JSON literal, the string checks among them, was never
+		// included and the call did not compile.
+		for _, v := range e.Values {
+			g.scanExpr(v)
+		}
 	case *ast.IndexExpr:
 		g.scanExpr(e.Array)
 		g.scanExpr(e.Index)

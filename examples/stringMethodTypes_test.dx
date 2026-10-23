@@ -1,0 +1,28 @@
+// A string method's result type is the same whether the string is a variable
+// or a field. On a variable, isEmpty() and the other checks had no type, and an
+// object literal encoded them as null.
+import "fmt"
+import "json"
+
+struct Holder {
+    text: string
+}
+
+fn main(): void {
+    let empty: string = ""
+    let word: string = "Ab1"
+    let h: Holder = Holder { text: "" }
+    let doc: json.Value = json.decode(json.encode({
+        isEmpty: empty.isEmpty(),
+        alpha: word.isAlpha(),
+        upper: word.containsUppercase(),
+        digit: word.containsDigit(),
+        fieldEmpty: h.text.isEmpty()
+    }))
+    assert(doc["isEmpty"].isBool() && doc["isEmpty"].asBool())
+    assert(doc["alpha"].isBool() && !doc["alpha"].asBool())
+    assert(doc["upper"].asBool())
+    assert(doc["digit"].asBool())
+    assert(doc["fieldEmpty"].asBool())
+    fmt.println("string_method_types_test: all assertions passed")
+}

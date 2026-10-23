@@ -450,19 +450,8 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 		// String method calls reached through a field chain, e.g. cmd.action.isEmpty()
 		if e.Module != "" && !g.isStringVar(e.Module) && strings.Contains(e.Module, ".") &&
 			g.resolveFieldChainType(e.Module) == ast.TypeString {
-			switch e.Name {
-			case "len", "indexOf":
-				return ast.TypeInt
-			case "charAt":
-				return ast.TypeChar
-			case "split":
-				return ast.ArrayTypeOf(ast.TypeString)
-			case "contains", "startsWith", "endsWith", "isAlphanumeric", "isAlpha",
-				"isDigit", "isNumeric", "isWhitespace", "isEmpty",
-				"containsUppercase", "containsLowercase", "containsDigit":
-				return ast.TypeBool
-			case "toLower", "toUpper", "trim", "substring", "replace":
-				return ast.TypeString
+			if t, ok := stringMethodType(e.Name); ok {
+				return t
 			}
 		}
 		// Array method calls, on a variable or a struct field chain
@@ -488,17 +477,8 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			}
 		}
 		if e.Module != "" && g.isStringVar(e.Module) {
-			switch e.Name {
-			case "len", "indexOf":
-				return ast.TypeInt
-			case "contains", "startsWith", "endsWith":
-				return ast.TypeBool
-			case "toLower", "toUpper", "trim", "substring", "replace":
-				return ast.TypeString
-			case "split":
-				return ast.TypeArrayString
-			case "charAt":
-				return ast.TypeChar
+			if t, ok := stringMethodType(e.Name); ok {
+				return t
 			}
 		}
 		// Constructor call returns the struct type
@@ -972,4 +952,26 @@ func (g *Generator) emitArrayFieldCodecs(out *strings.Builder, program *ast.Prog
 		out.WriteString(fmt.Sprintf("    *(%s*)_field = _a;\n", arrCType))
 		out.WriteString("}\n")
 	}
+}
+
+// stringMethodType is what a string method returns, for a string held in a
+// variable and one reached through a field alike. The two had a list each,
+// and the variable's lacked isEmpty and the other checks, so name.isEmpty()
+// had no type here and an object literal encoded it as null.
+func stringMethodType(name string) (ast.Type, bool) {
+	switch name {
+	case "len", "indexOf":
+		return ast.TypeInt, true
+	case "charAt":
+		return ast.TypeChar, true
+	case "split":
+		return ast.TypeArrayString, true
+	case "contains", "startsWith", "endsWith", "isAlphanumeric", "isAlpha",
+		"isDigit", "isNumeric", "isWhitespace", "isEmpty",
+		"containsUppercase", "containsLowercase", "containsDigit":
+		return ast.TypeBool, true
+	case "toLower", "toUpper", "trim", "substring", "replace":
+		return ast.TypeString, true
+	}
+	return ast.TypeVoid, false
 }

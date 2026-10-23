@@ -64,12 +64,67 @@ dex lint app.dx
 
 ## Docker
 
-Docker images are available for CI/CD or environments where you don't want to install `dex` directly:
+The image `ensamuel7/dexlang` has `dex` and everything it compiles with: gcc,
+git, and the headers for SQLite, PostgreSQL, OpenSSL, libcurl and hiredis. You
+need nothing else installed, which makes it a good fit for CI, or for trying the
+language without installing it.
 
 ```bash
-docker pull ensamuel7/dexlang:latest
-docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang run app.dx
+docker pull ensamuel7/dexlang:0.9.9     # or :latest
 ```
+
+The image's entrypoint is `dex`, and its working directory is `/workspace`, so
+mount your project there and pass a command:
+
+```bash
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang run hello.dx
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang test
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang build hello.dx
+```
+
+`build` writes a **Linux** binary to `build/`, so it runs in a container or on
+a Linux server, not on a Mac or Windows host. On a Linux host, add
+`--user "$(id -u):$(id -g)"` so `build/` belongs to you rather than to root.
+
+A server needs its port published:
+
+```bash
+docker run --rm -p 8080:8080 -v "$(pwd):/workspace" ensamuel7/dexlang run server.dx
+```
+
+### Shipping a program in its own image
+
+Build in the dex image and copy only the binary into a small one:
+
+```dockerfile
+FROM ensamuel7/dexlang:0.9.9 AS build
+WORKDIR /src
+COPY . .
+RUN dex build main.dx
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libsqlite3-0 libpq5 libssl3 libcurl4 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/build/main /usr/local/bin/app
+EXPOSE 8080
+CMD ["app"]
+```
+
+A project with a `dex.mod` needs its libraries fetched first: add
+`RUN dex mod download` before the build. Without a `dex.mod` that command
+fails, so leave it out.
+
+The binary links only the libraries for the modules it imports. A program
+using nothing beyond `fmt` needs libc alone, so the `apt-get` line can go.
+To see exactly what one needs:
+
+```bash
+docker run --rm -v "$(pwd):/workspace" --entrypoint ldd ensamuel7/dexlang build/main
+```
+
+Pin a version tag in a Dockerfile rather than `latest`, so a new release
+cannot change a build that used to work.
 
 ## What It Looks Like
 

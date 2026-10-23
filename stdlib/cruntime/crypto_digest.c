@@ -184,6 +184,79 @@ _Bool dex_crypto_secure_equals(DexString* a, DexString* b) {
     return diff == 0;
 }
 
+
+/* Passwords, in one format: pbkdf2-sha256$<iterations>$<salt hex>$<hash hex>.
+   The iteration count travels with the hash, so raising it later still
+   verifies every password stored before. 600000 is OWASP's figure for
+   PBKDF2-HMAC-SHA256. */
+#define DEX_PW_ITERATIONS 600000
+
+static char* dex_pw_encode(const char* password, size_t plen, const unsigned char* salt, size_t slen, int iterations) {
+    unsigned char key[32];
+    if (PKCS5_PBKDF2_HMAC(password, (int)plen, salt, (int)slen, iterations, EVP_sha256(), (int)sizeof(key), key) != 1) {
+        return NULL;
+    }
+    static const char hex[] = "0123456789abcdef";
+    size_t cap = 32 + slen * 2 + sizeof(key) * 2;
+    char* out = (char*)malloc(cap);
+    if (!out) return NULL;
+    int n = snprintf(out, cap, "pbkdf2-sha256$%d$", iterations);
+    for (size_t i = 0; i < slen; i++) { out[n++] = hex[salt[i] >> 4]; out[n++] = hex[salt[i] & 15]; }
+    out[n++] = '$';
+    for (size_t i = 0; i < sizeof(key); i++) { out[n++] = hex[key[i] >> 4]; out[n++] = hex[key[i] & 15]; }
+    out[n] = '\0';
+    return out;
+}
+
+DexString* dex_crypto_hash_password(DexString* password) {
+    unsigned char salt[16];
+    if (!dex_random_bytes(salt, sizeof(salt))) return dex_string_new("", 0);
+    const char* p = password ? password->data : "";
+    size_t plen = password ? password->len : 0;
+    char* encoded = dex_pw_encode(p, plen, salt, sizeof(salt), DEX_PW_ITERATIONS);
+    if (!encoded) return dex_string_new("", 0);
+    DexString* s = dex_string_new(encoded, strlen(encoded));
+    free(encoded);
+    return s;
+}
+
+static int dex_hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+/* False for every reason: a wrong password, a malformed or empty stored hash,
+   a build without OpenSSL. None of them is a reason to let someone in. */
+_Bool dex_crypto_verify_password(DexString* password, DexString* stored) {
+    if (!stored || stored->len == 0) return 0;
+    const char* s = stored->data;
+    const char* prefix = "pbkdf2-sha256$";
+    if (strncmp(s, prefix, strlen(prefix)) != 0) return 0;
+    const char* it = s + strlen(prefix);
+    char* end = NULL;
+    long iterations = strtol(it, &end, 10);
+    if (!end || *end != '$' || iterations < 1000 || iterations > 10000000) return 0;
+    const char* salt_hex = end + 1;
+    const char* sep = strchr(salt_hex, '$');
+    if (!sep) return 0;
+    size_t salt_hex_len = (size_t)(sep - salt_hex);
+    if (salt_hex_len == 0 || salt_hex_len % 2 != 0 || salt_hex_len > 128) return 0;
+    unsigned char salt[64];
+    for (size_t i = 0; i < salt_hex_len / 2; i++) {
+        int hi = dex_hex_nibble(salt_hex[2 * i]), lo = dex_hex_nibble(salt_hex[2 * i + 1]);
+        if (hi < 0 || lo < 0) return 0;
+        salt[i] = (unsigned char)(hi * 16 + lo);
+    }
+    const char* p = password ? password->data : "";
+    size_t plen = password ? password->len : 0;
+    char* again = dex_pw_encode(p, plen, salt, salt_hex_len / 2, (int)iterations);
+    if (!again) return 0;
+    size_t alen = strlen(again);
+    _Bool same = alen == stored->len && CRYPTO_memcmp(again, s, alen) == 0;
+    free(again);
+    return same;
+}
 #else
 
 /* Built without OpenSSL. The module still compiles so a program that only
@@ -229,4 +302,16 @@ _Bool dex_crypto_secure_equals(DexString* a, DexString* b) {
     return diff == 0;
 }
 
+
+DexString* dex_crypto_hash_password(DexString* password) {
+    (void)password;
+    fprintf(stderr, "[crypto] hashPassword needs OpenSSL; this build has none\n");
+    return dex_string_new("", 0);
+}
+
+_Bool dex_crypto_verify_password(DexString* password, DexString* stored) {
+    (void)password; (void)stored;
+    fprintf(stderr, "[crypto] verifyPassword needs OpenSSL; this build has none\n");
+    return 0;
+}
 #endif

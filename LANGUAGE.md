@@ -3675,6 +3675,32 @@ let id: string = crypto.uuid()
 | `hmacSha256Hex` | `hmacSha256Hex(key: string, message: string): string` | HMAC-SHA-256, lowercase hex |
 | `hmacSha256B64Url` | `hmacSha256B64Url(key: string, message: string): string` | HMAC-SHA-256, unpadded base64url — the encoding a JWS signature is written in |
 | `verifyRs256` | `verifyRs256(message: string, signature: string, modulus: string, exponent: string): bool` | Verify an RS256 signature against an RSA public key given as its two numbers |
+| `hashPassword` | `hashPassword(password: string): string` | Hash a password for storing |
+| `verifyPassword` | `verifyPassword(password: string, stored: string): bool` | Check a password against a stored hash, in constant time |
+| `randomHex` | `randomHex(bytes: int): string` | Random bytes as hex, for session and invite tokens |
+
+#### Passwords
+
+`hashPassword` is the only thing a password should be stored as. It uses
+PBKDF2-HMAC-SHA-256 with a fresh random salt and 600000 iterations, OWASP's
+figure, and writes all three into the result:
+
+```dex
+let stored: string = crypto.hashPassword(password)
+// pbkdf2-sha256$600000$5f0c...$9a1e...
+
+if (crypto.verifyPassword(attempt, stored)) {
+    // signed in
+}
+```
+
+The iteration count travels with each hash, so raising it later still
+verifies every password stored before. `verifyPassword` is false for every
+reason: a wrong password, a malformed hash, a build without OpenSSL.
+
+`randomHex(32)` is 32 bytes from the system's entropy source, 64 hex digits:
+a session token or an invite link. It returns `""` rather than a guessable
+value when the source cannot be read.
 
 #### Verifying what somebody else signed
 

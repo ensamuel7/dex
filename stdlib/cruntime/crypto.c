@@ -53,3 +53,24 @@ const char* dex_crypto_uuid(void) {
         bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
     return result;
 }
+
+/* n random bytes as lowercase hex, for session and invite tokens. "" when the
+   system has no entropy to give, or n is out of range. */
+const char* dex_crypto_random_hex(int n) {
+    if (n < 1 || n > 1024) return strdup("");
+    unsigned char* bytes = (unsigned char*)malloc((size_t)n);
+    char* out = (char*)malloc((size_t)n * 2 + 1);
+    if (!bytes || !out || !dex_random_bytes(bytes, (size_t)n)) {
+        free(bytes);
+        free(out);
+        return strdup("");
+    }
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < n; i++) {
+        out[2 * i] = hex[bytes[i] >> 4];
+        out[2 * i + 1] = hex[bytes[i] & 15];
+    }
+    out[2 * n] = '\0';
+    free(bytes);
+    return out;
+}

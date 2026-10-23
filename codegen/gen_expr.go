@@ -424,14 +424,17 @@ func (g *Generator) resolveFieldChainC(chain string) string {
 // resolveFieldChainType resolves the type of a dotted field chain like "self.database".
 func (g *Generator) resolveFieldChainType(chain string) ast.Type {
 	if !strings.Contains(chain, ".") {
+		// A bare name keeps its declared type: a method on a narrowed optional
+		// is generated through the pointer, and resolving it to the inner type
+		// made that `&n` of a pointer.
 		if t, ok := g.varTypes[chain]; ok {
 			return t
 		}
 		return ast.TypeVoid
 	}
 	parts := strings.Split(chain, ".")
-	current, ok := g.varTypes[parts[0]]
-	if !ok {
+	current := g.narrowedOrDeclared(parts[0])
+	if current == ast.TypeVoid {
 		return ast.TypeVoid
 	}
 	// Every segment after the first names a field of the type before it, so a
@@ -460,6 +463,20 @@ func (g *Generator) resolveFieldChainType(chain string) ast.Type {
 		current = next
 	}
 	return current
+}
+
+// narrowedOrDeclared is the type a field chain starts from: the inner type of
+// an optional a null check has narrowed, otherwise the declared one. A chain
+// starting at a narrowed `c: C?` read C? and found no fields, so
+// c.name.trim() lost its receiver and compiled to a bare trim().
+func (g *Generator) narrowedOrDeclared(name string) ast.Type {
+	if t, ok := g.narrowedTypes[name]; ok {
+		return t
+	}
+	if t, ok := g.varTypes[name]; ok {
+		return t
+	}
+	return ast.TypeVoid
 }
 
 // fieldChainC renders a dotted receiver — "cmd.action" — as the C that reads it,

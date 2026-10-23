@@ -3831,8 +3831,40 @@ struct ExecResult {
   exitCode: int
   output: string
   error: string
+  timedOut: bool
 }
 ```
+
+`os.execWith` runs a command under `ExecOptions`, the way `http.requestWith`
+runs a request under `HttpOptions`. Every field's zero value is its default, so
+`os.ExecOptions {}` behaves exactly like `os.exec`:
+
+```dex
+struct ExecOptions {
+  timeoutMs: int      // 0, the default, waits for ever
+  appendTo: string    // "", the default, returns output and error
+}
+
+let r: os.ExecResult = os.execWith("docker build -t app .", os.ExecOptions {
+    timeoutMs: 600000,
+    appendTo: "build.log"
+})
+if (r.timedOut) {
+    fmt.println("the build took over ten minutes and was stopped")
+}
+```
+
+**`appendTo`** writes stdout and stderr to the file as they arrive, interleaved
+in the order the command wrote them, so another thread can read the file while
+the command runs. They are not also returned: `output` and `error` stay empty,
+and a long build's output is held nowhere but the file. A file that cannot be
+opened gives an exit code of `-1` and says so in `error`.
+
+**`timeoutMs`** stops the command at the deadline, and everything it started
+with it: the command runs in a process group of its own, which receives
+`SIGTERM` and, two seconds later, `SIGKILL`. Without that, `sh -c "docker build"`
+would leave docker running under a shell that had been stopped. A timed-out
+command has `timedOut` set and an exit code of `124`, the code `timeout(1)` uses.
 
 | Function | Signature                       | Description                                        |
 |----------|---------------------------------|----------------------------------------------------|
@@ -3840,6 +3872,7 @@ struct ExecResult {
 | `env`    | `env(name: string): string`     | Read an environment variable (empty string if unset) |
 | `exit`   | `exit(code: int): void`         | Exit the process with the given status code        |
 | `exec`   | `exec(command: string): ExecResult` | Run a shell command and return the result      |
+| `execWith` | `execWith(command: string, options: ExecOptions): ExecResult` | The same, with a deadline and output appended to a file as it arrives |
 
 ### Command-line arguments
 

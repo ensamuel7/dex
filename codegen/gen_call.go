@@ -317,6 +317,24 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
+	// os.execWith — the options hold a string, so a struct built in the
+	// argument position is bound to a statement temporary and released after,
+	// rather than passed as a value whose string nothing owns.
+	if e.Module == "os" && e.Name == "execWith" {
+		optsType := g.typeOfExpr(e.Args[1])
+		opts, hoisted := g.hoistReceiver(e.Args[1], optsType)
+		out.WriteString("dex_os_exec_with(")
+		g.genStringArg(out, e.Args[0])
+		out.WriteString(", ")
+		if hoisted {
+			out.WriteString(opts)
+		} else {
+			g.genExpr(out, e.Args[1])
+		}
+		out.WriteString(")")
+		return
+	}
+
 	// HTTP client functions — bridge string args and wrap string returns
 	if e.Module == "http" {
 		switch e.Name {

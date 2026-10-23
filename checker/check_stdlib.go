@@ -442,6 +442,34 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return execResultType, true, nil
 	}
 
+	// os.execWith: a command and ExecOptions, returning ExecResult
+	if e.Module == "os" && e.Name == "execWith" {
+		execResultType, ok := ast.LookupStructType("ExecResult")
+		optsType, ok2 := ast.LookupStructType("ExecOptions")
+		if !ok || !ok2 {
+			return 0, true, c.errAt(e.Pos, "ExecResult or ExecOptions type not registered (internal error)")
+		}
+		if len(e.Args) != 2 {
+			return 0, true, c.errAt(e.Pos, "os.execWith() takes exactly 2 arguments, got %d", len(e.Args))
+		}
+		cmdType, err := c.checkExpr(e.Args[0])
+		if err != nil {
+			return 0, true, err
+		}
+		if cmdType != ast.TypeString {
+			return 0, true, c.errAt(e.Pos, "os.execWith() argument 1 must be string, got %s", typeName(cmdType))
+		}
+		optType, err := c.checkExpr(e.Args[1])
+		if err != nil {
+			return 0, true, err
+		}
+		if optType != optsType {
+			return 0, true, c.errAt(e.Pos, "os.execWith() argument 2 must be os.ExecOptions, got %s", typeName(optType))
+		}
+		e.ResolvedType = execResultType
+		return execResultType, true, nil
+	}
+
 	// HTTP client functions returning HttpResponse
 	if e.Module == "http" && (e.Name == "get" || e.Name == "post" || e.Name == "put" || e.Name == "patch" || e.Name == "delete" || e.Name == "request" || e.Name == "requestWith" || e.Name == "postForm") {
 		httpRespType, ok := ast.LookupStructType("HttpResponse")

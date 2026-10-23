@@ -43,6 +43,14 @@ func init() {
 				CName:      "",
 				Doc:        "Run a shell command and return an ExecResult with exitCode, output, and error.",
 			},
+			// os.execWith is special-cased in checker/codegen, as os.exec is
+			"execWith": {
+				Params:     nil,
+				ParamNames: []string{"command", "options"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Run a shell command under ExecOptions: a deadline, and a file its output is appended to as it arrives.",
+			},
 		},
 		Types: []ast.StructDef{
 			{
@@ -52,6 +60,15 @@ func init() {
 					{Name: "exitCode", Type: ast.TypeInt, Doc: "Exit code of the command (0 = success)."},
 					{Name: "output", Type: ast.TypeString, Doc: "Standard output captured from the command."},
 					{Name: "error", Type: ast.TypeString, Doc: "Standard error captured from the command."},
+					{Name: "timedOut", Type: ast.TypeBool, Doc: "The command was stopped at its deadline (os.execWith only); exitCode is then 124."},
+				},
+			},
+			{
+				Name: "ExecOptions",
+				Doc:  "Options for os.execWith(). Every field's zero value is its default, so an empty literal behaves exactly like os.exec().",
+				Fields: []ast.StructField{
+					{Name: "timeoutMs", Type: ast.TypeInt, Doc: "Stop the command and everything it started after this long. 0, the default, waits for ever."},
+					{Name: "appendTo", Type: ast.TypeString, Doc: "Append stdout and stderr to this file as they arrive, interleaved in the order written, instead of returning them. \"\", the default, returns them in output and error."},
 				},
 			},
 		},

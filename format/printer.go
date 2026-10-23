@@ -206,6 +206,11 @@ func (p *printer) flat(lo, hi int) {
 func (p *printer) flatWidth(lo, hi int) int {
 	w := 0
 	for k := lo; k < hi; k++ {
+		// A line comment runs to the end of the line, so nothing after one can
+		// share it: a run with a comment anywhere but last never fits.
+		if p.it[k].kind == token.TokenComment && k < hi-1 {
+			return LineWidth * 4
+		}
 		if k > lo && p.space(k) {
 			w++
 		}
@@ -235,8 +240,18 @@ func (p *printer) broken(lo, hi, cont int) {
 	}
 
 	for k := lo; k < hi; {
-		if k > lo && p.space(k) {
+		// After a comment the line has already been ended, so nothing separates.
+		if k > lo && p.space(k) && p.it[k-1].kind != token.TokenComment {
 			p.write(" ")
+		}
+
+		if p.it[k].kind == token.TokenComment {
+			p.write(p.it[k].text)
+			if k+1 < hi {
+				p.newline(cont)
+			}
+			k++
+			continue
 		}
 
 		j := p.match[k]
@@ -451,6 +466,15 @@ func (p *printer) expand(open, close int, elems []span) {
 
 	p.write(p.it[open].text)
 	for idx, el := range elems {
+		// A comment written on the same line as the comma before it belongs to
+		// the element before the comma, so it stays on that line.
+		for el.lo < el.hi && p.it[el.lo].kind == token.TokenComment && p.it[el.lo].line == p.it[el.lo-1].line {
+			p.write(" " + p.it[el.lo].text)
+			el.lo++
+		}
+		if el.lo >= el.hi {
+			continue
+		}
 		p.newline(inner)
 		// The comma that follows every element but the last shares the line
 		// with it, so the element has one column less to work with. Measuring

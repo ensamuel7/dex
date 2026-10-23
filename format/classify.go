@@ -11,8 +11,13 @@ func (p *printer) classify() {
 	p.markGenerics()
 
 	seg := 0
+	// The brackets open at this token, innermost last. A comment inside a
+	// literal or an argument list is part of the statement around it: if it
+	// ended the segment, the halves either side would each be printed on their
+	// own, flat, and `P {` / `a: 1, // why` / `b: 2 }` is what came out.
+	var open []int
 	for i := range p.it {
-		if i > 0 && p.startsSegment(i) {
+		if i > 0 && p.startsSegment(i) && !p.commentInGroup(i, open) {
 			p.boundary[i] = true
 			seg = i
 		}
@@ -24,7 +29,27 @@ func (p *printer) classify() {
 				p.block[j] = p.block[i]
 			}
 		}
+		switch {
+		case isOpener(p.it[i].kind):
+			open = append(open, i)
+		case isCloser(p.it[i].kind) && len(open) > 0:
+			open = open[:len(open)-1]
+		}
 	}
+}
+
+// commentInGroup reports whether the break before token i is one a comment
+// asked for, inside a bracket that is not a block. A block's statements are
+// segments of their own, so a lambda body inside a call keeps the old rule.
+func (p *printer) commentInGroup(i int, open []int) bool {
+	if p.it[i].kind != token.TokenComment && p.it[i-1].kind != token.TokenComment {
+		return false
+	}
+	if len(open) == 0 {
+		return false
+	}
+	top := open[len(open)-1]
+	return !(p.it[top].kind == token.TokenLBrace && p.block[top])
 }
 
 func (p *printer) pairBrackets() {
@@ -154,15 +179,25 @@ func (p *printer) isBlockBrace(i, seg int) bool {
 	// struct, enum or interface at the statement's own bracket depth. This is
 	// what makes a lambda's body a block in `let f = fn(x: int): int { ... }`,
 	// where the token before the brace is a return type.
+	//
+	// The keyword is looked for at the brace's own depth rather than the
+	// statement's, so a lambda passed as an argument — `g(fn(): void {` — has a
+	// body too. At depth 0 only, its statements were laid out as a literal's
+	// elements and joined onto one line.
 	depth := 0
-	introducer := -1
+	depths := make([]int, i-seg)
 	for k := seg; k < i; k++ {
+		depths[k-seg] = depth
 		switch {
 		case isOpener(p.it[k].kind):
 			depth++
 		case isCloser(p.it[k].kind):
 			depth--
-		case depth == 0 && isDeclKeyword(p.it[k].kind):
+		}
+	}
+	introducer := -1
+	for k := seg; k < i; k++ {
+		if depths[k-seg] == depth && isDeclKeyword(p.it[k].kind) {
 			introducer = k
 		}
 	}

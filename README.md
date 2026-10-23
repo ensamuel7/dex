@@ -67,8 +67,8 @@ dex lint app.dx
 Docker images are available for CI/CD or environments where you don't want to install `dex` directly:
 
 ```bash
-docker pull dexlang/dexlang:latest
-docker run --rm -v "$(pwd):/workspace" dexlang/dexlang run app.dx
+docker pull ensamuel7/dexlang:latest
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang run app.dx
 ```
 
 ## What It Looks Like

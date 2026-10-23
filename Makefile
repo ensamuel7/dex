@@ -1,5 +1,5 @@
 DEX_VERSION ?= 0.9.9
-IMAGE_NAME  := dexlang/dexlang
+IMAGE_NAME  := ensamuel7/dexlang
 PREFIX      ?= /usr/local
 
 # Build the compiler from the current source. The version is stamped so a local

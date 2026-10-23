@@ -26,25 +26,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.narrowedTypes = make(map[string]ast.Type)
 	g.fnHasDefer = containsDefer(fn.Body)
 
-	// Register global variables so all functions can resolve them
-	for name, typ := range g.globalVars {
-		g.varTypes[name] = typ
-		if typ == ast.TypeString {
-			g.strVars[name] = true
-		}
-		if ast.IsArrayType(typ) {
-			g.arrVars[name] = typ
-		}
-		if ast.IsStructType(typ) {
-			g.structVars[name] = typ
-		}
-		if ast.IsMapType(typ) {
-			g.mapVars[name] = typ
-		}
-		if typ == ast.TypeStringBuilder {
-			g.sbVars[name] = true
-		}
-	}
+	g.registerGlobalVars()
 
 	// Register params (not tracked in scope — callee-borrows convention)
 	for _, p := range fn.Params {
@@ -408,4 +390,28 @@ func cStringLit(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// registerGlobalVars makes the module-level variables resolvable by name in the
+// body about to be generated: a function, or a lambda, which reaches a global
+// where it lives rather than through a captured copy.
+func (g *Generator) registerGlobalVars() {
+	for name, typ := range g.globalVars {
+		g.varTypes[name] = typ
+		if typ == ast.TypeString {
+			g.strVars[name] = true
+		}
+		if ast.IsArrayType(typ) {
+			g.arrVars[name] = typ
+		}
+		if ast.IsStructType(typ) {
+			g.structVars[name] = typ
+		}
+		if ast.IsMapType(typ) {
+			g.mapVars[name] = typ
+		}
+		if typ == ast.TypeStringBuilder {
+			g.sbVars[name] = true
+		}
+	}
 }

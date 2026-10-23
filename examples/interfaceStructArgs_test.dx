@@ -1,0 +1,50 @@
+// An interface whose methods take and return structs. The vtable names those
+// struct types, so they must be declared before it is; this failed to compile
+// in C until every struct was forward-declared ahead of the interfaces.
+import "fmt"
+
+struct Job {
+    name: string
+    size: int
+}
+
+struct Verdict {
+    ok: bool
+    note: string
+}
+
+interface Runner {
+    fn run(job: Job, attempt: int): Verdict
+    fn last(): Job
+}
+
+struct Local {
+    prefix: string
+
+    fn run(job: Job, attempt: int): Verdict {
+        return Verdict { ok: job.size < 10, note: prefix + job.name }
+    }
+
+    fn last(): Job {
+        return Job { name: prefix, size: 1 }
+    }
+}
+
+// A struct holding the interface by value, which needs the interface complete.
+struct Holder {
+    runner: Runner
+}
+
+fn main(): void {
+    let r: Runner = Local { prefix: "local:" }
+    let v: Verdict = r.run(Job { name: "a", size: 3 }, 1)
+    assert(v.ok)
+    assert(v.note == "local:a")
+    assert(r.last().name == "local:")
+
+    let h: Holder = Holder { runner: r }
+    let w: Verdict = h.runner.run(Job { name: "b", size: 30 }, 2)
+    assert(!w.ok)
+
+    fmt.println("interface_struct_args_test: all assertions passed")
+}

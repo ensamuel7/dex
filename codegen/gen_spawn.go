@@ -158,11 +158,44 @@ func (g *Generator) findCapturedVars(body []ast.Stmt) []capturedVar {
 		if defined[name] {
 			continue
 		}
+		if g.namesGlobal(name) {
+			continue
+		}
 		if typ, ok := g.varTypes[name]; ok {
 			result = append(result, capturedVar{name: name, typ: typ})
 		}
 	}
 	return result
+}
+
+// namesGlobal reports whether name, inside the function being generated, means
+// a module-level variable rather than a local or a parameter.
+//
+// A global is not captured. The closure reaches it where it lives, as the
+// function it was written in does; a copy would see none of the writes made
+// after the closure was built, and a copied mutex is a different mutex, so
+// `defer mu.unlock()` released a lock nobody held and left the real one locked
+// for good.
+//
+// A local of the same name shadows the global, so any declaration of the name
+// in the function, anywhere in it, keeps the capture. That is conservative: a
+// local declared in a sibling block captures where the global was meant. It
+// errs toward the behaviour every closure had before.
+func (g *Generator) namesGlobal(name string) bool {
+	if _, ok := g.globalVars[name]; !ok {
+		return false
+	}
+	if g.currentFn == nil {
+		return true
+	}
+	for _, p := range g.currentFn.Params {
+		if p.Name == name {
+			return false
+		}
+	}
+	declared := make(map[string]bool)
+	g.collectUsedVars(g.currentFn.Body, make(map[string]bool), declared)
+	return !declared[name]
 }
 
 func (g *Generator) collectUsedVars(stmts []ast.Stmt, used, defined map[string]bool) {

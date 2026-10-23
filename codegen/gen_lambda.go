@@ -85,6 +85,7 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 		g.strVars = make(map[string]bool)
 		g.arrVars = make(map[string]ast.Type)
 		g.structVars = make(map[string]ast.Type)
+		g.registerGlobalVars()
 
 		for _, p := range e.Params {
 			g.varTypes[p.Name] = p.Type
@@ -102,12 +103,21 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 		// The body's `return` belongs to the lambda, not to the function the
 		// lambda is written inside, so the current signature is swapped for the
 		// duration.
+		//
+		// Its scopes are its own as well: a `return` in the body releases what
+		// the lambda declared, never the locals of the function it is written in.
 		savedFn := g.currentFn
+		savedScopes := g.scopeStack
 		g.currentFn = &ast.Function{Name: fnName, Params: e.Params, ReturnType: e.ReturnType}
+		g.scopeStack = nil
+		g.pushScope()
 		var bodyBuf strings.Builder
 		for _, stmt := range e.Body {
 			g.genStmt(&bodyBuf, stmt, 1)
 		}
+		// Falling off the end is a way out too.
+		g.popScope(&bodyBuf, "    ")
+		g.scopeStack = savedScopes
 		g.currentFn = savedFn
 		g.lambdaWrappers.WriteString(bodyBuf.String())
 		g.lambdaWrappers.WriteString("}\n")
@@ -178,6 +188,11 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 				newStructVars[name] = typ
 			}
 		}
+		// Globals first, so a captured local or a parameter of the same name
+		// shadows one; see namesGlobal.
+		for name, typ := range g.globalVars {
+			register(name, typ)
+		}
 		for _, cv := range captured {
 			register(cv.name, cv.typ)
 		}
@@ -200,6 +215,8 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 		for _, stmt := range e.Body {
 			g.genStmt(&bodyBuf, stmt, 1)
 		}
+		// Falling off the end is a way out too.
+		g.popScope(&bodyBuf, "    ")
 		g.scopeStack = savedScopes
 		g.currentFn = savedFn
 

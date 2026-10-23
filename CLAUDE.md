@@ -593,11 +593,14 @@ Four things hold it together:
   `emitUnwindSlotUpdate`, and the cleanup-stack push in `registerScopeVar`,
   which registers `name._obj` because the cleanup stack holds pointers and
   cannot read a dead frame's multi-word local.
-- **Typedef order is load-bearing.** The interface struct is void pointers and
-  function pointers only, so it depends on no struct and is emitted *before*
-  every struct typedef — a struct holding one would not compile otherwise. The
-  box constructors reference the flattened method functions by name, so they
-  are emitted *after* those forward declarations, not beside the typedefs.
+- **Typedef order is load-bearing.** Every struct is forward-declared
+  (`typedef struct Dex_X Dex_X;`) first, then the interface structs, then the
+  struct definitions. A vtable's function pointers name the structs its methods
+  take and return, which a forward declaration is enough for; a struct holding
+  an interface by value needs the interface complete, which is why interfaces
+  still precede the definitions. The box constructors reference the flattened
+  method functions by name, so they are emitted *after* those forward
+  declarations, not beside the typedefs.
 
 The cost is one pooled allocation per coercion and one real semantic change:
 mutation through an interface reaches the box, not the original. `Tally` in

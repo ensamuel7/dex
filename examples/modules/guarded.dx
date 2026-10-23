@@ -1,0 +1,11 @@
+// A module whose state is guarded by its own module-level mutex, unlocked by
+// defer: the shape a store module takes.
+let mu: mutex = mutex
+let count: int = 0
+
+fn bump(): int {
+    mu.lock()
+    defer mu.unlock()
+    count = count + 1
+    return count
+}

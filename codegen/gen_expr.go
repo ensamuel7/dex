@@ -400,7 +400,7 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		g.genMatchExpr(out, e)
 
 	case *ast.LambdaExpr:
-		g.genLambdaExpr(out, e)
+		g.genLambdaClosure(out, e)
 	}
 }
 

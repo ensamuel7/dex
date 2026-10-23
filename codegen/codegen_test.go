@@ -1047,7 +1047,7 @@ fn main(): void {
 	let resp: HttpResponse = http.get("https://example.com")
 }`)
 	// Struct typedef must appear before the C runtime that uses it
-	typedefIdx := strings.Index(out, "typedef struct {")
+	typedefIdx := strings.Index(out, "struct Dex_HttpResponse {")
 	runtimeIdx := strings.Index(out, "dex_route_entry")
 	if typedefIdx < 0 || runtimeIdx < 0 {
 		t.Fatal("expected both typedef and runtime in output")
@@ -1133,7 +1133,7 @@ fn main(): void {
 }`)
 	// The map macro instantiation defines the DexMap_str_str type
 	mapRuntimeIdx := strings.Index(out, "DEX_MAP_DEFINE(DexString*, DexString*, str_str,")
-	httpRequestIdx := strings.Index(out, "} Dex_HttpRequest;")
+	httpRequestIdx := strings.Index(out, "struct Dex_HttpRequest {")
 	if mapRuntimeIdx < 0 || httpRequestIdx < 0 {
 		t.Fatal("expected both DEX_MAP_DEFINE for str_str and Dex_HttpRequest in output")
 	}
@@ -1206,8 +1206,8 @@ func TestCodegenStructDefinition(t *testing.T) {
 fn main(): void {
     let p = Point { x: 1, y: 2 }
 }`)
-	assertContains(t, out, "typedef struct {")
-	assertContains(t, out, "Dex_Point")
+	assertContains(t, out, "typedef struct Dex_Point Dex_Point;")
+	assertContains(t, out, "struct Dex_Point {")
 	assertContains(t, out, "int x;")
 	assertContains(t, out, "int y;")
 }
@@ -1220,8 +1220,8 @@ func TestCodegenStructWithStringFields(t *testing.T) {
 fn main(): void {
     let u = User { name: "Alice", age: 30 }
 }`)
-	assertContains(t, out, "typedef struct {")
-	assertContains(t, out, "} Dex_User;")
+	assertContains(t, out, "typedef struct Dex_User Dex_User;")
+	assertContains(t, out, "struct Dex_User {")
 	assertContains(t, out, "DexString* name;")
 	assertContains(t, out, "int age;")
 }
@@ -1723,7 +1723,7 @@ func TestCodegenStructTypedefBeforeFunctions(t *testing.T) {
 fn main(): void {
     let p = Point { x: 1, y: 2 }
 }`)
-	typedefIdx := strings.Index(out, "} Dex_Point;")
+	typedefIdx := strings.Index(out, "struct Dex_Point {")
 	mainIdx := strings.Index(out, "int main(")
 	if typedefIdx < 0 || mainIdx < 0 {
 		t.Fatal("expected both struct typedef and main function in output")

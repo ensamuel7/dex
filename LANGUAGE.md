@@ -1530,6 +1530,12 @@ let add7: fn(int): int = makeAdder(7)
 add7(1)                                // 8
 ```
 
+A module-level variable is not captured. A closure reaches it where it lives,
+as any function does, so it sees writes made after it was built, and
+`defer mu.unlock()` on a module-level mutex unlocks that mutex rather than a
+copy of it. A local of the same name shadows the global and is captured as
+usual.
+
 **Method values** — naming a method without calling it gives that method bound to
 the object it was read from. The receiver travels inside the value:
 

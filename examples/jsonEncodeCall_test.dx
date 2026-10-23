@@ -1,0 +1,44 @@
+// json.encode of a struct a call returns, rather than one held in a variable.
+// The C took the address of the call, which is an rvalue; it did not compile,
+// and had it, the struct's strings would have had no owner to release them.
+import "fmt"
+import "json"
+
+struct Item {
+    name: string
+    tags: string[]
+    count: int
+}
+
+struct Shelf {
+    items: Item[]
+
+    fn first(): Item {
+        return items[0]
+    }
+}
+
+fn make(name: string): Item {
+    return Item { name: "item-" + name, tags: ["a", name], count: name.len() }
+}
+
+fn main(): void {
+    assert(json.encode(make("x")) == "{\"name\":\"item-x\",\"tags\":[\"a\",\"x\"],\"count\":1}")
+
+    // In a loop, so a leak would be visible to leaks(1) as more than one.
+    for (let i: int = 0; i < 100; i++) {
+        let text: string = json.encode(make("loop"))
+        assert(text.len() > 0)
+    }
+
+    // A method's result, which borrows nothing from the receiver once returned.
+    let shelf: Shelf = Shelf { items: [make("s")] }
+    assert(json.encode(shelf.first()) == "{\"name\":\"item-s\",\"tags\":[\"a\",\"s\"],\"count\":1}")
+    assert(shelf.items[0].name == "item-s")
+
+    // Inside an object literal too.
+    let doc: json.Value = json.decode(json.encode({ item: make("y") }))
+    assert(doc["item"]["name"].asString() == "item-y")
+
+    fmt.println("json_encode_call_test: all assertions passed")
+}

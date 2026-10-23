@@ -70,7 +70,7 @@ need nothing else installed, which makes it a good fit for CI, or for trying the
 language without installing it.
 
 ```bash
-docker pull ensamuel7/dexlang:0.9.10     # or :latest
+docker pull ensamuel7/dexlang:0.9.11     # or :latest
 ```
 
 The image's entrypoint is `dex`, and its working directory is `/workspace`, so
@@ -97,14 +97,14 @@ docker run --rm -p 8080:8080 -v "$(pwd):/workspace" ensamuel7/dexlang run server
 Build in the dex image and copy only the binary into a small one:
 
 ```dockerfile
-FROM ensamuel7/dexlang:0.9.10 AS build
+FROM ensamuel7/dexlang:0.9.11 AS build
 WORKDIR /src
 COPY . .
 RUN dex build main.dx
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libsqlite3-0 libpq5 libssl3 libcurl4 \
+        libsqlite3-0 libpq5 libssl3t64 libcurl4t64 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/build/main /usr/local/bin/app
 EXPOSE 8080
@@ -114,6 +114,9 @@ CMD ["app"]
 A project with a `dex.mod` needs its libraries fetched first: add
 `RUN dex mod download` before the build. Without a `dex.mod` that command
 fails, so leave it out.
+
+The runtime image must be the same Debian release the dex image is built on
+(13, "trixie"), because the binary links against that release's libraries.
 
 The binary links only the libraries for the modules it imports. A program
 using nothing beyond `fmt` needs libc alone, so the `apt-get` line can go.
@@ -710,10 +713,10 @@ Releases are automated via GitHub Actions. When you push a version tag, the work
 **To cut a release:**
 
 ```bash
-make release VERSION=0.9.10
+make release VERSION=0.9.11
 ```
 
-This creates an annotated tag `v0.9.10` and pushes it. The tag push triggers the workflow which:
+This creates an annotated tag `v0.9.11` and pushes it. The tag push triggers the workflow which:
 - Builds `dex` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
 - Creates a GitHub Release with all 4 tarballs attached
 - Deploys docs to GitHub Pages
@@ -721,7 +724,7 @@ This creates an annotated tag `v0.9.10` and pushes it. The tag push triggers the
 **To also publish Docker images** (separate from the GitHub release):
 
 ```bash
-make docker-publish DEX_VERSION=0.9.10
+make docker-publish DEX_VERSION=0.9.11
 ```
 
 `make release` and `make docker-publish` are independent — run either or both.

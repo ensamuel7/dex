@@ -34,17 +34,25 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		}
 		g.spawnWrappers.WriteString("    free(_raw);\n")
 
-		// Generate body statements into wrapper
+		// The body runs on another thread, in a function of its own, so its
+		// locals are its own scope's: registered in the enclosing function's,
+		// they were released there, where they do not exist.
+		savedScopes := g.scopeStack
+		g.scopeStack = nil
+		g.pushScope()
 		var bodyBuf strings.Builder
 		for _, stmt := range e.Body {
 			g.genStmt(&bodyBuf, stmt, 1)
 		}
+		g.popScope(&bodyBuf, "    ")
+		g.scopeStack = savedScopes
 		g.spawnWrappers.WriteString(bodyBuf.String())
-		// Release heap-typed captures before returning
+		// The context holds a reference to every capture (taken at the call
+		// site below), released here once the body is done with it.
 		for _, cv := range captured {
-			if ast.IsHeapType(cv.typ) {
-				g.spawnWrappers.WriteString(fmt.Sprintf("    dex_release(%s);\n", cv.name))
-			}
+			var rel strings.Builder
+			g.emitReleaseVar(&rel, "    ", cv.name, cv.typ)
+			g.spawnWrappers.WriteString(rel.String())
 		}
 		g.spawnWrappers.WriteString("    dex_release(_ch);\n")
 		// void function — no return needed
@@ -58,11 +66,15 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		out.WriteString(fmt.Sprintf("({ DexChan* _spawn_ch = dex_chan_new(sizeof(%s), 64); ", retCType))
 		out.WriteString(fmt.Sprintf("%s* _spawn_ctx = (%s*)malloc(sizeof(%s)); ", ctxType, ctxType, ctxType))
 		out.WriteString("_spawn_ctx->_ch = _spawn_ch; dex_retain(_spawn_ch); ")
+		// Every capture that holds a reference takes one, whatever its type.
+		// Retaining heap types alone left an interface's box and a struct's
+		// strings shared with the frame that spawned the thread, which
+		// released them on its way out while the thread still read them.
 		for _, cv := range captured {
 			out.WriteString(fmt.Sprintf("_spawn_ctx->%s = %s; ", cv.name, cv.name))
-			if ast.IsHeapType(cv.typ) {
-				out.WriteString(fmt.Sprintf("dex_retain(%s); ", cv.name))
-			}
+			var ret strings.Builder
+			g.emitRetainValue(&ret, "", cv.name, cv.typ)
+			out.WriteString(strings.ReplaceAll(ret.String(), "\n", " "))
 		}
 		out.WriteString(fmt.Sprintf("dex_spawn_submit(%s, _spawn_ctx); ", wrapperName))
 		out.WriteString("_spawn_ch; })")

@@ -35,7 +35,7 @@ memcheck:
 
 
 docker-build:
-	docker build --build-arg DEX_VERSION=$(DEX_VERSION) -t $(IMAGE_NAME):$(DEX_VERSION) -t $(IMAGE_NAME):latest .
+	docker build --pull --no-cache --build-arg DEX_VERSION=$(DEX_VERSION) -t $(IMAGE_NAME):$(DEX_VERSION) -t $(IMAGE_NAME):latest .
 	@echo "Built $(IMAGE_NAME):$(DEX_VERSION)"
 	@docker run --rm $(IMAGE_NAME):$(DEX_VERSION) version
 

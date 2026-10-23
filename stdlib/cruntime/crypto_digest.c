@@ -257,6 +257,65 @@ _Bool dex_crypto_verify_password(DexString* password, DexString* stored) {
     free(again);
     return same;
 }
+
+/* Authenticated encryption for secrets at rest: AES-256-GCM, a fresh 12-byte
+   nonce per call, written as base64(nonce || ciphertext || 16-byte tag). The
+   key is 32 bytes as 64 hex digits. Anything wrong (a bad key, a short or
+   altered input) gives "", because a decryption that half-succeeds is worse
+   than one that plainly fails. */
+static int dex_aes_key(DexString* hex, unsigned char key[32]) {
+    if (!hex || hex->len != 64) return 0;
+    for (int i = 0; i < 32; i++) {
+        int hi = dex_hex_nibble(hex->data[2 * i]), lo = dex_hex_nibble(hex->data[2 * i + 1]);
+        if (hi < 0 || lo < 0) return 0;
+        key[i] = (unsigned char)(hi * 16 + lo);
+    }
+    return 1;
+}
+
+DexString* dex_crypto_encrypt(DexString* keyHex, DexString* plain) {
+    unsigned char key[32];
+    if (!dex_aes_key(keyHex, key)) return dex_string_new("", 0);
+    size_t plen = plain ? plain->len : 0;
+    unsigned char* buf = (unsigned char*)malloc(12 + plen + 16);
+    if (!buf) return dex_string_new("", 0);
+    if (!dex_random_bytes(buf, 12)) { free(buf); return dex_string_new("", 0); }
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    int ok = ctx && EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, buf) == 1;
+    int n = 0, fin = 0;
+    if (ok && plen > 0) ok = EVP_EncryptUpdate(ctx, buf + 12, &n, (const unsigned char*)plain->data, (int)plen) == 1;
+    if (ok) ok = EVP_EncryptFinal_ex(ctx, buf + 12 + n, &fin) == 1;
+    if (ok) ok = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, buf + 12 + n + fin) == 1;
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    if (!ok) { free(buf); return dex_string_new("", 0); }
+    DexString* raw = dex_string_new((const char*)buf, (size_t)(12 + n + fin + 16));
+    free(buf);
+    DexString* out = dex_crypto_base64_encode(raw);
+    dex_release(raw);
+    return out;
+}
+
+DexString* dex_crypto_decrypt(DexString* keyHex, DexString* sealed) {
+    unsigned char key[32];
+    if (!dex_aes_key(keyHex, key) || !sealed) return dex_string_new("", 0);
+    DexString* raw = dex_crypto_base64_decode(sealed);
+    if (!raw || raw->len < 12 + 16) { if (raw) dex_release(raw); return dex_string_new("", 0); }
+    const unsigned char* in = (const unsigned char*)raw->data;
+    size_t clen = raw->len - 12 - 16;
+    unsigned char* out = (unsigned char*)malloc(clen + 1);
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    int ok = out && ctx && EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, in) == 1;
+    int n = 0, fin = 0;
+    if (ok && clen > 0) ok = EVP_DecryptUpdate(ctx, out, &n, in + 12, (int)clen) == 1;
+    if (ok) ok = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void*)(in + 12 + clen)) == 1;
+    if (ok) ok = EVP_DecryptFinal_ex(ctx, out + n, &fin) == 1;
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    dex_release(raw);
+    if (!ok) { free(out); return dex_string_new("", 0); }
+    DexString* result = dex_string_new((const char*)out, (size_t)(n + fin));
+    free(out);
+    return result;
+}
 #else
 
 /* Built without OpenSSL. The module still compiles so a program that only
@@ -313,5 +372,17 @@ _Bool dex_crypto_verify_password(DexString* password, DexString* stored) {
     (void)password; (void)stored;
     fprintf(stderr, "[crypto] verifyPassword needs OpenSSL; this build has none\n");
     return 0;
+}
+
+DexString* dex_crypto_encrypt(DexString* keyHex, DexString* plain) {
+    (void)keyHex; (void)plain;
+    fprintf(stderr, "[crypto] encrypt needs OpenSSL; this build has none\n");
+    return dex_string_new("", 0);
+}
+
+DexString* dex_crypto_decrypt(DexString* keyHex, DexString* sealed) {
+    (void)keyHex; (void)sealed;
+    fprintf(stderr, "[crypto] decrypt needs OpenSSL; this build has none\n");
+    return dex_string_new("", 0);
 }
 #endif

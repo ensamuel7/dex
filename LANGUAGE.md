@@ -3678,6 +3678,8 @@ let id: string = crypto.uuid()
 | `hashPassword` | `hashPassword(password: string): string` | Hash a password for storing |
 | `verifyPassword` | `verifyPassword(password: string, stored: string): bool` | Check a password against a stored hash, in constant time |
 | `randomHex` | `randomHex(bytes: int): string` | Random bytes as hex, for session and invite tokens |
+| `encrypt` | `encrypt(keyHex: string, plaintext: string): string` | Encrypt a secret for storing, AES-256-GCM, as base64 |
+| `decrypt` | `decrypt(keyHex: string, sealed: string): string` | Decrypt what `encrypt` produced; `""` if the key is wrong or the input was altered |
 
 #### Passwords
 
@@ -3701,6 +3703,22 @@ reason: a wrong password, a malformed hash, a build without OpenSSL.
 `randomHex(32)` is 32 bytes from the system's entropy source, 64 hex digits:
 a session token or an invite link. It returns `""` rather than a guessable
 value when the source cannot be read.
+
+#### Secrets at rest
+
+`encrypt` and `decrypt` keep a secret, such as an API token a user entrusts to
+you, unreadable in a database or a backup. The key is 32 bytes as 64 hex
+digits; make one with `randomHex(32)` and keep it outside the database:
+
+```dex
+let key: string = os.env("SECRET_KEY")
+let sealed: string = crypto.encrypt(key, token)   // store this
+let token: string = crypto.decrypt(key, sealed)   // "" if anything is wrong
+```
+
+It is AES-256-GCM with a fresh nonce on every call, so encrypting the same
+secret twice gives different results, and the tag means altered or truncated
+input decrypts to `""` rather than to something wrong.
 
 #### Verifying what somebody else signed
 

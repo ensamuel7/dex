@@ -744,3 +744,16 @@ func (g *Generator) genOptionalStructOwned(out *strings.Builder, expr ast.Expr, 
 	out.WriteString(strings.ReplaceAll(retains.String(), "\n", " "))
 	out.WriteString(tmp + "; })")
 }
+
+// isScopeVar reports whether name is a local the cleanup at a return would
+// release, as opposed to a parameter, which the caller owns.
+func (g *Generator) isScopeVar(name string) bool {
+	for _, scope := range g.scopeStack {
+		for _, sv := range scope.vars {
+			if sv.name == name {
+				return true
+			}
+		}
+	}
+	return false
+}

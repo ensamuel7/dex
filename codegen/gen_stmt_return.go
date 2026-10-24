@@ -182,9 +182,16 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 				// the caller instead of freeing what we are about to hand back.
 				exceptVar := ""
 				if ast.IsStructType(retType) {
-					if ident, ok := s.Value.(*ast.Ident); ok {
+					if ident, ok := s.Value.(*ast.Ident); ok && g.isScopeVar(ident.Name) {
 						// `return m` — leave m's fields alone; the caller owns them now.
 						exceptVar = ident.Name
+					} else if _, ok := s.Value.(*ast.Ident); ok {
+						// `return p` for a by-value parameter: its fields are the
+						// caller's, so there is nothing to move and the copy needs
+						// its own references. Without them the caller released the
+						// struct it passed in and then the one it got back, both
+						// sharing one set of strings.
+						g.emitRetainBorrowedStructFields(out, prefix, "_ret_tmp", retType)
 					} else if _, _, isLit := structAssignments(s.Value); isLit {
 						// `return Msg{...}` or `return Msg(...)` — only fields
 						// taken from a borrowed reference need a retain to

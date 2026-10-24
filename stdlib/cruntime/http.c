@@ -806,8 +806,9 @@ static void dex_listen_on(const char* host, int port) {
     time_t last_sweep = time(NULL);
 
     for (;;) {
-        int n = dex_ev_wait(dex_http_loop, events, 256, 1000);
-
+        /* The sweep runs before the wait, never between the wait and the
+         * events it returned: a connection freed there could still have an
+         * event in the batch, which would then read freed memory. */
         time_t now = time(NULL);
         if (now - last_sweep >= 1) {
             last_sweep = now;
@@ -824,6 +825,8 @@ static void dex_listen_on(const char* host, int port) {
                 dex_http_conn_free(c);
             }
         }
+
+        int n = dex_ev_wait(dex_http_loop, events, 256, 1000);
 
         for (int i = 0; i < n; i++) {
             DexEvent* ev = &events[i];

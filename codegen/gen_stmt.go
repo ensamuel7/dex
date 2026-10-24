@@ -25,6 +25,23 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			out.WriteString(");\n")
 			break
 		}
+		// os.exit never returns, so this frame's cleanup would never run. Doing it
+		// first leaves nothing at exit that only a dead stack slot pointed to,
+		// which a leak checker reports or not depending on what reused the slot.
+		if call, ok := s.Expr.(*ast.CallExpr); ok && call.Module == "os" && call.Name == "exit" && len(call.Args) == 1 {
+			out.WriteString(prefix + "{\n")
+			out.WriteString(prefix + "    int _dex_exit_code;\n")
+			g.beginStmtHoist()
+			var body strings.Builder
+			body.WriteString("_dex_exit_code = ")
+			g.genExpr(&body, call.Args[0])
+			body.WriteString(";\n")
+			g.emitWithHoists(out, prefix+"    ", body.String())
+			g.emitCleanupAll(out, prefix+"    ", "")
+			out.WriteString(prefix + "    dex_os_exit(_dex_exit_code);\n")
+			out.WriteString(prefix + "}\n")
+			break
+		}
 		// Check if this is a call that returns a heap type we need to release
 		if call, ok := s.Expr.(*ast.CallExpr); ok {
 			callRetType := g.typeOfExpr(call)

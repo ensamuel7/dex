@@ -111,7 +111,7 @@ func (g *Generator) jsonValueOwned(e ast.Expr) bool {
 	switch e.(type) {
 	case *ast.Ident, *ast.FieldAccessExpr:
 		return false
-	case *ast.IndexExpr, *ast.CallExpr, *ast.ObjectLitExpr, *ast.ArrayLitExpr, *ast.MapLitExpr:
+	case *ast.IndexExpr, *ast.CallExpr, *ast.ObjectLitExpr, *ast.ArrayLitExpr, *ast.MapLitExpr, *ast.MatchExpr:
 		return true
 	default:
 		// Conservative: assume borrowed, which leaks at worst rather than

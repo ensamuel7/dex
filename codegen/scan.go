@@ -11,6 +11,16 @@ func (g *Generator) scan(program *ast.Program) {
 			g.scanType(f.Type)
 		}
 	}
+	for _, ed := range program.Enums {
+		if ed.HasPayload() {
+			g.usesString = true
+		}
+		for _, payload := range ed.Payloads {
+			for _, t := range payload {
+				g.scanType(t)
+			}
+		}
+	}
 	// Scan global let declarations
 	for i := range program.GlobalLets {
 		g.scanStmt(&program.GlobalLets[i])

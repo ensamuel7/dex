@@ -1,0 +1,264 @@
+import "json"
+import "str"
+
+interface Greeter {
+    fn greet(): string
+}
+
+struct Person {
+    name: string
+
+    fn greet(): string {
+        return "hi " + name
+    }
+}
+
+struct Rec {
+    name: string
+    tags: string[]
+}
+
+struct Hold {
+    v: string
+    r: Rec
+    g: Greeter
+    nums: int[]
+}
+
+struct Wrap(g: Greeter) {}
+
+struct Slot {
+    g: Greeter
+}
+
+enum Shape {
+    Empty
+    Tags(string[])
+}
+
+enum Label {
+    Plain
+    Named(string)
+}
+
+fn mkPerson(n: int): Greeter {
+    return Person { name: "p" + str.fromInt(n) }
+}
+
+fn mkRec(n: int): Rec {
+    return Rec { name: "r" + str.fromInt(n), tags: ["t" + str.fromInt(n)] }
+}
+
+fn mkHold(n: int): Hold {
+    return Hold { v: "v" + str.fromInt(n), r: mkRec(n), g: mkPerson(n), nums: [n, n + 1] }
+}
+
+fn mkMap(n: int): map[string, string] {
+    let m: map[string, string] = {}
+    m["k"] = "m" + str.fromInt(n)
+    return m
+}
+
+fn greets(g: Greeter, want: string): bool {
+    return g.greet() == want
+}
+
+fn recName(r: Rec): string {
+    return r.name
+}
+
+fn boom(i: int): void {
+    if (i >= 0) {
+        throw Exception("boom")
+    }
+}
+
+fn reassignedInTry(i: int): string {
+    let x: string = "a" + str.fromInt(i)
+    try {
+        x = "b" + str.fromInt(i)
+        boom(i)
+    } catch (e: Exception) {}
+    return x
+}
+
+fn closureOverStruct(n: int): fn(): bool {
+    let h: Hold = mkHold(n)
+    return fn(): bool {
+        return h.v == "v" + str.fromInt(n) && h.r.tags[0] == "t" + str.fromInt(n)
+    }
+}
+
+fn wrapField(n: int): Rec {
+    return Rec { name: mkHold(n).v, tags: [] }
+}
+
+fn wrapGreeter(g: Greeter): Slot {
+    return Slot { g: g }
+}
+
+fn forwardGreeter(n: int): Greeter {
+    return mkPerson(n)
+}
+
+fn mkGreeters(g: Greeter): Greeter[] {
+    return [g]
+}
+
+fn shapes(): Shape[] {
+    let s: Shape = Shape.Tags(["a" + "b"])
+    return [s]
+}
+
+fn maybeLabel(n: int): Label? {
+    if (n < 0) {
+        return null
+    }
+    return Label.Named("n" + str.fromInt(n))
+}
+
+fn labelText(l: Label): string {
+    switch (l) {
+        case Label.Named(t): {
+            return t
+        }
+        default: {
+            return ""
+        }
+    }
+    return ""
+}
+
+fn applyTwice(f: fn(int): int, x: int): int {
+    return f(f(x))
+}
+
+fn deferredApply(f: fn(int): int): void {
+    assert(f(1) == 2)
+}
+
+fn deferLambda(): void {
+    defer deferredApply(fn(x: int): int {
+        return x + 1
+    })
+}
+
+fn main(): void {
+    for (let i: int = 0; i < 50; i++) {
+        let want: string = "hi p" + str.fromInt(i)
+
+        let arr: Greeter[] = [mkPerson(i)]
+        assert(arr[0].greet() == want)
+
+        let m: map[string, string] = mkMap(i)
+        if (m["k"] == "m" + str.fromInt(i)) {
+            assert(m.len() == 1)
+        } else {
+            assert(false)
+        }
+        assert(mkMap(i)["k"] == "m" + str.fromInt(i))
+
+        assert(reassignedInTry(i) == "b" + str.fromInt(i))
+
+        let task = spawn recName(mkRec(i))
+        assert(receive(task) == "r" + str.fromInt(i))
+        let held: Rec = mkRec(i)
+        let task2 = spawn recName(held)
+        assert(receive(task2) == held.name)
+        let task3 = spawn greets(Person { name: "p" + str.fromInt(i) }, want)
+        assert(receive(task3))
+        let task4 = spawn {
+            send(greets(mkPerson(i), want))
+        }
+        assert(receive(task4))
+
+        let f: fn(): bool = closureOverStruct(i)
+        assert(f())
+        assert(f())
+
+        let w: Rec = Rec { name: "x", tags: [] }
+        w.name = mkHold(i).v
+        assert(w.name == "v" + str.fromInt(i))
+        assert(wrapField(i).name == "v" + str.fromInt(i))
+
+        let total: int = 0
+        foreach (mkHold(i).nums as n) {
+            total += n
+        }
+        assert(total == 2 * i + 1)
+
+        let recs: Rec[] = [mkRec(i)]
+        recs[0] = mkRec(i + 1)
+        recs[0] = held
+        assert(recs[0].name == held.name)
+        let names: string[] = ["a"]
+        names[0] = mkHold(i).v
+        assert(names[0] == "v" + str.fromInt(i))
+
+        let shown: string = "<" + Rec { name: "n" + str.fromInt(i), tags: [] }
+        assert(shown.len() > 3)
+        let interp: string = "${mkRec(i)} ${[i, i]}"
+        assert(interp.len() > 3)
+
+        let byName: bool = greets(mkPerson(i), want)
+        assert(byName)
+
+        let p: Greeter = mkPerson(i)
+        assert(mkGreeters(p)[0].greet() == want)
+        let k: int = 0
+        foreach ([p, p] as e) {
+            if (e.greet() == want) {
+                k++
+            }
+        }
+        assert(k == 2)
+        assert(shapes().len() == 1)
+
+        let pushed: Greeter[] = []
+        pushed.push(Person { name: "p" + str.fromInt(i) })
+        pushed.push(p)
+        assert(pushed[0].greet() == want && pushed[1].greet() == want)
+        let wrapped: Wrap = Wrap(Person { name: "p" + str.fromInt(i) })
+        assert(wrapped.g.greet() == want)
+        assert(forwardGreeter(i).greet() == want)
+        assert(wrapGreeter(p).g.greet() == want)
+        assert(wrapGreeter(mkHold(i).g).g.greet() == want)
+
+        let lab: Label? = maybeLabel(i)
+        if (lab != null) {
+            assert(labelText(lab) == "n" + str.fromInt(i))
+        } else {
+            assert(false)
+        }
+        let shape: Shape = Shape.Tags(["q"])
+        let shapeText: string = "${shape}"
+        assert(shapeText == "Tags([q])")
+
+        let x: int = 3
+        assert(applyTwice(fn(x: int): int {
+            return x * 2
+        }, x) == 12)
+        deferLambda()
+        assert(p.greet() == want)
+
+        let picked: string = match (i % 2) {
+            0 => want
+            _ => want
+        }
+        assert(picked == want)
+        let pickedRec: Rec = match (i % 2) {
+            0 => held
+            _ => held
+        }
+        assert(pickedRec.name == held.name)
+        let doc: json.Value = match (i % 2) {
+            0 => {
+                name: "d" + str.fromInt(i)
+            }
+            _ => {
+                name: "d" + str.fromInt(i)
+            }
+        }
+        assert(doc["name"].asString() == "d" + str.fromInt(i))
+    }
+}

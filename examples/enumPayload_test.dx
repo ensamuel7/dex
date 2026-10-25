@@ -120,5 +120,9 @@ fn main(): void {
     }
     assert(discarded == 2)
 
+    assert("${Expr.Add(Expr.Lit(2), Expr.Neg(Expr.Lit(3)))}" == "Add(Lit(2), Neg(Lit(3)))")
+    assert("${Shape.Tagged("k", Shape.Tags(["a", "b"]))}" == "Tagged(k, Tags([a, b]))")
+    assert("shape: " + Shape.Empty == "shape: Empty")
+
     fmt.println("enumPayload ok " + str.fromLong(eval(tree(4))))
 }

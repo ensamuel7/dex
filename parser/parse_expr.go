@@ -2,6 +2,7 @@ package parser
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 	"github.com/ensamuel7/dex/token"
@@ -98,6 +99,10 @@ func (p *Parser) parseExpr(minPrec int) (ast.Expr, error) {
 }
 
 func (p *Parser) parseUnary() (ast.Expr, error) {
+	defer p.leave()
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
 	if p.check(token.TokenMinus) {
 		pos := p.nodePos()
 		p.advance()
@@ -395,7 +400,6 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			// chain that does not end in a call can be rebuilt as nested
 			// FieldAccessExpr nodes instead of being collapsed to its first segment.
 			members := []string{memberName}
-			qualifiedName := name + "." + memberName
 			for p.check(token.TokenDot) {
 				p.advance() // consume '.'
 				nextMember, err := p.expectIdent()
@@ -412,7 +416,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 					if err := p.expect(token.TokenRParen); err != nil {
 						return nil, err
 					}
-					callExpr := &ast.CallExpr{Pos: pos, Module: qualifiedName, Name: nextMember, Args: args}
+					callExpr := &ast.CallExpr{Pos: pos, Module: name + "." + strings.Join(members, "."), Name: nextMember, Args: args}
 					if p.lastArgNames != nil {
 						callExpr.ArgNames = p.lastArgNames
 						p.lastArgNames = nil
@@ -421,7 +425,6 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 				}
 				// Not a call, continue building the chain
 				members = append(members, nextMember)
-				qualifiedName = qualifiedName + "." + nextMember
 			}
 
 			// Check for a module-qualified enum variant: module.Enum.Variant.

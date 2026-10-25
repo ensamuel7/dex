@@ -42,13 +42,13 @@ static DexString* dex_str_fromBool(_Bool b) {
 }
 
 static int dex_str_toInt(const char* s) {
-    return atoi(s);
+    return dex_parse_int(s);
 }
 
 static long dex_str_toLong(const char* s) {
-    return atol(s);
+    return dex_parse_long(s);
 }
 
 static double dex_str_toDouble(const char* s) {
-    return atof(s);
+    return dex_parse_double(s);
 }

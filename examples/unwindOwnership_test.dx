@@ -1,0 +1,220 @@
+import "str"
+import "reflect"
+
+struct Inner {
+    label: string
+    tags: string[]
+}
+
+struct Outer {
+    name: string
+    inner: Inner
+    maybe: Inner?
+    note: string?
+}
+
+struct Pair {
+    left: string
+    right: string
+}
+
+struct Named {
+    name: string
+
+    fn rename(n: int): void {
+        self.name = "renamed " + str.fromInt(n)
+    }
+}
+
+interface Greeter {
+    fn greet(): string
+}
+
+struct Person {
+    name: string
+
+    fn greet(): string {
+        return "Hi " + name
+    }
+}
+
+struct Holder {
+    greeter: Greeter
+    label: string
+}
+
+enum Shape {
+    Empty
+    Label(string)
+    Tagged(string, Shape)
+}
+
+fn boom(n: int): void throws {
+    if (n >= 0) {
+        throw Exception("boom " + str.fromInt(n))
+    }
+}
+
+fn boomString(n: int): string throws {
+    boom(n)
+    return "never"
+}
+
+fn makeInner(n: int): Inner {
+    return Inner { label: "inner " + str.fromInt(n), tags: ["t" + str.fromInt(n)] }
+}
+
+fn shape(n: int): Shape {
+    return Shape.Tagged("t" + str.fromInt(n), Shape.Label("l" + str.fromInt(n)))
+}
+
+fn shapeThenThrow(n: int): int throws {
+    let s = shape(n)
+    boom(n)
+    return 0
+}
+
+fn concatThrows(n: int): string throws {
+    return str.fromInt(n) + boomString(n)
+}
+
+fn interpThrows(n: int): string throws {
+    return "a ${str.fromInt(n)} b ${boomString(n)}"
+}
+
+fn interpolated(n: int): string {
+    return "a ${str.fromInt(n)} b ${n}"
+}
+
+fn joined(a: string, b: string): string {
+    return a + "/" + b
+}
+
+fn letWithTemps(n: int): int throws {
+    let head = "head " + str.fromInt(n)
+    let tail = joined(head, "x" + str.fromInt(n))
+    boom(n)
+    return tail.len()
+}
+
+fn mutatedThenThrow(n: int): int throws {
+    let p = Named { name: "p " + str.fromInt(n) }
+    p.rename(n)
+    boom(n)
+    return p.name.len()
+}
+
+fn reflectedThenThrow(n: int): int throws {
+    let p = Named { name: "p " + str.fromInt(n) }
+    reflect.setString(p, 0, "set " + str.fromInt(n))
+    boom(n)
+    return p.name.len()
+}
+
+fn nestedFieldsThenThrow(n: int): int throws {
+    let o = Outer {
+        name: "o " + str.fromInt(n),
+        inner: makeInner(n),
+        maybe: makeInner(n + 1),
+        note: "note " + str.fromInt(n)
+    }
+    o.inner = makeInner(n + 2)
+    o.maybe = makeInner(n + 3)
+    let box: Inner? = makeInner(n + 4)
+    box = makeInner(n + 5)
+    boom(n)
+    return o.name.len()
+}
+
+fn interfaceFieldThenThrow(n: int): int throws {
+    let h = Holder { greeter: Person { name: "a" + str.fromInt(n) }, label: "l" }
+    h.greeter = Person { name: "b" + str.fromInt(n) }
+    let g = h.greeter
+    let total = g.greet().len()
+    boom(n)
+    return total
+}
+
+fn pairThrows(n: int): Pair throws {
+    return Pair { left: "l" + str.fromInt(n), right: boomString(n) }
+}
+
+fn count(items: string[]): int {
+    return items.len()
+}
+
+fn arrayLiteralThrows(n: int): int throws {
+    let local = [str.fromInt(n), boomString(n)]
+    return local.len() + count([str.fromInt(n), boomString(n)])
+}
+
+fn main(): void {
+    let caught = 0
+    for (let i = 0; i < 20; i = i + 1) {
+        try {
+            assert(shapeThenThrow(i) == 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(concatThrows(i).len() > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(interpThrows(i).len() > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(letWithTemps(i) > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(mutatedThenThrow(i) > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(reflectedThenThrow(i) > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(nestedFieldsThenThrow(i) > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(interfaceFieldThenThrow(i) > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(pairThrows(i).left.len() > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+        try {
+            assert(arrayLiteralThrows(i) > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+    }
+    assert(caught == 200)
+
+    assert(interpolated(7) == "a 7 b 7")
+
+    let o = Outer { name: "o", inner: makeInner(1), maybe: null, note: null }
+    o.inner = makeInner(2)
+    let keep = makeInner(3)
+    o.inner = keep
+    assert(keep.label == "inner 3")
+    assert(o.inner.label == "inner 3")
+
+    let h = Holder { greeter: Person { name: "z" }, label: "l" }
+    h.greeter = Person { name: "y" }
+    let g = h.greeter
+    assert(g.greet() == "Hi y")
+}

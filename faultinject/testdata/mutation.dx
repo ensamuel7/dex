@@ -1,0 +1,85 @@
+import "str"
+import "reflect"
+
+interface Greeter {
+    fn greet(): string
+}
+
+struct Person {
+    name: string
+
+    fn greet(): string {
+        return "Hi " + name
+    }
+}
+
+struct Inner {
+    label: string
+    tags: string[]
+}
+
+struct Record {
+    name: string
+    inner: Inner
+    maybe: Inner?
+    note: string?
+    greeter: Greeter
+
+    fn rename(n: int): void {
+        self.name = "renamed " + str.fromInt(n)
+    }
+
+    fn relabel(n: int): void {
+        self.inner = Inner { label: "relabelled " + str.fromInt(n), tags: [str.fromInt(n)] }
+    }
+}
+
+fn makeInner(n: int): Inner {
+    return Inner { label: "inner " + str.fromInt(n), tags: ["t" + str.fromInt(n), str.fromInt(n)] }
+}
+
+fn makeRecord(n: int): Record {
+    return Record {
+        name: "record " + str.fromInt(n),
+        inner: makeInner(n),
+        maybe: makeInner(n + 1),
+        note: "note " + str.fromInt(n),
+        greeter: Person { name: "p" + str.fromInt(n) }
+    }
+}
+
+fn touch(r: &Record, n: int): void {
+    r.note = "touched " + str.fromInt(n)
+}
+
+fn mutate(n: int): int {
+    let r = makeRecord(n)
+    r.rename(n)
+    r.relabel(n)
+    touch(r, n)
+    reflect.setString(r, 0, "reflected " + str.fromInt(n))
+    r.greeter = Person { name: "q" + str.fromInt(n) }
+    r.maybe = makeInner(n + 2)
+    r.inner = makeInner(n + 3)
+    let g = r.greeter
+    let box: Inner? = makeInner(n + 4)
+    box = makeInner(n + 5)
+    let copy = r
+    copy.name = "copy " + str.fromInt(n)
+    return r.name.len() + g.greet().len() + copy.name.len()
+}
+
+fn main(): void {
+    let caught = 0
+    for (let round = 0; round < 2; round = round + 1) {
+        try {
+            assert(mutate(round) > 0)
+            let r = makeRecord(round)
+            r.rename(round + 1)
+            assert(r.name.len() > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+    }
+    assert(caught >= 0)
+}

@@ -169,4 +169,62 @@ static int dex_ws_response_valid(const char* response, const char* sent_key) {
     return (size_t)(end - hdr) == elen && memcmp(hdr, expected, elen) == 0;
 }
 
+#define DEX_WS_MAX_HANDSHAKE 16384
+
+static int dex_ws_handshake_reply(const char* request, const char* subprotocol,
+                                  char* path, size_t path_size,
+                                  char* response, size_t response_size) {
+    if (!strstr(request, "\r\n\r\n")) return 0;
+
+    if (!strstr(request, "Upgrade: websocket") &&
+        !strstr(request, "Upgrade: WebSocket")) return -1;
+
+    if (strncmp(request, "GET ", 4) == 0 && path_size > 0) {
+        const char* pstart = request + 4;
+        const char* pend = strchr(pstart, ' ');
+        if (pend) {
+            size_t plen = (size_t)(pend - pstart);
+            if (plen >= path_size) plen = path_size - 1;
+            memcpy(path, pstart, plen);
+            path[plen] = '\0';
+        }
+    }
+
+    const char* key_hdr = strstr(request, "Sec-WebSocket-Key:");
+    if (!key_hdr) return -2;
+    key_hdr += 18;
+    while (*key_hdr == ' ') key_hdr++;
+    char ws_key[64];
+    int ki = 0;
+    while (key_hdr[ki] && key_hdr[ki] != '\r' && key_hdr[ki] != '\n' && ki < 63) {
+        ws_key[ki] = key_hdr[ki];
+        ki++;
+    }
+    ws_key[ki] = '\0';
+
+    char accept_key[64];
+    dex_ws_accept_key(ws_key, accept_key, sizeof(accept_key));
+
+    int rlen;
+    char negotiated[128];
+    if (dex_ws_client_offers(request, subprotocol, negotiated, sizeof(negotiated))) {
+        rlen = snprintf(response, response_size,
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n"
+            "Sec-WebSocket-Protocol: %s\r\n"
+            "\r\n", accept_key, negotiated);
+    } else {
+        rlen = snprintf(response, response_size,
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n"
+            "\r\n", accept_key);
+    }
+    if (rlen <= 0 || (size_t)rlen >= response_size) return -2;
+    return rlen;
+}
+
 #endif /* DEX_WS_HANDSHAKE_H */

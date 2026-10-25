@@ -36,6 +36,14 @@ func (g *Generator) genExprNoParen(out *strings.Builder, expr ast.Expr) {
 		if e.HasMixedTypes {
 			widerType := g.widerNumericType(e.LeftType, e.RightType)
 			castType := g.cType(widerType)
+			if fn := g.intDivFunc(e.Op, widerType); fn != "" {
+				out.WriteString(fmt.Sprintf("%s((%s)", fn, castType))
+				g.genExpr(out, e.Left)
+				out.WriteString(fmt.Sprintf(", (%s)", castType))
+				g.genExpr(out, e.Right)
+				out.WriteString(")")
+				return
+			}
 			if e.LeftType != widerType {
 				out.WriteString(fmt.Sprintf("(%s)", castType))
 			}
@@ -51,6 +59,14 @@ func (g *Generator) genExprNoParen(out *strings.Builder, expr ast.Expr) {
 			if e.Op == ast.BinDiv || e.Op == ast.BinMod {
 				out.WriteString(")")
 			}
+			return
+		}
+		if fn := g.intDivFunc(e.Op, g.typeOfExpr(e.Right)); fn != "" {
+			out.WriteString(fn + "(")
+			g.genExpr(out, e.Left)
+			out.WriteString(", ")
+			g.genExpr(out, e.Right)
+			out.WriteString(")")
 			return
 		}
 		g.genExpr(out, e.Left)
@@ -113,7 +129,7 @@ func (g *Generator) genNullComparison(out *strings.Builder, e *ast.BinaryExpr, w
 	if withParen {
 		out.WriteString("(")
 	}
-	g.genExpr(out, nonNullExpr)
+	g.genBorrowed(out, nonNullExpr)
 	if isEq {
 		out.WriteString(" == NULL")
 	} else {
@@ -174,14 +190,21 @@ func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) 
 		}
 		// At least one operand is +1 — use statement-expression to release it
 		out.WriteString("({ ")
+		mark := g.inlineUnwindMark(out)
 		lTmp := g.nextTemp()
 		out.WriteString(fmt.Sprintf("DexString* %s = ", lTmp))
 		g.genExpr(out, operands[0])
 		out.WriteString("; ")
+		if leftNew {
+			g.inlineUnwindPush(out, mark, lTmp)
+		}
 		rTmp := g.nextTemp()
 		out.WriteString(fmt.Sprintf("DexString* %s = ", rTmp))
 		g.genExpr(out, operands[1])
 		out.WriteString("; ")
+		if rightNew {
+			g.inlineUnwindPush(out, mark, rTmp)
+		}
 		resTmp := g.nextTemp()
 		out.WriteString(fmt.Sprintf("DexString* %s = dex_str_concat(%s, %s); ", resTmp, lTmp, rTmp))
 		if leftNew {
@@ -190,6 +213,7 @@ func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) 
 		if rightNew {
 			out.WriteString(fmt.Sprintf("dex_release(%s); ", rTmp))
 		}
+		g.inlineUnwindDrop(out, mark)
 		out.WriteString(fmt.Sprintf("%s; })", resTmp))
 		return
 	}
@@ -199,7 +223,10 @@ func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) 
 	g.usesString = true
 	sbTmp := g.nextTemp()
 	resTmp := g.nextTemp()
-	out.WriteString(fmt.Sprintf("({ DexStringBuilder* %s = dex_sb_new(); ", sbTmp))
+	out.WriteString("({ ")
+	mark := g.inlineUnwindMark(out)
+	out.WriteString(fmt.Sprintf("DexStringBuilder* %s = dex_sb_new(); ", sbTmp))
+	g.inlineUnwindPush(out, mark, sbTmp)
 
 	// Append each operand, handling both string and non-string types
 	for _, op := range operands {
@@ -223,13 +250,34 @@ func (g *Generator) genStringConcat(out *strings.Builder, expr *ast.BinaryExpr) 
 			// isStringExpr could not place the operand — so without this, any
 			// future gap in that function silently becomes a leak rather than a
 			// mis-typing.
-			if ast.NeedsRelease(typ) && g.isNewAlloc(op) {
-				out.WriteString(fmt.Sprintf("dex_release(%s); ", tmpName))
-			}
+			g.emitReleaseAppendedOperand(out, tmpName, typ, op)
 		}
 	}
 
-	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); dex_release(%s); %s; })", resTmp, sbTmp, sbTmp, resTmp))
+	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); dex_release(%s); ", resTmp, sbTmp, sbTmp))
+	g.inlineUnwindDrop(out, mark)
+	out.WriteString(fmt.Sprintf("%s; })", resTmp))
+}
+
+func (g *Generator) inlineUnwindMark(out *strings.Builder) string {
+	if !g.unwindTrackable(ast.TypeString) {
+		return ""
+	}
+	mark := g.nextCleanupMark()
+	out.WriteString(fmt.Sprintf("size_t %s = _dex_cleanup_top; ", mark))
+	return mark
+}
+
+func (g *Generator) inlineUnwindPush(out *strings.Builder, mark, name string) {
+	if mark != "" {
+		out.WriteString(fmt.Sprintf("_dex_cleanup_push(%s); ", name))
+	}
+}
+
+func (g *Generator) inlineUnwindDrop(out *strings.Builder, mark string) {
+	if mark != "" {
+		out.WriteString(fmt.Sprintf("_dex_cleanup_drop_to(%s); ", mark))
+	}
 }
 
 // genAppendToSB appends a C value of the given type to a StringBuilder variable.
@@ -301,6 +349,8 @@ func (g *Generator) genAppendToSB(out *strings.Builder, sbVar string, cExpr stri
 			out.WriteString("} ")
 			out.WriteString(fmt.Sprintf("dex_sb_append_cstr(%s, \"]\"); ", sbVar))
 			out.WriteString("} ")
+		} else if ast.IsPayloadEnumType(typ) {
+			out.WriteString(fmt.Sprintf("%s(%s, %s); ", g.enumAppender(typ), sbVar, cExpr))
 		} else if ast.IsEnumType(typ) {
 			out.WriteString(fmt.Sprintf("dex_sb_append_int(%s, %s); ", sbVar, cExpr))
 		} else {
@@ -322,12 +372,18 @@ func (g *Generator) genExprAsString(out *strings.Builder, expr ast.Expr) {
 	sbTmp := g.nextTemp()
 	valTmp := g.nextTemp()
 	resTmp := g.nextTemp()
-	out.WriteString(fmt.Sprintf("({ DexStringBuilder* %s = dex_sb_new(); ", sbTmp))
+	out.WriteString("({ ")
+	mark := g.inlineUnwindMark(out)
+	out.WriteString(fmt.Sprintf("DexStringBuilder* %s = dex_sb_new(); ", sbTmp))
+	g.inlineUnwindPush(out, mark, sbTmp)
 	out.WriteString(fmt.Sprintf("%s %s = ", g.cType(typ), valTmp))
 	g.genExpr(out, expr)
 	out.WriteString("; ")
 	g.genAppendToSB(out, sbTmp, valTmp, typ)
-	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); dex_release(%s); %s; })", resTmp, sbTmp, sbTmp, resTmp))
+	g.emitReleaseAppendedOperand(out, valTmp, typ, expr)
+	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); dex_release(%s); ", resTmp, sbTmp, sbTmp))
+	g.inlineUnwindDrop(out, mark)
+	out.WriteString(fmt.Sprintf("%s; })", resTmp))
 }
 
 // isStringExpr checks if an expression is known to produce a string type.
@@ -633,7 +689,10 @@ func (g *Generator) genStringInterpExpr(out *strings.Builder, e *ast.StringInter
 	resultName := fmt.Sprintf("_interp_result_%d", g.tempCounter)
 	g.tempCounter++
 
-	out.WriteString(fmt.Sprintf("({ DexStringBuilder* %s = dex_sb_new(); ", sbName))
+	out.WriteString("({ ")
+	mark := g.inlineUnwindMark(out)
+	out.WriteString(fmt.Sprintf("DexStringBuilder* %s = dex_sb_new(); ", sbName))
+	g.inlineUnwindPush(out, mark, sbName)
 
 	for _, part := range e.Parts {
 		if strLit, ok := part.(*ast.StringLit); ok {
@@ -650,6 +709,7 @@ func (g *Generator) genStringInterpExpr(out *strings.Builder, e *ast.StringInter
 
 	out.WriteString(fmt.Sprintf("DexString* %s = dex_sb_toString(%s); ", resultName, sbName))
 	out.WriteString(fmt.Sprintf("dex_release(%s); ", sbName))
+	g.inlineUnwindDrop(out, mark)
 	out.WriteString(fmt.Sprintf("%s; })", resultName))
 }
 
@@ -657,6 +717,13 @@ func (g *Generator) genStringInterpExpr(out *strings.Builder, e *ast.StringInter
 func (g *Generator) genAppendExprToSB(out *strings.Builder, sbName string, expr ast.Expr, typ ast.Type) {
 	switch typ {
 	case ast.TypeString:
+		if g.isNewAlloc(expr) {
+			tmp := g.nextTemp()
+			out.WriteString(fmt.Sprintf("{ DexString* %s = ", tmp))
+			g.genExpr(out, expr)
+			out.WriteString(fmt.Sprintf("; dex_sb_append_str(%s, %s); dex_release(%s); }", sbName, tmp, tmp))
+			break
+		}
 		out.WriteString(fmt.Sprintf("dex_sb_append_str(%s, ", sbName))
 		g.genExpr(out, expr)
 		out.WriteString(")")
@@ -689,4 +756,58 @@ func (g *Generator) genAppendExprToSB(out *strings.Builder, sbName string, expr 
 		g.genExprAsString(out, expr)
 		out.WriteString(fmt.Sprintf("; dex_sb_append_str(%s, _interp_tmp); dex_release(_interp_tmp); }", sbName))
 	}
+}
+
+func (g *Generator) emitReleaseAppendedOperand(out *strings.Builder, tmp string, typ ast.Type, expr ast.Expr) {
+	if !ast.NeedsRelease(typ) {
+		return
+	}
+	var rel strings.Builder
+	if ast.IsStructType(typ) {
+		if g.borrowsHeapValue(expr) {
+			return
+		}
+		if _, _, isLit := structAssignments(expr); isLit {
+			g.emitRetainStructLitFields(&rel, "", tmp, typ, expr)
+		}
+	} else if !g.isNewAlloc(expr) {
+		return
+	}
+	g.emitReleaseVar(&rel, "", tmp, typ)
+	out.WriteString(strings.ReplaceAll(rel.String(), "\n", " "))
+}
+
+func (g *Generator) enumAppender(typ ast.Type) string {
+	ed := ast.GetEnumDef(typ)
+	name := "dex_enum_" + ed.Name + "_append"
+	if g.enumAppenders[name] {
+		return name
+	}
+	if g.enumAppenders == nil {
+		g.enumAppenders = make(map[string]bool)
+	}
+	g.enumAppenders[name] = true
+	fmt.Fprintf(&g.enumAppenderProtos, "static void %s(DexStringBuilder* _sb, Dex_%s* _e);\n", name, ed.Name)
+	var body strings.Builder
+	fmt.Fprintf(&body, "static void %s(DexStringBuilder* _sb, Dex_%s* _e) {\n", name, ed.Name)
+	body.WriteString("    switch (_e->tag) {\n")
+	for i, v := range ed.Variants {
+		fmt.Fprintf(&body, "        case %s: ", g.enumTagName(ed.Name, v))
+		fields := ed.Payloads[i]
+		if len(fields) == 0 {
+			fmt.Fprintf(&body, "dex_sb_append_cstr(_sb, %q); break;\n", v)
+			continue
+		}
+		fmt.Fprintf(&body, "dex_sb_append_cstr(_sb, %q); ", v+"(")
+		for j, ft := range fields {
+			if j > 0 {
+				body.WriteString("dex_sb_append_cstr(_sb, \", \"); ")
+			}
+			g.genAppendToSB(&body, "_sb", fmt.Sprintf("_e->u.v_%s.f%d", v, j), ft)
+		}
+		body.WriteString("dex_sb_append_cstr(_sb, \")\"); break;\n")
+	}
+	body.WriteString("        default: break;\n    }\n}\n")
+	g.enumAppenderBodies.WriteString(body.String())
+	return name
 }

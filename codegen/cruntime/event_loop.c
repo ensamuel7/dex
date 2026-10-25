@@ -59,7 +59,7 @@ static void dex_set_nonblocking(int fd) {
 /* ── Event loop core ─────────────────────────────────────────────── */
 
 static DexEventLoop* dex_ev_create(int max_events) {
-    DexEventLoop* loop = (DexEventLoop*)calloc(1, sizeof(DexEventLoop));
+    DexEventLoop* loop = (DexEventLoop*)dex_xcalloc(1, sizeof(DexEventLoop));
     if (!loop) return NULL;
     loop->max_events = max_events;
 

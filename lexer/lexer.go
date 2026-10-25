@@ -20,7 +20,11 @@ type Lexer struct {
 	// is nothing the parser can use — and the formatter turns it on, because a
 	// comment it never sees is a comment it deletes.
 	KeepComments bool
+
+	depth int
 }
+
+const maxInterpDepth = 100
 
 func New(source string) *Lexer {
 	return &Lexer{
@@ -465,7 +469,7 @@ func (l *Lexer) scanStringLiteral(startLine, startCol int) ([]token.Token, error
 				// inside ${...} reports line 1 column 1 — and so does every
 				// diagnostic about it.
 				exprLine, exprCol := l.line, l.col
-				var exprSource []rune
+				exprStart, exprEnd := l.pos, l.pos
 				for l.pos < len(l.source) && braceDepth > 0 {
 					ch := l.source[l.pos]
 					if ch == '{' {
@@ -473,22 +477,28 @@ func (l *Lexer) scanStringLiteral(startLine, startCol int) ([]token.Token, error
 					} else if ch == '}' {
 						braceDepth--
 						if braceDepth == 0 {
+							exprEnd = l.pos
 							l.advance() // consume closing '}'
 							break
 						}
 					}
-					exprSource = append(exprSource, ch)
 					l.advance()
 				}
 				if braceDepth > 0 {
 					return nil, fmt.Errorf("%s%d:%d: unterminated string interpolation", l.errPrefix(), startLine, startCol)
 				}
+				if l.depth >= maxInterpDepth {
+					return nil, fmt.Errorf("%s%d:%d: string interpolation nested too deep (more than %d levels)", l.errPrefix(), startLine, startCol, maxInterpDepth)
+				}
 				// Tokenize the expression
-				subLexer := New(string(exprSource))
-				subLexer.file = l.file
-				subLexer.KeepComments = l.KeepComments
-				subLexer.line = exprLine
-				subLexer.col = exprCol
+				subLexer := &Lexer{
+					source:       l.source[exprStart:exprEnd],
+					line:         exprLine,
+					col:          exprCol,
+					file:         l.file,
+					KeepComments: l.KeepComments,
+					depth:        l.depth + 1,
+				}
 				exprTokens, err := subLexer.Tokenize()
 				if err != nil {
 					return nil, err

@@ -37,9 +37,9 @@ static DexArrayString* dex_os_args(void) {
 static char* dex_os_env(const char* name) {
     const char* val = getenv(name);
     if (val == NULL) {
-        return strdup("");
+        return dex_xstrdup("");
     }
-    return strdup(val);
+    return dex_xstrdup(val);
 }
 
 static void dex_os_exit(int code) {
@@ -57,7 +57,7 @@ static char* dex_os_read_fd(int fd, size_t* out_len) {
     while ((n = read(fd, chunk, sizeof(chunk))) > 0) {
         if (len + (size_t)n > cap) {
             cap = (len + (size_t)n) * 2;
-            char* new_buf = realloc(buf, cap + 1);
+            char* new_buf = dex_xrealloc(buf, cap + 1);
             if (!new_buf) {
                 if (buf) buf[len] = '\0';
                 *out_len = len;
@@ -109,7 +109,7 @@ static Dex_ExecResult dex_os_run(const char* command, int timeout_ms, const char
         sink = open(append_to, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
         if (sink < 0) {
             dex_release(result.error);
-            result.error = dex_string_from_cstr(strdup("could not open the file to append output to"));
+            result.error = dex_string_from_cstr(dex_xstrdup("could not open the file to append output to"));
             return result;
         }
     }
@@ -208,7 +208,7 @@ static Dex_ExecResult dex_os_run(const char* command, int timeout_ms, const char
                     size_t* cap = (i == 0) ? &out_cap : &err_cap;
                     if (*len + (size_t)n > *cap) {
                         *cap = (*len + (size_t)n) * 2;
-                        char* new_buf = realloc(*buf, *cap + 1);
+                        char* new_buf = dex_xrealloc(*buf, *cap + 1);
                         if (new_buf) *buf = new_buf;
                     }
                     if (*buf) {

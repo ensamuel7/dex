@@ -12,13 +12,15 @@ fn main(): void {
     let empty: string = ""
     let word: string = "Ab1"
     let h: Holder = Holder { text: "" }
-    let doc: json.Value = json.decode(json.encode({
-        isEmpty: empty.isEmpty(),
-        alpha: word.isAlpha(),
-        upper: word.containsUppercase(),
-        digit: word.containsDigit(),
-        fieldEmpty: h.text.isEmpty()
-    }))
+    let doc: json.Value = json.decode(
+        json.encode({
+            isEmpty: empty.isEmpty(),
+            alpha: word.isAlpha(),
+            upper: word.containsUppercase(),
+            digit: word.containsDigit(),
+            fieldEmpty: h.text.isEmpty()
+        })
+    )
     assert(doc["isEmpty"].isBool() && doc["isEmpty"].asBool())
     assert(doc["alpha"].isBool() && !doc["alpha"].asBool())
     assert(doc["upper"].asBool())

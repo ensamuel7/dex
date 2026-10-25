@@ -104,7 +104,7 @@ func (p *printer) segmentEnd(lo int) int {
 func (p *printer) separate(prevIdx, curIdx, indent int) {
 	prev, cur := p.it[prevIdx], p.it[curIdx]
 
-	if cur.kind == token.TokenComment && cur.line == prev.line {
+	if cur.kind == token.TokenComment && cur.line == prev.end {
 		p.write(" ")
 		return
 	}
@@ -113,7 +113,7 @@ func (p *printer) separate(prevIdx, curIdx, indent int) {
 		return
 	}
 
-	blank := cur.line-prev.line >= 2
+	blank := cur.line-prev.end >= 2
 	if prev.kind == token.TokenLBrace && p.block[prevIdx] {
 		blank = false
 	}
@@ -398,12 +398,21 @@ func (p *printer) loosestOps(lo, hi int) []int {
 		case depth == 0 && k > lo && p.opPrecedence(k) == best:
 			// Nothing follows the last operator in the range, so breaking after
 			// it would leave a dangling line.
-			if k+1 < hi {
+			if p.codeAfter(k, hi) {
 				ops = append(ops, k)
 			}
 		}
 	}
 	return ops
+}
+
+func (p *printer) codeAfter(k, hi int) bool {
+	for j := k + 1; j < hi; j++ {
+		if p.it[j].kind != token.TokenComment {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *printer) opPrecedence(i int) int {
@@ -468,7 +477,7 @@ func (p *printer) expand(open, close int, elems []span) {
 	for idx, el := range elems {
 		// A comment written on the same line as the comma before it belongs to
 		// the element before the comma, so it stays on that line.
-		for el.lo < el.hi && p.it[el.lo].kind == token.TokenComment && p.it[el.lo].line == p.it[el.lo-1].line {
+		for el.lo < el.hi && p.it[el.lo].kind == token.TokenComment && p.it[el.lo].line == p.it[el.lo-1].end {
 			p.write(" " + p.it[el.lo].text)
 			el.lo++
 		}

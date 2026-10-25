@@ -172,6 +172,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 			out.WriteString(inc + "\n")
 		}
 	}
+	out.WriteString(CoreRuntime)
 
 	if g.usesOptional {
 		inc := "#include <stdlib.h>"
@@ -232,11 +233,18 @@ func (g *Generator) Generate(program *ast.Program) string {
 		if g.memCheck {
 			out.WriteString("#define DEX_MEM_CHECK 1\n")
 		}
+		if g.profile {
+			out.WriteString("#define DEX_PROFILE 1\n")
+		}
 		out.WriteString(RefcountRuntime)
 		// The checker needs DexObjHeader, so it follows the refcount runtime,
-		// which forward-declares the four hooks it calls into.
+		// which forward-declares the four hooks it calls into. The profiler
+		// follows it for the same reason.
 		if g.memCheck {
 			out.WriteString(MemCheckRuntime)
+		}
+		if g.profile {
+			out.WriteString(ProfileRuntime)
 		}
 	}
 
@@ -677,6 +685,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// and lambda wrappers, which may themselves build closures.
 	if g.closureTypes.Len() > 0 {
 		out.WriteString(g.closureTypes.String())
+		out.WriteString("\n")
+	}
+	if g.enumAppenderBodies.Len() > 0 {
+		out.WriteString(g.enumAppenderProtos.String())
+		out.WriteString(g.enumAppenderBodies.String())
 		out.WriteString("\n")
 	}
 	if g.closureWrappers.Len() > 0 {

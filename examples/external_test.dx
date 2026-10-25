@@ -1,5 +1,6 @@
 import "fmt"
 import "crypto"
+import "file"
 
 external module cmath {
     include "<math.h>"
@@ -165,7 +166,9 @@ fn main(): void {
     assert(zlib.crc32(0, "hello world", 11) == 222957957)
 
     // A handle round-trips through C and closes at scope exit.
-    let f: File? = cio.open("examples/external_test.dx", "r")
+    let scratch: string = "/tmp/dex_external_" + crypto.randomHex(8)
+    assert(file.write(scratch, "external"))
+    let f: File? = cio.open(scratch, "r")
     assert(f != null)
     if (f != null) {
         assert(cio.readByte(f) > 0)
@@ -178,12 +181,13 @@ fn main(): void {
     let round: int = 0
     while (round < 200) {
         try {
-            openThenThrow("examples/external_test.dx")
+            openThenThrow(scratch)
         } catch (e: OpenFailed) {
             assert(e.message == "deliberate")
         }
         round = round + 1
     }
 
+    assert(file.remove(scratch))
     fmt.println("external_test: all assertions passed")
 }

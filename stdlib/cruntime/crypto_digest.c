@@ -198,7 +198,7 @@ static char* dex_pw_encode(const char* password, size_t plen, const unsigned cha
     }
     static const char hex[] = "0123456789abcdef";
     size_t cap = 32 + slen * 2 + sizeof(key) * 2;
-    char* out = (char*)malloc(cap);
+    char* out = (char*)dex_xmalloc(cap);
     if (!out) return NULL;
     int n = snprintf(out, cap, "pbkdf2-sha256$%d$", iterations);
     for (size_t i = 0; i < slen; i++) { out[n++] = hex[salt[i] >> 4]; out[n++] = hex[salt[i] & 15]; }
@@ -277,7 +277,7 @@ DexString* dex_crypto_encrypt(DexString* keyHex, DexString* plain) {
     unsigned char key[32];
     if (!dex_aes_key(keyHex, key)) return dex_string_new("", 0);
     size_t plen = plain ? plain->len : 0;
-    unsigned char* buf = (unsigned char*)malloc(12 + plen + 16);
+    unsigned char* buf = (unsigned char*)dex_xmalloc(12 + plen + 16);
     if (!buf) return dex_string_new("", 0);
     if (!dex_random_bytes(buf, 12)) { free(buf); return dex_string_new("", 0); }
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -302,7 +302,7 @@ DexString* dex_crypto_decrypt(DexString* keyHex, DexString* sealed) {
     if (!raw || raw->len < 12 + 16) { if (raw) dex_release(raw); return dex_string_new("", 0); }
     const unsigned char* in = (const unsigned char*)raw->data;
     size_t clen = raw->len - 12 - 16;
-    unsigned char* out = (unsigned char*)malloc(clen + 1);
+    unsigned char* out = (unsigned char*)dex_xmalloc(clen + 1);
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     int ok = out && ctx && EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, in) == 1;
     int n = 0, fin = 0;

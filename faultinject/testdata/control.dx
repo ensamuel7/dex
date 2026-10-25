@@ -1,0 +1,102 @@
+import "str"
+
+struct ParseError(message: string, line: int) {}
+
+enum Shape {
+    Empty
+    Label(string)
+    Tagged(string, Shape)
+}
+
+fn shape(n: int): Shape {
+    if (n == 0) {
+        return Shape.Empty
+    }
+    return Shape.Tagged("t" + str.fromInt(n), Shape.Label("l" + str.fromInt(n)))
+}
+
+fn describe(s: Shape): string {
+    switch (s) {
+        case Shape.Empty: {
+            return "empty"
+        }
+        case Shape.Label(text): {
+            return "label " + text
+        }
+        case Shape.Tagged(tag, inner): {
+            return tag + " of " + describe(inner)
+        }
+    }
+    return ""
+}
+
+fn typed(n: int): int throws ParseError {
+    let s = "typed " + str.fromInt(n)
+    if (n < 0) {
+        throw ParseError("negative " + s, n)
+    }
+    return s.len()
+}
+
+fn declining(n: int): int throws ParseError {
+    try {
+        let a = "declining " + str.fromInt(n)
+        return typed(n) + a.len()
+    } catch (e: ParseError) {
+        return 0
+    } finally {
+        let f = "finally " + str.fromInt(n)
+        assert(f.len() > 0)
+    }
+}
+
+fn nestedTry(n: int): int {
+    let outer = "outer " + str.fromInt(n)
+    try {
+        let mid = outer + " mid"
+        try {
+            let deep = mid + " deep"
+            return deep.len()
+        } catch (e: Exception) {
+            return -1
+        }
+    } catch (e: Exception) {
+        return -2
+    }
+}
+
+fn loopWithJumps(n: int): int {
+    let seen = 0
+    for (let i = 0; i < n; i = i + 1) {
+        let s = "loop " + str.fromInt(i)
+        try {
+            if (i == 1) {
+                continue
+            }
+            if (i > 3) {
+                break
+            }
+            seen = seen + s.len()
+        } catch (e: Exception) {
+            seen = 0
+        }
+    }
+    return seen
+}
+
+fn main(): void {
+    let caught = 0
+    for (let round = 0; round < 2; round = round + 1) {
+        try {
+            assert(describe(shape(round + 1)).len() > 0)
+            assert(declining(round) > 0)
+            assert(nestedTry(round) != 0)
+            assert(loopWithJumps(6) > 0)
+            let s = shape(round)
+            assert(describe(s).len() > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+    }
+    assert(caught >= 0)
+}

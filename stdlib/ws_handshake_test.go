@@ -76,6 +76,26 @@ int main(void) {
 	expect_int("non-101 refused", dex_ws_response_valid(
 		"HTTP/1.1 400 Bad Request\r\n\r\n", KEY), 0);
 
+	char path[16] = "/";
+	char reply[512];
+	int rlen = dex_ws_handshake_reply(
+		"GET /chat HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+		"Sec-WebSocket-Protocol: chat.v1\r\n\r\n", "chat.v1", path, sizeof(path), reply, sizeof(reply));
+	expect_int("reply length", rlen, (int)strlen(reply));
+	expect_str("reply path", path, "/chat");
+	expect_int("reply carries accept", strstr(reply, "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n") != NULL, 1);
+	expect_int("reply carries protocol", strstr(reply, "Sec-WebSocket-Protocol: chat.v1\r\n") != NULL, 1);
+	expect_int("incomplete request waits", dex_ws_handshake_reply(
+		"GET / HTTP/1.1\r\nUpgrade: websocket\r\n", "", path, sizeof(path), reply, sizeof(reply)), 0);
+	expect_int("non-upgrade refused", dex_ws_handshake_reply(
+		"GET / HTTP/1.1\r\nHost: x\r\n\r\n", "", path, sizeof(path), reply, sizeof(reply)), -1);
+	expect_int("missing key refused", dex_ws_handshake_reply(
+		"GET / HTTP/1.1\r\nUpgrade: websocket\r\n\r\n", "", path, sizeof(path), reply, sizeof(reply)), -2);
+	dex_ws_handshake_reply(
+		"GET /a-path-longer-than-sixteen HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: k\r\n\r\n",
+		"", path, sizeof(path), reply, sizeof(reply));
+	expect_str("long path truncated", path, "/a-path-longer-");
+
 	printf(failures == 0 ? "OK\n" : "FAILURES\n");
 	return failures == 0 ? 0 : 1;
 }

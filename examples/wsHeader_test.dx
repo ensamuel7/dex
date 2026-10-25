@@ -12,7 +12,9 @@ fn serve(): void {
 }
 
 fn main(): void {
-    spawn { serve() }
+    spawn {
+        serve()
+    }
     time.sleep(200)
     let conn: ws.Conn = ws.connect("ws://127.0.0.1:19417/ocpp/CP-1")
     ws.send(conn, "ping")

@@ -1,0 +1,32 @@
+import "num"
+import "str"
+
+fn main(): void {
+    let a: int = str.toInt("-2147483648")
+    let b: int = str.toInt("-1")
+    assert(a / b == a)
+    assert(a % b == 0)
+    let c: int = -2147483647 - 1
+    assert(c / -1 == c)
+    let la: long = num.toLong(a) * 4294967296
+    let lb: long = num.toLong(b)
+    assert(la / lb == la)
+    assert(la % lb == 0)
+    let x: int = a
+    x /= b
+    assert(x == a)
+    let m: int = 7
+    m %= 3
+    assert(m == 1)
+    assert(num.toInt(10000000000000000000000.0) == 2147483647)
+    assert(num.toInt(-10000000000000000000000.0) == -2147483648)
+    assert(num.toLong(10000000000000000000000.0) == 9223372036854775807)
+    let nan: double = str.toDouble("nan")
+    assert(num.toInt(nan) == 0)
+    assert(num.toInt(-3.99) == -3)
+    assert(7 / 2 == 3)
+    assert(-7 % 3 == -1)
+    assert(str.toInt("99999999999") == 2147483647)
+    assert(str.toInt("-99999999999") == -2147483648)
+    assert(str.toLong("999999999999999999999") == 9223372036854775807)
+}

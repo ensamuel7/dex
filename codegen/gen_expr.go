@@ -110,6 +110,14 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		if e.HasMixedTypes {
 			widerType := g.widerNumericType(e.LeftType, e.RightType)
 			castType := g.cType(widerType)
+			if fn := g.intDivFunc(e.Op, widerType); fn != "" {
+				out.WriteString(fmt.Sprintf("%s((%s)", fn, castType))
+				g.genExpr(out, e.Left)
+				out.WriteString(fmt.Sprintf(", (%s)", castType))
+				g.genExpr(out, e.Right)
+				out.WriteString(")")
+				return
+			}
 			out.WriteString("(")
 			if e.LeftType != widerType {
 				out.WriteString(fmt.Sprintf("(%s)", castType))
@@ -130,6 +138,14 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			return
 		}
 
+		if fn := g.intDivFunc(e.Op, g.typeOfExpr(e.Right)); fn != "" {
+			out.WriteString(fn + "(")
+			g.genExpr(out, e.Left)
+			out.WriteString(", ")
+			g.genExpr(out, e.Right)
+			out.WriteString(")")
+			return
+		}
 		out.WriteString("(")
 		g.genExpr(out, e.Left)
 		out.WriteString(fmt.Sprintf(" %s ", g.cBinOp(e.Op)))
@@ -182,17 +198,13 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		if ast.IsStructArrayType(arrType) {
 			elemType := ast.ElementType(arrType)
 			elemCType := g.cType(elemType)
-			out.WriteString(fmt.Sprintf("(dex_bounds_check("))
+			out.WriteString(fmt.Sprintf("(*(%s*)dex_array_struct_get(%s, dex_checked_index(", elemCType, arrC))
 			g.genExpr(out, e.Index)
-			out.WriteString(fmt.Sprintf(", %s->len), *(%s*)dex_array_struct_get(%s, ", arrC, elemCType, arrC))
-			g.genExpr(out, e.Index)
-			out.WriteString("))")
+			out.WriteString(fmt.Sprintf(", %s->len)))", arrC))
 		} else {
-			out.WriteString("(dex_bounds_check(")
+			out.WriteString(fmt.Sprintf("(%s->data[dex_checked_index(", arrC))
 			g.genExpr(out, e.Index)
-			out.WriteString(fmt.Sprintf(", %s->len), %s->data[", arrC, arrC))
-			g.genExpr(out, e.Index)
-			out.WriteString("])")
+			out.WriteString(fmt.Sprintf(", %s->len)])", arrC))
 		}
 
 	case *ast.SliceExpr:
@@ -264,9 +276,16 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 
 	case *ast.StructLitExpr:
 		cName := "Dex_" + e.Name
-		out.WriteString(fmt.Sprintf("(%s){ ", cName))
 		structType, _ := ast.LookupStructType(e.Name)
 		structDef := ast.GetStructDef(structType)
+		guarded := g.structLitNeedsUnwindGuard(e, structDef)
+		guardMark, guardTmp := "", ""
+		if guarded {
+			guardMark = g.nextCleanupMark()
+			guardTmp = g.nextTemp()
+			out.WriteString(fmt.Sprintf("({ size_t %s = _dex_cleanup_top; %s %s = ", guardMark, cName, guardTmp))
+		}
+		out.WriteString(fmt.Sprintf("(%s){ ", cName))
 		// Track which fields are explicitly provided
 		provided := make(map[string]bool, len(e.FieldNames))
 		for _, fn := range e.FieldNames {
@@ -297,6 +316,10 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 					break
 				}
 			}
+			if guarded && g.structLitFieldOwned(fieldType, e.FieldValues[i]) {
+				g.genGuardedFieldValue(out, fieldType, e.FieldValues[i])
+				continue
+			}
 			// An interface-typed field takes a box the struct then owns, so
 			// the coercion happens here and the struct's cleanup releases it.
 			if ast.IsInterfaceType(fieldType) &&
@@ -323,6 +346,9 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			}
 		}
 		out.WriteString(" }")
+		if guarded {
+			out.WriteString(fmt.Sprintf("; _dex_cleanup_drop_to(%s); %s; })", guardMark, guardTmp))
+		}
 
 	case *ast.FieldAccessExpr:
 		if e.IsMethodValue {
@@ -345,7 +371,7 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 		}
 
 	case *ast.CallExpr:
-		g.genCallExpr(out, e)
+		g.genCallRefreshingUnwind(out, e)
 
 	case *ast.SpawnExpr:
 		g.genSpawnExpr(out, e)
@@ -513,58 +539,67 @@ func (g *Generator) fieldChainC(chain string) string {
 func (g *Generator) genStringCompare(out *strings.Builder, e *ast.BinaryExpr, op string) {
 	leftOwned := !isStringLiteral(e.Left) && g.isNewAlloc(e.Left)
 	rightOwned := !isStringLiteral(e.Right) && g.isNewAlloc(e.Right)
+	neg := ""
+	if op == "!=" {
+		neg = "!"
+	}
 
-	// Nothing to release: the original form, which keeps the generated C
-	// readable for the overwhelmingly common literal and variable comparisons.
 	if !leftOwned && !rightOwned {
-		out.WriteString("(strcmp(")
-		g.genStringData(out, e.Left)
-		out.WriteString(", ")
-		g.genStringData(out, e.Right)
-		out.WriteString(fmt.Sprintf(") %s 0)", op))
+		out.WriteString("(" + neg + g.stringEqExpr(g.stringOperand(e.Left), g.stringOperand(e.Right)) + ")")
 		return
 	}
 
-	// Each side that allocates is bound once, compared, and released. A side
-	// that does not allocate is left inline, so a borrowed reference is never
-	// released by mistake.
 	out.WriteString("({ ")
-	var leftRef, rightRef string
+	left, right := "", ""
 	if leftOwned {
-		leftRef = g.nextTemp()
-		out.WriteString(fmt.Sprintf("DexString* %s = ", leftRef))
+		left = g.nextTemp()
+		out.WriteString(fmt.Sprintf("DexString* %s = ", left))
 		g.genExpr(out, e.Left)
 		out.WriteString("; ")
+	} else {
+		left = g.stringOperand(e.Left)
 	}
 	if rightOwned {
-		rightRef = g.nextTemp()
-		out.WriteString(fmt.Sprintf("DexString* %s = ", rightRef))
+		right = g.nextTemp()
+		out.WriteString(fmt.Sprintf("DexString* %s = ", right))
 		g.genExpr(out, e.Right)
 		out.WriteString("; ")
+	} else {
+		right = g.stringOperand(e.Right)
 	}
 
 	result := g.nextTemp()
-	out.WriteString(fmt.Sprintf("_Bool %s = (strcmp(", result))
+	out.WriteString(fmt.Sprintf("_Bool %s = %s%s; ", result, neg, g.stringEqExpr(left, right)))
 	if leftOwned {
-		out.WriteString(leftRef + "->data")
-	} else {
-		g.genStringData(out, e.Left)
-	}
-	out.WriteString(", ")
-	if rightOwned {
-		out.WriteString(rightRef + "->data")
-	} else {
-		g.genStringData(out, e.Right)
-	}
-	out.WriteString(fmt.Sprintf(") %s 0); ", op))
-
-	if leftOwned {
-		out.WriteString(fmt.Sprintf("dex_release(%s); ", leftRef))
+		out.WriteString(fmt.Sprintf("dex_release(%s); ", left))
 	}
 	if rightOwned {
-		out.WriteString(fmt.Sprintf("dex_release(%s); ", rightRef))
+		out.WriteString(fmt.Sprintf("dex_release(%s); ", right))
 	}
 	out.WriteString(fmt.Sprintf("%s; })", result))
+}
+
+func (g *Generator) stringOperand(expr ast.Expr) string {
+	if lit, ok := expr.(*ast.StringLit); ok {
+		return fmt.Sprintf("%q", lit.Value)
+	}
+	var b strings.Builder
+	g.genBorrowed(&b, expr)
+	return b.String()
+}
+
+func (g *Generator) stringEqExpr(left, right string) string {
+	leftLit := strings.HasPrefix(left, "\"")
+	rightLit := strings.HasPrefix(right, "\"")
+	switch {
+	case leftLit && rightLit:
+		return fmt.Sprintf("(sizeof(%s) == sizeof(%s) && memcmp(%s, %s, sizeof(%s)) == 0)", left, right, left, right, left)
+	case rightLit:
+		return fmt.Sprintf("dex_str_eq_lit(%s, %s, sizeof(%s) - 1)", left, right, right)
+	case leftLit:
+		return fmt.Sprintf("dex_str_eq_lit(%s, %s, sizeof(%s) - 1)", right, left, left)
+	}
+	return fmt.Sprintf("dex_str_eq(%s, %s)", left, right)
 }
 
 func isStringLiteral(expr ast.Expr) bool {
@@ -592,25 +627,33 @@ func (g *Generator) genStringData(out *strings.Builder, expr ast.Expr) {
 // built inside a statement expression.
 func (g *Generator) genArrayLitExpr(out *strings.Builder, e *ast.ArrayLitExpr) {
 	arrType := ast.ArrayTypeOf(e.ElemType)
-	if ast.IsStructType(e.ElemType) {
+	if ast.IsStructType(e.ElemType) || ast.IsStructArrayType(arrType) {
 		arrType = ast.StructArrayTypeOf(e.ElemType)
 		elemCType := g.cType(e.ElemType)
 		tmp := g.nextTemp()
-		out.WriteString(fmt.Sprintf("({ DexArrayStruct* %s = dex_array_struct_new(sizeof(%s), %s); ",
+		out.WriteString("({ ")
+		mark := g.inlineUnwindMark(out)
+		out.WriteString(fmt.Sprintf("DexArrayStruct* %s = dex_array_struct_new(sizeof(%s), %s); ",
 			tmp, elemCType, g.structArrayCleanupFunc(e.ElemType)))
+		g.inlineUnwindPush(out, mark, tmp)
 		for _, elem := range e.Elems {
 			g.genStructArrayLitElem(out, tmp, e.ElemType, elem)
 			out.WriteString(" ")
 		}
+		g.inlineUnwindDrop(out, mark)
 		out.WriteString(fmt.Sprintf("%s; })", tmp))
 		return
 	}
 
 	tmp := g.nextTemp()
-	out.WriteString(fmt.Sprintf("({ %s %s = %s(); ", g.cType(arrType), tmp, g.arrayNewFunc(arrType)))
+	out.WriteString("({ ")
+	mark := g.inlineUnwindMark(out)
+	out.WriteString(fmt.Sprintf("%s %s = %s(); ", g.cType(arrType), tmp, g.arrayNewFunc(arrType)))
+	g.inlineUnwindPush(out, mark, tmp)
 	for _, elem := range e.Elems {
 		g.genArrayLitElem(out, tmp, arrType, elem)
 		out.WriteString(" ")
 	}
+	g.inlineUnwindDrop(out, mark)
 	out.WriteString(fmt.Sprintf("%s; })", tmp))
 }

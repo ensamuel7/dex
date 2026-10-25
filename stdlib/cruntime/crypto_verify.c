@@ -205,7 +205,7 @@ DexString* dex_crypto_sign_rs256(DexString* message, DexString* pem) {
            is not knowable from the message. */
         size_t siglen = 0;
         if (EVP_DigestSign(ctx, NULL, &siglen, m, mlen) == 1 && siglen > 0) {
-            unsigned char* sig = (unsigned char*)malloc(siglen);
+            unsigned char* sig = (unsigned char*)dex_xmalloc(siglen);
             if (sig) {
                 if (EVP_DigestSign(ctx, sig, &siglen, m, mlen) == 1) {
                     out = dex_b64url_string(sig, siglen);

@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <execinfo.h>
 
 #define DEX_MC_MAGIC_LIVE 0xD3C0FFEE0000A11CULL
 #define DEX_MC_MAGIC_DEAD 0xD3C0FFEE0000DEADULL
@@ -65,6 +66,13 @@ static int dex_mc_q_next = 0;
 static long dex_mc_live_count = 0;
 static long dex_mc_allocs = 0;
 static long dex_mc_frees = 0;
+static long dex_mc_fail_at = -1;
+static long dex_mc_fail_seen = 0;
+static int dex_mc_fail_on = 0;
+static int dex_mc_fail_try_only = 0;
+static void (*dex_mc_inject_throw)(const char* msg) = NULL;
+static int (*dex_mc_inject_armed)(void) = NULL;
+static DEX_MC_TLS char dex_mc_inject_msg[256];
 
 static void dex_mc_describe(const DexObjHeader* o) {
     if (!o) return;
@@ -119,8 +127,33 @@ static void dex_mc_rc_guard(const void* ptr) {
     }
 }
 
+static void dex_mc_inject(void* ptr) {
+    if (dex_mc_fail_try_only && !(dex_mc_inject_armed && dex_mc_inject_armed())) return;
+    DEX_MC_LOCK();
+    long n = ++dex_mc_fail_seen;
+    int fire = n == dex_mc_fail_at;
+    if (fire) dex_mc_fail_at = -1;
+    DEX_MC_UNLOCK();
+    if (!fire) return;
+    free(ptr);
+    snprintf(dex_mc_inject_msg, sizeof(dex_mc_inject_msg),
+             "injected allocation failure #%ld at %s", n, dex_mc_site);
+    fflush(stdout);
+    fprintf(stderr, "fault injection: %s\n", dex_mc_inject_msg);
+    const char* trace = getenv("DEX_FAIL_ALLOC_TRACE");
+    if (trace && strcmp(trace, "1") == 0) {
+        void* frames[32];
+        backtrace_symbols_fd(frames, backtrace(frames, 32), 2);
+    }
+    if (dex_mc_inject_throw) dex_mc_inject_throw(dex_mc_inject_msg);
+    fflush(stdout);
+    fprintf(stderr, "Unhandled Exception: %s\n", dex_mc_inject_msg);
+    exit(1);
+}
+
 static void dex_mc_on_alloc(void* ptr, size_t size) {
     DexObjHeader* o = (DexObjHeader*)ptr;
+    if (dex_mc_fail_on) dex_mc_inject(ptr);
     o->mc_magic = DEX_MC_MAGIC_LIVE;
     o->mc_alloc_site = dex_mc_site;
     o->mc_free_site = NULL;
@@ -180,6 +213,12 @@ typedef struct {
 // failing exit status once the expected-live set for a program is known. A
 // memory *error* needs no such judgement and is always fatal.
 static void dex_mc_report(void) {
+    const char* count = getenv("DEX_FAIL_ALLOC_REPORT");
+    if (count && strcmp(count, "1") == 0) {
+        fflush(stdout);
+        fprintf(stderr, "fault injection: %ld allocations\n", dex_mc_fail_seen);
+        fflush(stderr);
+    }
     DEX_MC_LOCK();
     long leaked = dex_mc_live_count;
     DexMcSiteTally tally[DEX_MC_SITES];
@@ -236,6 +275,12 @@ static void dex_mc_report(void) {
 }
 
 static void dex_mc_init(void) {
+    const char* at = getenv("DEX_FAIL_ALLOC");
+    const char* report = getenv("DEX_FAIL_ALLOC_REPORT");
+    const char* scope = getenv("DEX_FAIL_ALLOC_SCOPE");
+    if (at) dex_mc_fail_at = atol(at);
+    dex_mc_fail_on = dex_mc_fail_at > 0 || (report && strcmp(report, "1") == 0);
+    dex_mc_fail_try_only = scope && strcmp(scope, "try") == 0;
     atexit(dex_mc_report);
 }
 

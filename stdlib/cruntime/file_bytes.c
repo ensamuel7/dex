@@ -12,17 +12,20 @@
 DexString* dex_file_read_bytes(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) return dex_string_new("", 0);
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (len < 0) { fclose(f); return dex_string_new("", 0); }
-
-    DexString* out = (DexString*)dex_obj_alloc(sizeof(DexString) + (size_t)len + 1,
-                                               dex_string_destroy);
-    size_t got = fread(out->data, 1, (size_t)len, f);
+    size_t cap = 4096, len = 0;
+    char* buf = (char*)dex_xmalloc(cap);
+    for (;;) {
+        if (len == cap) {
+            cap *= 2;
+            buf = (char*)dex_xrealloc(buf, cap);
+        }
+        size_t got = fread(buf + len, 1, cap - len, f);
+        len += got;
+        if (got == 0) break;
+    }
     fclose(f);
-    out->len = got;
-    out->data[got] = '\0';
+    DexString* out = dex_string_new(buf, len);
+    free(buf);
     return out;
 }
 
@@ -57,7 +60,7 @@ int dex_file_size(const char* path) {
 _Bool dex_file_mkdirp(const char* path) {
     if (!path || !*path) return 0;
     size_t n = strlen(path);
-    char* buf = (char*)malloc(n + 1);
+    char* buf = (char*)dex_xmalloc(n + 1);
     if (!buf) return 0;
     memcpy(buf, path, n + 1);
 
@@ -144,7 +147,7 @@ int dex_file_put_url(const char* path, const char* url, const char* headers) {
 
     struct curl_slist* list = NULL;
     if (headers && *headers) {
-        char* copy = strdup(headers);
+        char* copy = dex_xstrdup(headers);
         char* save = NULL;
         for (char* line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
             if (*line) list = curl_slist_append(list, line);

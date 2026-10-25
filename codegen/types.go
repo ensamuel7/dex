@@ -689,6 +689,23 @@ func (g *Generator) widerNumericType(a, b ast.Type) ast.Type {
 	return b
 }
 
+func (g *Generator) intDivFunc(op ast.BinOp, t ast.Type) string {
+	if op != ast.BinDiv && op != ast.BinMod {
+		return ""
+	}
+	name := "div"
+	if op == ast.BinMod {
+		name = "mod"
+	}
+	switch t {
+	case ast.TypeInt, ast.TypeChar:
+		return "dex_" + name + "_int"
+	case ast.TypeLong:
+		return "dex_" + name + "_long"
+	}
+	return ""
+}
+
 func (g *Generator) nonzeroCheckFunc(t ast.Type) string {
 	switch t {
 	case ast.TypeLong:

@@ -36,15 +36,15 @@ static int dex_random_bytes(unsigned char* out, size_t want) {
 const char* dex_crypto_uuid(void) {
     unsigned char bytes[16];
     if (!dex_random_bytes(bytes, sizeof(bytes))) {
-        return strdup("");
+        return dex_xstrdup("");
     }
     // Set version 4 (bits 6-7 of byte 6)
     bytes[6] = (bytes[6] & 0x0F) | 0x40;
     // Set variant 1 (bits 6-7 of byte 8)
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
 
-    char* result = (char*)malloc(37);
-    if (!result) return strdup("");
+    char* result = (char*)dex_xmalloc(37);
+    if (!result) return dex_xstrdup("");
     snprintf(result, 37, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
         bytes[0], bytes[1], bytes[2], bytes[3],
         bytes[4], bytes[5],
@@ -57,13 +57,13 @@ const char* dex_crypto_uuid(void) {
 /* n random bytes as lowercase hex, for session and invite tokens. "" when the
    system has no entropy to give, or n is out of range. */
 const char* dex_crypto_random_hex(int n) {
-    if (n < 1 || n > 1024) return strdup("");
-    unsigned char* bytes = (unsigned char*)malloc((size_t)n);
-    char* out = (char*)malloc((size_t)n * 2 + 1);
+    if (n < 1 || n > 1024) return dex_xstrdup("");
+    unsigned char* bytes = (unsigned char*)dex_xmalloc((size_t)n);
+    char* out = (char*)dex_xmalloc((size_t)n * 2 + 1);
     if (!bytes || !out || !dex_random_bytes(bytes, (size_t)n)) {
         free(bytes);
         free(out);
-        return strdup("");
+        return dex_xstrdup("");
     }
     static const char hex[] = "0123456789abcdef";
     for (int i = 0; i < n; i++) {

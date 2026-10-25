@@ -95,5 +95,4 @@ fn main(): void {
 
     fill(p, 42)
     fmt.println(p.currency + " / " + p.firstAt + " / " + str.fromInt(p.sessions))
-
 }

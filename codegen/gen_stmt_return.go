@@ -132,10 +132,14 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 		g.stmtPrelude = savedPrelude
 
 		if prelude != "" {
+			if g.stmtTempsRegistered && g.stmtTempMark == "" {
+				g.stmtTempMark = g.nextCleanupMark()
+				out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_top;\n", prefix, g.stmtTempMark))
+			}
 			out.WriteString(prefix + prelude + "\n")
 		}
 		out.WriteString(fmt.Sprintf("%s%s _ret_tmp = %s;\n", prefix, g.cType(retType), body.String()))
-		if alreadyIface {
+		if alreadyIface && g.borrowsHeapValue(s.Value) {
 			out.WriteString(fmt.Sprintf("%sdex_retain(_ret_tmp._obj);\n", prefix))
 		}
 		g.emitHoistReleases(out, prefix)
@@ -234,6 +238,7 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
 			g.emitRetainReturnedLitFields(out, prefix, retType, s.Value)
+			g.emitHoistReleases(out, prefix)
 			g.emitReturn(out, prefix, "_ret_tmp")
 		} else if ast.IsStructType(retType) && g.borrowsHeapValue(s.Value) &&
 			g.structHasReleasableField(retType) {
@@ -254,6 +259,7 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
 			g.emitRetainBorrowedStructFields(out, prefix, "_ret_tmp", retType)
+			g.emitHoistReleases(out, prefix)
 			g.emitReturn(out, prefix, "_ret_tmp")
 		} else {
 			// Nothing in scope to clean up, but the return expression may

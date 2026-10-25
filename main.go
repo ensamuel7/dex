@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -168,6 +170,9 @@ func main() {
 	case "dev":
 		dev(filename)
 
+	case "profile":
+		runProfile(filename)
+
 	case "check":
 		check(filename)
 
@@ -184,12 +189,21 @@ func main() {
 func runTests(args []string) {
 	var files []string
 
-	if len(args) >= 1 {
-		// Run specific test file
-		files = append(files, args[0])
-	} else {
-		// Discover *_test.dx files recursively
-		err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+	roots := args
+	if len(roots) == 0 {
+		roots = []string{"."}
+	}
+	for _, root := range roots {
+		info, err := os.Stat(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if !info.IsDir() {
+			files = append(files, root)
+			continue
+		}
+		err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -202,10 +216,10 @@ func runTests(args []string) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if len(files) == 0 {
-			fmt.Fprintln(os.Stderr, "No *_test.dx files found")
-			os.Exit(1)
-		}
+	}
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "No *_test.dx files found")
+		os.Exit(1)
 	}
 
 	passed := 0
@@ -220,9 +234,7 @@ func runTests(args []string) {
 		}
 
 		cmd := exec.Command(binaryPath)
-		if os.Getenv("DEX_SANITIZE") == "1" {
-			cmd.Env = append(os.Environ(), "ASAN_OPTIONS=detect_leaks=1")
-		}
+		cmd.Env = append(os.Environ(), sanitizerEnv()...)
 		output, err := cmd.CombinedOutput()
 		os.Remove(binaryPath)
 
@@ -498,14 +510,9 @@ func build(filename string) (string, error) {
 
 	// Generate C
 	gen := codegen.New()
-	// DEX_MEM_CHECK=1 builds in the debug memory checker: every retain and
-	// release is validated against the object's header, a freed object is kept
-	// in quarantine so a second release panics instead of corrupting the
-	// allocator, and anything still alive at exit is reported against the .dx
-	// statement that allocated it.
-	memCheck := os.Getenv("DEX_MEM_CHECK") == "1"
-	if memCheck {
-		gen.EnableMemCheck()
+	memCheck, err := configureGen(gen)
+	if err != nil {
+		return "", err
 	}
 	cCode := gen.Generate(program)
 
@@ -543,6 +550,11 @@ func build(filename string) (string, error) {
 		}
 	}
 	libflags = keepLastOccurrence(libflags)
+	if names, _ := sanitizers(); len(names) > 0 {
+		cflags = slices.DeleteFunc(cflags, func(f string) bool { return strings.HasPrefix(f, "-D_FORTIFY_SOURCE") })
+	}
+	cflags = append(cflags, hardeningFlags(compiler)...)
+	cflags = append(cflags, strings.Fields(os.Getenv("DEX_CFLAGS"))...)
 	// A stdlib function whose C signature disagrees with how it is registered —
 	// a DexString* declared where the generated call passes char*, because
 	// RawParams was left off — produced nothing worse than a warning, compiled,
@@ -565,9 +577,11 @@ func build(filename string) (string, error) {
 		"-Werror=incompatible-pointer-types",
 		"-Werror=implicit-function-declaration",
 	}, cflags...)
-	if os.Getenv("DEX_SANITIZE") == "1" {
-		args = append(args, "-fsanitize=address", "-fno-omit-frame-pointer", "-g")
+	sanFlags, err := sanitizerFlags()
+	if err != nil {
+		return "", err
 	}
+	args = append(args, sanFlags...)
 	// The checker aborts on a bad release, so the build carries symbols for the
 	// resulting backtrace.
 	if memCheck {
@@ -584,6 +598,136 @@ func build(filename string) (string, error) {
 	return binaryPath, nil
 }
 
+var (
+	hardeningOnce   sync.Once
+	hardeningCached []string
+)
+
+func hardeningFlags(compiler string) []string {
+	hardeningOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "dex-probe")
+		if err != nil {
+			return
+		}
+		defer os.RemoveAll(dir)
+		src := filepath.Join(dir, "p.c")
+		if os.WriteFile(src, []byte("int main(void) { return 0; }\n"), 0644) != nil {
+			return
+		}
+		supports := func(flags ...string) bool {
+			args := append([]string{"-Werror", "-O2"}, flags...)
+			args = append(args, src, "-o", filepath.Join(dir, "p"))
+			return exec.Command(compiler, args...).Run() == nil
+		}
+		names, _ := sanitizers()
+		if len(names) == 0 && supports("-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=3") {
+			hardeningCached = append(hardeningCached, "-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=3")
+		}
+		candidates := []string{"-fstack-clash-protection", "-mbranch-protection=standard", "-fcf-protection=full"}
+		if !slices.Contains(names, "memory") {
+			candidates = append(candidates, "-ftrivial-auto-var-init=zero")
+		}
+		for _, f := range candidates {
+			if supports(f) {
+				hardeningCached = append(hardeningCached, f)
+			}
+		}
+	})
+	return hardeningCached
+}
+
+func sanitizers() ([]string, error) {
+	v := os.Getenv("DEX_SANITIZE")
+	if v == "" || v == "0" {
+		return nil, nil
+	}
+	var out []string
+	for _, name := range strings.Split(v, ",") {
+		switch strings.TrimSpace(name) {
+		case "1", "address", "asan":
+			out = append(out, "address")
+		case "undefined", "ub", "ubsan":
+			out = append(out, "undefined")
+		case "thread", "tsan":
+			out = append(out, "thread")
+		case "memory", "msan":
+			out = append(out, "memory")
+		case "leak", "lsan":
+			out = append(out, "leak")
+		default:
+			return nil, fmt.Errorf("DEX_SANITIZE: unknown sanitizer %q (address, undefined, thread, memory, leak)", name)
+		}
+	}
+	has := func(n string) bool { return slices.Contains(out, n) }
+	if has("thread") && (has("address") || has("memory") || has("leak")) {
+		return nil, fmt.Errorf("DEX_SANITIZE: thread cannot be combined with address, memory or leak")
+	}
+	if has("memory") && (has("address") || has("leak")) {
+		return nil, fmt.Errorf("DEX_SANITIZE: memory cannot be combined with address or leak")
+	}
+	return out, nil
+}
+
+func sanitizerFlags() ([]string, error) {
+	names, err := sanitizers()
+	if err != nil || len(names) == 0 {
+		return nil, err
+	}
+	flags := []string{"-fsanitize=" + strings.Join(names, ","), "-fno-omit-frame-pointer", "-g"}
+	if slices.Contains(names, "undefined") {
+		flags = append(flags, "-fno-sanitize-recover=all")
+	}
+	if slices.Contains(names, "memory") {
+		flags = append(flags, "-fsanitize-memory-track-origins")
+	}
+	return flags, nil
+}
+
+func sanitizerEnv() []string {
+	names, _ := sanitizers()
+	var env []string
+	for _, n := range names {
+		switch n {
+		case "address":
+			if runtime.GOOS == "linux" {
+				env = append(env, "ASAN_OPTIONS=detect_leaks=1:abort_on_error=0")
+			}
+		case "undefined":
+			env = append(env, "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+		case "thread":
+			env = append(env, "TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1")
+		}
+	}
+	return env
+}
+
+// configureGen turns on the instrumented build modes the environment asks for,
+// and reports whether the memory checker is one of them.
+//
+// DEX_MEM_CHECK=1 builds in the debug memory checker: every retain and release
+// is validated against the object's header, a freed object is kept in
+// quarantine so a second release panics instead of corrupting the allocator,
+// and anything still alive at exit is reported against the .dx statement that
+// allocated it.
+//
+// DEX_PROFILE=1 (or `dex profile`) builds in the memory profiler instead. The
+// two cannot share a build: the checker's quarantine holds freed memory back,
+// which is exactly what would make the profiler's numbers wrong.
+func configureGen(gen *codegen.Generator) (bool, error) {
+	memCheck := os.Getenv("DEX_MEM_CHECK") == "1"
+	profile := profileBuild || os.Getenv("DEX_PROFILE") == "1"
+	if memCheck && profile {
+		return false, fmt.Errorf("DEX_MEM_CHECK and the profiler cannot be combined: the checker's quarantine would count as memory the program holds")
+	}
+	if memCheck {
+		gen.EnableMemCheck()
+	}
+	if profile {
+		gen.EnableProfile()
+	}
+	return memCheck, nil
+}
+
 // generateC runs the compilation pipeline up to C code generation (no cc invocation).
 // Returns the path to the generated .c file.
 func generateC(filename string) (string, error) {
@@ -593,14 +737,8 @@ func generateC(filename string) (string, error) {
 	}
 	resolve.RenameCCollisions(program)
 	gen := codegen.New()
-	// DEX_MEM_CHECK=1 builds in the debug memory checker: every retain and
-	// release is validated against the object's header, a freed object is kept
-	// in quarantine so a second release panics instead of corrupting the
-	// allocator, and anything still alive at exit is reported against the .dx
-	// statement that allocated it.
-	memCheck := os.Getenv("DEX_MEM_CHECK") == "1"
-	if memCheck {
-		gen.EnableMemCheck()
+	if _, err := configureGen(gen); err != nil {
+		return "", err
 	}
 	cCode := gen.Generate(program)
 

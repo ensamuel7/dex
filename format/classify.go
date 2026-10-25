@@ -126,7 +126,7 @@ func (p *printer) startsSegment(i int) bool {
 		return true
 	}
 	if cur.kind == token.TokenComment {
-		return cur.line > prev.line
+		return cur.line > prev.end
 	}
 
 	if prev.kind == token.TokenLBrace && p.block[i-1] {
@@ -146,7 +146,10 @@ func (p *printer) startsSegment(i int) bool {
 		return true
 	}
 
-	return cur.line > prev.line && canEnd(prev.kind) && canStart(cur.kind)
+	if prev.kind == token.TokenGt && !p.generic[i-1] {
+		return false
+	}
+	return cur.line > prev.end && canEnd(prev.kind) && canStart(cur.kind)
 }
 
 // isBlockBrace separates a brace that opens a body from one that opens a struct,
@@ -157,6 +160,9 @@ func (p *printer) startsSegment(i int) bool {
 // Getting this wrong is a layout bug and never a correctness one: the lexer
 // discards newlines, so the parser cannot tell where the formatter put them.
 func (p *printer) isBlockBrace(i, seg int) bool {
+	if i == 0 {
+		return false
+	}
 	switch p.it[i-1].kind {
 	case token.TokenRParen, token.TokenElse, token.TokenTry, token.TokenFinally,
 		token.TokenFatArrow, token.TokenDefer, token.TokenSpawn:

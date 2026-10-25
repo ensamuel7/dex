@@ -17,7 +17,9 @@ fn add(n: int): int {
 // A local of the same name is still captured by value, as locals are.
 fn shadowed(): int {
     let total: int = 7
-    let local: fn(): int = fn(): int { return total }
+    let local: fn(): int = fn(): int {
+        return total
+    }
     total = 8
     return local()
 }
@@ -42,7 +44,9 @@ fn main(): void {
     assert(add(0) == 13)
 
     // A closure sees writes to a global made after it was built.
-    let read: fn(): int = fn(): int { return total }
+    let read: fn(): int = fn(): int {
+        return total
+    }
     total = 100
     assert(read() == 100)
 

@@ -202,6 +202,18 @@ confirms a clean run. `DEX_MEM_ABORT=1` aborts on an error instead of exiting,
 for a core dump; the default is a fast exit because `abort()` on macOS hands the
 process to the crash reporter and looks like a hang.
 
+Fault injection rides on the checker. `DEX_FAIL_ALLOC=N` makes the Nth managed
+allocation throw `injected allocation failure #N at file.dx:line` through the
+same staged throw `throw` uses, so every unwind path can be driven
+deliberately; `DEX_FAIL_ALLOC_SCOPE=try` counts only allocations made while a
+try is live, `DEX_FAIL_ALLOC_REPORT=1` prints the total, and
+`DEX_FAIL_ALLOC_TRACE=1` a C backtrace at the failing one.
+`faultinject/faultinject_test.go` sweeps N over the fixtures in
+`faultinject/testdata/` on every `go test`, and over the whole example suite
+with `make faultinject`. It fails only on a memory error, a crash or a hang; a
+leak is reported, not failed, because of the two bounded classes in the unwind
+section below.
+
 It complements rather than replaces the two existing tools. `leaks` is
 reachability-based and conservatively scans the stack, so it reports zero for a
 closure whose only remaining pointer is a dead stack slot — the checker catches
@@ -213,6 +225,124 @@ ASan knows about the whole heap.
 It cannot find everything at compile time, and will not: whether a release is
 the last one is a runtime fact, and a reference cycle is not statically
 decidable at all — which is why `#[debug(cycles)]` is a runtime tool too.
+
+## Sanitizers and the other safety nets
+
+`DEX_SANITIZE` takes a comma list: `address` (or `1`), `undefined`, `thread`,
+`memory`, `leak`. `thread` and `memory` each exclude `address`. Every build
+also takes `DEX_CFLAGS`, appended last, and `dex test` takes any number of
+files or directories.
+
+- `make sanitize` (ASan+UBSan) and `make tsan` run the suite on macOS, whose
+  clang has no MSan, LSan or libFuzzer.
+- `make sanitize-linux` runs ASan+LSan+UBSan, MSan, TSan and Valgrind in
+  `sanitize/Dockerfile` against a read-only copy of the tree, so its `build/`
+  never touches the host's. `MODES="asan valgrind"` picks a subset. Linux
+  clang's UBSan checks calls through a mismatched function type, which Apple
+  clang 17 does not; that is what found the interface vtable casts.
+- MSan sees memory written by an uninstrumented library as uninitialised, so
+  `run.sh` leaves out programs that link OpenSSL, sqlite, libpq and the like.
+- `make strict-c` builds the suite with `-Wall -Wextra -Wconversion -Werror`,
+  minus the categories the generated C produces on purpose (unused statics,
+  missing initialisers in a struct literal, pointer sign at an external, an
+  unwind slot for a field that is never reassigned) and `-Wignored-qualifiers`,
+  which librdkafka's own header trips.
+  `-Wshadow` is off: nested JSON literals reuse `_jo` in inner statement
+  expressions.
+- `matrix/matrix_test.go` crosses 13 value types with 12 ways of producing one
+  and 46 ways of consuming it, builds each combination under the memory checker
+  and runs it 50 times with `DEX_MEM_LEAKS=error`. Plain `go test` runs a fixed
+  sample; `DEX_MATRIX=1` runs all 6624 (about 75 minutes, most of it macOS
+  scanning each new binary), `DEX_MATRIX_FILTER=<substr>` a subset,
+  `DEX_MATRIX_ASAN=1` under ASan, and `DEX_MATRIX_OUT=<dir>` keeps every
+  failing program with its log. A combination the checker rejects counts as
+  invalid, not failed. `knownGaps` lists a combination that fails for a
+  reason not yet fixed, so it is reported rather than failing the run; it is
+  empty. Pass `-count=1`: the test shells out to a freshly built compiler,
+  which Go's test cache cannot see.
+- `fuzz/` holds libFuzzer harnesses for the runtime's input parsers;
+  `fuzz/run.sh` runs them under a local coverage-guided driver, `--docker` under
+  real libFuzzer. `fuzz/runtime.h` includes the runtime in `gen_program.go`'s
+  order and has to follow it.
+- The front end has Go fuzzers: `FuzzTokenize`, `FuzzParse`, `FuzzCheck` and
+  `FuzzFormat`, each in its package's `fuzz_test.go`, seeded from `examples/`.
+  Their crashers in `testdata/fuzz/` run on every `go test`. Run one with
+  `go test ./parser -run='^$' -fuzz=^FuzzParse$ -fuzztime=8m
+  -fuzzminimizetime=3s`; the default minimise time stalls on inputs grown from
+  the examples. The parser stops at 1000 levels of nesting and the lexer at
+  100 levels of interpolation, each with a diagnostic, because both recursed
+  without bound.
+
+Hardening flags are probed per compiler (`hardeningFlags` in `main.go`, once
+per process): `_FORTIFY_SOURCE=3`, stack clash protection, branch protection,
+and zeroed automatic variables. A sanitizer build drops fortify, which ASan
+defines to 0, and an MSan build drops zero-init, which would hide exactly what
+MSan looks for.
+
+### Undefined behaviour the generated C used to have
+
+- Integer `/` and `%`, compound forms included, go through `dex_div_int` and
+  friends in `safety.c`: zero panics, and `MIN / -1` is `MIN` with remainder
+  `0`, Go's answer. `-fwrapv` covers `+ - *` but not division, which faults on
+  x86 and was folded to garbage at `-O3`.
+- `num.toInt`/`toLong` of a double saturates and maps NaN to 0
+  (`dex_double_to_int`). Narrowing a long wraps, as Go does.
+- An index is evaluated once and checked at the access:
+  `a->data[dex_checked_index(i, a->len)]`. The check took the index as a
+  separate expression, so `a[next()]` called `next` twice and could check one
+  slot and touch another. An index assignment evaluates the index, then the
+  value, then checks, so a value that shrinks the array cannot make the check
+  stale.
+- An interface vtable slot is a typed thunk, `dex_vt_<Iface>_<Struct>_<m>`,
+  not the method cast to a `void*`-receiver pointer type.
+- `str.toInt` and every runtime parse of outside data go through
+  `dex_parse_int`/`dex_parse_long`/`dex_parse_double` in `core.c`, which
+  saturate; `atoi` on an out-of-range string is undefined.
+
+`core.c` is emitted into every program, ahead of every other runtime file. It
+holds the stack-overflow handler, the parse helpers, and `dex_xmalloc` and its
+siblings, which every stdlib allocation goes through: out of memory is fatal
+with the same message `dex_obj_alloc` gives. The stack guard records each
+thread's stack top and size — `main` from `RLIMIT_STACK`, a pool worker from
+the default attribute — and its alternate stack is static or in the worker's
+own frame, because a malloc'd one reachable only from the kernel reads as a
+leak to `leaks`. It is off under ASan, TSan and MSan, which install their own
+handlers.
+
+An external function whose handle return is declared without `?` goes through
+`dex_handle_require`, so a NULL stops the program at the call that produced it
+rather than at the next C function to receive it.
+
+## Profiling memory
+
+`dex profile <file>.dx` (or `DEX_PROFILE=1` on any build) compiles in
+`codegen/cruntime/profile.c` in place of the checker. It shares the checker's
+`DEX_AT` statement markers and nothing else: no quarantine and no poisoning,
+and the object pool stays on, so the numbers are the program's own. The two
+are refused together in `configureGen`.
+
+- **Sites are keyed on the literal's address**, in an open-addressed table, so
+  an allocation costs a hash rather than the checker's `strcmp` scan. The
+  header gains the site slot, the object's size, and its buffer size.
+- **Container buffers count.** Arrays, maps, string builders, channels and
+  `json.Value` call `DEX_PF_BUF_SET(obj, bytes)` after every (re)allocation of
+  their backing store. The delta is held by the site that allocated the
+  container and charged as allocation to the statement that grew it. A new
+  container type must do the same or its memory is invisible.
+- **`DEX_PF_FRAME()` at every function entry** restores the caller's marker on
+  return (`__attribute__((cleanup))`), so the rest of `let s = f() + "x"` is
+  charged to the caller rather than to `f`'s last line. An unwind skips it;
+  the next statement's marker corrects the site.
+- **At peak** is copied whenever the peak grows by 1%, not on every new high,
+  so it is approximate by that much.
+- The writer runs from `atexit` and from SIGUSR1/SIGINT/SIGTERM (only where the
+  program left the default disposition), so it uses `write(2)` from a static
+  buffer and takes the lock only with trylock in a handler.
+- `profview/` renders the JSON plus the source files it names into one HTML
+  page (`template.html`, embedded); `profilecli.go` is the command.
+
+Allocations are attributed to the line, not the call stack: everything inside a
+shared helper is charged to the helper's line.
 
 ## What an unwind collects, and what it still leaves
 
@@ -247,9 +377,16 @@ double free:
 
 A struct is registered a field at a time rather than as itself: releasing a
 struct means releasing its fields through its address, which the unwind cannot
-safely read. `registerStructFieldsForUnwind` does that, and skips a field that
-is itself a struct or an optional rather than descending into it — those are
-what still leak on an unwind, and the only thing that does.
+safely read. `registerStructFieldsForUnwind` does that, descending into a
+nested struct and registering an optional, a `T?` box or an interface's `_obj`
+under a dotted slot key; `emitUnwindPathUpdate` keeps each slot current after a
+field write. A call that may mutate a struct local's fields — a mutating
+method, a `&T` argument, `reflect.setString`, `db.fill` — goes through
+`gen_unwind_refresh.go`, which clears those slots before the call and refreshes
+them after. If that callee itself throws, the field it was writing leaks, one
+object per throw: the caller cannot know the new value and the dead frame
+cannot be read. That and allocations failing inside runtime constructors are
+what the fault-injection sweep still finds leaking.
 
 Registration is guarded on `_dex_exc_top >= 0`: with no exception frame live a
 throw exits the process and nothing unwinds, so the push is a load and a branch.
@@ -632,8 +769,8 @@ asked only about the fields. `genOptionalStructOwned` is now the one place a
 `T?` is produced owned: it boxes a `T` (retaining what a borrowed source holds)
 and retains a borrowed `T?`. `examples/optionalStruct_test.dx` covers each path.
 
-The box is not on the cleanup stack, so a throw past a frame still leaks a
-`T?` local there, as it did before.
+The box goes on the cleanup stack as its header pointer, or NULL when empty,
+with a slot when the variable is reassigned (`registerScopeVar`/`unwindHeld`).
 
 ## Maps reject what they cannot represent
 
@@ -766,6 +903,14 @@ or a use-after-free, so change them deliberately:
   reference the caller still holds, and an array element would write into the
   shallow copy `genReflectSubject` makes for reads. Both are compile errors, and
   `genReflectMutableSubject` therefore has no element path at all.
+- **A map read of a string mints.** `dex_map_*_get` returns its value
+  retained, so `m["k"]` is owned (`isMapHeapRead`), and `if (m["k"] == "v")`
+  releases it like any other minted operand.
+- **A local written in a try body escapes before the `setjmp`.** After a
+  `longjmp` a local the body changed may be read from a register holding its
+  old value, which was a double free when the old value had been released.
+  `emitTryWrittenEscapes` takes each such local's address ahead of the
+  `setjmp`, which keeps it in memory.
 - `json.Value` has its own ownership rules — indexing a document mints a reference
   where indexing an array only borrows one. See `jsonValueOwned` in `gen_jsonvalue.go`.
 - A method value is a fresh closure even though it reads like a field access, so

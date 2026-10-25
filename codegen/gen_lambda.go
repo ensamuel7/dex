@@ -19,7 +19,7 @@ import (
 // which is what an ordinary assignment wants — but a deferred call needs a
 // closure in hand either way, since the defer stack holds closures.
 func (g *Generator) genLambdaClosure(out *strings.Builder, e *ast.LambdaExpr) {
-	if len(g.findCapturedVars(e.Body)) > 0 {
+	if len(g.lambdaCaptures(e)) > 0 {
 		g.genLambdaExpr(out, e)
 		return
 	}
@@ -57,24 +57,25 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 	g.lambdaCounter++
 
 	// Determine captured variables from outer scope
-	captured := g.findCapturedVars(e.Body)
+	captured := g.lambdaCaptures(e)
 
 	fnName := fmt.Sprintf("_dex_lambda_%d", idx)
 
 	if len(captured) == 0 {
 		// No captures — generate a simple static function
-		g.lambdaWrappers.WriteString(fmt.Sprintf("static %s %s(", g.cType(e.ReturnType), fnName))
+		var lw strings.Builder
+		lw.WriteString(fmt.Sprintf("static %s %s(", g.cType(e.ReturnType), fnName))
 		if len(e.Params) == 0 {
-			g.lambdaWrappers.WriteString("void")
+			lw.WriteString("void")
 		} else {
 			for i, p := range e.Params {
 				if i > 0 {
-					g.lambdaWrappers.WriteString(", ")
+					lw.WriteString(", ")
 				}
-				g.lambdaWrappers.WriteString(fmt.Sprintf("%s %s", g.cType(p.Type), p.Name))
+				lw.WriteString(fmt.Sprintf("%s %s", g.cType(p.Type), p.Name))
 			}
 		}
-		g.lambdaWrappers.WriteString(") {\n")
+		lw.WriteString(") {\n")
 
 		// Save and restore generator state for the lambda body
 		savedVarTypes := g.varTypes
@@ -112,15 +113,24 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 		g.scopeStack = nil
 		g.pushScope()
 		var bodyBuf strings.Builder
+		restoreHoist := g.isolateFrame()
+		savedDefer := g.fnHasDefer
+		g.fnHasDefer = containsDefer(e.Body)
+		if g.fnHasDefer {
+			bodyBuf.WriteString("    size_t _dex_defer_base = _dex_defer_top;\n")
+		}
 		for _, stmt := range e.Body {
 			g.genStmt(&bodyBuf, stmt, 1)
 		}
 		// Falling off the end is a way out too.
 		g.popScope(&bodyBuf, "    ")
+		g.fnHasDefer = savedDefer
+		restoreHoist()
 		g.scopeStack = savedScopes
 		g.currentFn = savedFn
-		g.lambdaWrappers.WriteString(bodyBuf.String())
-		g.lambdaWrappers.WriteString("}\n")
+		lw.WriteString(bodyBuf.String())
+		lw.WriteString("}\n")
+		g.lambdaWrappers.WriteString(lw.String())
 
 		// Restore state
 		g.varTypes = savedVarTypes
@@ -148,9 +158,9 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 		g.closureWrappers.WriteString(fmt.Sprintf("static void %s(void* _p) {\n", destroyName))
 		g.closureWrappers.WriteString(fmt.Sprintf("    %s* _e = (%s*)_p;\n    (void)_e;\n", envName, envName))
 		for _, cv := range captured {
-			if ast.IsHeapType(cv.typ) {
-				g.closureWrappers.WriteString(fmt.Sprintf("    dex_release(_e->%s);\n", cv.name))
-			}
+			var rel strings.Builder
+			g.emitReleaseVar(&rel, "    ", "_e->"+cv.name, cv.typ)
+			g.closureWrappers.WriteString(rel.String())
 		}
 		g.closureWrappers.WriteString("}\n")
 
@@ -212,11 +222,19 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 		g.scopeStack = nil
 		g.pushScope()
 		var bodyBuf strings.Builder
+		restoreHoist := g.isolateFrame()
+		savedDefer := g.fnHasDefer
+		g.fnHasDefer = containsDefer(e.Body)
+		if g.fnHasDefer {
+			bodyBuf.WriteString("    size_t _dex_defer_base = _dex_defer_top;\n")
+		}
 		for _, stmt := range e.Body {
 			g.genStmt(&bodyBuf, stmt, 1)
 		}
 		// Falling off the end is a way out too.
 		g.popScope(&bodyBuf, "    ")
+		g.fnHasDefer = savedDefer
+		restoreHoist()
 		g.scopeStack = savedScopes
 		g.currentFn = savedFn
 
@@ -235,10 +253,27 @@ func (g *Generator) genLambdaExpr(out *strings.Builder, e *ast.LambdaExpr) {
 			envName, tmp, envName, envName, destroyName))
 		for _, cv := range captured {
 			out.WriteString(fmt.Sprintf("%s->%s = %s; ", tmp, cv.name, cv.name))
-			if ast.IsHeapType(cv.typ) {
-				out.WriteString(fmt.Sprintf("dex_retain(%s->%s); ", tmp, cv.name))
-			}
+			var ret strings.Builder
+			g.emitRetainValue(&ret, "", tmp+"->"+cv.name, cv.typ)
+			out.WriteString(strings.ReplaceAll(ret.String(), "\n", " "))
 		}
 		out.WriteString(fmt.Sprintf("dex_closure_new((void*)%s, %s); })", fnName, tmp))
 	}
+}
+
+func (g *Generator) lambdaCaptures(e *ast.LambdaExpr) []capturedVar {
+	var out []capturedVar
+	for _, cv := range g.findCapturedVars(e.Body) {
+		isParam := false
+		for _, p := range e.Params {
+			if p.Name == cv.name {
+				isParam = true
+				break
+			}
+		}
+		if !isParam {
+			out = append(out, cv)
+		}
+	}
+	return out
 }

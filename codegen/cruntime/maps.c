@@ -77,7 +77,8 @@ static DexMap_##SUFFIX* dex_map_##SUFFIX##_new(void) { \
     DexMap_##SUFFIX* m = (DexMap_##SUFFIX*)dex_obj_alloc(sizeof(DexMap_##SUFFIX), dex_map_##SUFFIX##_destroy); \
     m->cap = 16; \
     m->len = 0; \
-    m->entries = (DexMapEntry_##SUFFIX*)calloc((size_t)m->cap, sizeof(DexMapEntry_##SUFFIX)); \
+    m->entries = (DexMapEntry_##SUFFIX*)dex_xcalloc((size_t)m->cap, sizeof(DexMapEntry_##SUFFIX)); \
+    DEX_PF_BUF_SET(m, (size_t)m->cap * sizeof(DexMapEntry_##SUFFIX)); \
     if (!m->entries) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); } \
     return m; \
 } \
@@ -86,7 +87,8 @@ static void dex_map_##SUFFIX##_resize(DexMap_##SUFFIX* m, int newCap) { \
     int oldCap = m->cap; \
     DexMapEntry_##SUFFIX* oldEntries = m->entries; \
     m->cap = newCap; \
-    m->entries = (DexMapEntry_##SUFFIX*)calloc((size_t)m->cap, sizeof(DexMapEntry_##SUFFIX)); \
+    m->entries = (DexMapEntry_##SUFFIX*)dex_xcalloc((size_t)m->cap, sizeof(DexMapEntry_##SUFFIX)); \
+    DEX_PF_BUF_SET(m, (size_t)m->cap * sizeof(DexMapEntry_##SUFFIX)); \
     if (!m->entries) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); } \
     int mask = m->cap - 1; \
     m->len = 0; \

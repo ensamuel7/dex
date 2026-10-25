@@ -69,7 +69,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		}
 		g.beginStmtHoist()
 		var exprBody strings.Builder
-		if call, ok := s.Expr.(*ast.CallExpr); ok && g.isHandleOutCall(call) {
+		if call, ok := s.Expr.(*ast.CallExpr); ok && (g.isHandleOutCall(call) || len(g.structLocalsWrittenByCall(call)) > 0) {
 			exprBody.WriteString("(void)")
 		}
 		g.genExpr(&exprBody, s.Expr)
@@ -302,7 +302,9 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		elemType := ast.ElementType(arrType)
 		elemCType := g.cType(elemType)
 
-		ownsIterable := ast.IsHeapType(arrType) && !g.borrowsHeapValue(s.Iterable)
+		_, plainIterable := s.Iterable.(*ast.Ident)
+		borrowedIterable := g.borrowsHeapValue(s.Iterable)
+		ownsIterable := ast.IsHeapType(arrType) && (!borrowedIterable || !plainIterable)
 		if ownsIterable {
 			arrExpr = fmt.Sprintf("_foreach_arr_%d", idx)
 			out.WriteString(fmt.Sprintf("%s{\n%s%s %s;\n", prefix, prefix, g.cType(arrType), arrExpr))
@@ -311,7 +313,11 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			var init strings.Builder
 			init.WriteString(arrExpr + " = ")
 			g.genExpr(&init, s.Iterable)
-			init.WriteString(";\n")
+			init.WriteString(";")
+			if borrowedIterable {
+				init.WriteString(fmt.Sprintf(" dex_retain(%s);", arrExpr))
+			}
+			init.WriteString("\n")
 			g.emitWithHoists(out, prefix, init.String())
 			g.varTypes[arrExpr] = arrType
 			g.registerScopeVar(out, prefix, arrExpr, arrType)
@@ -394,13 +400,25 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 	case *ast.CompoundAssignStmt:
 		g.beginStmtHoist()
 		var body strings.Builder
-		if t, ok := g.varTypes[s.Name]; ok && isPrimitiveRef(t) {
-			body.WriteString(fmt.Sprintf("(*%s) %s= ", s.Name, g.cBinOp(s.Op)))
-		} else {
-			body.WriteString(fmt.Sprintf("%s %s= ", s.Name, g.cBinOp(s.Op)))
+		target := s.Name
+		t := g.varTypes[s.Name]
+		if isPrimitiveRef(t) {
+			target = "(*" + s.Name + ")"
+			t = ast.RefInnerType(t)
 		}
-		g.genExpr(&body, s.Value)
-		body.WriteString(";\n")
+		if fn := g.intDivFunc(s.Op, t); fn != "" {
+			body.WriteString(fmt.Sprintf("%s = %s(%s, ", target, fn, target))
+			g.genExpr(&body, s.Value)
+			body.WriteString(");\n")
+		} else if t == ast.TypeDouble && s.Op == ast.BinDiv {
+			body.WriteString(fmt.Sprintf("%s %s= dex_check_nonzero_double(", target, g.cBinOp(s.Op)))
+			g.genExpr(&body, s.Value)
+			body.WriteString(");\n")
+		} else {
+			body.WriteString(fmt.Sprintf("%s %s= ", target, g.cBinOp(s.Op)))
+			g.genExpr(&body, s.Value)
+			body.WriteString(";\n")
+		}
 		g.emitWithHoists(out, prefix, body.String())
 
 	case *ast.IndexAssignStmt:
@@ -424,26 +442,39 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		if ast.IsStructArrayType(arrType) {
 			elemType := ast.ElementType(arrType)
 			elemCType := g.cType(elemType)
-			out.WriteString(prefix)
-			out.WriteString("dex_bounds_check(")
+			tmpIdx := g.nextTemp()
+			out.WriteString(fmt.Sprintf("%slong %s = ", prefix, tmpIdx))
 			g.genExpr(out, s.Index)
-			out.WriteString(", ")
-			g.genExpr(out, s.Array)
-			out.WriteString("->len);\n")
+			out.WriteString(";\n")
 			out.WriteString(fmt.Sprintf("%s{ %s _assign_tmp = ", prefix, elemCType))
-			g.genExpr(out, s.Value)
-			out.WriteString(fmt.Sprintf("; memcpy(dex_array_struct_get("))
+			if ast.IsInterfaceType(elemType) && !ast.IsInterfaceType(g.typeOfExpr(s.Value)) {
+				g.genInterfaceValue(out, s.Value, elemType)
+				out.WriteString("; ")
+			} else {
+				g.genExpr(out, s.Value)
+				out.WriteString("; ")
+				if ast.IsInterfaceType(elemType) {
+					if g.borrowsHeapValue(s.Value) {
+						out.WriteString("dex_retain(_assign_tmp._obj); ")
+					}
+				} else {
+					g.emitRetainPushedStructFields(out, "_assign_tmp", elemType, s.Value)
+				}
+			}
+			out.WriteString(fmt.Sprintf("%s* _assign_slot = (%s*)dex_array_struct_get(", elemCType, elemCType))
 			g.genExpr(out, s.Array)
-			out.WriteString(", ")
-			g.genExpr(out, s.Index)
-			out.WriteString(fmt.Sprintf("), &_assign_tmp, sizeof(%s)); }\n", elemCType))
+			out.WriteString(fmt.Sprintf(", dex_checked_index(%s, ", tmpIdx))
+			g.genExpr(out, s.Array)
+			out.WriteString("->len)); ")
+			var rel strings.Builder
+			g.emitReleaseVar(&rel, "", "(*_assign_slot)", elemType)
+			out.WriteString(strings.ReplaceAll(rel.String(), "\n", " "))
+			out.WriteString(fmt.Sprintf("memcpy(_assign_slot, &_assign_tmp, sizeof(%s)); }\n", elemCType))
 		} else {
-			out.WriteString(prefix)
-			out.WriteString("dex_bounds_check(")
+			tmpIdx := g.nextTemp()
+			out.WriteString(fmt.Sprintf("%slong %s = ", prefix, tmpIdx))
 			g.genExpr(out, s.Index)
-			out.WriteString(", ")
-			g.genExpr(out, s.Array)
-			out.WriteString("->len);\n")
+			out.WriteString(";\n")
 
 			// A string array's slot owns its reference, the same way a struct
 			// field does. Overwriting one therefore has to release what was
@@ -464,19 +495,20 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 				}
 				out.WriteString(fmt.Sprintf("%s%s* %s = &", prefix, g.cType(ast.ElementType(arrType)), tmpSlot))
 				g.genExpr(out, s.Array)
-				out.WriteString("->data[")
-				g.genExpr(out, s.Index)
-				out.WriteString("];\n")
+				out.WriteString(fmt.Sprintf("->data[dex_checked_index(%s, ", tmpIdx))
+				g.genExpr(out, s.Array)
+				out.WriteString("->len)];\n")
 				out.WriteString(fmt.Sprintf("%sdex_release(*%s);\n", prefix, tmpSlot))
 				out.WriteString(fmt.Sprintf("%s*%s = %s;\n", prefix, tmpSlot, tmpVal))
 			} else {
-				out.WriteString(prefix)
-				g.genExpr(out, s.Array)
-				out.WriteString("->data[")
-				g.genExpr(out, s.Index)
-				out.WriteString("] = ")
+				elemCType := g.cType(ast.ElementType(arrType))
+				out.WriteString(fmt.Sprintf("%s{ %s _assign_tmp = ", prefix, elemCType))
 				g.genExpr(out, s.Value)
-				out.WriteString(";\n")
+				out.WriteString("; ")
+				g.genExpr(out, s.Array)
+				out.WriteString(fmt.Sprintf("->data[dex_checked_index(%s, ", tmpIdx))
+				g.genExpr(out, s.Array)
+				out.WriteString("->len)] = _assign_tmp; }\n")
 			}
 		}
 
@@ -499,7 +531,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			out.WriteString(prefix)
 			g.genExpr(out, s.Object)
 			out.WriteString(fmt.Sprintf("%s%s = %s;\n", accessOp, s.Field, tmpVal))
-		} else if ast.IsHeapType(fieldType) {
+		} else if ast.IsHeapType(fieldType) || ast.IsHeapOptionalType(declaredType) {
 			// A struct field owns its reference, whether the struct is behind a ref or
 			// held by value. Evaluate once into a temp to avoid double-evaluating side
 			// effects, retain a borrowed value (an owned temporary already carries the
@@ -510,7 +542,11 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 				accessOp = "->"
 			}
 			tmpVal := g.nextTemp()
-			out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(fieldType), tmpVal))
+			tmpType := fieldType
+			if ast.IsHeapOptionalType(declaredType) {
+				tmpType = declaredType
+			}
+			out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(tmpType), tmpVal))
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
 			if g.borrowsHeapValue(s.Value) {
@@ -522,11 +558,45 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			out.WriteString(prefix)
 			g.genExpr(out, s.Object)
 			out.WriteString(fmt.Sprintf("%s%s = %s;\n", accessOp, s.Field, tmpVal))
-			// The field's old value has just been released, so its cleanup
-			// entry — if it has one — has to follow the new value.
-			if ident, ok := s.Object.(*ast.Ident); ok {
-				g.emitUnwindFieldUpdate(out, prefix, ident.Name, s.Field)
+		} else if ast.IsInterfaceType(declaredType) {
+			accessOp := "."
+			if ast.IsRefType(objType) {
+				accessOp = "->"
 			}
+			var target strings.Builder
+			g.genExpr(&target, s.Object)
+			field := target.String() + accessOp + s.Field
+			alreadyIface := ast.IsInterfaceType(g.typeOfExpr(s.Value))
+			out.WriteString(fmt.Sprintf("%s{ void* _dex_old = %s._obj; %s = ", prefix, field, field))
+			if alreadyIface {
+				g.genExpr(out, s.Value)
+			} else {
+				g.genInterfaceValue(out, s.Value, declaredType)
+			}
+			out.WriteString(";")
+			if alreadyIface && g.borrowsHeapValue(s.Value) {
+				out.WriteString(fmt.Sprintf(" dex_retain(%s._obj);", field))
+			}
+			out.WriteString(" if (_dex_old) { dex_release(_dex_old); } }\n")
+		} else if ast.IsStructType(declaredType) && ast.NeedsRelease(declaredType) {
+			accessOp := "."
+			if ast.IsRefType(objType) {
+				accessOp = "->"
+			}
+			var target strings.Builder
+			g.genExpr(&target, s.Object)
+			field := target.String() + accessOp + s.Field
+			tmpVal := g.nextTemp()
+			out.WriteString(fmt.Sprintf("%s{ %s %s = ", prefix, g.cType(declaredType), tmpVal))
+			g.genExpr(out, s.Value)
+			out.WriteString(";\n")
+			if _, _, isLit := structAssignments(s.Value); isLit {
+				g.emitRetainStructLitFields(out, prefix+"    ", tmpVal, declaredType, s.Value)
+			} else if g.borrowsHeapValue(s.Value) {
+				g.emitRetainBorrowedStructFields(out, prefix+"    ", tmpVal, declaredType)
+			}
+			g.emitReleaseVar(out, prefix+"    ", field, declaredType)
+			out.WriteString(fmt.Sprintf("%s    %s = %s;\n%s}\n", prefix, field, tmpVal, prefix))
 		} else {
 			out.WriteString(prefix)
 			g.genExpr(out, s.Object)
@@ -537,6 +607,12 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			}
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
+		}
+		if head, path, ok := fieldPathOf(s.Object); ok {
+			if path != "" {
+				path += "."
+			}
+			g.emitUnwindPathUpdate(out, prefix, head, path+s.Field)
 		}
 		// Emit cycle check if debug(cycles) is enabled and field is heap-typed
 		if g.usesDebugCycles {
@@ -625,9 +701,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 					out.WriteString(fmt.Sprintf("%s->tag == %s", tagVar,
 						g.enumTagName(ast.EnumName(tagType), variant)))
 				case isString:
-					out.WriteString(fmt.Sprintf("strcmp(%s->data, ", tagVar))
-					g.genStringData(out, val)
-					out.WriteString(") == 0")
+					out.WriteString(g.stringEqExpr(tagVar, g.stringOperand(val)))
 				default:
 					out.WriteString(fmt.Sprintf("%s == ", tagVar))
 					g.genExpr(out, val)
@@ -710,6 +784,7 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_defer_top;\n", prefix, deferMark))
 		}
 
+		g.emitTryWrittenEscapes(out, prefix, s.Body)
 		// Push exception frame
 		out.WriteString(fmt.Sprintf("%s_dex_exc_push_frame();\n", prefix))
 		out.WriteString(fmt.Sprintf("%svolatile int _dex_exc_%d_caught = 0;\n", prefix, id))

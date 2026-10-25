@@ -62,6 +62,11 @@ type item struct {
 	kind token.TokenKind
 	text string
 	line int
+	end  int
+}
+
+func newItem(kind token.TokenKind, text string, line int) item {
+	return item{kind: kind, text: text, line: line, end: line + strings.Count(text, "\n")}
 }
 
 func (it item) width() int { return utf8.RuneCountInString(it.text) }
@@ -79,11 +84,11 @@ func collapse(raw []token.Token) []item {
 		}
 		if t.Kind == token.TokenInterpStringStart {
 			text, next := renderInterp(raw, i)
-			items = append(items, item{kind: token.TokenString, text: text, line: t.Line})
+			items = append(items, newItem(token.TokenString, text, t.Line))
 			i = next
 			continue
 		}
-		items = append(items, item{kind: t.Kind, text: render(t), line: t.Line})
+		items = append(items, newItem(t.Kind, render(t), t.Line))
 		i++
 	}
 	return items

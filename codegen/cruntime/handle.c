@@ -26,6 +26,14 @@ static DexHandle* dex_handle_new(void* p, void (*close)(void*)) {
 // Unboxes for a call into C. A NULL box yields a NULL pointer rather than
 // faulting, so passing an absent handle reaches the C function as NULL — which
 // is what that function already has to handle.
+static DexHandle* dex_handle_require(DexHandle* h, const char* fn) {
+    if (!h) {
+        fprintf(stderr, "runtime error: %s returned NULL for a handle declared non-optional\n", fn);
+        exit(1);
+    }
+    return h;
+}
+
 static void* dex_handle_ptr(DexHandle* h) {
     return h ? h->ptr : NULL;
 }

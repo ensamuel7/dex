@@ -43,7 +43,8 @@ fn main(): void {
 
     // Options built in place, with a computed path: nothing leaks.
     for (let i: int = 0; i < 20; i++) {
-        let r: os.ExecResult = os.execWith("true", os.ExecOptions { appendTo: "/tmp/dex_execwith_" + "loop.log", timeoutMs: 5000 })
+        let r: os.ExecResult =
+            os.execWith("true", os.ExecOptions { appendTo: "/tmp/dex_execwith_" + "loop.log", timeoutMs: 5000 })
         assert(r.exitCode == 0)
     }
 

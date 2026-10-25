@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} memory profile</title>
+<style>
+:root {
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --ink: #1d1d1b;
+  --muted: #6b6b66;
+  --faint: #e6e5e0;
+  --line: #d9d8d2;
+  --accent: #c2410c;
+  --accent-soft: rgba(194, 65, 12, 0.14);
+  --live: #1d4ed8;
+  --live-soft: rgba(29, 78, 216, 0.12);
+  --sel: #fff4d6;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --panel: #1f1f1d;
+    --ink: #ecebe6;
+    --muted: #9b9a93;
+    --faint: #2c2c29;
+    --line: #3a3a36;
+    --accent: #fb923c;
+    --accent-soft: rgba(251, 146, 60, 0.18);
+    --live: #7aa2ff;
+    --live-soft: rgba(122, 162, 255, 0.16);
+    --sel: #3a3220;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
+main { max-width: 1400px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h1 code { font-family: var(--mono); font-size: 18px; }
+header .sub { color: var(--muted); }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat .k { color: var(--muted); font-size: 12px; }
+.stat .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .d { color: var(--muted); font-size: 12px; }
+.stat.warn .v { color: var(--accent); }
+#chart { position: relative; margin-bottom: 16px; }
+#chart svg { display: block; width: 100%; height: 220px; overflow: visible; }
+#chart .axis text { fill: var(--muted); font-size: 11px; font-family: var(--sans); }
+#chart .axis line { stroke: var(--faint); }
+#chart .legend { display: flex; gap: 16px; color: var(--muted); font-size: 12px; margin-top: 6px; flex-wrap: wrap; }
+#chart .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+#tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12px; padding: 4px 8px; border-radius: 4px; white-space: nowrap; display: none; font-variant-numeric: tabular-nums; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+.tools { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.tools input { flex: 1; min-width: 140px; font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.tools .count { color: var(--muted); font-size: 12px; }
+.tablewrap { overflow-x: auto; max-height: 70vh; overflow-y: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--faint); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; white-space: normal; }
+th { position: sticky; top: 0; background: var(--panel); font-weight: 600; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; z-index: 1; }
+th:hover { color: var(--ink); }
+th.on { color: var(--ink); }
+th.on::after { content: " \2193"; }
+th.on.asc::after { content: " \2191"; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--faint); }
+tbody tr.sel { background: var(--sel); }
+td.site { font-family: var(--mono); font-size: 12px; min-width: 180px; }
+td.site .src { color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+td.num { position: relative; }
+td.num .bar { position: absolute; right: 0; top: 4px; bottom: 4px; background: var(--accent-soft); border-radius: 2px; }
+td.num span { position: relative; }
+td.zero { color: var(--muted); }
+.files { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.files button { font: 12px var(--mono); padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--muted); cursor: pointer; }
+.files button.on { color: var(--ink); border-color: var(--ink); }
+.code { font: 12px/1.6 var(--mono); max-height: 70vh; overflow: auto; border: 1px solid var(--faint); border-radius: 6px; }
+.code .ln { display: grid; grid-template-columns: 76px 44px minmax(0, 1fr); }
+.code .ln.hot { cursor: pointer; }
+.code .ln.sel { background: var(--sel); }
+.code .g { text-align: right; padding-right: 8px; color: var(--accent); position: relative; }
+.code .g .h { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent-soft); }
+.code .g span { position: relative; }
+.code .n { text-align: right; padding-right: 10px; color: var(--muted); border-right: 1px solid var(--faint); }
+.code pre { margin: 0; padding-left: 10px; white-space: pre; }
+.empty { color: var(--muted); padding: 16px 0; }
+.note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Memory profile <code id="title"></code></h1>
+    <span class="sub" id="sub"></span>
+  </header>
+  <section class="stats" id="stats"></section>
+  <section class="panel" id="chart">
+    <h2>Live memory over time</h2>
+    <svg id="svg" role="img" aria-label="Live bytes over the run"></svg>
+    <div class="legend">
+      <span><i style="background:var(--live-soft);border:1px solid var(--live)"></i>highest in each interval</span>
+      <span><i style="background:var(--live)"></i>live at each sample</span>
+      <span><i style="background:var(--accent)"></i>peak</span>
+    </div>
+    <div id="tip"></div>
+  </section>
+  <section class="grid">
+    <div class="panel">
+      <h2>Lines</h2>
+      <div class="tools">
+        <input id="filter" type="search" placeholder="Filter by file, line or source text">
+        <span class="count" id="count"></span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr id="head"></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p class="note">
+        <b>At peak</b>: bytes this line's allocations held when the whole program was at its peak.
+        <b>Line peak</b>: the most they ever held at once. <b>At exit</b>: still held when the program ended.
+        <b>Allocated</b>: everything this line allocated over the run, including the growth of arrays,
+        maps and string builders it pushed into.
+      </p>
+    </div>
+    <div class="panel">
+      <h2>Source</h2>
+      <div class="files" id="files"></div>
+      <div class="code" id="code"></div>
+    </div>
+  </section>
+</main>
+<script>
+const DATA = {{.Data}};
+const P = DATA.profile;
+const T = P.total;
+
+const COLS = [
+  { key: "site", label: "Line" },
+  { key: "at_peak", label: "At peak", bytes: true },
+  { key: "peak_bytes", label: "Line peak", bytes: true },
+  { key: "live_bytes", label: "At exit", bytes: true },
+  { key: "alloc_bytes", label: "Allocated", bytes: true },
+  { key: "allocs", label: "Objects" },
+];
+
+function fmtBytes(b) {
+  const a = Math.abs(b);
+  if (a >= 1073741824) return (b / 1073741824).toFixed(2) + " GB";
+  if (a >= 1048576) return (b / 1048576).toFixed(a >= 104857600 ? 0 : 1) + " MB";
+  if (a >= 1024) return (b / 1024).toFixed(a >= 102400 ? 0 : 1) + " KB";
+  return b + " B";
+}
+function fmtMs(ms) {
+  if (ms >= 60000) return (ms / 60000).toFixed(1) + " min";
+  if (ms >= 1000) return (ms / 1000).toFixed(ms >= 10000 ? 0 : 2) + " s";
+  return ms.toFixed(ms >= 10 ? 0 : 1) + " ms";
+}
+function fmtCount(n) { return n.toLocaleString(); }
+function el(tag, attrs, kids) {
+  const e = document.createElement(tag);
+  for (const k in attrs || {}) {
+    if (k === "text") e.textContent = attrs[k];
+    else if (k === "cls") e.className = attrs[k];
+    else e.setAttribute(k, attrs[k]);
+  }
+  for (const c of kids || []) e.append(c);
+  return e;
+}
+function splitSite(s) {
+  const i = s.lastIndexOf(":");
+  if (i <= 0) return { file: "", line: 0 };
+  const n = parseInt(s.slice(i + 1), 10);
+  return n > 0 ? { file: s.slice(0, i), line: n } : { file: "", line: 0 };
+}
+const lineCache = {};
+function sourceLines(file) {
+  if (!(file in lineCache)) lineCache[file] = DATA.sources[file] != null ? DATA.sources[file].split("\n") : null;
+  return lineCache[file];
+}
+function sourceText(file, line) {
+  const ls = file && sourceLines(file);
+  return ls && ls[line - 1] != null ? ls[line - 1].trim() : "";
+}
+function shortFile(f) { const i = f.lastIndexOf("/"); return i >= 0 ? f.slice(i + 1) : f; }
+
+// ---- header and stats ------------------------------------------------------
+
+document.getElementById("title").textContent = DATA.title;
+document.getElementById("sub").textContent = "ran for " + fmtMs(P.duration_ms);
+const stats = [
+  { k: "Peak live", v: fmtBytes(T.peak_bytes), d: "at " + fmtMs(T.peak_ms) },
+  { k: "Allocated in total", v: fmtBytes(T.alloc_bytes), d: fmtCount(T.allocs) + " objects" },
+  { k: "Still live at exit", v: fmtBytes(T.live_bytes), d: fmtCount(T.live_objects) + " objects", warn: T.live_objects > 0 },
+  { k: "Lines that allocate", v: fmtCount(P.sites.length), d: Object.keys(DATA.sources).length + " source file" + (Object.keys(DATA.sources).length === 1 ? "" : "s") },
+];
+const statsEl = document.getElementById("stats");
+for (const s of stats) {
+  statsEl.append(el("div", { cls: "panel stat" + (s.warn ? " warn" : "") }, [
+    el("div", { cls: "k", text: s.k }),
+    el("div", { cls: "v", text: s.v }),
+    el("div", { cls: "d", text: s.d }),
+  ]));
+}
+
+// ---- chart -----------------------------------------------------------------
+
+const NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function niceStep(range, target) {
+  const raw = range / target;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const f = raw / mag;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * mag;
+}
+function byteStep(max) {
+  // Ticks on round binary sizes, so the labels read 256 KB, 512 KB, 768 KB.
+  const units = [1, 1024, 1048576, 1073741824];
+  let u = 1;
+  for (const x of units) if (max >= x * 2) u = x;
+  return niceStep(max / u, 4) * u;
+}
+function drawChart() {
+  const svg = document.getElementById("svg");
+  svg.replaceChildren();
+  const W = svg.clientWidth || 800, H = 220;
+  const L = 64, R = 12, Tp = 10, B = 24;
+  const pts = P.timeline;
+  const tMax = Math.max(P.duration_ms, pts.length ? pts[pts.length - 1][0] : 0, 1);
+  const yMax = Math.max(T.peak_bytes, 1) * 1.08;
+  const x = t => L + (t / tMax) * (W - L - R);
+  const y = b => Tp + (1 - b / yMax) * (H - Tp - B);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
+  const axis = svgEl("g", { class: "axis" });
+  const ys = byteStep(yMax);
+  for (let v = 0; v <= yMax; v += ys) {
+    axis.append(svgEl("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+    const t = svgEl("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" });
+    t.textContent = fmtBytes(v);
+    axis.append(t);
+  }
+  const xs = niceStep(tMax, Math.max(2, Math.floor((W - L - R) / 110)));
+  for (let v = 0; v <= tMax + 1e-9; v += xs) {
+    const t = svgEl("text", { x: x(v), y: H - 6, "text-anchor": "middle" });
+    t.textContent = fmtMs(v);
+    axis.append(t);
+  }
+  svg.append(axis);
+
+  if (pts.length) {
+    // Step lines: a sample holds until the next one, since nothing between
+    // them was recorded.
+    let high = `M${x(0)},${y(0)}`, live = "";
+    let prev = null;
+    for (const [t, l, h] of pts) {
+      if (prev) high += `L${x(t)},${y(prev[2])}`;
+      high += `L${x(t)},${y(h)}`;
+      live += (live ? `L${x(t)},${y(prev ? prev[1] : l)}L` : "M") + `${x(t)},${y(l)}`;
+      prev = [t, l, h];
+    }
+    high += `L${x(prev[0])},${y(0)}Z`;
+    svg.append(svgEl("path", { d: high, fill: "var(--live-soft)", stroke: "none" }));
+    svg.append(svgEl("path", { d: live, fill: "none", stroke: "var(--live)", "stroke-width": 1.5 }));
+  }
+  const px = x(T.peak_ms), py = y(T.peak_bytes);
+  svg.append(svgEl("line", { x1: px, x2: px, y1: py, y2: H - B, stroke: "var(--accent)", "stroke-dasharray": "3 3" }));
+  svg.append(svgEl("circle", { cx: px, cy: py, r: 4, fill: "var(--accent)" }));
+  const pl = svgEl("text", { x: px + (px > W - 160 ? -8 : 8), y: py + 4, "text-anchor": px > W - 160 ? "end" : "start", fill: "var(--accent)", "font-size": 12, "font-weight": 600 });
+  pl.textContent = "peak " + fmtBytes(T.peak_bytes);
+  svg.append(pl);
+
+  const cross = svgEl("line", { y1: Tp, y2: H - B, stroke: "var(--muted)", "stroke-width": 1, visibility: "hidden" });
+  svg.append(cross);
+  const tip = document.getElementById("tip");
+  svg.onmousemove = ev => {
+    const r = svg.getBoundingClientRect();
+    const mx = (ev.clientX - r.left) * (W / r.width);
+    if (mx < L || mx > W - R || !pts.length) { svg.onmouseleave(); return; }
+    const t = (mx - L) / (W - L - R) * tMax;
+    let i = 0;
+    while (i + 1 < pts.length && pts[i + 1][0] <= t) i++;
+    const p = pts[i];
+    cross.setAttribute("x1", mx); cross.setAttribute("x2", mx);
+    cross.setAttribute("visibility", "visible");
+    tip.textContent = `${fmtMs(t)} · live ${fmtBytes(p[1])} · high ${fmtBytes(p[2])}`;
+    tip.style.display = "block";
+    const cr = document.getElementById("chart").getBoundingClientRect();
+    const left = ev.clientX - cr.left + 12;
+    tip.style.left = Math.min(left, cr.width - tip.offsetWidth - 8) + "px";
+    tip.style.top = (ev.clientY - cr.top - 34) + "px";
+  };
+  svg.onmouseleave = () => { cross.setAttribute("visibility", "hidden"); tip.style.display = "none"; };
+}
+drawChart();
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawChart, 100); });
+
+// ---- table -----------------------------------------------------------------
+
+const rows = P.sites.map(s => Object.assign({}, s, splitSite(s.site)));
+for (const r of rows) r.text = sourceText(r.file, r.line);
+let sortKey = T.peak_bytes > 0 ? "at_peak" : "alloc_bytes";
+let sortAsc = false;
+let selected = null;
+let filter = "";
+
+const head = document.getElementById("head");
+for (const c of COLS) {
+  const th = el("th", { text: c.label, "data-key": c.key });
+  th.onclick = () => {
+    if (sortKey === c.key) sortAsc = !sortAsc;
+    else { sortKey = c.key; sortAsc = c.key === "site"; }
+    renderTable();
+    renderSource();
+  };
+  head.append(th);
+}
+
+function cmp(a, b) {
+  if (sortKey === "site") {
+    const f = a.file.localeCompare(b.file) || a.line - b.line || a.site.localeCompare(b.site);
+    return sortAsc ? f : -f;
+  }
+  const d = a[sortKey] - b[sortKey];
+  return (sortAsc ? d : -d) || b.alloc_bytes - a.alloc_bytes;
+}
+
+function renderTable() {
+  for (const th of head.children) {
+    th.className = th.dataset.key === sortKey ? "on" + (sortAsc ? " asc" : "") : "";
+  }
+  const q = filter.toLowerCase();
+  const shown = rows.filter(r => !q || r.site.toLowerCase().includes(q) || r.text.toLowerCase().includes(q)).sort(cmp);
+  const max = Math.max(1, ...rows.map(r => sortKey === "site" ? 0 : r[sortKey]));
+  const body = document.getElementById("rows");
+  body.replaceChildren();
+  for (const r of shown) {
+    const tr = el("tr", r === selected ? { cls: "sel" } : {});
+    tr.append(el("td", { cls: "site" }, [
+      el("span", { text: r.file ? shortFile(r.file) + ":" + r.line : r.site, title: r.site }),
+      el("span", { cls: "src", text: r.text }),
+    ]));
+    for (const c of COLS.slice(1)) {
+      const v = r[c.key];
+      const td = el("td", { cls: "num" + (v === 0 ? " zero" : "") });
+      if (c.key === sortKey && v > 0) {
+        td.append(el("div", { cls: "bar", style: `width:${(v / max * 100).toFixed(1)}%` }));
+      }
+      td.append(el("span", { text: c.bytes ? fmtBytes(v) : fmtCount(v) }));
+      tr.append(td);
+    }
+    tr.onclick = () => select(r, true);
+    body.append(tr);
+  }
+  document.getElementById("count").textContent =
+    shown.length === rows.length ? `${rows.length} lines` : `${shown.length} of ${rows.length} lines`;
+}
+document.getElementById("filter").oninput = e => { filter = e.target.value; renderTable(); };
+
+// ---- source ----------------------------------------------------------------
+
+let currentFile = null;
+function pickDefaultFile() {
+  const withData = rows.filter(r => r.file && DATA.sources[r.file] != null).sort(cmp);
+  return withData.length ? withData[0].file : DATA.files[0] || null;
+}
+
+function renderFiles() {
+  const box = document.getElementById("files");
+  box.replaceChildren();
+  if (DATA.files.length < 2) return;
+  for (const f of DATA.files) {
+    const b = el("button", { text: shortFile(f), title: f, cls: f === currentFile ? "on" : "" });
+    b.onclick = () => { currentFile = f; renderFiles(); renderSource(); };
+    box.append(b);
+  }
+}
+
+function renderSource(scrollTo) {
+  const code = document.getElementById("code");
+  code.replaceChildren();
+  if (!currentFile) { code.append(el("div", { cls: "empty", text: "No source files were found for this profile." })); return; }
+  const ls = sourceLines(currentFile);
+  if (!ls) { code.append(el("div", { cls: "empty", text: currentFile + " could not be read." })); return; }
+  const metric = sortKey === "site" ? "at_peak" : sortKey;
+  const col = COLS.find(c => c.key === metric);
+  const byLine = {};
+  for (const r of rows) if (r.file === currentFile) byLine[r.line] = r;
+  const max = Math.max(1, ...Object.values(byLine).map(r => r[metric]));
+  let target = null;
+  ls.forEach((text, i) => {
+    const n = i + 1, r = byLine[n];
+    const g = el("div", { cls: "g" });
+    if (r && r[metric] > 0) {
+      g.append(el("div", { cls: "h", style: `width:${(r[metric] / max * 100).toFixed(1)}%` }));
+      g.append(el("span", { text: col.bytes ? fmtBytes(r[metric]) : fmtCount(r[metric]) }));
+    }
+    const ln = el("div", { cls: "ln" + (r ? " hot" : "") + (selected && r === selected ? " sel" : "") }, [
+      g, el("div", { cls: "n", text: String(n) }), el("pre", { text: text || " " }),
+    ]);
+    if (r) ln.onclick = () => select(r, false);
+    if (selected && r === selected) target = ln;
+    code.append(ln);
+  });
+  if (scrollTo && target) {
+    code.scrollTop = target.offsetTop - code.clientHeight / 3;
+  }
+}
+
+function select(r, scroll) {
+  selected = r;
+  if (r.file && DATA.sources[r.file] != null && r.file !== currentFile) {
+    currentFile = r.file;
+    renderFiles();
+  }
+  renderTable();
+  renderSource(scroll);
+}
+
+currentFile = pickDefaultFile();
+renderFiles();
+renderTable();
+renderSource();
+</script>
+</body>
+</html>

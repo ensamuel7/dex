@@ -13,6 +13,8 @@ import (
 // when the error limit is reached.
 type maxParseErrors struct{}
 
+const maxNestingDepth = 1000
+
 type Parser struct {
 	tokens         []token.Token
 	pos            int
@@ -42,6 +44,7 @@ type Parser struct {
 	// instantiatedStructs collects the struct definitions built by parse-time
 	// instantiation, so Parse can append them to the program.
 	instantiatedStructs *[]ast.StructDef
+	depth               int
 }
 
 func New(tokens []token.Token) *Parser {
@@ -203,6 +206,18 @@ func (p *Parser) knownTypeName(name string) bool {
 		}
 	}
 	return len(p.candidates[name]) > 0
+}
+
+func (p *Parser) enter() error {
+	p.depth++
+	if p.depth > maxNestingDepth {
+		return p.errorf("nesting too deep (more than %d levels)", maxNestingDepth)
+	}
+	return nil
+}
+
+func (p *Parser) leave() {
+	p.depth--
 }
 
 // recordError appends an error and panics with maxParseErrors if the limit is reached.
@@ -860,6 +875,10 @@ func (p *Parser) parseParams() ([]ast.Param, error) {
 }
 
 func (p *Parser) parseType() (ast.Type, error) {
+	defer p.leave()
+	if err := p.enter(); err != nil {
+		return 0, err
+	}
 	// Reject &&Type (double-ref) — tokenized as TokenAnd
 	if p.check(token.TokenAnd) {
 		return 0, p.errorf("double-reference types (&&) are not allowed")

@@ -8,6 +8,7 @@ DexLang is a statically-typed language that compiles to C. It is designed for bu
 dex build <file.dx>       # compiles to native binary
 dex run <file.dx>         # compiles and runs
 dex dev <file.dx>         # rebuilds and reruns on every change
+dex profile <file.dx>     # runs with the memory profiler and opens a report
 dex test [file_test.dx]   # runs test files (*_test.dx)
 dex format [path...]      # lays files out the one canonical way
 dex lint <file.dx>        # reports lint findings without building
@@ -18,6 +19,22 @@ dex mod init <path>       # starts a dex.mod naming this project — see Modules
 `build`, `run` and `dev` report lint findings alongside the build unless given
 `--no-lint`; `test` reports them only when given `--lint`. `--lint=strict` fails
 the build when there are any. See [Linting](#linting).
+
+`dex profile` builds with the memory profiler, runs the program, and writes
+`build/<name>.profile.html`: live memory over time, a sortable table of the
+lines that allocate and hold memory (at the peak, at their own peak, at exit,
+and in total), and the source with each line's share beside it. Growth of an
+array, map or string builder is charged to the line that grew it, and held by
+the line that created it. `--no-open` writes the report without opening it;
+`dex profile <file.json>` renders a profile written earlier.
+
+`DEX_PROFILE=1` on `build` or `run` compiles the profiler into the binary
+directly; it writes JSON at exit to `DEX_PROFILE_OUT` (default
+`dex-profile.json`). For a server, `kill -USR1 <pid>` writes a snapshot without
+stopping it, and SIGINT or SIGTERM write one before it exits — in each case only
+if the program has not installed a handler of its own. `DEX_PROFILE_QUIET=1`
+drops the summary printed at exit. The profiler and `DEX_MEM_CHECK` cannot be
+combined.
 
 Pipeline: `.dx` source → tokens → AST (Abstract Syntax Tree) → type check → C code → native binary (via `cc`/`gcc`)
 
@@ -737,6 +754,11 @@ values takes 391ms.
 - One pattern per `case`. Two variants matched by one arm would carry different
   payloads, so there would be no consistent type for a name to have.
 - A payload enum is not a map key or a `json` field; a plain enum still is.
+- `Shape?` is an optional payload enum, absent as `null`.
+- Interpolating a payload enum, concatenating one with a string, or printing
+  one renders its variant and payload: `"${Expr.Add(Expr.Lit(2), Expr.Lit(3))}"`
+  is `"Add(Lit(2), Lit(3))"`, and a variant with no payload is just its name. A
+  plain enum is still an integer and renders as one.
 
 ### Enum usage
 
@@ -1765,6 +1787,21 @@ body-checking pass reaches it like any other function.
 | `%=`     | Modulo and assign |
 
 `+` also works for string concatenation when both operands are `string`.
+
+#### Integer overflow and division
+
+`int` and `long` arithmetic wraps on overflow, in two's complement. Dividing by
+zero, with `/`, `%`, `/=` or `%=`, stops the program with
+`runtime error: division by zero`, for `double` as well as the integer types.
+The most negative value divided by `-1` is itself, and its remainder is `0`,
+the same as in Go: on x86 that division faults in C, and on arm64 it quietly
+produces the same answer, so Dex defines it rather than inheriting either.
+
+```dex
+let min: int = -2147483647 - 1
+assert(min / -1 == min)
+assert(min % -1 == 0)
+```
 
 #### Operands must already agree
 
@@ -3972,6 +4009,11 @@ num.toInt(3.99)                   // 3, truncated toward zero
 `toChar` does not accept a `double`: there is no character code for one, and
 rounding it silently would be a conversion nobody asked for.
 
+A `double` outside the target's range saturates to its largest or smallest
+value, and NaN becomes `0`, so a number parsed from untrusted input cannot
+produce an arbitrary integer. A `long` narrowed to `int` keeps its low 32 bits,
+as a conversion does in Go.
+
 ### str
 
 Type conversion utilities for converting between strings and numeric/boolean types.
@@ -4601,6 +4643,11 @@ if (f != null) {
 
 A handle is a pointer, so the optional needs no extra representation: NULL is
 the absent value, which is the same thing the C function already meant by it.
+
+A return declared without the `?` is a promise that C never returns NULL. If it
+does, the program stops at that call with
+`runtime error: cio.open returned NULL for a handle declared non-optional`,
+rather than carrying the NULL into the next C function that receives it.
 
 #### What refcounting does not solve
 

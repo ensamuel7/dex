@@ -44,7 +44,6 @@ fn main(): void {
 
     let genuine: bool = crypto.verifyRs256(SIGNED, signature, modulus, exponent)
     if (genuine) {
-
         assert(!crypto.verifyRs256(SIGNED + "x", signature, modulus, exponent))
 
         // A signature that is the right length and the wrong bytes.

@@ -1,0 +1,104 @@
+import "str"
+
+struct Pair(left: string, right: string) {}
+
+fn pair(n: int): Pair {
+    let l = "l" + str.fromInt(n)
+    return Pair(l, l + str.fromInt(n))
+}
+
+struct Inner {
+    label: string
+    tags: string[]
+}
+
+struct Outer {
+    name: string
+    inner: Inner
+    maybe: Inner?
+    note: string?
+}
+
+fn makeInner(n: int): Inner {
+    let tags: string[] = []
+    tags.push("t" + str.fromInt(n))
+    tags.push(str.fromInt(n * 2))
+    return Inner { label: "inner " + str.fromInt(n), tags: tags }
+}
+
+fn makeOuter(n: int): Outer {
+    let name = "outer " + str.fromInt(n)
+    let inner = makeInner(n)
+    let maybe: Inner? = makeInner(n + 1)
+    let note: string? = "note " + str.fromInt(n)
+    return Outer { name: name, inner: inner, maybe: maybe, note: note }
+}
+
+fn reassign(n: int): int {
+    let o = makeOuter(n)
+    o.name = o.name + "!"
+    o.inner = makeInner(n + 5)
+    o.maybe = makeInner(n + 6)
+    o.note = "changed " + o.name
+    return o.name.len() + o.inner.tags.len()
+}
+
+fn optionalChain(n: int): int {
+    let m: Inner? = null
+    if (n > 0) {
+        m = makeInner(n)
+    }
+    let o = makeOuter(n)
+    let got: Inner? = o.maybe
+    if (got == null) {
+        return 0
+    }
+    if (m == null) {
+        return 1
+    }
+    return got.label.len() + m.label.len()
+}
+
+fn structArray(n: int): int {
+    let all: Inner[] = []
+    for (let i = 0; i < n; i = i + 1) {
+        all.push(makeInner(i))
+    }
+    let total = 0
+    foreach (all as one) {
+        total = total + one.label.len()
+    }
+    return total
+}
+
+fn constructed(n: int): Outer {
+    return Outer { name: "ctor " + str.fromInt(n), inner: makeInner(n), maybe: null, note: null }
+}
+
+fn deep(n: int): int {
+    if (n == 0) {
+        return makeOuter(7).name.len()
+    }
+    let held = makeOuter(n)
+    return deep(n - 1) + held.inner.label.len()
+}
+
+fn main(): void {
+    let caught = 0
+    for (let round = 0; round < 2; round = round + 1) {
+        try {
+            assert(reassign(round) > 0)
+            assert(optionalChain(round + 1) > 0)
+            assert(structArray(4) > 0)
+            assert(constructed(round).name.len() > 0)
+            assert(deep(3) > 0)
+            assert(pair(round).right.len() > 0)
+            let o = makeOuter(round)
+            let copy = o
+            assert(copy.name == o.name)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+    }
+    assert(caught >= 0)
+}

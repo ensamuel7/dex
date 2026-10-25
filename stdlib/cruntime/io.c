@@ -29,7 +29,7 @@ static char* dex_io_read_line_interactive(void) {
     size_t cap = 256;
     size_t len = 0;
     size_t cursor = 0;
-    char* buf = (char*)malloc(cap);
+    char* buf = (char*)dex_xmalloc(cap);
     buf[0] = '\0';
 
     while (1) {
@@ -136,7 +136,7 @@ static char* dex_io_read_line_interactive(void) {
             if (len == 0) {
                 free(buf);
                 tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
-                return strdup("");
+                return dex_xstrdup("");
             }
             continue;
         }
@@ -152,7 +152,7 @@ static char* dex_io_read_line_interactive(void) {
         if ((unsigned char)c >= 32) {
             if (len + 1 >= cap) {
                 cap *= 2;
-                buf = (char*)realloc(buf, cap);
+                buf = (char*)dex_xrealloc(buf, cap);
             }
             memmove(buf + cursor + 1, buf + cursor, len - cursor);
             buf[cursor] = c;
@@ -184,7 +184,7 @@ static char* dex_io_read_line(void) {
     ssize_t nread = getline(&line, &len, stdin);
     if (nread == -1) {
         free(line);
-        return strdup("");
+        return dex_xstrdup("");
     }
     if (nread > 0 && line[nread - 1] == '\n') line[--nread] = '\0';
     if (nread > 0 && line[nread - 1] == '\r') line[--nread] = '\0';

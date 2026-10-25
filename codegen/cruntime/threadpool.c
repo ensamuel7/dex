@@ -32,6 +32,13 @@ typedef struct {
 
 static void* dex_pool_worker(void* arg) {
     DexThreadPool* pool = (DexThreadPool*)arg;
+    char alt[DEX_ALTSTACK_SIZE];
+    size_t stack = 0;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_getstacksize(&attr, &stack);
+    pthread_attr_destroy(&attr);
+    dex_guard_thread((char*)&stack, stack, alt);
     for (;;) {
         pthread_mutex_lock(&pool->mutex);
         while (!pool->head && !pool->shutdown) {
@@ -64,9 +71,9 @@ static DexThreadPool* dex_pool_create(int num_threads) {
         if (num_threads < 4) num_threads = 4;
     }
 
-    DexThreadPool* pool = (DexThreadPool*)calloc(1, sizeof(DexThreadPool));
+    DexThreadPool* pool = (DexThreadPool*)dex_xcalloc(1, sizeof(DexThreadPool));
     pool->num_threads = num_threads;
-    pool->threads = (pthread_t*)calloc(num_threads, sizeof(pthread_t));
+    pool->threads = (pthread_t*)dex_xcalloc(num_threads, sizeof(pthread_t));
     pthread_mutex_init(&pool->mutex, NULL);
     pthread_cond_init(&pool->cond, NULL);
     pool->head = NULL;
@@ -80,7 +87,7 @@ static DexThreadPool* dex_pool_create(int num_threads) {
 }
 
 static void dex_pool_submit(DexThreadPool* pool, void (*func)(void*), void* arg) {
-    DexWorkItem* item = (DexWorkItem*)malloc(sizeof(DexWorkItem));
+    DexWorkItem* item = (DexWorkItem*)dex_xmalloc(sizeof(DexWorkItem));
     item->func = func;
     item->arg = arg;
     item->next = NULL;

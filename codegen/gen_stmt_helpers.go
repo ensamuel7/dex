@@ -156,7 +156,7 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 		}
 		return false // borrowed from struct field
 	case *ast.IndexExpr:
-		return false // borrowed from array/map element
+		return g.isMapHeapRead(expr)
 	case *ast.SliceExpr:
 		return true // slice produces a new array (+1 ref)
 	case *ast.StringLit:
@@ -173,6 +173,8 @@ func (g *Generator) isNewAlloc(expr ast.Expr) bool {
 		return true // match produces a new value
 	case *ast.ArrayLitExpr, *ast.MapLitExpr, *ast.ObjectLitExpr:
 		return true // a literal container is freshly allocated (+1)
+	case *ast.LambdaExpr:
+		return true
 	default:
 		return false // conservative: assume borrowed to avoid premature free
 	}
@@ -261,7 +263,7 @@ func (g *Generator) genBorrowed(out *strings.Builder, expr ast.Expr) {
 	switch {
 	case ast.IsHeapType(t), ast.IsHeapOptionalType(t), ast.IsStructOptionalType(t):
 		owned = g.isNewAlloc(expr)
-	case ast.IsStructType(t) && ast.NeedsRelease(t):
+	case ast.IsStructType(t) && ast.NeedsRelease(t), ast.IsInterfaceType(t):
 		owned = !g.borrowsHeapValue(expr)
 	}
 	if !owned {
@@ -409,12 +411,15 @@ func (g *Generator) genShortCircuit(out *strings.Builder, e *ast.BinaryExpr) {
 // has to stay in scope. Pair with emitHoistReleases.
 func (g *Generator) emitHoistPrelude(out *strings.Builder, prefix string) {
 	if g.stmtPrelude == nil || g.stmtPrelude.Len() == 0 {
+		g.stmtTempMark = ""
 		return
 	}
 	// No block to scope the mark to, so it is declared alongside the statement.
 	// emitHoistReleases drops to it once the releases have run.
-	g.stmtTempMark = ""
-	if g.stmtTempsRegistered {
+	if g.stmtTempMark != "" {
+		out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_top;\n", prefix, g.stmtTempMark))
+		g.stmtTempMark = ""
+	} else if g.stmtTempsRegistered {
 		g.stmtTempMark = g.nextCleanupMark()
 		out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_top;\n", prefix, g.stmtTempMark))
 	}
@@ -429,8 +434,13 @@ func (g *Generator) emitHoistReleases(out *strings.Builder, prefix string) {
 		// releasing each of its heap fields, not the struct itself.
 		g.emitReleaseVar(out, prefix, g.stmtTemps[i].name, g.stmtTemps[i].typ)
 	}
-	g.emitCleanupRestore(out, prefix, g.stmtTempMark)
-	g.stmtTempMark = ""
+	if g.stmtTempMark != "" {
+		g.emitCleanupRestore(out, prefix, g.stmtTempMark)
+		g.stmtTempMark = ""
+	} else if g.stmtTempsRegistered && g.stmtPrelude != nil && g.stmtPrelude.Len() > 0 {
+		g.stmtTempMark = g.nextCleanupMark()
+		g.emitCleanupRestore(out, prefix, g.stmtTempMark)
+	}
 	g.stmtTempsRegistered = false
 	g.stmtTemps = nil
 }
@@ -510,6 +520,9 @@ func (g *Generator) structLitBorrowsHeapField(structType ast.Type, lit ast.Expr)
 		if ast.IsHeapType(ft) || ast.IsHeapOptionalType(ft) || (ast.IsStructType(ft) && ast.NeedsRelease(ft)) {
 			return true
 		}
+		if ast.IsInterfaceType(ft) && ast.IsInterfaceType(g.typeOfExpr(val)) {
+			return true
+		}
 	}
 	return false
 }
@@ -576,7 +589,10 @@ func (g *Generator) genStructArrayLitElem(out *strings.Builder, arrVar string, e
 		alreadyIface := ast.IsInterfaceType(g.typeOfExpr(elem))
 		if alreadyIface {
 			g.genExpr(out, elem)
-			out.WriteString("; dex_retain(_el._obj); ")
+			out.WriteString("; ")
+			if g.borrowsHeapValue(elem) {
+				out.WriteString("dex_retain(_el._obj); ")
+			}
 		} else {
 			g.genInterfaceValue(out, elem, elemType)
 			out.WriteString("; ")

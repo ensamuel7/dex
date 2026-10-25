@@ -176,6 +176,7 @@ func (g *Generator) hoistReceiver(expr ast.Expr, recvType ast.Type) (string, boo
 		owned = !g.borrowsHeapValue(expr)
 	}
 	if owned {
+		g.registerTempForUnwind(g.stmtPrelude, tmp, recvType)
 		g.stmtTemps = append(g.stmtTemps, scopeVar{name: tmp, typ: recvType})
 	}
 	return tmp, true

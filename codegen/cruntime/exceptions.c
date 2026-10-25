@@ -234,3 +234,19 @@ static void _dex_rethrow(const char* type, const char* msg) {
     _dex_exc_stack[_dex_exc_top].active = 1;
     DEX_LONGJMP(_dex_exc_stack[_dex_exc_top].env);
 }
+
+#ifdef DEX_MEM_CHECK
+static void _dex_mc_throw_injected(const char* msg) {
+    _dex_exc_stage(msg);
+    _dex_throw_staged("Exception");
+}
+
+static int _dex_mc_in_try(void) {
+    return _dex_exc_top >= 0;
+}
+
+__attribute__((constructor)) static void _dex_mc_inject_init(void) {
+    dex_mc_inject_throw = _dex_mc_throw_injected;
+    dex_mc_inject_armed = _dex_mc_in_try;
+}
+#endif

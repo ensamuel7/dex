@@ -56,6 +56,14 @@ static DexString* dex_string_new(const char* s, size_t len) {
     return ds;
 }
 
+static inline _Bool dex_str_eq(const DexString* a, const DexString* b) {
+    return a == b || (a->len == b->len && memcmp(a->data, b->data, a->len) == 0);
+}
+
+static inline _Bool dex_str_eq_lit(const DexString* a, const char* lit, size_t n) {
+    return a->len == n && memcmp(a->data, lit, n) == 0;
+}
+
 static DexString* dex_string_from_lit(const char* s) {
     return dex_string_new(s, strlen(s));
 }
@@ -167,14 +175,14 @@ static int dex_json_unescape_string(const char** pp, char** out, size_t* outlen)
     p++;
 
     size_t cap = 32, n = 0;
-    char* buf = (char*)malloc(cap);
+    char* buf = (char*)dex_xmalloc(cap);
     if (!buf) return 0;
 
     while (*p && *p != '"') {
         // One escape can expand to four UTF-8 bytes.
         if (n + 5 > cap) {
             cap *= 2;
-            char* nb = (char*)realloc(buf, cap);
+            char* nb = (char*)dex_xrealloc(buf, cap);
             if (!nb) { free(buf); return 0; }
             buf = nb;
         }
@@ -249,7 +257,7 @@ static int dex_json_unescape_string(const char** pp, char** out, size_t* outlen)
     p++;
 
     if (n + 1 > cap) {
-        char* nb = (char*)realloc(buf, n + 1);
+        char* nb = (char*)dex_xrealloc(buf, n + 1);
         if (!nb) { free(buf); return 0; }
         buf = nb;
     }

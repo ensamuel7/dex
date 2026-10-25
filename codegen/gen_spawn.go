@@ -26,18 +26,20 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		g.spawnWrappers.WriteString(fmt.Sprintf(" } %s;\n", ctxType))
 
 		// Build wrapper function
-		g.spawnWrappers.WriteString(fmt.Sprintf("void %s(void* _raw) {\n", wrapperName))
-		g.spawnWrappers.WriteString(fmt.Sprintf("    %s* _ctx = (%s*)_raw;\n", ctxType, ctxType))
-		g.spawnWrappers.WriteString("    DexChan* _ch = _ctx->_ch;\n")
+		var sw strings.Builder
+		sw.WriteString(fmt.Sprintf("void %s(void* _raw) {\n", wrapperName))
+		sw.WriteString(fmt.Sprintf("    %s* _ctx = (%s*)_raw;\n", ctxType, ctxType))
+		sw.WriteString("    DexChan* _ch = _ctx->_ch;\n")
 		for _, cv := range captured {
-			g.spawnWrappers.WriteString(fmt.Sprintf("    %s %s = _ctx->%s;\n", g.cType(cv.typ), cv.name, cv.name))
+			sw.WriteString(fmt.Sprintf("    %s %s = _ctx->%s;\n", g.cType(cv.typ), cv.name, cv.name))
 		}
-		g.spawnWrappers.WriteString("    free(_raw);\n")
+		sw.WriteString("    free(_raw);\n")
 
 		// The body runs on another thread, in a function of its own, so its
 		// locals are its own scope's: registered in the enclosing function's,
 		// they were released there, where they do not exist.
 		savedScopes := g.scopeStack
+		restoreHoist := g.isolateFrame()
 		g.scopeStack = nil
 		g.pushScope()
 		var bodyBuf strings.Builder
@@ -46,15 +48,17 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		}
 		g.popScope(&bodyBuf, "    ")
 		g.scopeStack = savedScopes
-		g.spawnWrappers.WriteString(bodyBuf.String())
+		restoreHoist()
+		sw.WriteString(bodyBuf.String())
 		// The context holds a reference to every capture (taken at the call
 		// site below), released here once the body is done with it.
 		for _, cv := range captured {
 			var rel strings.Builder
 			g.emitReleaseVar(&rel, "    ", cv.name, cv.typ)
-			g.spawnWrappers.WriteString(rel.String())
+			sw.WriteString(rel.String())
 		}
-		g.spawnWrappers.WriteString("    dex_release(_ch);\n")
+		sw.WriteString("    dex_release(_ch);\n")
+		g.spawnWrappers.WriteString(sw.String())
 		// void function — no return needed
 		g.spawnWrappers.WriteString("}\n")
 
@@ -82,11 +86,11 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		// Spawn function call: spawn fn(args)
 		call := e.Call.(*ast.CallExpr)
 
+		argTypes, coerced := g.spawnArgTypes(call)
 		// Build context struct with channel + args
 		g.spawnWrappers.WriteString(fmt.Sprintf("typedef struct { DexChan* _ch;"))
-		for i, arg := range call.Args {
-			argType := g.typeOfExpr(arg)
-			g.spawnWrappers.WriteString(fmt.Sprintf(" %s _a%d;", g.cType(argType), i))
+		for i := range call.Args {
+			g.spawnWrappers.WriteString(fmt.Sprintf(" %s _a%d;", g.cType(argTypes[i]), i))
 		}
 		g.spawnWrappers.WriteString(fmt.Sprintf(" } %s;\n", ctxType))
 
@@ -94,9 +98,8 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		g.spawnWrappers.WriteString(fmt.Sprintf("void %s(void* _raw) {\n", wrapperName))
 		g.spawnWrappers.WriteString(fmt.Sprintf("    %s* _ctx = (%s*)_raw;\n", ctxType, ctxType))
 		g.spawnWrappers.WriteString("    DexChan* _ch = _ctx->_ch;\n")
-		for i, arg := range call.Args {
-			argType := g.typeOfExpr(arg)
-			g.spawnWrappers.WriteString(fmt.Sprintf("    %s _a%d = _ctx->_a%d;\n", g.cType(argType), i, i))
+		for i := range call.Args {
+			g.spawnWrappers.WriteString(fmt.Sprintf("    %s _a%d = _ctx->_a%d;\n", g.cType(argTypes[i]), i, i))
 		}
 		g.spawnWrappers.WriteString("    free(_raw);\n")
 
@@ -122,11 +125,10 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 			g.spawnWrappers.WriteString("    dex_chan_send(_ch, &_ret);\n")
 		}
 		// Release heap-typed args before returning
-		for i, arg := range call.Args {
-			argType := g.typeOfExpr(arg)
-			if ast.IsHeapType(argType) {
-				g.spawnWrappers.WriteString(fmt.Sprintf("    dex_release(_a%d);\n", i))
-			}
+		for i := range call.Args {
+			var rel strings.Builder
+			g.emitReleaseVar(&rel, "    ", fmt.Sprintf("_a%d", i), argTypes[i])
+			g.spawnWrappers.WriteString(rel.String())
 		}
 		g.spawnWrappers.WriteString("    dex_release(_ch);\n")
 		// void function — no return needed
@@ -142,11 +144,17 @@ func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
 		out.WriteString("_spawn_ctx->_ch = _spawn_ch; dex_retain(_spawn_ch); ")
 		for i, arg := range call.Args {
 			out.WriteString(fmt.Sprintf("_spawn_ctx->_a%d = ", i))
-			g.genExpr(out, arg)
-			out.WriteString("; ")
-			argType := g.typeOfExpr(arg)
-			if ast.IsHeapType(argType) {
-				out.WriteString(fmt.Sprintf("dex_retain(_spawn_ctx->_a%d); ", i))
+			switch {
+			case coerced[i] && ast.IsInterfaceType(argTypes[i]):
+				g.genInterfaceValue(out, arg, argTypes[i])
+				out.WriteString("; ")
+			case coerced[i]:
+				g.genOptionalStructOwned(out, arg, argTypes[i])
+				out.WriteString("; ")
+			default:
+				g.genExpr(out, arg)
+				out.WriteString("; ")
+				g.emitRetainMovedArg(out, fmt.Sprintf("_spawn_ctx->_a%d", i), arg)
 			}
 		}
 		out.WriteString(fmt.Sprintf("dex_spawn_submit(%s, _spawn_ctx); ", wrapperName))
@@ -363,4 +371,51 @@ func (g *Generator) collectUsedVarsExpr(expr ast.Expr, used map[string]bool) {
 		}
 		g.collectUsedVars(e.Body, used, defined)
 	}
+}
+
+func (g *Generator) emitRetainMovedArg(out *strings.Builder, target string, arg ast.Expr) {
+	t := g.typeOfExpr(arg)
+	if ast.IsStructType(t) || ast.IsPayloadEnumType(t) {
+		g.emitRetainPushedStructFields(out, target, t, arg)
+		return
+	}
+	if !g.borrowsHeapValue(arg) {
+		return
+	}
+	var ret strings.Builder
+	g.emitRetainValue(&ret, "", target, t)
+	out.WriteString(strings.ReplaceAll(ret.String(), "\n", " "))
+}
+
+func (g *Generator) isolateFrame() func() {
+	prelude, temps, registered, mark := g.stmtPrelude, g.stmtTemps, g.stmtTempsRegistered, g.stmtTempMark
+	tryDepth, inLoop, loopDepth, loopTryDepth := g.tryDepth, g.isInLoop, g.loopDepth, g.loopTryDepth
+	g.stmtPrelude, g.stmtTemps, g.stmtTempsRegistered, g.stmtTempMark = nil, nil, false, ""
+	g.tryDepth, g.isInLoop, g.loopDepth, g.loopTryDepth = 0, false, 0, 0
+	return func() {
+		g.stmtPrelude, g.stmtTemps, g.stmtTempsRegistered, g.stmtTempMark = prelude, temps, registered, mark
+		g.tryDepth, g.isInLoop, g.loopDepth, g.loopTryDepth = tryDepth, inLoop, loopDepth, loopTryDepth
+	}
+}
+
+func (g *Generator) spawnArgTypes(call *ast.CallExpr) ([]ast.Type, []bool) {
+	types := make([]ast.Type, len(call.Args))
+	coerced := make([]bool, len(call.Args))
+	var params []ast.Param
+	if fn, ok := g.funcs[call.Name]; ok && call.Module == "" {
+		params = fn.Params
+	}
+	for i, arg := range call.Args {
+		types[i] = g.typeOfExpr(arg)
+		if i >= len(params) {
+			continue
+		}
+		pt := params[i].Type
+		if ast.IsInterfaceType(pt) && !ast.IsInterfaceType(types[i]) {
+			types[i], coerced[i] = pt, true
+		} else if ast.IsStructOptionalType(pt) && !ast.IsOptionalType(types[i]) {
+			types[i], coerced[i] = pt, true
+		}
+	}
+	return types, coerced
 }

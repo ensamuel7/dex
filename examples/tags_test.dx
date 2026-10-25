@@ -26,9 +26,11 @@ fn snake(field: string): string {
         if (ch != lower) {
             sb.append("_")
         }
+
         sb.append(lower)
         i = i + 1
     }
+
     return sb.toString()
 }
 
@@ -43,8 +45,10 @@ fn columnsFor(bk: Book, alias: string): string[] {
         } else {
             out.push(tagged + " AS " + name)
         }
+
         i = i + 1
     }
+
     return out
 }
 
@@ -84,8 +88,10 @@ fn main(): void {
             total = total + reflect.fieldTag(bk, f, "db").len()
             f = f + 1
         }
+
         r = r + 1
     }
+
     fmt.println(total)
     fmt.println(str.fromInt(cols.len()))
 
@@ -104,8 +110,10 @@ fn projection(names: string[], tags: string[], alias: string): string[] {
         } else {
             out.push(tag)
         }
+
         i = i + 1
     }
+
     return out
 }
 
@@ -146,5 +154,6 @@ fn checkFieldTags(): void {
         total = total + reflect.fieldTags(bk, "db").len()
         r = r + 1
     }
+
     assert(total == 3000)
 }

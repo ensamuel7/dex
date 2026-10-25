@@ -36,6 +36,7 @@ fn fill(out: &Pending, seed: int): void {
         } else if (kind == "string") {
             assert(reflect.setString(out, i, reflect.fieldName(out, i) + "-" + str.fromInt(seed)))
         }
+
         i = i + 1
     }
 }

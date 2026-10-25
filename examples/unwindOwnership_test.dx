@@ -156,52 +156,62 @@ fn main(): void {
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(concatThrows(i).len() > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(interpThrows(i).len() > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(letWithTemps(i) > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(mutatedThenThrow(i) > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(reflectedThenThrow(i) > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(nestedFieldsThenThrow(i) > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(interfaceFieldThenThrow(i) > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(pairThrows(i).left.len() > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
+
         try {
             assert(arrayLiteralThrows(i) > 0)
         } catch (e: Exception) {
             caught = caught + 1
         }
     }
+
     assert(caught == 200)
 
     assert(interpolated(7) == "a 7 b 7")

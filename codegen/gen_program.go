@@ -417,7 +417,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// definitions are ordered by that dependency rather than by source order.
 	for _, sd := range orderStructsByDependency(program.Structs) {
 		out.WriteString(fmt.Sprintf("struct Dex_%s {\n", sd.Name))
-		for _, f := range sd.Fields {
+		for _, f := range ast.LaidOutFields(sd.Fields) {
 			out.WriteString(fmt.Sprintf("    %s %s;\n", g.cType(f.Type), f.Name))
 		}
 		out.WriteString("};\n")

@@ -108,6 +108,7 @@ func RegisterAllModuleTypes() {
 	for _, mod := range registry {
 		for _, td := range mod.Types {
 			if _, exists := ast.LookupStructType(td.Name); !exists {
+				td.DeclaredOrder = true
 				ast.RegisterStructType(td)
 			}
 		}

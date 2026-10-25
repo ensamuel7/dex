@@ -31,6 +31,7 @@ fn describe(c: &User): string {
         sb.append(";")
         i = i + 1
     }
+
     return sb.toString()
 }
 
@@ -92,8 +93,10 @@ fn main(): void {
             total = total + num.toLong(shown.len())
             f = f + 1
         }
+
         r = r + 1
     }
+
     fmt.println(total)
     fmt.println(other.ignored)
 }

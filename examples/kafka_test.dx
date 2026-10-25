@@ -29,6 +29,7 @@ fn main(): void {
                     payload = kafka.poll(c, 500)
                 }
             }
+
             assert(!payload.isEmpty())
             assert(kafka.lastTopic(c) == "dex.test")
             assert(kafka.lastKey(c) == "order-1")

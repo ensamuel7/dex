@@ -121,6 +121,7 @@ type StructDef struct {
 	Doc               string        // documentation string for hover
 	Pos               Pos
 	Annotations       []string
+	DeclaredOrder     bool
 }
 
 // QualifiedStructName is the flat name a module's type is registered under.

@@ -31,9 +31,11 @@ fn run(db: Db, sql: string): int {
     if (rc != 0 || st == null) {
         return rc
     }
+
     if (st != null) {
         rc = sq.step(st)
     }
+
     return rc
 }
 
@@ -47,6 +49,7 @@ fn sum(db: Db): int {
             total = sq.colInt(st, 0)
         }
     }
+
     return total
 }
 
@@ -59,6 +62,7 @@ fn main(): void {
         assert(sq.open(":memory:", db) == 0)
         i = i + 1
     }
+
     if (db != null) {
         assert(run(db, "CREATE TABLE t(v INT)") == 101)
         assert(run(db, "INSERT INTO t VALUES (2), (40)") == 101)
@@ -82,7 +86,9 @@ fn main(): void {
         } catch (e: Failed) {
             assert(e.message == "unwound")
         }
+
         n = n + 1
     }
+
     fmt.println("externalSqlite_test: all assertions passed")
 }

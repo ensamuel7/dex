@@ -48,9 +48,11 @@ fn main(): void {
     for (let i: int = 0; i < 20; i++) {
         launch(done)
     }
+
     for (let i: int = 0; i < 20; i++) {
         let got: string = receive(done)
         assert(got == "checked Ada! label-x")
     }
+
     fmt.println("spawn_captures_test: all assertions passed")
 }

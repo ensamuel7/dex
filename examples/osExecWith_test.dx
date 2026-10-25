@@ -25,6 +25,7 @@ fn main(): void {
         time.sleep(400)
         send(file.read(log))
     }
+
     os.execWith("echo early; sleep 1; echo late", os.ExecOptions { appendTo: log })
     let midway: string = receive(watcher)
     assert(midway.contains("early"))

@@ -20,6 +20,7 @@ fn main(): void {
         let id: int = db.col(created, 0)
         fmt.println("inserted id " + str.fromInt(id))
     }
+
     db.free(created)
 
     let older: string[] = ["40"]
@@ -29,6 +30,7 @@ fn main(): void {
         let age: int = db.col(rows, 1)
         fmt.println(name + " is " + str.fromInt(age))
     }
+
     db.free(rows)
 
     let none: string[] = []
@@ -37,6 +39,7 @@ fn main(): void {
         let n: int = db.col(counted, 0)
         fmt.println(str.fromInt(n) + " rows")
     }
+
     db.free(counted)
 
     db.exec(conn, "DROP TABLE people")

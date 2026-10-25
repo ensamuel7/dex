@@ -23,6 +23,7 @@ fn divide(a: int, b: int): int {
     if (b == 0) {
         throw Exception("division by zero for " + str.fromInt(a))
     }
+
     return a / b
 }
 
@@ -62,6 +63,7 @@ fn main(): void {
 
         i = i + 1
     }
+
     assert(caught == 2000)
 
     // The borrowed message was never the throw's to release.
@@ -75,8 +77,10 @@ fn main(): void {
         } catch (e: Exception) {
             assert(false)
         }
+
         j = j + 1
     }
+
     assert(ok == 2500)
 
     // finally runs on both paths.
@@ -92,8 +96,10 @@ fn main(): void {
         } finally {
             ran = ran + 1
         }
+
         k = k + 1
     }
+
     assert(ran == 200)
 
     fmt.println(str.fromInt(caught) + " caught, " + str.fromInt(ran) + " finally")

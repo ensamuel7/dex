@@ -10,6 +10,7 @@ fn makePoint(x: int): OptPoint? {
     if (x < 0) {
         return null
     }
+
     return OptPoint { x: x, label: "p" + x }
 }
 
@@ -69,6 +70,7 @@ fn testBoolOptional(): void {
     if (b != null) {
         assert(b == true)
     }
+
     b = null
     assert(b == null)
 }
@@ -86,6 +88,7 @@ fn maybeInt(flag: bool): int? {
     if (flag) {
         return 42
     }
+
     return null
 }
 
@@ -105,6 +108,7 @@ fn maybeString(flag: bool): string? {
     if (flag) {
         return "yes"
     }
+
     return null
 }
 
@@ -132,6 +136,7 @@ fn showOptional(val: int?): bool {
     if (val != null) {
         return true
     }
+
     return false
 }
 
@@ -147,6 +152,7 @@ fn testLongOptional(): void {
     if (l != null) {
         assert(l == 1000000)
     }
+
     l = null
     assert(l == null)
 }
@@ -160,6 +166,7 @@ fn testStringReassign(): void {
     if (s != null) {
         assert(s == "second")
     }
+
     s = null
     assert(s == null)
 }
@@ -188,6 +195,7 @@ fn main(): void {
         assert(some.x == 3)
         assert(some.label == "p3")
     }
+
     let none: OptPoint? = makePoint(-1)
     assert(none == null)
 }

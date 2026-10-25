@@ -25,6 +25,7 @@ fn main(): void {
     if (refuse("in a condition").ok) {
         assert(false)
     }
+
     let reason: string = refuse("read the field").reason
     assert(reason == "read the field")
 
@@ -32,6 +33,7 @@ fn main(): void {
     if (takesBorrowed(name.toLower())) {
         assert(true)
     }
+
     while (takesBorrowed(name.toLower()) && reason.len() > 0) {
         reason = ""
     }
@@ -52,6 +54,7 @@ fn main(): void {
             n = n + 1
         }
     }
+
     assert(n == 3)
 
     fmt.println("temporary ownership: ok")

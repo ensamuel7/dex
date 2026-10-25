@@ -18,6 +18,7 @@ fn label(s: string): int {
             n = 2
         }
     }
+
     return n
 }
 

@@ -46,6 +46,7 @@ fn sizeOf(n: Named?): int {
     if (n == null) {
         return 0
     }
+
     return n.size()
 }
 
@@ -54,6 +55,7 @@ fn read(h: Holder): int {
     if (r == null) {
         return 0
     }
+
     return r.size()
 }
 
@@ -89,6 +91,7 @@ fn main(): void {
     if (t != null) {
         assert(t.bump() == 1)
     }
+
     let t2: Tally? = made.tally
     if (t2 != null) {
         assert(t2.n == 1)
@@ -113,6 +116,7 @@ fn main(): void {
     if (wi != null) {
         assert(read(wi) == 4)
     }
+
     let holders: Holder[] = [copy, again, made]
     assert(read(holders[2]) == 3)
 
@@ -120,6 +124,7 @@ fn main(): void {
     if (good != null) {
         assert(good.host == "db")
     }
+
     let bad: Config? = json.decode("not json")
     assert(bad == null)
     fmt.println("optionalStruct_test: all assertions passed")

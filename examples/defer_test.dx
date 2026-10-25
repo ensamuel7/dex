@@ -10,6 +10,7 @@ fn conditional(run: bool): void {
     if (run) {
         defer note("conditional")
     }
+
     note("body")
 }
 
@@ -17,6 +18,7 @@ fn looped(): void {
     for (let i = 0; i < 3; i = i + 1) {
         defer note("iteration " + str.fromInt(i))
     }
+
     note("loop body done")
 }
 
@@ -52,6 +54,7 @@ fn main(): void {
     } catch (e: Exception) {
         note("caught unwound")
     }
+
     ordered()
     try {
         captures(7)

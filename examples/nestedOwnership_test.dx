@@ -17,6 +17,7 @@ struct Cols {
                 out = out + ", " + e
             }
         }
+
         return out
     }
 }

@@ -198,8 +198,8 @@ func TestHoverStructShowsSizeAndBetterOrder(t *testing.T) {
 	s, uri := hoverServer(t)
 	got := s.hoverAt(uri, hoverSource, hoverLineCol(t, "struct Loose", "Loose"))
 	for _, want := range []string{
-		"**Size:** 24 bytes (align 8, 14 bytes of padding)",
-		"Ordered by alignment it would be 16 bytes: `total, on, off`",
+		"**Size:** 16 bytes (align 8, 6 bytes of padding)",
+		"Laid out as `total, on, off`; in declared order it would be 24 bytes.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("hover over Loose missing %q:\n%s", want, got)
@@ -207,7 +207,7 @@ func TestHoverStructShowsSizeAndBetterOrder(t *testing.T) {
 	}
 
 	plain := s.hoverAt(uri, hoverSource, hoverLineCol(t, "struct Plain", "Plain"))
-	if !strings.Contains(plain, "**Size:** 4 bytes (align 4)") || strings.Contains(plain, "Ordered by alignment") {
+	if !strings.Contains(plain, "**Size:** 4 bytes (align 4)") || strings.Contains(plain, "Laid out as") {
 		t.Errorf("hover over Plain:\n%s", plain)
 	}
 }

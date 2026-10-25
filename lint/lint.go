@@ -64,7 +64,7 @@ var ruleDoc = map[string]string{
 	RuleUnneededThrows:   "a throws declaration naming a type the function cannot throw",
 	RuleUnreachableCatch: "a catch clause that can never run",
 	RuleUnknownAllow:     "an #[allow(...)] naming a rule that does not exist",
-	RuleStructPadding:    "a struct whose field order wastes bytes on padding",
+	RuleStructPadding:    "a struct declared in an order the compiler has to rearrange to avoid padding",
 }
 
 // RuleDoc returns the one-line description of a rule.
@@ -241,11 +241,11 @@ func (l *linter) checkStructPadding() {
 		}
 		seen[sd.Pos] = true
 		layout := ast.LayoutFields(sd.Fields)
-		if layout.Packed >= layout.Size {
+		if layout.Declared <= layout.Size {
 			continue
 		}
 		l.report(RuleStructPadding, sd.Pos,
-			"struct '%s' is %d bytes as declared and %d with its fields ordered by alignment: %s",
-			ast.DisplayStructName(sd.Name), layout.Size, layout.Packed, strings.Join(layout.Order, ", "))
+			"struct '%s' would be %d bytes in declared order; the compiler lays it out as %s in %d",
+			ast.DisplayStructName(sd.Name), layout.Declared, strings.Join(layout.Order, ", "), layout.Size)
 	}
 }

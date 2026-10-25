@@ -36,6 +36,7 @@ fn main(): void {
         total = total * 10 + (num.toInt(digits.charAt(i)) - 48)
         i = i + 1
     }
+
     assert(total == 90210)
 
     fmt.println("numConvert ok " + str.fromInt(total))

@@ -24,6 +24,7 @@ fn main(): void {
     let addBase: fn(int): int = fn(x: int): int {
         return x + base
     }
+
     assert(addBase(5) == 15)
     assert(apply(addBase, 1) == 11)
 
@@ -48,6 +49,7 @@ fn main(): void {
     let sum: fn(): int = fn(): int {
         return x + y
     }
+
     assert(sum() == 5)
 
     // a plain function still works as a value

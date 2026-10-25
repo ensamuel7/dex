@@ -20,6 +20,7 @@ fn shadowed(): int {
     let local: fn(): int = fn(): int {
         return total
     }
+
     total = 8
     return local()
 }
@@ -38,15 +39,18 @@ fn main(): void {
             send(done, add(1))
         }
     }
+
     for (let i: int = 0; i < 8; i++) {
         receive(done)
     }
+
     assert(add(0) == 13)
 
     // A closure sees writes to a global made after it was built.
     let read: fn(): int = fn(): int {
         return total
     }
+
     total = 100
     assert(read() == 100)
 

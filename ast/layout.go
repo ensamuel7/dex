@@ -13,12 +13,12 @@ type FieldLayout struct {
 }
 
 type StructLayout struct {
-	Size    int64
-	Align   int64
-	Padding int64
-	Fields  []FieldLayout
-	Packed  int64
-	Order   []string
+	Size     int64
+	Align    int64
+	Padding  int64
+	Declared int64
+	Fields   []FieldLayout
+	Order    []string
 }
 
 func mutexLayout() (int64, int64) {
@@ -79,12 +79,28 @@ func LayoutOf(t Type) StructLayout {
 	if def == nil {
 		return StructLayout{Align: 1}
 	}
+	if def.DeclaredOrder {
+		l := place(def.Fields)
+		l.Declared = l.Size
+		for _, f := range l.Fields {
+			l.Order = append(l.Order, f.Name)
+		}
+		return l
+	}
 	return LayoutFields(def.Fields)
 }
 
 func LayoutFields(fields []StructField) StructLayout {
-	var l StructLayout
-	l.Align = 1
+	l := place(LaidOutFields(fields))
+	l.Declared = place(fields).Size
+	for _, f := range l.Fields {
+		l.Order = append(l.Order, f.Name)
+	}
+	return l
+}
+
+func place(fields []StructField) StructLayout {
+	l := StructLayout{Align: 1}
 	var used int64
 	for _, f := range fields {
 		s, a := TypeLayout(f.Type)
@@ -98,14 +114,15 @@ func LayoutFields(fields []StructField) StructLayout {
 	}
 	l.Size = alignUp(l.Size, l.Align)
 	l.Padding = l.Size - used
-
-	sorted := append([]FieldLayout(nil), l.Fields...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Align > sorted[j].Align })
-	var packed int64
-	for _, f := range sorted {
-		packed = alignUp(packed, f.Align) + f.Size
-		l.Order = append(l.Order, f.Name)
-	}
-	l.Packed = alignUp(packed, l.Align)
 	return l
+}
+
+func LaidOutFields(fields []StructField) []StructField {
+	out := append([]StructField(nil), fields...)
+	sort.SliceStable(out, func(i, j int) bool {
+		_, ai := TypeLayout(out[i].Type)
+		_, aj := TypeLayout(out[j].Type)
+		return ai > aj
+	})
+	return out
 }

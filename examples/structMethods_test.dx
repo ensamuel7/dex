@@ -35,6 +35,7 @@ struct Labelled {
         if (tag.isEmpty()) {
             return "untagged"
         }
+
         return tag.toUpper() + "/" + outer.middle.inner.label.trim()
     }
 

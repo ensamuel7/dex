@@ -15,6 +15,7 @@ struct Halver {
         if (h < 0) {
             throw ShimError("odd input", n)
         }
+
         return h
     }
 

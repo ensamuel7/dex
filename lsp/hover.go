@@ -411,13 +411,16 @@ func formatStructSize(def *ast.StructDef) string {
 		}
 	}
 	l := ast.LayoutFields(def.Fields)
+	if t, ok := ast.LookupStructType(def.Name); ok {
+		l = ast.LayoutOf(t)
+	}
 	out := fmt.Sprintf("**Size:** %s (align %d", plural(l.Size, "byte"), l.Align)
 	if l.Padding > 0 {
 		out += fmt.Sprintf(", %s of padding", plural(l.Padding, "byte"))
 	}
 	out += ")"
-	if l.Packed < l.Size {
-		out += fmt.Sprintf("\n\nOrdered by alignment it would be %s: `%s`", plural(l.Packed, "byte"), strings.Join(l.Order, ", "))
+	if l.Declared > l.Size {
+		out += fmt.Sprintf("\n\nLaid out as `%s`; in declared order it would be %s.", strings.Join(l.Order, ", "), plural(l.Declared, "byte"))
 	}
 	return out
 }

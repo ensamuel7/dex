@@ -19,6 +19,7 @@ fn main(): void {
     if (altered != sealed) {
         assert(crypto.decrypt(key, altered) == "")
     }
+
     assert(crypto.decrypt(key, sealed.substring(0, 10)) == "")
     assert(crypto.decrypt(key, "") == "")
 

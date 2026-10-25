@@ -107,6 +107,7 @@ fn main(): void {
         let back: Holder = stamped(fresh, i)
         keptId = back.id
     }
+
     assert(keptId == "H1")
 
     // Plain data, which needs no retain and must still work.
@@ -127,6 +128,7 @@ fn main(): void {
         total = total + paramItems.len()
         rounds = rounds + 1
     }
+
     assert(total == 800)
     fmt.println("returned " + str.fromInt(total) + " items through borrowed struct returns")
 }

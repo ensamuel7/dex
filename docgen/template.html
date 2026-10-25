@@ -2049,11 +2049,12 @@ dex build app.dx --lint-off=unused-param,shadow</code></pre>
 <tr><td><code>unnecessary-throws</code></td><td>a <code>throws</code> naming a type the function cannot throw</td></tr>
 <tr><td><code>unreachable-catch</code></td><td>a <code>catch</code> clause that can never run</td></tr>
 <tr><td><code>unknown-allow</code></td><td>an <code>#[allow(...)]</code> naming a rule that does not exist</td></tr>
-<tr><td><code>struct-padding</code></td><td>a struct whose field order wastes bytes on padding</td></tr>
+<tr><td><code>struct-padding</code></td><td>a struct declared in an order the compiler rearranges to avoid padding</td></tr>
 </table>
 
 <h3>Struct Size and Field Order</h3>
-<p>A struct is laid out in C in the order its fields are declared, each at an offset its alignment allows, so a <code>bool</code> between two <code>long</code>s costs seven bytes of padding. The compiler does not reorder fields. Hovering a struct's name shows its size, its alignment and how much of it is padding, and, when some other order is smaller, the order that is. <code>struct-padding</code> reports the same thing as a finding: <code>struct Reading { ok: bool, at: long, stale: bool }</code> is 24 bytes as declared and 16 as <code>at, ok, stale</code>. The sizes are for a 64-bit target, and <code>#[allow(struct-padding)]</code> on the struct keeps an order chosen for another reason.</p>
+<p>The compiler lays a struct out with its widest fields first, so the order you declare fields in never costs padding: <code>struct Reading { ok: bool, at: long, stale: bool }</code> is 16 bytes, laid out as <code>at, ok, stale</code>, where declared order would be 24. Everything you can observe keeps declared order (struct literals, auto-constructor parameters, <code>json.encode</code>, printing, <code>reflect</code> field indexes and <code>db.fill</code>); only the memory layout changes. A standard library struct keeps its declared layout, which its C runtime relies on.</p>
+<p>Hovering a struct's name shows its size, alignment and padding, and when the layout differs from declared order, the order used and what declared order would have cost. <code>struct-padding</code> reports that difference as a finding, a hint in the editor; <code>#[allow(struct-padding)]</code> on the struct keeps an order chosen for another reason. Sizes are for a 64-bit target.</p>
 <h3>Suppressing a Finding</h3>
 <p><code>#[allow(&lt;rule&gt;)]</code> on the declaration it fires on silences one rule there. <code>#[allow(unused)]</code> covers the four <code>unused-*</code> rules and <code>#[allow(all)]</code> covers everything:</p>
 <pre><code>#[allow(unused)]

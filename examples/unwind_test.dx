@@ -35,11 +35,13 @@ fn breaksOut(limit: int): int {
             if (i > 3) {
                 break
             }
+
             seen = seen + 1
         } catch (e: Exception) {
             seen = 0
         }
     }
+
     return seen
 }
 
@@ -55,6 +57,7 @@ fn mightThrow(fail: bool): int throws {
     if (fail) {
         throw Exception("from the return expression")
     }
+
     return 5
 }
 
@@ -67,6 +70,7 @@ fn main(): void {
             caught = caught + 1
         }
     }
+
     assert(caught == 100)
 
     let temps = 0
@@ -77,12 +81,14 @@ fn main(): void {
             temps = temps + 1
         }
     }
+
     assert(temps == 100)
 
     let total = 0
     for (let i = 0; i < 200; i = i + 1) {
         total = total + guarded(i)
     }
+
     assert(total == 39800)
 
     assert(breaksOut(10) == 4)
@@ -96,5 +102,6 @@ fn main(): void {
     } catch (e: Exception) {
         last = e.message
     }
+
     assert(last == "final")
 }

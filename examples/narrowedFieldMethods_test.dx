@@ -18,6 +18,7 @@ fn read(text: string): string {
     if (c == null) {
         return "none"
     }
+
     let name: string = c.name.trim()
     let lower: string = c.email.toLower()
     let label: string = c.inner.label.toUpper()
@@ -31,5 +32,6 @@ fn main(): void {
         let r: string = read("{\"name\":\" n \",\"email\":\"E\",\"inner\":{\"label\":\"l\"}}")
         assert(r.len() > 0)
     }
+
     fmt.println("narrowed_field_methods_test: all assertions passed")
 }

@@ -40,6 +40,7 @@ fn openThenThrow(path: string): void throws OpenFailed {
     if (f == null) {
         throw OpenFailed("could not open — a previous handle was not closed")
     }
+
     throw OpenFailed("deliberate")
 }
 
@@ -185,6 +186,7 @@ fn main(): void {
         } catch (e: OpenFailed) {
             assert(e.message == "deliberate")
         }
+
         round = round + 1
     }
 

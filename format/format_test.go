@@ -284,3 +284,74 @@ func TestHuggedArgumentStillOpensTheGroup(t *testing.T) {
 		t.Errorf("hugged group was not kept on the line:\n%s", got)
 	}
 }
+
+func TestBlankLineAfterAStatementBlock(t *testing.T) {
+	in := `fn getDriver(req: Request): Response {
+    let ctx: Ctx = open(req)
+    if (ctx.rejected) {
+        return denied(ctx)
+    }
+    if (withheld(ctx)) {
+        return unavailable(ctx)
+    }
+    let home: bool = ctx.home
+    let purses: int[] = []
+    if (home) {
+        purses = owned(ctx)
+    } else {
+        purses = []
+    }
+    switch (ctx.kind) {
+        case 0: {
+            return none()
+        }
+        default: {
+            purses.push(1)
+        }
+    }
+    let doubled: int[] = purses.map(fn(x: int): int {
+        return x * 2
+    })
+    return okFor(ctx, doubled)
+}
+`
+	want := `fn getDriver(req: Request): Response {
+    let ctx: Ctx = open(req)
+    if (ctx.rejected) {
+        return denied(ctx)
+    }
+
+    if (withheld(ctx)) {
+        return unavailable(ctx)
+    }
+
+    let home: bool = ctx.home
+    let purses: int[] = []
+    if (home) {
+        purses = owned(ctx)
+    } else {
+        purses = []
+    }
+
+    switch (ctx.kind) {
+        case 0: {
+            return none()
+        }
+        default: {
+            purses.push(1)
+        }
+    }
+
+    let doubled: int[] = purses.map(fn(x: int): int {
+        return x * 2
+    })
+    return okFor(ctx, doubled)
+}
+`
+	if got := format(t, in); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if got := format(t, want); got != want {
+		t.Errorf("not idempotent:\n%s", got)
+	}
+}

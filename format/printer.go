@@ -120,7 +120,7 @@ func (p *printer) separate(prevIdx, curIdx, indent int) {
 	if cur.kind == token.TokenRBrace && p.block[curIdx] {
 		blank = false
 	}
-	if p.wantsBlankBefore(prevIdx, curIdx, indent) {
+	if p.wantsBlankBefore(prevIdx, curIdx, indent) || p.closesStatementBlock(prevIdx, curIdx) {
 		blank = true
 	}
 
@@ -161,6 +161,17 @@ func (p *printer) wantsBlankBefore(prevIdx, curIdx, indent int) bool {
 		return false
 	}
 	return declStart(p.it[curIdx].kind)
+}
+
+func (p *printer) closesStatementBlock(prevIdx, curIdx int) bool {
+	if p.it[prevIdx].kind != token.TokenRBrace || !p.block[prevIdx] {
+		return false
+	}
+	switch p.it[curIdx].kind {
+	case token.TokenRBrace, token.TokenCase, token.TokenDefault:
+		return false
+	}
+	return true
 }
 
 func declStart(k token.TokenKind) bool {

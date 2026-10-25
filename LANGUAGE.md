@@ -4822,29 +4822,25 @@ would otherwise be underlined as though it were broken.
 | `unnecessary-throws` | a `throws` declaration naming a type the function cannot throw |
 | `unreachable-catch` | a `catch` clause that can never run |
 | `unknown-allow` | an `#[allow(...)]` naming a rule that does not exist |
-| `struct-padding` | a struct whose field order wastes bytes on padding |
+| `struct-padding` | a struct declared in an order the compiler rearranges to avoid padding |
 
 ### Struct size and field order
 
-A struct is laid out in C in the order its fields are declared, each at an
-offset its alignment allows, so a `bool` between two `long`s costs seven bytes
-of padding. The compiler does not reorder fields. Hovering a struct's name
-shows its size, its alignment and how much of it is padding, and, when some
-other order is smaller, the order that is. `struct-padding` reports the same
-thing as a finding:
+The compiler lays a struct out with its widest fields first, so the order you
+declare fields in never costs padding: `struct Reading { ok: bool, at: long,
+stale: bool }` is 16 bytes, laid out as `at, ok, stale`, where declared order
+would be 24. Everything you can observe keeps declared order — a struct
+literal, the auto-constructor's parameters, `json.encode`, printing,
+`reflect` field indexes and `db.fill` — only the memory layout changes. A
+standard library struct keeps its declared layout, which its C runtime relies
+on.
 
-```dex
-struct Reading {
-    ok: bool
-    at: long
-    stale: bool
-}
-```
-
-is 24 bytes as declared and 16 as `at, ok, stale`. The sizes are for a 64-bit
-target. Putting the widest fields first is always at least as small, and
+Hovering a struct's name shows its size, alignment and padding, and when the
+layout differs from declared order, the order used and what declared order
+would have cost. `struct-padding` reports that difference as a finding, a hint
+in the editor, for anyone who wants the source to read in layout order;
 `#[allow(struct-padding)]` on the struct keeps an order chosen for another
-reason.
+reason. Sizes are for a 64-bit target.
 
 ### Suppressing a Finding
 

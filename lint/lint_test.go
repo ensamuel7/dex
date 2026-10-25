@@ -1110,7 +1110,7 @@ fn main(): void {
     assert(a.total + b.total + c.total == 3)
 }
 `, RuleStructPadding)
-	if want := "struct 'Loose' is 24 bytes as declared and 16 with its fields ordered by alignment: total, on, off"; findings[0].Msg != want {
+	if want := "struct 'Loose' would be 24 bytes in declared order; the compiler lays it out as total, on, off in 16"; findings[0].Msg != want {
 		t.Errorf("got %q, want %q", findings[0].Msg, want)
 	}
 }

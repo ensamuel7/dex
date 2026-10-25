@@ -79,6 +79,7 @@ fn reassignedInTry(i: int): string {
         x = "b" + str.fromInt(i)
         boom(i)
     } catch (e: Exception) {}
+
     return x
 }
 
@@ -114,6 +115,7 @@ fn maybeLabel(n: int): Label? {
     if (n < 0) {
         return null
     }
+
     return Label.Named("n" + str.fromInt(n))
 }
 
@@ -126,6 +128,7 @@ fn labelText(l: Label): string {
             return ""
         }
     }
+
     return ""
 }
 
@@ -156,6 +159,7 @@ fn main(): void {
         } else {
             assert(false)
         }
+
         assert(mkMap(i)["k"] == "m" + str.fromInt(i))
 
         assert(reassignedInTry(i) == "b" + str.fromInt(i))
@@ -170,6 +174,7 @@ fn main(): void {
         let task4 = spawn {
             send(greets(mkPerson(i), want))
         }
+
         assert(receive(task4))
 
         let f: fn(): bool = closureOverStruct(i)
@@ -185,6 +190,7 @@ fn main(): void {
         foreach (mkHold(i).nums as n) {
             total += n
         }
+
         assert(total == 2 * i + 1)
 
         let recs: Rec[] = [mkRec(i)]
@@ -211,6 +217,7 @@ fn main(): void {
                 k++
             }
         }
+
         assert(k == 2)
         assert(shapes().len() == 1)
 
@@ -230,6 +237,7 @@ fn main(): void {
         } else {
             assert(false)
         }
+
         let shape: Shape = Shape.Tags(["q"])
         let shapeText: string = "${shape}"
         assert(shapeText == "Tags([q])")
@@ -245,20 +253,24 @@ fn main(): void {
             0 => want
             _ => want
         }
+
         assert(picked == want)
         let pickedRec: Rec = match (i % 2) {
             0 => held
             _ => held
         }
+
         assert(pickedRec.name == held.name)
         let doc: json.Value = match (i % 2) {
             0 => {
                 name: "d" + str.fromInt(i)
             }
+
             _ => {
                 name: "d" + str.fromInt(i)
             }
         }
+
         assert(doc["name"].asString() == "d" + str.fromInt(i))
     }
 }

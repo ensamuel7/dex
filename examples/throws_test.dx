@@ -4,6 +4,7 @@ fn parseAge(s: string): int throws {
     if (s == "") {
         throw Exception("empty input")
     }
+
     return str.toInt(s)
 }
 
@@ -18,6 +19,7 @@ struct Validator {
         if (age < min) {
             throw Exception("too young")
         }
+
         return age
     }
 }
@@ -38,6 +40,7 @@ fn main(): void {
         caught = true
         assert(e.message == "empty input")
     }
+
     assert(caught)
 
     // A method declaring throws behaves the same way.
@@ -54,6 +57,7 @@ fn main(): void {
     } catch (e: Exception) {
         rejected = true
     }
+
     assert(rejected)
 
     assert(true)

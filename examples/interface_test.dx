@@ -101,6 +101,7 @@ fn greeterFor(robot: bool): Greeter {
         let r = Robot { id: 3 }
         return r
     }
+
     let p = Person { name: "Eve" }
     return p
 }

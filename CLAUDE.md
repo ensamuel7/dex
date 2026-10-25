@@ -313,17 +313,35 @@ An external function whose handle return is declared without `?` goes through
 `dex_handle_require`, so a NULL stops the program at the call that produced it
 rather than at the next C function to receive it.
 
-## Struct layout in the editor
+## Struct field layout
 
-`ast/layout.go` computes a struct's C layout from its Dex field types —
-`TypeLayout` mirrors `cType`, so a new C representation for a type has to be
-reflected there too. The LSP hover shows the size, alignment and padding, and
-the `struct-padding` lint rule (a hint in the editor) names a smaller order
-when sorting by alignment gives one. The compiler keeps declared order: the
-hover and the lint describe what the C really is. `StructDef.Pos` and
-`StructDef.Annotations` exist for this rule, and a generic struct's
-instantiations share their template's position, so the rule reports a
-position once.
+A user struct's C definition lists its fields sorted by alignment, widest
+first and otherwise in declared order (`ast.LaidOutFields`, used in
+`gen_program.go`), so declaration order never costs padding. That is safe
+because the C never depends on field order: every struct literal and
+auto-constructor is a designated initialiser, and reflection, JSON, `db.fill`
+and printing all go by name or by the Dex field list. A stdlib module's struct
+is the exception and keeps declared order (`StructDef.DeclaredOrder`, set in
+`RegisterAllModuleTypes`): the `http` runtime depends on the layout of
+`HttpRequest` and `HttpResponse`, and reordering them broke five examples.
+
+`ast/layout.go` computes the layout from Dex field types. `TypeLayout`
+mirrors `cType`, so a new C representation for a type has to be reflected
+there too. The LSP hover shows size, alignment and padding, plus the declared
+order's cost when the layout differs, and the `struct-padding` lint rule (a
+hint in the editor) reports that difference. `StructDef.Pos` and
+`StructDef.Annotations` exist for the rule; a generic struct's instantiations
+share their template's position, so the rule reports a position once.
+
+## Blank lines the formatter adds
+
+Besides the blank line before a top-level declaration and after the imports,
+`closesStatementBlock` in `format/printer.go` puts one after a closing block
+brace followed by another statement: an `if`, loop, `try`, `switch`, `match`
+binding or multi-line lambda binding ends a paragraph. Not before a closing
+brace, not between `else`/`catch`/`finally` and their block, and not between
+`switch` cases. A brace closing a lambda passed as an argument is inside its
+statement, not a boundary, so it is unaffected.
 
 ## Profiling memory
 

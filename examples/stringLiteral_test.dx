@@ -18,6 +18,7 @@ fn build(n: int): string {
         acc = acc + "x"
         i = i + 1
     }
+
     return acc
 }
 

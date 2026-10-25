@@ -339,48 +339,9 @@ func (s *Server) moduleCompletions(moduleName string, text string, uri string) [
 		return items
 	}
 
-	// Not a known module — offer both array and string methods
-	return []CompletionItem{
-		// Array methods
-		{Label: "push", Kind: CompletionKindFunction, Detail: "(val): void", Documentation: "Append an element to the array."},
-		{Label: "pop", Kind: CompletionKindFunction, Detail: "(): element", Documentation: "Remove and return the last element."},
-		{Label: "len", Kind: CompletionKindFunction, Detail: "(): int", Documentation: "Return the number of elements."},
-		{Label: "remove", Kind: CompletionKindFunction, Detail: "(index: int): void", Documentation: "Remove the element at the given index."},
-		{Label: "contains", Kind: CompletionKindFunction, Detail: "(val): bool", Documentation: "Check if the value is in the array/string."},
-		{Label: "indexOf", Kind: CompletionKindFunction, Detail: "(val): int", Documentation: "Return the index of the value, or -1."},
-		{Label: "reverse", Kind: CompletionKindFunction, Detail: "(): void", Documentation: "Reverse the array in place."},
-		{Label: "sort", Kind: CompletionKindFunction, Detail: "(direction: string): void", Documentation: "Sort the array (\"asc\" or \"desc\")."},
-		// String methods
-		{Label: "startsWith", Kind: CompletionKindFunction, Detail: "(prefix: string): bool", Documentation: "Check if the string starts with the prefix."},
-		{Label: "endsWith", Kind: CompletionKindFunction, Detail: "(suffix: string): bool", Documentation: "Check if the string ends with the suffix."},
-		{Label: "toLower", Kind: CompletionKindFunction, Detail: "(): string", Documentation: "Return a lowercase copy."},
-		{Label: "toUpper", Kind: CompletionKindFunction, Detail: "(): string", Documentation: "Return an uppercase copy."},
-		{Label: "trim", Kind: CompletionKindFunction, Detail: "(): string", Documentation: "Return a copy with leading/trailing whitespace removed."},
-		{Label: "split", Kind: CompletionKindFunction, Detail: "(delimiter: string): string[]", Documentation: "Split the string by the delimiter."},
-		{Label: "substring", Kind: CompletionKindFunction, Detail: "(start: int, end: int): string", Documentation: "Return a substring from start to end (exclusive)."},
-		{Label: "replace", Kind: CompletionKindFunction, Detail: "(old: string, new: string): string", Documentation: "Replace all occurrences of old with new."},
-		{Label: "charAt", Kind: CompletionKindFunction, Detail: "(index: int): char", Documentation: "Return the character at the given index."},
-		{Label: "isAlphanumeric", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are alphanumeric (non-empty)."},
-		{Label: "isAlpha", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are alphabetic (non-empty)."},
-		{Label: "isDigit", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are digits (non-empty)."},
-		{Label: "isNumeric", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are numeric or '.' (non-empty)."},
-		{Label: "isWhitespace", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if all characters are whitespace (non-empty)."},
-		{Label: "isEmpty", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string is empty (length 0)."},
-		{Label: "containsUppercase", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one uppercase letter."},
-		{Label: "containsLowercase", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one lowercase letter."},
-		{Label: "containsDigit", Kind: CompletionKindFunction, Detail: "(): bool", Documentation: "Check if the string contains at least one digit."},
-		// StringBuilder methods
-		{Label: "append", Kind: CompletionKindFunction, Detail: "(value): void", Documentation: "Append a value (string, int, long, double, bool, or char) to the StringBuilder."},
-		{Label: "toString", Kind: CompletionKindFunction, Detail: "(): string", Documentation: "Build the final string from the StringBuilder buffer."},
-		// Map methods
-		{Label: "set", Kind: CompletionKindFunction, Detail: "(key, value): void", Documentation: "Set a key-value pair in the map."},
-		{Label: "get", Kind: CompletionKindFunction, Detail: "(key): value", Documentation: "Get the value for a key."},
-		{Label: "has", Kind: CompletionKindFunction, Detail: "(key): bool", Documentation: "Check if a key exists in the map."},
-		{Label: "remove", Kind: CompletionKindFunction, Detail: "(key): void", Documentation: "Remove a key-value pair from the map."},
-		{Label: "clear", Kind: CompletionKindFunction, Detail: "(): void", Documentation: "Remove all entries from the map."},
-		{Label: "keys", Kind: CompletionKindFunction, Detail: "(): key[]", Documentation: "Return an array of all keys."},
-		{Label: "values", Kind: CompletionKindFunction, Detail: "(): value[]", Documentation: "Return an array of all values."},
-	}
+	// Not a known module, so a value whose type is not known here: offer every
+	// built-in receiver's methods. The list is the one hover reads.
+	return builtinMethodCompletions()
 }
 
 // isModuleImported checks whether a module is already imported in the source text.

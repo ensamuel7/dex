@@ -26,8 +26,10 @@
 // At exit the profile is written as JSON to DEX_PROFILE_OUT (default
 // dex-profile.json). SIGUSR1 writes a snapshot without stopping the program,
 // and SIGINT / SIGTERM write one before the program dies — both only when the
-// program has not installed a handler of its own — so a server can be
-// profiled and then stopped.
+// program has not installed a handler of its own. The HTTP and WebSocket
+// servers do install their own, and end the process with _exit, which skips
+// atexit; their shutdown paths call DEX_PF_FLUSH() first, so a server can be
+// profiled and then stopped with Ctrl-C.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -110,6 +112,10 @@ static struct timespec dex_pf_t0;
 // does not start a second write into the same buffer.
 static volatile sig_atomic_t dex_pf_writing = 0;
 static const char* dex_pf_out = "dex-profile.json";
+// The process that started profiling. A child forked from it — an HTTP worker
+// from listenMulti — inherits the tables and the output path, and must not
+// overwrite the parent's profile with its own partial copy.
+static pid_t dex_pf_pid = 0;
 
 static double dex_pf_now_ms(void) {
     struct timespec t;
@@ -317,7 +323,7 @@ static void dex_pf_putf(double d) {
 // only tries, because the thread it interrupted may be the one holding it, and
 // a snapshot read without the lock is at worst a little inconsistent.
 static void dex_pf_write(int locked) {
-    if (dex_pf_writing) return;
+    if (dex_pf_writing || getpid() != dex_pf_pid) return;
     dex_pf_writing = 1;
     int have = locked ? (DEX_PF_LOCK(), 1) : DEX_PF_TRYLOCK();
     double now = dex_pf_now_ms();
@@ -465,6 +471,7 @@ static void dex_pf_catch(int sig) {
 }
 
 static void dex_pf_init(void) {
+    dex_pf_pid = getpid();
     clock_gettime(CLOCK_MONOTONIC, &dex_pf_t0);
     const char* out = getenv("DEX_PROFILE_OUT");
     if (out && *out) dex_pf_out = out;
@@ -475,6 +482,19 @@ static void dex_pf_init(void) {
     dex_pf_catch(SIGINT);
     dex_pf_catch(SIGTERM);
     atexit(dex_pf_at_exit);
+}
+
+// Called by a runtime about to _exit — the HTTP and WebSocket servers'
+// shutdown paths, which run in a signal handler. So the notice goes out with
+// write(2) rather than stdio, and the summary dex_pf_at_exit prints is left
+// out; the report has everything in it.
+static void dex_pf_shutdown(void) {
+    if (getpid() != dex_pf_pid) return;
+    dex_pf_write(0);
+    static const char msg[] = "\nprofile: written on shutdown to ";
+    if (write(2, msg, sizeof(msg) - 1) < 0) return;
+    if (write(2, dex_pf_out, strlen(dex_pf_out)) < 0) return;
+    if (write(2, "\n", 1) < 0) return;
 }
 
 static inline void dex_pf_restore(const char** saved) { dex_pf_site = *saved; }

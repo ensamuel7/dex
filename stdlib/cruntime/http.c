@@ -730,6 +730,7 @@ static void dex_shutdown_handler(int sig) {
         dex_shutdown_drain_hook();
         return;
     }
+    DEX_PF_FLUSH();
     _exit(0);
 }
 
@@ -1009,6 +1010,7 @@ static void dex_multi_shutdown_handler(int sig) {
         }
     }
     if (dex_server_fd >= 0) close(dex_server_fd);
+    DEX_PF_FLUSH();
     _exit(0);
 }
 

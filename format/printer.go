@@ -237,7 +237,8 @@ func (p *printer) flatWidth(lo, hi int) int {
 //
 // The order is the one that keeps the most meaning: split at the loosest-binding
 // operator in the statement first, because that is the seam a reader already
-// sees, and only then open up the bracketed groups.
+// sees, then at the dots of a method chain, which is the next one, and only then
+// open up the bracketed groups.
 func (p *printer) broken(lo, hi, cont int) {
 	if ops := p.loosestOps(lo, hi); len(ops) > 0 && !p.preferGroup(ops[0], hi, cont) {
 		start := lo
@@ -247,6 +248,11 @@ func (p *printer) broken(lo, hi, cont int) {
 			start = op + 1
 		}
 		p.segment(start, hi, cont)
+		return
+	}
+
+	if links := p.chainLinks(lo, hi); len(links) >= MinChainLinks {
+		p.chain(lo, hi, links)
 		return
 	}
 
@@ -342,6 +348,12 @@ func (p *printer) preferGroup(op, hi, cont int) bool {
 			return true
 		}
 	}
+	// So does a method chain: `let q = from("t")` keeps the name with what it
+	// is given, and the links go one per line below it, instead of `let q =`
+	// left hanging above the whole chain.
+	if len(p.chainLinks(op+1, hi)) >= MinChainLinks {
+		return true
+	}
 	// Otherwise the right-hand side going to its own line is the better of the
 	// two breaks whenever it fits there. Opening a group instead spreads a call
 	// whose arguments are three short names over five lines while the line
@@ -362,6 +374,67 @@ func (p *printer) preferGroup(op, hi, cont int) bool {
 		}
 	}
 	return false
+}
+
+// chainLinks returns where each link of a method chain starts in [lo,hi): the
+// `.` of every `.name(` at bracket depth 0 that follows a call or an index.
+//
+// What comes before the first link is the chain's head, and the head is never
+// split: in `q.from("books").where(..)` the first dot follows an identifier, so
+// `q.from("books")` is the head, and a module qualifier or a field access
+// (`q.col`, `self.cols`) is never mistaken for a link.
+func (p *printer) chainLinks(lo, hi int) []int {
+	var links []int
+	depth := 0
+	for k := lo; k < hi; k++ {
+		switch {
+		case isOpener(p.it[k].kind):
+			depth++
+		case isCloser(p.it[k].kind):
+			depth--
+		case depth == 0 && k > lo && k+2 < hi && p.it[k].kind == token.TokenDot:
+			prev := p.it[k-1].kind
+			if (prev == token.TokenRParen || prev == token.TokenRBracket) &&
+				p.it[k+1].kind == token.TokenIdent && p.it[k+2].kind == token.TokenLParen {
+				links = append(links, k)
+			}
+		}
+	}
+	return links
+}
+
+// chain lays out a method chain that does not fit: the head stays where it is,
+// and each link starts a line of its own, one level in from the line the head
+// is on, the way a builder API is written in its own documentation:
+//
+//	let byAuthor: q.Query = q.from("books")
+//	    .columns(["title"])
+//	    .where(q.col("author_name").eq(q.param("who")))
+//	    .build(LITE)
+//
+// The indent is taken from the head's line rather than from the continuation
+// indent the caller passes, because inside an expanded argument list that is
+// the argument's own column, and links there would line up with the head as if
+// they were further arguments.
+//
+// A link that is too wide on its own line is laid out by the same rules as any
+// other segment, so its arguments open beneath it. Only the last link shares a
+// line with whatever the caller owes after the chain, such as a trailing comma.
+func (p *printer) chain(lo, hi int, links []int) {
+	linkIndent := p.lineIndent + IndentWidth
+	owed := p.reserve
+	p.reserve = 0
+	p.segment(lo, links[0], linkIndent)
+	for i, start := range links {
+		end := hi
+		if i+1 < len(links) {
+			end = links[i+1]
+		} else {
+			p.reserve = owed
+		}
+		p.newline(linkIndent)
+		p.segment(start, end, linkIndent)
+	}
 }
 
 // hugged reports whether a group holds exactly one element and that element is

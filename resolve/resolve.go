@@ -934,32 +934,63 @@ func FlattenStructMethods(program *ast.Program) {
 			flatFn.Body = make([]ast.Stmt, len(method.Body))
 			copy(flatFn.Body, method.Body)
 
-			localNames := map[string]bool{}
+			params := make([]string, 0, len(method.Params))
 			for _, p := range method.Params {
-				localNames[p.Name] = true
+				params = append(params, p.Name)
 			}
-
-			for _, stmt := range flatFn.Body {
-				rewriteFieldRefsInStmt(stmt, fieldNames, methodNames, localNames)
-			}
+			rewriteFieldRefs(flatFn.Body, fieldNames, methodNames, params)
 
 			program.Functions = append(program.Functions, flatFn)
 		}
 	}
 }
 
-// Rewrites a method body so bare field names read through the receiver: `label`
-// means `self.label`. A local of the same name shadows the field.
-func rewriteFieldRefsInStmt(stmt ast.Stmt, fieldNames, methodNames, localNames map[string]bool) {
+// localScopes is the stack of names bound at a point in a method body,
+// innermost last. A name bound in a block is local only within it, so a `let`
+// in one branch does not shadow a field in a sibling branch.
+type localScopes []map[string]bool
+
+func (ls *localScopes) enter(names []string) func() {
+	frame := make(map[string]bool, len(names))
+	for _, n := range names {
+		frame[n] = true
+	}
+	*ls = append(*ls, frame)
+	return func() { *ls = (*ls)[:len(*ls)-1] }
+}
+
+func (ls localScopes) bind(name string) {
+	ls[len(ls)-1][name] = true
+}
+
+func (ls localScopes) has(name string) bool {
+	for i := len(ls) - 1; i >= 0; i-- {
+		if ls[i][name] {
+			return true
+		}
+	}
+	return false
+}
+
+// rewriteFieldRefs rewrites a method body so bare field names read through the
+// receiver: `label` means `self.label`. Any local of the same name shadows the
+// field within its scope: a parameter, a `let`, a foreach variable, a catch
+// binding, a switch case's pattern names, and a lambda's parameters inside the
+// lambda. Only parameters and `let` used to count, so a foreach variable named
+// like a field silently read the field instead.
+func rewriteFieldRefs(body []ast.Stmt, fieldNames, methodNames map[string]bool, params []string) {
+	var scopes localScopes
+	scopes.enter(params)
+
 	stmtFn := func(st ast.Stmt) {
 		if let, ok := st.(*ast.LetStmt); ok {
 			// A local declared here shadows any field of the same name from this
-			// point on.
+			// point to the end of its block.
 			if let.Name != "" {
-				localNames[let.Name] = true
+				scopes.bind(let.Name)
 			}
 			for _, n := range let.Names {
-				localNames[n] = true
+				scopes.bind(n)
 			}
 		}
 	}
@@ -967,7 +998,7 @@ func rewriteFieldRefsInStmt(stmt ast.Stmt, fieldNames, methodNames, localNames m
 	exprFn := func(expr ast.Expr) ast.Expr {
 		switch e := expr.(type) {
 		case *ast.Ident:
-			if (fieldNames[e.Name] || methodNames[e.Name]) && !localNames[e.Name] {
+			if (fieldNames[e.Name] || methodNames[e.Name]) && !scopes.has(e.Name) {
 				return &ast.FieldAccessExpr{Pos: e.Pos, Object: &ast.Ident{Pos: e.Pos, Name: "self"}, Field: e.Name}
 			}
 		case *ast.CallExpr:
@@ -980,21 +1011,21 @@ func rewriteFieldRefsInStmt(stmt ast.Stmt, fieldNames, methodNames, localNames m
 				if dot := strings.Index(head, "."); dot >= 0 {
 					head = head[:dot]
 				}
-				if fieldNames[head] && !localNames[head] {
+				if fieldNames[head] && !scopes.has(head) {
 					e.Module = "self." + e.Module
 				}
 			}
 			// An unqualified call naming a sibling method is a call on the same
 			// receiver, so `commandGuard(id)` inside a method means
 			// `self.commandGuard(id)`.
-			if e.Module == "" && methodNames[e.Name] && !localNames[e.Name] {
+			if e.Module == "" && methodNames[e.Name] && !scopes.has(e.Name) {
 				e.Module = "self"
 			}
 		}
 		return nil
 	}
 
-	walkStmtsWith([]ast.Stmt{stmt}, stmtFn, exprFn)
+	walkStmtsScoped(body, scopes.enter, stmtFn, exprFn)
 }
 
 func walkProgramExprs(program *ast.Program, fn func(ast.Expr) ast.Expr) {
@@ -1022,12 +1053,55 @@ type walker struct {
 	// spawn, so an analysis about what happens in *this* call must not read
 	// them as if they were inline.
 	inFrame bool
+	// scope, when non-nil, is called on entering each block with the names that
+	// block's header binds — a foreach variable, a catch binding, a switch
+	// case's pattern names, a lambda's parameters — and returns what to call on
+	// leaving it. A `let` inside the block arrives through stmtFn as before.
+	//
+	// It lives here because only the walker knows every place a name can be
+	// bound. Each pass that modelled scope on its own missed some of them: the
+	// method field rewriter knew only parameters and `let`, so a foreach
+	// variable named like a field read the field.
+	scope func(names []string) (leave func())
+}
+
+// scoped walks body as a block that binds names.
+func (w *walker) scoped(names []string, body func()) {
+	if w.scope == nil {
+		body()
+		return
+	}
+	leave := w.scope(names)
+	body()
+	leave()
+}
+
+// patternBinds is what a switch case binds: the names in its payload patterns,
+// without the `_` that binds nothing.
+func patternBinds(values []ast.Expr) []string {
+	var names []string
+	for _, v := range values {
+		if pat, ok := v.(*ast.EnumPatternExpr); ok {
+			for _, b := range pat.Binds {
+				if b != "_" {
+					names = append(names, b)
+				}
+			}
+		}
+	}
+	return names
 }
 
 // stmtFn, when non-nil, runs on each statement before its children — assignment
 // targets are plain strings rather than expressions, so a rewrite needs it.
 func walkStmtsWith(stmts []ast.Stmt, stmtFn func(ast.Stmt), exprFn func(ast.Expr) ast.Expr) {
 	(&walker{stmtFn: stmtFn, exprFn: exprFn}).stmts(stmts)
+}
+
+// walkStmtsScoped is walkStmtsWith with a scope callback, for a pass that has to
+// know which names are local at each point. See walker.scope.
+func walkStmtsScoped(stmts []ast.Stmt, scope func([]string) func(), stmtFn func(ast.Stmt), exprFn func(ast.Expr) ast.Expr) {
+	(&walker{stmtFn: stmtFn, exprFn: exprFn, scope: scope}).stmts(stmts)
 }
 
 func walkExpr(expr ast.Expr, fn func(ast.Expr) ast.Expr) ast.Expr {
@@ -1069,43 +1143,56 @@ func (w *walker) stmt(stmt ast.Stmt) {
 		s.Value = w.expr(s.Value)
 	case *ast.IfStmt:
 		s.Cond = w.expr(s.Cond)
-		w.stmts(s.Then)
-		w.stmts(s.Else)
+		w.scoped(nil, func() { w.stmts(s.Then) })
+		w.scoped(nil, func() { w.stmts(s.Else) })
 	case *ast.WhileStmt:
 		s.Cond = w.expr(s.Cond)
-		w.stmts(s.Body)
+		w.scoped(nil, func() { w.stmts(s.Body) })
 	case *ast.ForStmt:
-		w.stmt(s.Init)
-		s.Cond = w.expr(s.Cond)
-		w.stmt(s.Post)
-		w.stmts(s.Body)
+		// The init's `let` belongs to the loop, not to what follows it.
+		w.scoped(nil, func() {
+			w.stmt(s.Init)
+			s.Cond = w.expr(s.Cond)
+			w.stmt(s.Post)
+			w.stmts(s.Body)
+		})
 	case *ast.ForeachStmt:
 		s.Iterable = w.expr(s.Iterable)
-		w.stmts(s.Body)
+		var names []string
+		for _, n := range []string{s.IndexVar, s.ValueVar} {
+			if n != "" {
+				names = append(names, n)
+			}
+		}
+		w.scoped(names, func() { w.stmts(s.Body) })
 	case *ast.SwitchStmt:
 		s.Tag = w.expr(s.Tag)
 		for i := range s.Cases {
 			for j := range s.Cases[i].Values {
 				s.Cases[i].Values[j] = w.expr(s.Cases[i].Values[j])
 			}
-			w.stmts(s.Cases[i].Body)
+			w.scoped(patternBinds(s.Cases[i].Values), func() { w.stmts(s.Cases[i].Body) })
 		}
-		w.stmts(s.Default)
+		w.scoped(nil, func() { w.stmts(s.Default) })
 	case *ast.SendStmt:
 		s.Target = w.expr(s.Target)
 		s.Value = w.expr(s.Value)
 	case *ast.ThrowStmt:
 		s.Value = w.expr(s.Value)
 	case *ast.TryCatchStmt:
-		w.stmts(s.Body)
+		w.scoped(nil, func() { w.stmts(s.Body) })
 		for i := range s.Catches {
-			w.stmts(s.Catches[i].Body)
+			var names []string
+			if s.Catches[i].VarName != "" {
+				names = []string{s.Catches[i].VarName}
+			}
+			w.scoped(names, func() { w.stmts(s.Catches[i].Body) })
 		}
-		w.stmts(s.FinallyBody)
+		w.scoped(nil, func() { w.stmts(s.FinallyBody) })
 	case *ast.DeferStmt:
 		s.Expr = w.expr(s.Expr)
 	case *ast.BlockStmt:
-		w.stmts(s.Stmts)
+		w.scoped(nil, func() { w.stmts(s.Stmts) })
 	}
 }
 
@@ -1168,12 +1255,16 @@ func (w *walker) expr(expr ast.Expr) ast.Expr {
 		}
 	case *ast.LambdaExpr:
 		if !w.inFrame {
-			w.stmts(e.Body)
+			names := make([]string, 0, len(e.Params))
+			for _, p := range e.Params {
+				names = append(names, p.Name)
+			}
+			w.scoped(names, func() { w.stmts(e.Body) })
 		}
 	case *ast.SpawnExpr:
 		if !w.inFrame {
 			e.Call = w.expr(e.Call)
-			w.stmts(e.Body)
+			w.scoped(nil, func() { w.stmts(e.Body) })
 		}
 	case *ast.ReceiveExpr:
 		e.Source = w.expr(e.Source)
@@ -1202,23 +1293,23 @@ func withoutShadowed(names map[string]bool, fn *ast.Function) map[string]bool {
 
 // Block scoping is not modelled: a name declared in an inner block withholds the
 // rename for the whole function, erring toward an "undefined" error over a
-// silent rebinding.
+// silent rebinding. Every way of binding a name counts — the walker's scope
+// callback reports the foreach variables, catch bindings, case patterns and
+// lambda parameters, and stmtFn the `let`s. Only `let` and foreach used to.
 func collectDeclaredNames(stmts []ast.Stmt, out map[string]bool) {
-	walkStmtsWith(stmts, func(st ast.Stmt) {
-		switch s := st.(type) {
-		case *ast.LetStmt:
+	scope := func(names []string) func() {
+		for _, n := range names {
+			out[n] = true
+		}
+		return func() {}
+	}
+	walkStmtsScoped(stmts, scope, func(st ast.Stmt) {
+		if s, ok := st.(*ast.LetStmt); ok {
 			if s.Name != "" {
 				out[s.Name] = true
 			}
 			for _, n := range s.Names {
 				out[n] = true
-			}
-		case *ast.ForeachStmt:
-			if s.ValueVar != "" {
-				out[s.ValueVar] = true
-			}
-			if s.IndexVar != "" {
-				out[s.IndexVar] = true
 			}
 		}
 	}, func(expr ast.Expr) ast.Expr { return nil })

@@ -28,6 +28,8 @@ func TestParseMod(t *testing.T) {
 	mod, err := ParseMod("/proj/dex.mod", `// the app
 module github.com/acme/web
 
+dex 0.9.14 // the oldest compiler it builds with
+
 require github.com/acme/greet v0.1.0
 require (
     github.com/acme/kit v1.2.3 // shared helpers
@@ -50,6 +52,9 @@ replace (
 	if mod.Replace["github.com/acme/greet"] != "/greet" || mod.Replace["github.com/acme/kit"] != "/abs/kit" {
 		t.Errorf("replace = %v", mod.Replace)
 	}
+	if mod.Dex != "0.9.14" || mod.DexLine != 4 {
+		t.Errorf("dex = %q on line %d, want 0.9.14 on line 4", mod.Dex, mod.DexLine)
+	}
 }
 
 func TestParseModErrors(t *testing.T) {
@@ -64,6 +69,12 @@ func TestParseModErrors(t *testing.T) {
 		"module x.com/a\nexclude x.com/b v1.0.0\n":                             "unknown directive",
 		"module x.com/a\nrequire (\n x.com/b v1.0.0\n":                         "never closed",
 		"module not a path\n":                                                  "expected `module",
+		"module x.com/a\ndex 0.9.14\ndex 0.9.15\n":                             "dex is declared twice",
+		"module x.com/a\ndex\n":                                                "expected `dex <version>`",
+		"module x.com/a\ndex 0.9.14 0.9.15\n":                                  "expected `dex <version>`",
+		"module x.com/a\ndex v0.9.14\n":                                        "not a compiler version",
+		"module x.com/a\ndex 0.9\n":                                            "not a compiler version",
+		"module x.com/a\ndex 0.9.14-dev\n":                                     "not a compiler version",
 	} {
 		_, err := ParseMod("/p/dex.mod", src)
 		if err == nil || !strings.Contains(err.Error(), want) {

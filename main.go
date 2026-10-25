@@ -39,6 +39,10 @@ var errorLocPattern = regexp.MustCompile(`^(.+?:\d+:\d+:)\s*(.*)$`)
 // Version is set at build time via -ldflags "-X main.Version=..."
 var Version = "dev"
 
+// Commit is the source commit, set by `make build` via -ldflags. A -dev stamp
+// alone cannot tell two builds of the same version apart.
+var Commit = ""
+
 func formatError(msg string) string {
 	if !term.IsTerminal(int(os.Stderr.Fd())) {
 		return msg
@@ -52,6 +56,10 @@ func formatError(msg string) string {
 }
 
 func main() {
+	// The resolver refuses a module whose dex.mod needs a newer compiler, so it
+	// has to know which one this is. It cannot import main to ask.
+	resolve.SetCompilerVersion(Version)
+
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
@@ -73,7 +81,11 @@ func main() {
 	lintEnabled = lintOnByDefault(command)
 
 	if command == "version" {
-		fmt.Println("dex version " + Version)
+		if Commit != "" {
+			fmt.Printf("dex version %s (%s)\n", Version, Commit)
+		} else {
+			fmt.Println("dex version " + Version)
+		}
 		return
 	}
 
@@ -1005,6 +1017,10 @@ func runGet(args []string) {
 				note = " (needed by another module)"
 			}
 			fmt.Printf("added %s %s%s\n", f.Path, f.Version, note)
+			if f.NeedsDex != "" {
+				fmt.Fprintf(os.Stderr, "warning: %s %s needs dex %s or later; this is dex %s — upgrade with `dex update` before building with it\n",
+					f.Path, f.Version, f.NeedsDex, Version)
+			}
 		}
 	}
 }

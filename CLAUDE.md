@@ -475,16 +475,24 @@ macros, and a few Linux-only names.
 
 ## dex.mod
 
-`resolve/mod.go` reads a `dex.mod` (`module`, `require`, `replace`, with go.mod's
+`resolve/mod.go` reads a `dex.mod` (`module`, `dex`, `require`, `replace`, with go.mod's
 block form) and `importFile` turns an import into a file: a path whose first
 segment holds a dot is a module path (Go's rule), anything else is relative to
 the importing file as it always was. Every site that used to join a path with
 `.dx` goes through it — pre-registration, `moduleIdentities`, `fileAliases`,
 resolution, and the three LSP lookups via `resolve.ImportFile`.
 
-Only the main program's `dex.mod` is read, found by walking up from the main
-file; a library's imports, its own module path included, resolve through the
-program's `require` and `replace`. A replace names a directory only, and must be
+Only the main program's `dex.mod` decides where imports come from, found by
+walking up from the main file; a library's imports, its own module path
+included, resolve through the program's `require` and `replace`. A library's own
+`dex.mod` is read for its `dex` line alone: `dex 0.9.14` is the oldest compiler
+it builds with, and `checkModuleCompiler` refuses the import before any of its
+files are read, so an old compiler does not fail inside correct library code.
+The program's own line is checked by `CheckMainCompiler`. `main` passes its
+`Version` in through `resolve.SetCompilerVersion`; a `-dev` suffix is ignored
+and a bare `dev` build is never refused. `dex mod init` writes the line for the
+running release, which a compiler older than the directive rejects as unknown.
+A replace names a directory only, and must be
 required, so deleting it leaves a complete file. A module path imported whole
 reads `<root>/<last segment>.dx`.
 

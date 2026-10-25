@@ -33,6 +33,12 @@ const (
 
 	// IndentWidth is one level of indentation, matching the existing corpus.
 	IndentWidth = 4
+
+	// MinChainLinks is how many `.method(..)` links a chain needs, after its
+	// head, before a chain that does not fit is broken at its dots. Prettier
+	// waits for three; builder chains here are commonly two or three links,
+	// and two already read better one per line than opened at a bracket.
+	MinChainLinks = 2
 )
 
 // Source formats one file's worth of DexLang source. The returned text ends in

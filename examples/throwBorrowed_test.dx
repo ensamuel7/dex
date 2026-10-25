@@ -1,0 +1,198 @@
+// A throw releases only what the throwing frame owns.
+//
+// Throwing a struct used to release every heap field of the thrown value, as
+// if the throw had made all of it. That is right for a literal built from fresh
+// values and for a local the throw consumes, and wrong for everything borrowed:
+// `throw Oops(h.err)` freed the caller's string while the caller still held it,
+// and a switch binding was released twice. Building an error from what you
+// were given is the ordinary way to throw, so each shape below is one that
+// corrupted memory, or one that must not start leaking.
+//
+// Run under the memory checker to see a regression, since a freed string can
+// still read correctly in an optimised build:
+//
+//   DEX_MEM_CHECK=1 DEX_MEM_LEAKS=error go run . run examples/throwBorrowed_test.dx
+
+struct Oops(message: string, code: int) {}
+
+struct Holder {
+    err: string
+}
+
+struct Outer {
+    inner: Holder
+}
+
+enum Node {
+    Bad(string)
+    Ok
+}
+
+let lastResort: Oops = Oops("global " + "news", 9)
+
+struct Checker {
+    label: string
+
+    // A switch binding borrows from the enum it matched.
+    fn check(n: Node): void throws Oops {
+        switch (n) {
+            case Node.Bad(m): {
+                throw Oops(m, 1)
+            }
+            case Node.Ok: {}
+        }
+    }
+
+    // A field read through self borrows from the receiver.
+    fn fromSelf(): void throws Oops {
+        throw Oops(self.label, 10)
+    }
+}
+
+// Borrowed parts: the literal must take its own reference to each.
+fn fromParamField(h: Holder): void throws Oops {
+    throw Oops(h.err, 1)
+}
+
+fn fromBraceLit(h: Holder): void throws Oops {
+    throw Oops { message: h.err, code: 2 }
+}
+
+fn fromNestedField(o: Outer): void throws Oops {
+    throw Oops(o.inner.err, 3)
+}
+
+fn fromParam(msg: string): void throws Oops {
+    throw Oops(msg, 4)
+}
+
+// Borrowed whole values: nothing to release.
+fn fromParamStruct(e: Oops): void throws Oops {
+    throw e
+}
+
+fn fromGlobal(): void throws Oops {
+    throw lastResort
+}
+
+// Owned values: released by the throw, or they leak once per throw.
+fn fromLocal(h: Holder): void throws Oops {
+    let e: Oops = Oops(h.err, 5)
+    throw e
+}
+
+fn makeOops(m: string): Oops {
+    return Oops(m, 6)
+}
+
+fn fromCall(h: Holder): void throws Oops {
+    throw makeOops(h.err)
+}
+
+fn fromConcat(h: Holder): void throws Oops {
+    throw Oops(h.err + "!", 7)
+}
+
+fn rethrow(h: Holder): void throws Oops {
+    try {
+        fromParamField(h)
+    } catch (e: Oops) {
+        throw e
+    }
+}
+
+fn main(): void {
+    let h: Holder = Holder { err: "bad " + "news" }
+    let o: Outer = Outer { inner: Holder { err: "deep " + "news" } }
+    let n: Node = Node.Bad("node " + "news")
+    let c: Checker = Checker { label: "check" + "er" }
+    let pre: Oops = Oops("pre " + "made", 8)
+
+    // Repeated, so a reference dropped once per throw reaches zero and frees.
+    for (let i = 0; i < 4; i++) {
+        try {
+            fromParamField(h)
+        } catch (e: Oops) {
+            assert(e.message == "bad news" && e.code == 1)
+        }
+
+        try {
+            fromBraceLit(h)
+        } catch (e: Oops) {
+            assert(e.message == "bad news" && e.code == 2)
+        }
+
+        try {
+            fromNestedField(o)
+        } catch (e: Oops) {
+            assert(e.message == "deep news")
+        }
+
+        try {
+            fromParam(h.err)
+        } catch (e: Oops) {
+            assert(e.message == "bad news" && e.code == 4)
+        }
+
+        try {
+            fromParamStruct(pre)
+        } catch (e: Oops) {
+            assert(e.message == "pre made" && e.code == 8)
+        }
+
+        try {
+            fromGlobal()
+        } catch (e: Oops) {
+            assert(e.message == "global news")
+        }
+
+        try {
+            fromLocal(h)
+        } catch (e: Oops) {
+            assert(e.message == "bad news" && e.code == 5)
+        }
+
+        try {
+            fromCall(h)
+        } catch (e: Oops) {
+            assert(e.message == "bad news" && e.code == 6)
+        }
+
+        try {
+            fromConcat(h)
+        } catch (e: Oops) {
+            assert(e.message == "bad news!")
+        }
+
+        try {
+            rethrow(h)
+        } catch (e: Oops) {
+            assert(e.message == "bad news" && e.code == 1)
+        }
+
+        try {
+            c.check(n)
+        } catch (e: Oops) {
+            assert(e.message == "node news")
+        }
+
+        try {
+            c.fromSelf()
+        } catch (e: Oops) {
+            assert(e.message == "checker" && e.code == 10)
+        }
+    }
+
+    // Everything the throws borrowed from is still intact.
+    assert(h.err == "bad news")
+    assert(o.inner.err == "deep news")
+    assert(pre.message == "pre made")
+    assert(c.label == "checker")
+    assert(lastResort.message == "global news")
+    switch (n) {
+        case Node.Bad(m): {
+            assert(m == "node news")
+        }
+        case Node.Ok: {}
+    }
+}

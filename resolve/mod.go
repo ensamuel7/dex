@@ -20,6 +20,11 @@ type Mod struct {
 	Path    string
 	Require map[string]string
 	Replace map[string]string
+	// Dex is the oldest compiler the module builds with, from its `dex`
+	// directive, as in "0.9.14"; empty when it names none. DexLine is the
+	// directive's line, for an error that points at it.
+	Dex     string
+	DexLine int
 }
 
 var (
@@ -99,6 +104,18 @@ func ParseMod(file, src string) (*Mod, error) {
 			}
 			mod.Path = fields[0]
 
+		case "dex":
+			if mod.Dex != "" {
+				return nil, errAt(n, "dex is declared twice")
+			}
+			if len(fields) != 1 {
+				return nil, errAt(n, "expected `dex <version>`, the oldest compiler this module builds with, as in dex 0.9.14")
+			}
+			if !dexVersionRe.MatchString(fields[0]) {
+				return nil, errAt(n, "%q is not a compiler version — write it as a release without the v, as in dex 0.9.14", fields[0])
+			}
+			mod.Dex, mod.DexLine = fields[0], n
+
 		case "require":
 			if len(fields) != 2 {
 				return nil, errAt(n, "expected `require <module> <version>`, as in require github.com/acme/dexsqlite v1.0.0")
@@ -135,7 +152,7 @@ func ParseMod(file, src string) (*Mod, error) {
 			mod.Replace[path] = filepath.Clean(target)
 
 		default:
-			return nil, errAt(n, "unknown directive %q — a dex.mod has module, require and replace", verb)
+			return nil, errAt(n, "unknown directive %q — a dex.mod has module, dex, require and replace", verb)
 		}
 	}
 	if block != "" {
@@ -178,6 +195,15 @@ func importFile(mod *Mod, fromDir, path string) (string, error) {
 	} else {
 		return "", fmt.Errorf("import %q is in no module %s requires — add it with: dex get %s", path, mod.File, path)
 	}
+	// Another module was written against some compiler. Asking before any of
+	// its files is returned is what keeps an old compiler from failing inside
+	// the package instead. The program's own module is checked once, up front,
+	// by CheckMainCompiler.
+	if modulePath != mod.Path {
+		if err := checkModuleCompiler(root, modulePath); err != nil {
+			return "", err
+		}
+	}
 
 	rest := strings.TrimPrefix(strings.TrimPrefix(path, modulePath), "/")
 	if rest == "" {
@@ -187,6 +213,9 @@ func importFile(mod *Mod, fromDir, path string) (string, error) {
 }
 
 func CheckModuleImports(imports []ImportRef, sourceDir, filename string) error {
+	if err := CheckMainCompiler(sourceDir); err != nil {
+		return err
+	}
 	var mod *Mod
 	for _, ref := range imports {
 		if !IsModulePath(ref.Path) {
@@ -240,7 +269,14 @@ func InitMod(dir, path string) (string, error) {
 	if _, err := os.Stat(file); err == nil {
 		return "", fmt.Errorf("%s already exists", file)
 	}
-	if err := os.WriteFile(file, []byte("module "+path+"\n"), 0o644); err != nil {
+	// A new module records the compiler it is started with, as `go mod init`
+	// writes the go line, so it says what it needs from its first release. A
+	// compiler built straight from a checkout has no version to record.
+	content := "module " + path + "\n"
+	if core, _, _ := strings.Cut(compilerVersion, "-"); dexVersionRe.MatchString(core) {
+		content += "\ndex " + core + "\n"
+	}
+	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
 		return "", err
 	}
 	return file, nil

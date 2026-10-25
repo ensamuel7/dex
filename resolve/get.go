@@ -471,6 +471,11 @@ type Fetched struct {
 	Version  string
 	Dir      string
 	Indirect bool
+	// NeedsDex is set when the module's dex.mod needs a newer compiler than
+	// this one: the version it needs. The fetch still happens, because the
+	// module may be the one the user is about to upgrade the compiler for, but
+	// `dex get` says so now rather than at the next build.
+	NeedsDex string
 }
 
 func Get(mod *Mod, arg string) ([]Fetched, error) {
@@ -536,6 +541,9 @@ func Get(mod *Mod, arg string) ([]Fetched, error) {
 			own, err := ParseMod(filepath.Join(dir, ModFileName), string(data))
 			if err != nil {
 				return nil, err
+			}
+			if !compilerSatisfies(compilerVersion, own.Dex) {
+				fetched[len(fetched)-1].NeedsDex = own.Dex
 			}
 			for dep, v := range own.Require {
 				if dep == mod.Path {

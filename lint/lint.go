@@ -13,6 +13,7 @@ package lint
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/ensamuel7/dex/ast"
 )
@@ -31,6 +32,7 @@ const (
 	RuleUnneededThrows   = "unnecessary-throws"
 	RuleUnreachableCatch = "unreachable-catch"
 	RuleUnknownAllow     = "unknown-allow"
+	RuleStructPadding    = "struct-padding"
 )
 
 // AllRules lists every rule, in the order the help text shows them.
@@ -46,6 +48,7 @@ var AllRules = []string{
 	RuleUnneededThrows,
 	RuleUnreachableCatch,
 	RuleUnknownAllow,
+	RuleStructPadding,
 }
 
 // ruleDoc is the one-line description `dex lint --rules` prints.
@@ -61,6 +64,7 @@ var ruleDoc = map[string]string{
 	RuleUnneededThrows:   "a throws declaration naming a type the function cannot throw",
 	RuleUnreachableCatch: "a catch clause that can never run",
 	RuleUnknownAllow:     "an #[allow(...)] naming a rule that does not exist",
+	RuleStructPadding:    "a struct whose field order wastes bytes on padding",
 }
 
 // RuleDoc returns the one-line description of a rule.
@@ -103,6 +107,7 @@ func Run(program *ast.Program, opts Options) []Finding {
 	l.checkImports()
 	l.checkPrivateFunctions()
 	l.checkThrows()
+	l.checkStructPadding()
 
 	sort.SliceStable(l.findings, func(i, j int) bool {
 		a, b := l.findings[i].Pos, l.findings[j].Pos
@@ -225,4 +230,22 @@ func childBlocks(stmt ast.Stmt) [][]ast.Stmt {
 		return append(blocks, s.Default)
 	}
 	return nil
+}
+
+func (l *linter) checkStructPadding() {
+	seen := map[ast.Pos]bool{}
+	for i := range l.program.Structs {
+		sd := &l.program.Structs[i]
+		if sd.Pos.Line == 0 || seen[sd.Pos] || allows(sd.Annotations, RuleStructPadding) {
+			continue
+		}
+		seen[sd.Pos] = true
+		layout := ast.LayoutFields(sd.Fields)
+		if layout.Packed >= layout.Size {
+			continue
+		}
+		l.report(RuleStructPadding, sd.Pos,
+			"struct '%s' is %d bytes as declared and %d with its fields ordered by alignment: %s",
+			ast.DisplayStructName(sd.Name), layout.Size, layout.Packed, strings.Join(layout.Order, ", "))
+	}
 }

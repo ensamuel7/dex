@@ -25,6 +25,12 @@ struct Plain {
     id: int
 }
 
+struct Loose {
+    on: bool
+    total: long
+    off: bool
+}
+
 fn main(): void {
     let q: Query = Query { from: "t", max: 1 }
     print(q.table("u").from)
@@ -185,5 +191,23 @@ func TestHoverArrayMethod(t *testing.T) {
 	}
 	if got := arrayHover(t, "users.push", "push"); !strings.Contains(got, "(method) User[].push(value: User): void") {
 		t.Errorf("got:\n%s", got)
+	}
+}
+
+func TestHoverStructShowsSizeAndBetterOrder(t *testing.T) {
+	s, uri := hoverServer(t)
+	got := s.hoverAt(uri, hoverSource, hoverLineCol(t, "struct Loose", "Loose"))
+	for _, want := range []string{
+		"**Size:** 24 bytes (align 8, 14 bytes of padding)",
+		"Ordered by alignment it would be 16 bytes: `total, on, off`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("hover over Loose missing %q:\n%s", want, got)
+		}
+	}
+
+	plain := s.hoverAt(uri, hoverSource, hoverLineCol(t, "struct Plain", "Plain"))
+	if !strings.Contains(plain, "**Size:** 4 bytes (align 4)") || strings.Contains(plain, "Ordered by alignment") {
+		t.Errorf("hover over Plain:\n%s", plain)
 	}
 }

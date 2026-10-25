@@ -377,6 +377,10 @@ func formatStructHover(def *ast.StructDef) string {
 
 	out := fmt.Sprintf("```dex\n%s\n```\n\n%s", sig, doc)
 
+	if size := formatStructSize(def); size != "" {
+		out += "\n\n" + size
+	}
+
 	if len(def.Fields) > 0 {
 		var fieldDocs []string
 		for _, f := range def.Fields {
@@ -398,6 +402,31 @@ func formatStructHover(def *ast.StructDef) string {
 	}
 
 	return out
+}
+
+func formatStructSize(def *ast.StructDef) string {
+	for _, f := range def.Fields {
+		if ast.IsTypeParamType(f.Type) {
+			return ""
+		}
+	}
+	l := ast.LayoutFields(def.Fields)
+	out := fmt.Sprintf("**Size:** %s (align %d", plural(l.Size, "byte"), l.Align)
+	if l.Padding > 0 {
+		out += fmt.Sprintf(", %s of padding", plural(l.Padding, "byte"))
+	}
+	out += ")"
+	if l.Packed < l.Size {
+		out += fmt.Sprintf("\n\nOrdered by alignment it would be %s: `%s`", plural(l.Packed, "byte"), strings.Join(l.Order, ", "))
+	}
+	return out
+}
+
+func plural(n int64, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // methodSignature renders a method as it was declared, receiver implicit: the

@@ -313,6 +313,18 @@ An external function whose handle return is declared without `?` goes through
 `dex_handle_require`, so a NULL stops the program at the call that produced it
 rather than at the next C function to receive it.
 
+## Struct layout in the editor
+
+`ast/layout.go` computes a struct's C layout from its Dex field types —
+`TypeLayout` mirrors `cType`, so a new C representation for a type has to be
+reflected there too. The LSP hover shows the size, alignment and padding, and
+the `struct-padding` lint rule (a hint in the editor) names a smaller order
+when sorting by alignment gives one. The compiler keeps declared order: the
+hover and the lint describe what the C really is. `StructDef.Pos` and
+`StructDef.Annotations` exist for this rule, and a generic struct's
+instantiations share their template's position, so the rule reports a
+position once.
+
 ## Profiling memory
 
 `dex profile <file>.dx` (or `DEX_PROFILE=1` on any build) compiles in

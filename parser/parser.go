@@ -366,7 +366,7 @@ func (p *Parser) Parse() (program *ast.Program, errs []error) {
 				p.synchronize()
 				continue
 			}
-			_ = annotations // struct-level annotations reserved for future use
+			sd.Annotations = annotations
 			program.Structs = append(program.Structs, *sd)
 
 		case p.isGlobalLetAhead():
@@ -611,6 +611,7 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 
 	p.advance() // consume 'struct'
 
+	namePos := p.nodePos()
 	name, err := p.expectDeclName("a struct name")
 	if err != nil {
 		return nil, err
@@ -725,9 +726,9 @@ func (p *Parser) parseStructDef() (*ast.StructDef, error) {
 	// Methods go into the registry too, not only onto the returned def:
 	// interface satisfaction is decided from the registered type, and without
 	// them every struct was found to be missing every method.
-	ast.RegisterStructType(ast.StructDef{Name: flatName, Module: p.module, Fields: fields, Methods: methods, ConstructorParams: constructorParams})
+	ast.RegisterStructType(ast.StructDef{Name: flatName, Module: p.module, Fields: fields, Methods: methods, ConstructorParams: constructorParams, Pos: namePos})
 
-	return &ast.StructDef{Name: flatName, Module: p.module, Fields: fields, Methods: methods, ConstructorParams: constructorParams}, nil
+	return &ast.StructDef{Name: flatName, Module: p.module, Fields: fields, Methods: methods, ConstructorParams: constructorParams, Pos: namePos}, nil
 }
 
 func (p *Parser) parseFunction() (*ast.Function, error) {

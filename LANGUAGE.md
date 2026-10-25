@@ -4822,6 +4822,29 @@ would otherwise be underlined as though it were broken.
 | `unnecessary-throws` | a `throws` declaration naming a type the function cannot throw |
 | `unreachable-catch` | a `catch` clause that can never run |
 | `unknown-allow` | an `#[allow(...)]` naming a rule that does not exist |
+| `struct-padding` | a struct whose field order wastes bytes on padding |
+
+### Struct size and field order
+
+A struct is laid out in C in the order its fields are declared, each at an
+offset its alignment allows, so a `bool` between two `long`s costs seven bytes
+of padding. The compiler does not reorder fields. Hovering a struct's name
+shows its size, its alignment and how much of it is padding, and, when some
+other order is smaller, the order that is. `struct-padding` reports the same
+thing as a finding:
+
+```dex
+struct Reading {
+    ok: bool
+    at: long
+    stale: bool
+}
+```
+
+is 24 bytes as declared and 16 as `at, ok, stale`. The sizes are for a 64-bit
+target. Putting the widest fields first is always at least as small, and
+`#[allow(struct-padding)]` on the struct keeps an order chosen for another
+reason.
 
 ### Suppressing a Finding
 

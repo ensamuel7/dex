@@ -30,6 +30,7 @@ fn fieldText(s: string): string? {
     if (u.name == "") {
         return null
     }
+
     return u.name
 }
 
@@ -48,6 +49,7 @@ fn field(h: H): U? {
     if (pad == "") {
         return null
     }
+
     return h.u
 }
 
@@ -55,6 +57,7 @@ fn maybe(s: string): string? {
     if (s == "") {
         return null
     }
+
     return s + "!"
 }
 
@@ -62,6 +65,7 @@ fn lenOf(s: string?): int {
     if (s == null) {
         return -1
     }
+
     return s.len()
 }
 
@@ -75,6 +79,7 @@ fn find(want: string): int {
             return i
         }
     }
+
     return -1
 }
 
@@ -84,8 +89,10 @@ fn firstTwo(): int {
         if (count == 2 || n == "") {
             break
         }
+
         count++
     }
+
     return count
 }
 
@@ -105,21 +112,25 @@ fn main(): void {
         assert(a.name == "a!")
         assert(a.tags[0] == "a!")
     }
+
     let b: U? = ident("b")
     if (b != null) {
         assert(b.name == "b?")
     }
+
     let h: H = H { u: U { name: "in" + "ner", tags: ["t" + "1"] } }
     let f: U? = field(h)
     if (f != null) {
         assert(f.tags[0] == "t1")
     }
+
     assert(h.u.name == "inner")
 
     let seen: string = ""
     foreach (["x", "y" + "z"] as s) {
         seen = seen + s
     }
+
     assert(seen == "xyz")
     assert(find("b2") == 1)
     assert(find("none") == -1)
@@ -131,6 +142,7 @@ fn main(): void {
         total += lenOf(maybe(""))
         total += lenOf("x" + "y")
     }
+
     assert(total == 40)
     assert(lenOf(maybe("abc")) == 4)
 

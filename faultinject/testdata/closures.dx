@@ -1,0 +1,97 @@
+import "str"
+
+let log: string[] = []
+
+fn note(s: string): void {
+    log.push(s)
+}
+
+interface Greeter {
+    fn greet(): string
+}
+
+struct Person {
+    name: string
+
+    fn greet(): string {
+        return "Hi " + name
+    }
+}
+
+struct Robot {
+    id: int
+
+    fn greet(): string {
+        return "UNIT-" + str.fromInt(id)
+    }
+}
+
+fn makeGreeter(name: string): fn(): string {
+    let prefix = "hello " + name
+    return fn(): string {
+        return prefix + "!"
+    }
+}
+
+fn apply(f: fn(string): string, s: string): string {
+    return f(s)
+}
+
+fn lambdas(n: int): int {
+    let tag = "tag" + str.fromInt(n)
+    let g = makeGreeter(tag)
+    let h = fn(s: string): string {
+        return s + tag
+    }
+    return g().len() + apply(h, str.fromInt(n)).len()
+}
+
+fn deferred(n: int): int {
+    defer note("leaving " + str.fromInt(n))
+    let local = "local " + str.fromInt(n)
+    for (let i = 0; i < 2; i = i + 1) {
+        defer note(local + str.fromInt(i))
+    }
+    return local.len()
+}
+
+fn pick(n: int): Greeter {
+    if (n % 2 == 0) {
+        return Person { name: "p" + str.fromInt(n) }
+    }
+    return Robot { id: n }
+}
+
+fn interfaces(n: int): int {
+    let all: Greeter[] = []
+    for (let i = 0; i < n; i = i + 1) {
+        all.push(pick(i))
+    }
+    let total = 0
+    foreach (all as g) {
+        total = total + g.greet().len()
+    }
+    let one: Greeter = Person { name: "solo " + str.fromInt(n) }
+    return total + one.greet().len()
+}
+
+fn methodValues(n: int): int {
+    let p = Person { name: "mv" + str.fromInt(n) }
+    let f = p.greet
+    return f().len()
+}
+
+fn main(): void {
+    let caught = 0
+    for (let round = 0; round < 2; round = round + 1) {
+        try {
+            assert(lambdas(round) > 0)
+            assert(deferred(round) > 0)
+            assert(interfaces(3) > 0)
+            assert(methodValues(round) > 0)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+    }
+    assert(caught >= 0)
+}

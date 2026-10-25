@@ -17,6 +17,8 @@ Commands:
   build    compile to a native binary
   run      compile and run
   dev      rebuild and rerun on change
+  profile  build with the memory profiler, run, and open a report of which
+           lines allocate and hold memory (profile <file.json> reopens one)
   test     run *_test.dx files
   check    run cppcheck over the generated C
   format   lay files out the one canonical way
@@ -37,7 +39,8 @@ Flags:
   --lint=strict    report them and fail the build if there are any
   --lint-off=a,b   turn named rules off
   --rules          with lint: list the rules and what each one finds
-  --force          with update: reinstall even if already current`
+  --force          with update: reinstall even if already current
+  --no-open        with profile: write the report without opening it`
 
 // The flags for this invocation. A command's behaviour is otherwise driven by
 // environment variables (DEX_MEM_CHECK and friends); these are the options that
@@ -52,6 +55,7 @@ var (
 	forceUpdate bool
 	listRules   bool
 	fmtCheck    bool
+	noOpen      bool
 )
 
 func lintOnByDefault(command string) bool {
@@ -94,6 +98,8 @@ func parseFlags(args []string) ([]string, error) {
 			listRules = true
 		case a == "--force":
 			forceUpdate = true
+		case a == "--no-open":
+			noOpen = true
 		case strings.HasPrefix(a, "-"):
 			return nil, fmt.Errorf("unknown flag '%s'\n\n%s", a, usage)
 		default:

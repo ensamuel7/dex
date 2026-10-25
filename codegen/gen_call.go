@@ -62,6 +62,8 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				}
 			} else if ast.IsStructOptionalType(cp.Type) {
 				g.genOptionalStructOwned(out, e.Args[i], cp.Type)
+			} else if ast.IsInterfaceType(cp.Type) && !ast.IsInterfaceType(g.typeOfExpr(e.Args[i])) {
+				g.genInterfaceValue(out, e.Args[i], cp.Type)
 			} else {
 				g.genExpr(out, e.Args[i])
 			}
@@ -165,6 +167,12 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		cast := map[string]string{
 			"toInt": "int", "toLong": "long", "toDouble": "double", "toChar": "char",
 		}[e.Name]
+		if g.typeOfExpr(e.Args[0]) == ast.TypeDouble && (cast == "int" || cast == "long") {
+			out.WriteString("dex_double_to_" + cast + "(")
+			g.genExpr(out, e.Args[0])
+			out.WriteString(")")
+			return
+		}
 		out.WriteString("((" + cast + ")(")
 		g.genExpr(out, e.Args[0])
 		out.WriteString("))")
@@ -190,6 +198,13 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		nl := ""
 		if newline {
 			nl = "\\n"
+		}
+		if ast.IsPayloadEnumType(argType) {
+			sb := g.nextTemp()
+			fmt.Fprintf(out, "({ DexStringBuilder* %s = dex_sb_new(); %s(%s, ", sb, g.enumAppender(argType), sb)
+			g.genBorrowed(out, e.Args[0])
+			fmt.Fprintf(out, "); printf(\"%%s%s\", %s->buf); dex_release(%s); })", nl, sb, sb)
+			return
 		}
 		var fmtStr string
 		switch argType {
@@ -313,6 +328,24 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 	if e.Module == "os" && e.Name == "exec" {
 		out.WriteString("dex_os_exec(")
 		g.genStringArg(out, e.Args[0])
+		out.WriteString(")")
+		return
+	}
+
+	// os.execWith — the options hold a string, so a struct built in the
+	// argument position is bound to a statement temporary and released after,
+	// rather than passed as a value whose string nothing owns.
+	if e.Module == "os" && e.Name == "execWith" {
+		optsType := g.typeOfExpr(e.Args[1])
+		opts, hoisted := g.hoistReceiver(e.Args[1], optsType)
+		out.WriteString("dex_os_exec_with(")
+		g.genStringArg(out, e.Args[0])
+		out.WriteString(", ")
+		if hoisted {
+			out.WriteString(opts)
+		} else {
+			g.genExpr(out, e.Args[1])
+		}
 		out.WriteString(")")
 		return
 	}
@@ -670,14 +703,9 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 			if ast.IsStructArrayType(arrType) {
 				// Struct array methods
 				elemType := ast.ElementType(arrType)
-				elemCType := g.cType(elemType)
 				switch e.Name {
 				case "push":
-					out.WriteString(fmt.Sprintf("{ %s _push_tmp = ", elemCType))
-					g.genExpr(out, e.Args[0])
-					out.WriteString("; ")
-					g.emitRetainPushedStructFields(out, "_push_tmp", elemType, e.Args[0])
-					out.WriteString(fmt.Sprintf("dex_array_struct_push(%s, &_push_tmp); }", e.Module))
+					g.genStructArrayLitElem(out, e.Module, elemType, e.Args[0])
 					return
 				case "len":
 					out.WriteString(fmt.Sprintf("%s->len", e.Module))
@@ -864,6 +892,10 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				// The C function hands back a raw pointer; box it so it is
 				// refcounted and closed when its last reference goes. A NULL
 				// means the call failed, and dex_handle_new yields NULL for it.
+				required := ast.IsHandleType(funcDef.ReturnType)
+				if required {
+					out.WriteString("dex_handle_require(")
+				}
 				out.WriteString("dex_handle_new(")
 				out.WriteString(funcDef.CName)
 				out.WriteString("(")
@@ -876,6 +908,9 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 				out.WriteString("), ")
 				out.WriteString(handleCloserName(ast.HandleModule(ht), ast.HandleName(ht)))
 				out.WriteString(")")
+				if required {
+					out.WriteString(fmt.Sprintf(", %q)", e.Module+"."+e.Name))
+				}
 			} else {
 				out.WriteString(funcDef.CName)
 				out.WriteString("(")
@@ -945,6 +980,7 @@ func (g *Generator) genOptionalArg(out *strings.Builder, arg ast.Expr, paramType
 		g.genOptionalStructOwned(&boxed, arg, paramType)
 		tmp := g.nextTemp()
 		g.stmtPrelude.WriteString(fmt.Sprintf("%s %s = %s; ", g.cType(paramType), tmp, boxed.String()))
+		g.registerTempForUnwind(g.stmtPrelude, tmp, paramType)
 		g.stmtTemps = append(g.stmtTemps, scopeVar{name: tmp, typ: paramType})
 		out.WriteString(tmp)
 		return

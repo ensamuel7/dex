@@ -19,6 +19,18 @@
 #define DEX_MC_HEADER_FIELDS
 #endif
 
+#ifdef DEX_PROFILE
+// Profiler bookkeeping: the allocating statement's slot in the profiler's site
+// table (0 once freed, or for an object it never saw), the object's own size,
+// and the size of the backing buffer it owns, if it is a container.
+#define DEX_PF_HEADER_FIELDS           \
+    unsigned pf_site;                  \
+    size_t pf_bytes;                   \
+    size_t pf_buf;
+#else
+#define DEX_PF_HEADER_FIELDS
+#endif
+
 // The reference count is the only field whose representation depends on
 // whether the program spawns threads: a single-threaded program pays nothing
 // for atomics it cannot need. Everything below is written against these three
@@ -31,6 +43,7 @@ typedef struct DexObjHeader {
     unsigned sclass;
     void (*destroy)(void*);
     DEX_MC_HEADER_FIELDS
+    DEX_PF_HEADER_FIELDS
 } DexObjHeader;
 
 #define DEX_RC_SET(o, v) ((o)->rc = (v))
@@ -47,6 +60,7 @@ typedef struct DexObjHeader {
     unsigned sclass;
     void (*destroy)(void*);
     DEX_MC_HEADER_FIELDS
+    DEX_PF_HEADER_FIELDS
 } DexObjHeader;
 
 #define DEX_RC_SET(o, v) atomic_store_explicit(&(o)->rc, (v), memory_order_relaxed)
@@ -210,7 +224,23 @@ static void dex_mc_rc_guard(const void* ptr);
 #define dex_mc_on_free(ptr) _dex_obj_free(ptr)
 #define dex_mc_check(ptr, op) ((void)0)
 #define dex_mc_rc_guard(ptr) ((void)0)
+#ifndef DEX_PROFILE
 #define DEX_AT(site) ((void)0)
+#endif
+#endif
+
+#ifdef DEX_PROFILE
+// Defined by the profiler runtime, emitted after this file for the same reason
+// as the memory checker's hooks.
+static void dex_pf_on_alloc(void* ptr, size_t size);
+static void dex_pf_on_free(void* ptr);
+static void dex_pf_buf_set(void* ptr, size_t bytes);
+#define DEX_PF_BUF_SET(obj, bytes) dex_pf_buf_set((obj), (bytes))
+#else
+#define dex_pf_on_alloc(ptr, size) ((void)0)
+#define dex_pf_on_free(ptr) ((void)0)
+#define DEX_PF_BUF_SET(obj, bytes) ((void)0)
+#define DEX_PF_FRAME() ((void)0)
 #endif
 
 static inline void* dex_obj_alloc(size_t size, void (*destroy)(void*)) {
@@ -236,6 +266,7 @@ static inline void* dex_obj_alloc(size_t size, void (*destroy)(void*)) {
     DEX_RC_SET(obj, 1);
     obj->destroy = destroy;
     dex_mc_on_alloc(obj, size);
+    dex_pf_on_alloc(obj, size);
     return obj;
 }
 
@@ -255,6 +286,7 @@ static inline void dex_release(void* ptr) {
     dex_mc_rc_guard(obj);
     if (DEX_RC_DEC(obj) == 1) {
         if (obj->destroy) obj->destroy(ptr);
+        dex_pf_on_free(ptr);
         dex_mc_on_free(ptr);
     }
 }
@@ -285,5 +317,6 @@ static inline void dex_owned_free(void* ptr) {
     if (DEX_IS_IMMORTAL(obj)) return;
     dex_mc_check(obj, "owned free");
     if (obj->destroy) obj->destroy(ptr);
+    dex_pf_on_free(ptr);
     dex_mc_on_free(ptr);
 }

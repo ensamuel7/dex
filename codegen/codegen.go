@@ -60,6 +60,12 @@ type Generator struct {
 	// DEX_MEM_CHECK=1, off in every normal build.
 	memCheck bool
 
+	// profile emits the memory profiler: the same DEX_AT statement markers,
+	// with a per-statement allocation table and a timeline of live bytes in
+	// place of the checker's registry and quarantine. Set by `dex profile` or
+	// DEX_PROFILE=1. It and memCheck are never both on.
+	profile bool
+
 	tryCatchCounter int
 	switchCounter   int
 
@@ -156,6 +162,10 @@ type Generator struct {
 	// See gen_litpool.go.
 	litPool  map[string]string
 	litOrder []string
+
+	enumAppenders      map[string]bool
+	enumAppenderProtos strings.Builder
+	enumAppenderBodies strings.Builder
 }
 
 func New() *Generator {
@@ -240,7 +250,7 @@ func (g *Generator) CompilerFlags() []string {
 	// It also costs nothing real — a genuinely wrong declaration is an
 	// incompatible-pointer-types error, which stays fatal.
 	if g.usesExternal {
-		flags = append(flags, "-Wno-pointer-sign")
+		flags = append(flags, "-Wno-pointer-sign", "-lm")
 	}
 	for _, mod := range g.importedModules {
 		flags = append(flags, mod.CFlags...)
@@ -284,3 +294,12 @@ func (g *Generator) lookupFunc(module, name string) (*stdlib.FuncDef, bool) {
 // each statement is preceded by a marker naming its .dx source position so a
 // leak or a double release can be reported against it.
 func (g *Generator) EnableMemCheck() { g.memCheck = true }
+
+// EnableProfile turns on the memory profiler for this generation: every
+// statement is preceded by a marker naming its .dx position, every function
+// restores its caller's marker on the way out, and the runtime tallies the
+// bytes each statement allocates and still holds.
+func (g *Generator) EnableProfile() { g.profile = true }
+
+// siteMarkers reports whether statements carry DEX_AT markers in this build.
+func (g *Generator) siteMarkers() bool { return (g.memCheck || g.profile) && g.usesRefcount }

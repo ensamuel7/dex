@@ -130,8 +130,8 @@ func TestCodegenBinaryArithmetic(t *testing.T) {
 		{"fn main(): int { return 1 + 2 }", "(1 + 2)"},
 		{"fn main(): int { return 3 - 1 }", "(3 - 1)"},
 		{"fn main(): int { return 2 * 3 }", "(2 * 3)"},
-		{"fn main(): int { return 6 / 2 }", "(6 / dex_check_nonzero_int(2))"},
-		{"fn main(): int { return 7 % 3 }", "(7 % dex_check_nonzero_int(3))"},
+		{"fn main(): int { return 6 / 2 }", "dex_div_int(6, 2)"},
+		{"fn main(): int { return 7 % 3 }", "dex_mod_int(7, 3)"},
 	}
 	for _, tt := range tests {
 		out := generate(t, tt.source)
@@ -146,14 +146,12 @@ func TestCodegenStringConcat(t *testing.T) {
 
 func TestCodegenStringComparison(t *testing.T) {
 	out := generate(t, `fn main(): bool { return "a" == "b" }`)
-	assertContains(t, out, "strcmp(")
-	assertContains(t, out, "== 0")
+	assertContains(t, out, `(sizeof("a") == sizeof("b") && memcmp("a", "b", sizeof("a")) == 0)`)
 }
 
 func TestCodegenStringNeq(t *testing.T) {
 	out := generate(t, `fn main(): bool { return "a" != "b" }`)
-	assertContains(t, out, "strcmp(")
-	assertContains(t, out, "!= 0")
+	assertContains(t, out, `(!(sizeof("a") == sizeof("b")`)
 }
 
 func TestCodegenStrictEq(t *testing.T) {
@@ -168,8 +166,7 @@ func TestCodegenStrictNeq(t *testing.T) {
 
 func TestCodegenStrictEqString(t *testing.T) {
 	out := generate(t, `fn main(): bool { return "a" === "b" }`)
-	assertContains(t, out, "strcmp(")
-	assertContains(t, out, "== 0")
+	assertContains(t, out, `memcmp("a", "b", sizeof("a")) == 0`)
 }
 
 func TestCodegenCrossNumericEqIntLong(t *testing.T) {
@@ -437,8 +434,7 @@ func TestCodegenArrayIndexing(t *testing.T) {
 		let a: int[] = [10, 20]
 		return a[0]
 	}`)
-	assertContains(t, out, "dex_bounds_check(0, a->len)")
-	assertContains(t, out, "a->data[0]")
+	assertContains(t, out, "a->data[dex_checked_index(0, a->len)]")
 }
 
 func TestCodegenEmptyArray(t *testing.T) {
@@ -453,8 +449,8 @@ func TestCodegenIndexAssign(t *testing.T) {
 		let a: int[] = [1, 2]
 		a[0] = 99
 	}`)
-	assertContains(t, out, "dex_bounds_check(0, a->len);")
-	assertContains(t, out, "a->data[0] = 99;")
+	assertContains(t, out, "int _assign_tmp = 99;")
+	assertContains(t, out, "a->len)] = _assign_tmp;")
 }
 
 // --- Stdlib codegen ---
@@ -920,7 +916,7 @@ func TestCodegenBoundsCheckRead(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		return a[1]
 	}`)
-	assertContains(t, out, "(dex_bounds_check(1, a->len), a->data[1])")
+	assertContains(t, out, "(a->data[dex_checked_index(1, a->len)])")
 }
 
 func TestCodegenBoundsCheckReadVariable(t *testing.T) {
@@ -929,7 +925,7 @@ func TestCodegenBoundsCheckReadVariable(t *testing.T) {
 		let i: int = 0
 		return a[i]
 	}`)
-	assertContains(t, out, "(dex_bounds_check(i, a->len), a->data[i])")
+	assertContains(t, out, "(a->data[dex_checked_index(i, a->len)])")
 }
 
 func TestCodegenBoundsCheckWrite(t *testing.T) {
@@ -937,8 +933,8 @@ func TestCodegenBoundsCheckWrite(t *testing.T) {
 		let a: int[] = [1, 2, 3]
 		a[1] = 42
 	}`)
-	assertContains(t, out, "dex_bounds_check(1, a->len);")
-	assertContains(t, out, "a->data[1] = 42;")
+	assertContains(t, out, "long _dex_tmp_0 = 1;")
+	assertContains(t, out, "a->data[dex_checked_index(_dex_tmp_0, a->len)] = _assign_tmp;")
 }
 
 func TestCodegenDivByZeroCheckInt(t *testing.T) {
@@ -947,7 +943,7 @@ func TestCodegenDivByZeroCheckInt(t *testing.T) {
 		let b: int = 2
 		return a / b
 	}`)
-	assertContains(t, out, "dex_check_nonzero_int(b)")
+	assertContains(t, out, "dex_div_int(a, b)")
 }
 
 func TestCodegenModByZeroCheckInt(t *testing.T) {
@@ -956,7 +952,7 @@ func TestCodegenModByZeroCheckInt(t *testing.T) {
 		let b: int = 3
 		return a % b
 	}`)
-	assertContains(t, out, "dex_check_nonzero_int(b)")
+	assertContains(t, out, "dex_mod_int(a, b)")
 }
 
 func TestCodegenDivByZeroCheckAdaptedLiteral(t *testing.T) {
@@ -964,7 +960,7 @@ func TestCodegenDivByZeroCheckAdaptedLiteral(t *testing.T) {
 		let a: long = 10
 		let c: long = a / 3
 	}`)
-	assertContains(t, out, "dex_check_nonzero_long(")
+	assertContains(t, out, "dex_div_long(")
 }
 
 func TestCodegenNoDivCheckForOtherOps(t *testing.T) {
@@ -1047,7 +1043,7 @@ fn main(): void {
 	let resp: HttpResponse = http.get("https://example.com")
 }`)
 	// Struct typedef must appear before the C runtime that uses it
-	typedefIdx := strings.Index(out, "typedef struct {")
+	typedefIdx := strings.Index(out, "struct Dex_HttpResponse {")
 	runtimeIdx := strings.Index(out, "dex_route_entry")
 	if typedefIdx < 0 || runtimeIdx < 0 {
 		t.Fatal("expected both typedef and runtime in output")
@@ -1133,7 +1129,7 @@ fn main(): void {
 }`)
 	// The map macro instantiation defines the DexMap_str_str type
 	mapRuntimeIdx := strings.Index(out, "DEX_MAP_DEFINE(DexString*, DexString*, str_str,")
-	httpRequestIdx := strings.Index(out, "} Dex_HttpRequest;")
+	httpRequestIdx := strings.Index(out, "struct Dex_HttpRequest {")
 	if mapRuntimeIdx < 0 || httpRequestIdx < 0 {
 		t.Fatal("expected both DEX_MAP_DEFINE for str_str and Dex_HttpRequest in output")
 	}
@@ -1206,8 +1202,8 @@ func TestCodegenStructDefinition(t *testing.T) {
 fn main(): void {
     let p = Point { x: 1, y: 2 }
 }`)
-	assertContains(t, out, "typedef struct {")
-	assertContains(t, out, "Dex_Point")
+	assertContains(t, out, "typedef struct Dex_Point Dex_Point;")
+	assertContains(t, out, "struct Dex_Point {")
 	assertContains(t, out, "int x;")
 	assertContains(t, out, "int y;")
 }
@@ -1220,8 +1216,8 @@ func TestCodegenStructWithStringFields(t *testing.T) {
 fn main(): void {
     let u = User { name: "Alice", age: 30 }
 }`)
-	assertContains(t, out, "typedef struct {")
-	assertContains(t, out, "} Dex_User;")
+	assertContains(t, out, "typedef struct Dex_User Dex_User;")
+	assertContains(t, out, "struct Dex_User {")
 	assertContains(t, out, "DexString* name;")
 	assertContains(t, out, "int age;")
 }
@@ -1425,7 +1421,7 @@ func TestCodegenIfWithoutElse(t *testing.T) {
     }
 }`)
 	assertContains(t, out, "if (x > 3)")
-	assertNotContains(t, out, "} else {")
+	assertNotContains(t, out[strings.Index(out, "if (x > 3)"):], "} else {")
 }
 
 // --- While loop codegen ---
@@ -1482,9 +1478,8 @@ func TestCodegenSwitchString(t *testing.T) {
         }
     }
 }`)
-	// String switch uses strcmp
-	assertContains(t, out, "strcmp(")
-	assertContains(t, out, "== 0")
+	assertContains(t, out, `dex_str_eq_lit(_switch_`)
+	assertContains(t, out, `"hello", sizeof("hello") - 1)`)
 }
 
 func TestCodegenSwitchMultipleValues(t *testing.T) {
@@ -1723,7 +1718,7 @@ func TestCodegenStructTypedefBeforeFunctions(t *testing.T) {
 fn main(): void {
     let p = Point { x: 1, y: 2 }
 }`)
-	typedefIdx := strings.Index(out, "} Dex_Point;")
+	typedefIdx := strings.Index(out, "struct Dex_Point {")
 	mainIdx := strings.Index(out, "int main(")
 	if typedefIdx < 0 || mainIdx < 0 {
 		t.Fatal("expected both struct typedef and main function in output")
@@ -1814,4 +1809,38 @@ func TestCodegenGreaterThanEqual(t *testing.T) {
     return 3 >= 2
 }`)
 	assertContains(t, out, "(3 >= 2)")
+}
+
+func TestCodegenNonOptionalHandleReturnRequired(t *testing.T) {
+	out := generate(t, `external module cio {
+    include "<stdio.h>"
+    type File closed by "fclose"
+    fn open(path: string, mode: string): File = "fopen"
+    fn tryOpen(path: string, mode: string): File? = "fopen"
+}
+
+fn main(): void {
+    let f: File = cio.open("a", "r")
+    let g: File? = cio.tryOpen("b", "r")
+}`)
+	assertContains(t, out, `dex_handle_require(dex_handle_new(fopen(`)
+	assertContains(t, out, `"cio.open")`)
+	assertNotContains(t, out, `"cio.tryOpen")`)
+}
+
+func TestCodegenIntDivisionGoSemantics(t *testing.T) {
+	out := generate(t, `import "num"
+
+fn main(): void {
+    let a: int = 7
+    let b: long = 3
+    let c = b % b
+    let d: int = 9
+    d %= a
+    let e: double = 2.0
+    let n: int = num.toInt(e)
+}`)
+	assertContains(t, out, "dex_mod_long(b, b)")
+	assertContains(t, out, "d = dex_mod_int(d, a);")
+	assertContains(t, out, "dex_double_to_int(e)")
 }

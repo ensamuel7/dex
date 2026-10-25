@@ -27,11 +27,13 @@ fn exec(d: Database, sql: string): bool {
     if (h == null) {
         return false
     }
+
     let st: Stmt? = null
     c.prepare(h, sql, -1, st, null)
     if (st == null) {
         return false
     }
+
     return c.step(st) == 101
 }
 
@@ -40,13 +42,16 @@ fn queryInt(d: Database, sql: string): int {
     if (h == null) {
         return 0
     }
+
     let st: Stmt? = null
     c.prepare(h, sql, -1, st, null)
     if (st == null) {
         return 0
     }
+
     if (c.step(st) != 100) {
         return 0
     }
+
     return c.colInt(st, 0)
 }

@@ -34,6 +34,7 @@ fn main(): void {
         sb4.append(str.fromInt(i))
         sb4.append(",")
     }
+
     let csv: string = sb4.toString()
     assert(csv.startsWith("0,1,2,"))
     assert(csv.endsWith("99,"))

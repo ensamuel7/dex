@@ -305,20 +305,38 @@ dex run hello.dx      # build + run, cleans up after</code></pre>
 </div>
 
 <h3>Docker</h3>
-<p>For deployment without installing Go or a C compiler locally, use the Docker image:</p>
+<p>The image <code>ensamuel7/dexlang</code> has <code>dex</code> and everything it compiles with: gcc, git, and the headers for SQLite, PostgreSQL, OpenSSL, libcurl and hiredis. You need nothing else installed, which makes it a good fit for CI, or for trying the language without installing it.</p>
 <div class="install">
-<pre><code># Build a .dx file inside Docker
-docker run --rm -v $(pwd):/app dexlang/dex build /app/hello.dx
-
-# Or use in a Dockerfile
-FROM dexlang/dex AS builder
-COPY . /app
-RUN dex build /app/main.dx -o /app/server
-
-FROM debian:bookworm-slim
-COPY --from=builder /app/server /usr/local/bin/server
-CMD ["server"]</code></pre>
+<pre><code>docker pull ensamuel7/dexlang:0.9.14     # or :latest</code></pre>
 </div>
+<p>The entrypoint is <code>dex</code> and the working directory is <code>/workspace</code>, so mount your project there and pass a command:</p>
+<div class="install">
+<pre><code>docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang run hello.dx
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang test
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang build hello.dx
+
+# a server needs its port published
+docker run --rm -p 8080:8080 -v "$(pwd):/workspace" ensamuel7/dexlang run server.dx</code></pre>
+</div>
+<p><code>build</code> writes a <strong>Linux</strong> binary to <code>build/</code>, so it runs in a container or on a Linux server, not on a Mac or Windows host. On a Linux host, add <code>--user "$(id -u):$(id -g)"</code> so <code>build/</code> belongs to you rather than to root.</p>
+<p>To ship a program in its own image, build in the dex image and copy only the binary into a small one:</p>
+<div class="install">
+<pre><code>FROM ensamuel7/dexlang:0.9.14 AS build
+WORKDIR /src
+COPY . .
+RUN dex build main.dx
+
+FROM debian:trixie-slim
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends \
+        libsqlite3-0 libpq5 libssl3t64 libcurl4t64 \
+    &amp;&amp; rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/build/main /usr/local/bin/app
+EXPOSE 8080
+CMD ["app"]</code></pre>
+</div>
+<p>A project with a <code>dex.mod</code> needs its libraries fetched first: add <code>RUN dex mod download</code> before the build. Without a <code>dex.mod</code> that command fails, so leave it out.</p>
+<p>The runtime image must be the same Debian release the dex image is built on (13, "trixie"), because the binary links against that release's libraries.</p>
+<p>The binary links only the libraries for the modules it imports. A program using nothing beyond <code>fmt</code> needs libc alone, so the <code>apt-get</code> line can go. To see exactly what one needs: <code>docker run --rm -v "$(pwd):/workspace" --entrypoint ldd ensamuel7/dexlang build/main</code>. Pin a version tag in a Dockerfile rather than <code>latest</code>, so a new release cannot change a build that used to work.</p>
 
 <h3>CLI Commands</h3>
 <table>
@@ -326,6 +344,7 @@ CMD ["server"]</code></pre>
 <tr><td><code>dex build &lt;file&gt;</code></td><td>Compile to a native binary</td></tr>
 <tr><td><code>dex run &lt;file&gt;</code></td><td>Build and execute, then remove binary</td></tr>
 <tr><td><code>dex dev &lt;file&gt;</code></td><td>Rebuild and rerun on every change</td></tr>
+<tr><td><code>dex profile &lt;file&gt;</code></td><td>Run with the memory profiler and open a report of which lines allocate and hold memory (<code>--no-open</code> to only write it)</td></tr>
 <tr><td><code>dex test [file]</code></td><td>Run test files (<code>*_test.dx</code>)</td></tr>
 <tr><td><code>dex format [path]</code></td><td>Lay files out the one canonical way (<code>--check</code> to only report)</td></tr>
 <tr><td><code>dex lint &lt;file&gt;</code></td><td>Report what compiles but is probably not meant</td></tr>
@@ -2030,8 +2049,12 @@ dex build app.dx --lint-off=unused-param,shadow</code></pre>
 <tr><td><code>unnecessary-throws</code></td><td>a <code>throws</code> naming a type the function cannot throw</td></tr>
 <tr><td><code>unreachable-catch</code></td><td>a <code>catch</code> clause that can never run</td></tr>
 <tr><td><code>unknown-allow</code></td><td>an <code>#[allow(...)]</code> naming a rule that does not exist</td></tr>
+<tr><td><code>struct-padding</code></td><td>a struct declared in an order the compiler rearranges to avoid padding</td></tr>
 </table>
 
+<h3>Struct Size and Field Order</h3>
+<p>The compiler lays a struct out with its widest fields first, so the order you declare fields in never costs padding: <code>struct Reading { ok: bool, at: long, stale: bool }</code> is 16 bytes, laid out as <code>at, ok, stale</code>, where declared order would be 24. Everything you can observe keeps declared order (struct literals, auto-constructor parameters, <code>json.encode</code>, printing, <code>reflect</code> field indexes and <code>db.fill</code>); only the memory layout changes. A standard library struct keeps its declared layout, which its C runtime relies on.</p>
+<p>Hovering a struct's name shows its size, alignment and padding, and when the layout differs from declared order, the order used and what declared order would have cost. <code>struct-padding</code> reports that difference as a finding, a hint in the editor; <code>#[allow(struct-padding)]</code> on the struct keeps an order chosen for another reason. Sizes are for a 64-bit target.</p>
 <h3>Suppressing a Finding</h3>
 <p><code>#[allow(&lt;rule&gt;)]</code> on the declaration it fires on silences one rule there. <code>#[allow(unused)]</code> covers the four <code>unused-*</code> rules and <code>#[allow(all)]</code> covers everything:</p>
 <pre><code>#[allow(unused)]

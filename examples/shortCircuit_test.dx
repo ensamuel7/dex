@@ -20,22 +20,26 @@ fn main(): void {
     if (false && word().len() == 2) {
         assert(false)
     }
-    if (true || word().isEmpty()) {
-    }
+
+    if (true || word().isEmpty()) {}
+
     if (false && list().len() == 1) {
         assert(false)
     }
+
     assert(calls == 0)
 
     let i: int = 0
     while (i < 3 && word().len() == 2) {
         i = i + 1
     }
+
     assert(calls == 3)
 
     if (true && word().len() == 2) {
         calls = calls + 0
     }
+
     assert(calls == 4)
 
     // The guard this exists for.
@@ -49,9 +53,11 @@ fn main(): void {
     while (nonEmpty(name.toLower()) && n < 50) {
         n = n + 1
     }
+
     while (n < 100 && nonEmpty(name.toUpper())) {
         n = n + 1
     }
+
     let both: bool = nonEmpty(name.toLower()) && nonEmpty(name.toUpper())
     assert(both)
     let either: bool = false || nonEmpty(name.toLower())

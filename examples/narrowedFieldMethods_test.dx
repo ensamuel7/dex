@@ -1,0 +1,37 @@
+// A method on a field of an optional struct that a null check has narrowed:
+// c.name.trim() lost its receiver and compiled to a bare trim().
+import "fmt"
+import "json"
+
+struct Inner {
+    label: string
+}
+
+struct Credentials {
+    name: string
+    email: string
+    inner: Inner
+}
+
+fn read(text: string): string {
+    let c: Credentials? = json.decode(text)
+    if (c == null) {
+        return "none"
+    }
+
+    let name: string = c.name.trim()
+    let lower: string = c.email.toLower()
+    let label: string = c.inner.label.toUpper()
+    return name + "|" + lower + "|" + label + "|${c.name.len()}"
+}
+
+fn main(): void {
+    assert(read("{\"name\":\"  ada \",\"email\":\"A@B.C\",\"inner\":{\"label\":\"x\"}}") == "ada|a@b.c|X|6")
+    assert(read("not json") == "none")
+    for (let i: int = 0; i < 50; i++) {
+        let r: string = read("{\"name\":\" n \",\"email\":\"E\",\"inner\":{\"label\":\"l\"}}")
+        assert(r.len() > 0)
+    }
+
+    fmt.println("narrowed_field_methods_test: all assertions passed")
+}

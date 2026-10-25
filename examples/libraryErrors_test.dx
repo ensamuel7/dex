@@ -21,6 +21,7 @@ fn main(): void {
         caught = e.input
         assert(e.message == "odd input")
     }
+
     assert(caught == 3)
 
     try {

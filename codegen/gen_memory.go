@@ -58,6 +58,15 @@ func (g *Generator) registerScopeVar(out *strings.Builder, prefix, name string, 
 		} else {
 			out.WriteString(fmt.Sprintf("%s_dex_cleanup_push(%s._obj);\n", prefix, name))
 		}
+	case g.usesExceptions && ast.IsStructOptionalType(typ):
+		g.markScopeForUnwind(out, prefix, idx)
+		held, _ := unwindHeld(name, typ)
+		if g.isReassigned(name) {
+			sv.slot = g.nextCleanupSlot()
+			out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_push(%s);\n", prefix, sv.slot, held))
+		} else {
+			out.WriteString(fmt.Sprintf("%s_dex_cleanup_push(%s);\n", prefix, held))
+		}
 	case g.unwindTrackable(typ):
 		g.markScopeForUnwind(out, prefix, idx)
 		if g.isReassigned(name) {
@@ -88,32 +97,107 @@ func (g *Generator) registerScopeVar(out *strings.Builder, prefix, name string, 
 // struct over it, and throwing the struct — a throw consumes it and releases
 // its fields, so the entries have to be cleared or the unwind releases them a
 // second time.
-//
-// A field that is itself a struct or an optional is skipped rather than
-// descended into: it is still released on the normal path, and leaks on an
-// unwind as before.
 func (g *Generator) registerStructFieldsForUnwind(out *strings.Builder, prefix string, idx int, name string, typ ast.Type) map[string]string {
 	if !g.usesExceptions {
 		return nil
 	}
-	def := ast.GetStructDef(typ)
-	if def == nil {
+	slots := map[string]string{}
+	g.registerFieldsForUnwind(out, prefix, idx, name, "", typ, slots, 0)
+	if len(slots) == 0 {
 		return nil
 	}
-	var slots map[string]string
+	return slots
+}
+
+func (g *Generator) registerFieldsForUnwind(out *strings.Builder, prefix string, idx int, name, path string, typ ast.Type, slots map[string]string, depth int) {
+	def := ast.GetStructDef(typ)
+	if def == nil || depth > 8 {
+		return
+	}
 	for _, f := range def.Fields {
-		if !ast.IsHeapType(f.Type) {
+		key := path + f.Name
+		if held, ok := unwindHeld(name+"."+key, f.Type); ok {
+			g.markScopeForUnwind(out, prefix, idx)
+			slot := g.nextCleanupSlot()
+			slots[key] = slot
+			out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_push(%s);\n", prefix, slot, held))
 			continue
 		}
-		g.markScopeForUnwind(out, prefix, idx)
-		slot := g.nextCleanupSlot()
-		if slots == nil {
-			slots = map[string]string{}
+		if ast.IsStructType(f.Type) {
+			g.registerFieldsForUnwind(out, prefix, idx, name, key+".", f.Type, slots, depth+1)
 		}
-		slots[f.Name] = slot
-		out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_push(%s.%s);\n", prefix, slot, name, f.Name))
 	}
-	return slots
+}
+
+func unwindHeld(expr string, typ ast.Type) (string, bool) {
+	switch {
+	case ast.IsHeapType(typ), ast.IsHeapOptionalType(typ):
+		return expr, true
+	case ast.IsStructOptionalType(typ):
+		return fmt.Sprintf("((%s) ? (void*)((char*)(%s) - sizeof(DexObjHeader)) : NULL)", expr, expr), true
+	case ast.IsInterfaceType(typ):
+		return expr + "._obj", true
+	}
+	return "", false
+}
+
+func fieldPathType(typ ast.Type, path string) ast.Type {
+	for _, part := range strings.Split(path, ".") {
+		def := ast.GetStructDef(typ)
+		if def == nil {
+			return 0
+		}
+		found := false
+		for _, f := range def.Fields {
+			if f.Name == part {
+				typ = f.Type
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0
+		}
+	}
+	return typ
+}
+
+func fieldPathOf(expr ast.Expr) (string, string, bool) {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name, "", true
+	case *ast.FieldAccessExpr:
+		head, path, ok := fieldPathOf(e.Object)
+		if !ok {
+			return "", "", false
+		}
+		if path == "" {
+			return head, e.Field, true
+		}
+		return head, path + "." + e.Field, true
+	}
+	return "", "", false
+}
+
+func (g *Generator) emitUnwindPathUpdate(out *strings.Builder, prefix, name, path string) {
+	sv := g.lookupScopeVar(name)
+	if sv == nil || len(sv.fieldSlots) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(sv.fieldSlots))
+	for key := range sv.fieldSlots {
+		if path == "" || key == path || strings.HasPrefix(key, path+".") {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		held, ok := unwindHeld(name+"."+key, fieldPathType(sv.typ, key))
+		if !ok {
+			continue
+		}
+		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s);\n", prefix, sv.fieldSlots[key], held))
+	}
 }
 
 // markScopeForUnwind gives a scope its cleanup-stack mark, once, on the first
@@ -139,30 +223,14 @@ func (g *Generator) emitUnwindSlotUpdate(out *strings.Builder, prefix, name stri
 		held := name
 		if ast.IsInterfaceType(sv.typ) {
 			held = name + "._obj"
+		} else if h, ok := unwindHeld(name, sv.typ); ok {
+			held = h
 		}
 		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s);\n", prefix, sv.slot, held))
 	}
 	// Assigning a struct replaces every field at once, so every field's entry
 	// moves with it. Sorted, because a map's order would churn the output.
-	fields := make([]string, 0, len(sv.fieldSlots))
-	for field := range sv.fieldSlots {
-		fields = append(fields, field)
-	}
-	sort.Strings(fields)
-	for _, field := range fields {
-		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s.%s);\n", prefix, sv.fieldSlots[field], name, field))
-	}
-}
-
-// emitUnwindFieldUpdate does the same for one field of a struct local.
-func (g *Generator) emitUnwindFieldUpdate(out *strings.Builder, prefix, name, field string) {
-	sv := g.lookupScopeVar(name)
-	if sv == nil || sv.fieldSlots == nil {
-		return
-	}
-	if slot, ok := sv.fieldSlots[field]; ok {
-		out.WriteString(fmt.Sprintf("%s_dex_cleanup_set(%s, %s.%s);\n", prefix, slot, name, field))
-	}
+	g.emitUnwindPathUpdate(out, prefix, name, "")
 }
 
 // emitUnwindEntriesCleared gives up a variable's cleanup entries without
@@ -224,11 +292,34 @@ func (g *Generator) unwindTrackable(typ ast.Type) bool {
 // the statement that built it releases it. A temporary is written once and read
 // once, so it needs no slot: nothing can replace the value its entry names.
 func (g *Generator) registerTempForUnwind(out *strings.Builder, name string, typ ast.Type) {
-	if !g.unwindTrackable(typ) {
+	if !g.usesExceptions {
 		return
 	}
-	out.WriteString(fmt.Sprintf("_dex_cleanup_push(%s); ", name))
-	g.stmtTempsRegistered = true
+	var held []string
+	g.collectUnwindHeld(name, typ, &held, 0)
+	for _, h := range held {
+		out.WriteString(fmt.Sprintf("_dex_cleanup_push(%s); ", h))
+	}
+	if len(held) > 0 {
+		g.stmtTempsRegistered = true
+	}
+}
+
+func (g *Generator) collectUnwindHeld(expr string, typ ast.Type, held *[]string, depth int) {
+	if h, ok := unwindHeld(expr, typ); ok {
+		*held = append(*held, h)
+		return
+	}
+	if !ast.IsStructType(typ) || depth > 8 {
+		return
+	}
+	def := ast.GetStructDef(typ)
+	if def == nil {
+		return
+	}
+	for _, f := range def.Fields {
+		g.collectUnwindHeld(expr+"."+f.Name, f.Type, held, depth+1)
+	}
 }
 
 // emitCleanupRestore drops the cleanup entries a scope registered, without
@@ -472,7 +563,19 @@ func (g *Generator) borrowsHeapValue(e ast.Expr) bool {
 	if g.isFuncValueIdent(e) {
 		return false
 	}
+	if g.isMapHeapRead(e) {
+		return false
+	}
 	return isBorrowedExpr(e)
+}
+
+func (g *Generator) isMapHeapRead(e ast.Expr) bool {
+	idx, ok := e.(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	mt := g.typeOfExpr(idx.Array)
+	return ast.IsMapType(mt) && ast.IsHeapType(g.typeOfExpr(e))
 }
 
 // isFuncValueIdent reports whether an identifier names a top-level function
@@ -743,4 +846,60 @@ func (g *Generator) genOptionalStructOwned(out *strings.Builder, expr ast.Expr, 
 	}
 	out.WriteString(strings.ReplaceAll(retains.String(), "\n", " "))
 	out.WriteString(tmp + "; })")
+}
+
+// isScopeVar reports whether name is a local the cleanup at a return would
+// release, as opposed to a parameter, which the caller owns.
+func (g *Generator) isScopeVar(name string) bool {
+	for _, scope := range g.scopeStack {
+		for _, sv := range scope.vars {
+			if sv.name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (g *Generator) emitTryWrittenEscapes(out *strings.Builder, prefix string, body []ast.Stmt) {
+	declared := map[string]bool{}
+	var written []string
+	seen := map[string]bool{}
+	note := func(name string) {
+		if name == "" || seen[name] || declared[name] {
+			return
+		}
+		if _, local := g.varTypes[name]; !local {
+			return
+		}
+		if _, global := g.globalVars[name]; global {
+			return
+		}
+		seen[name] = true
+		written = append(written, name)
+	}
+	for _, st := range body {
+		resolve.VisitStmtInFrame(st, func(n ast.Stmt) {
+			switch s := n.(type) {
+			case *ast.LetStmt:
+				declared[s.Name] = true
+				for _, name := range s.Names {
+					declared[name] = true
+				}
+			case *ast.AssignStmt:
+				note(s.Name)
+			case *ast.CompoundAssignStmt:
+				note(s.Name)
+			case *ast.IncrementStmt:
+				note(s.Name)
+			case *ast.DecrementStmt:
+				note(s.Name)
+			case *ast.FieldAssignStmt:
+				note(headIdentName(s.Object))
+			}
+		}, nil)
+	}
+	for _, name := range written {
+		out.WriteString(fmt.Sprintf("%s__asm__ volatile(\"\" : : \"r\"(&%s) : \"memory\");\n", prefix, name))
+	}
 }

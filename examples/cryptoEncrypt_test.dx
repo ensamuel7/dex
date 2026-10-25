@@ -1,0 +1,36 @@
+// Secrets at rest: encrypt and decrypt, AES-256-GCM.
+import "fmt"
+import "crypto"
+
+fn main(): void {
+    let key: string = crypto.randomHex(32)
+    let secret: string = "hcloud-token-0123456789abcdef"
+    let sealed: string = crypto.encrypt(key, secret)
+    assert(sealed.len() > 0)
+    assert(!sealed.contains(secret))
+    assert(crypto.decrypt(key, sealed) == secret)
+
+    // A fresh nonce each time.
+    assert(crypto.encrypt(key, secret) != sealed)
+
+    // The wrong key, an altered or a truncated input: nothing comes back.
+    assert(crypto.decrypt(crypto.randomHex(32), sealed) == "")
+    let altered: string = sealed.substring(0, 20) + "A" + sealed.substring(21, sealed.len())
+    if (altered != sealed) {
+        assert(crypto.decrypt(key, altered) == "")
+    }
+
+    assert(crypto.decrypt(key, sealed.substring(0, 10)) == "")
+    assert(crypto.decrypt(key, "") == "")
+
+    // A key that is not 64 hex digits is refused.
+    assert(crypto.encrypt("abcd", secret) == "")
+    assert(crypto.encrypt("zz" + key.substring(2, 64), secret) == "")
+
+    // Binary-safe, and an empty secret round-trips to empty.
+    let bytes: string = crypto.base64Decode("AAECA/8A")
+    assert(crypto.decrypt(key, crypto.encrypt(key, bytes)) == bytes)
+    assert(crypto.decrypt(key, crypto.encrypt(key, "")) == "")
+
+    fmt.println("crypto_encrypt_test: all assertions passed")
+}

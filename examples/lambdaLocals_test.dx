@@ -1,0 +1,45 @@
+// A lambda's own locals are released when its body ends, with or without a
+// return, and whether or not it captures anything. They were released only on
+// a `return`, so a void lambda leaked every string and array it made, once per
+// call. A lambda capturing nothing could not be stored in a variable at all.
+import "fmt"
+
+fn main(): void {
+    let plain: fn(int): int = fn(n: int): int {
+        return n * 2
+    }
+
+    assert(plain(4) == 8)
+
+    let count: int = 0
+    let falls: fn(int): void = fn(n: int): void {
+        let s: string = "x${n}"
+        let parts: string[] = s.split("x")
+        assert(parts.len() == 2)
+    }
+
+    let base: int = 3
+    let captures: fn(int): void = fn(n: int): void {
+        let s: string = "y${n + base}"
+        let parts: string[] = s.split("y")
+        assert(parts.len() == 2)
+    }
+
+    let returns: fn(int): string = fn(n: int): string {
+        let s: string = "z${n}"
+        return s + "!"
+    }
+
+    // Run under leaks(1) by the leak sweep: one hundred calls of each would be
+    // hundreds of leaks.
+    for (let i: int = 0; i < 100; i++) {
+        falls(i)
+        captures(i)
+        let r: string = returns(i)
+        count = count + r.len()
+    }
+
+    assert(count > 0)
+
+    fmt.println("lambda_locals_test: all assertions passed")
+}

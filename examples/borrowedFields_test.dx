@@ -45,6 +45,7 @@ fn main(): void {
         seen = seen + ids.len()
         i = i + 1
     }
+
     assert(seen == 4)
     churn(500)
 
@@ -62,6 +63,7 @@ fn main(): void {
         copies.push(Rule { id: rule.id, name: rule.name, siteIds: rule.siteIds })
         j = j + 1
     }
+
     churn(500)
     let copied: Rule = copies[1]
     let copiedIds: long[] = copied.siteIds

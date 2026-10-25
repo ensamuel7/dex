@@ -35,7 +35,9 @@ func (g *Generator) genMatchExpr(out *strings.Builder, e *ast.MatchExpr) {
 			}
 			out.WriteString(fmt.Sprintf("{ _match_%d = ", idx))
 			g.genExpr(out, arm.Body)
-			out.WriteString("; } ")
+			out.WriteString("; ")
+			g.emitRetainMovedArg(out, fmt.Sprintf("_match_%d", idx), arm.Body)
+			out.WriteString("} ")
 		} else {
 			if !isFirst {
 				out.WriteString("else ")
@@ -48,9 +50,7 @@ func (g *Generator) genMatchExpr(out *strings.Builder, e *ast.MatchExpr) {
 				// Check if comparing strings
 				patType := g.typeOfExpr(pat)
 				if patType == ast.TypeString {
-					out.WriteString(fmt.Sprintf("strcmp(dex_string_data(_tag_%d), ", idx))
-					g.genStringData(out, pat)
-					out.WriteString(") == 0")
+					out.WriteString(g.stringEqExpr(fmt.Sprintf("_tag_%d", idx), g.stringOperand(pat)))
 				} else {
 					out.WriteString(fmt.Sprintf("_tag_%d == ", idx))
 					g.genExpr(out, pat)
@@ -58,7 +58,9 @@ func (g *Generator) genMatchExpr(out *strings.Builder, e *ast.MatchExpr) {
 			}
 			out.WriteString(fmt.Sprintf(") { _match_%d = ", idx))
 			g.genExpr(out, arm.Body)
-			out.WriteString("; } ")
+			out.WriteString("; ")
+			g.emitRetainMovedArg(out, fmt.Sprintf("_match_%d", idx), arm.Body)
+			out.WriteString("} ")
 		}
 		isFirst = false
 	}

@@ -6,9 +6,11 @@ fn load(path: string): int throws ParseError, IOError {
     if (path == "") {
         throw IOError("no path")
     }
+
     if (path == "bad") {
         throw ParseError("not a digit", 12)
     }
+
     return 7
 }
 
@@ -34,6 +36,7 @@ struct Validator {
         if (age < min) {
             throw ParseError("too young", age)
         }
+
         return age
     }
 }
@@ -52,6 +55,7 @@ fn main(): void {
     } catch (e: IOError) {
         assert(false)
     }
+
     assert(parseLine == 12)
 
     // A different type reaches a different clause.
@@ -64,6 +68,7 @@ fn main(): void {
         sawIO = true
         assert(e.message == "no path")
     }
+
     assert(sawIO)
 
     // Nothing thrown: no clause runs.
@@ -82,6 +87,7 @@ fn main(): void {
         caughtAny = true
         assert(e.message == "not a digit")
     }
+
     assert(caughtAny)
 
     // An exception no clause claimed propagates, payload intact.
@@ -91,6 +97,7 @@ fn main(): void {
     } catch (e: ParseError) {
         rethrownLine = e.line
     }
+
     assert(rethrownLine == 12)
 
     try {
@@ -107,6 +114,7 @@ fn main(): void {
     } catch (e: ParseError) {
         rejected = e.line
     }
+
     assert(rejected == 9)
     try {
         assert(v.check(21) == 21)

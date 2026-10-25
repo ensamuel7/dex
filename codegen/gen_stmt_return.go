@@ -132,10 +132,14 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 		g.stmtPrelude = savedPrelude
 
 		if prelude != "" {
+			if g.stmtTempsRegistered && g.stmtTempMark == "" {
+				g.stmtTempMark = g.nextCleanupMark()
+				out.WriteString(fmt.Sprintf("%ssize_t %s = _dex_cleanup_top;\n", prefix, g.stmtTempMark))
+			}
 			out.WriteString(prefix + prelude + "\n")
 		}
 		out.WriteString(fmt.Sprintf("%s%s _ret_tmp = %s;\n", prefix, g.cType(retType), body.String()))
-		if alreadyIface {
+		if alreadyIface && g.borrowsHeapValue(s.Value) {
 			out.WriteString(fmt.Sprintf("%sdex_retain(_ret_tmp._obj);\n", prefix))
 		}
 		g.emitHoistReleases(out, prefix)
@@ -182,9 +186,16 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 				// the caller instead of freeing what we are about to hand back.
 				exceptVar := ""
 				if ast.IsStructType(retType) {
-					if ident, ok := s.Value.(*ast.Ident); ok {
+					if ident, ok := s.Value.(*ast.Ident); ok && g.isScopeVar(ident.Name) {
 						// `return m` — leave m's fields alone; the caller owns them now.
 						exceptVar = ident.Name
+					} else if _, ok := s.Value.(*ast.Ident); ok {
+						// `return p` for a by-value parameter: its fields are the
+						// caller's, so there is nothing to move and the copy needs
+						// its own references. Without them the caller released the
+						// struct it passed in and then the one it got back, both
+						// sharing one set of strings.
+						g.emitRetainBorrowedStructFields(out, prefix, "_ret_tmp", retType)
 					} else if _, _, isLit := structAssignments(s.Value); isLit {
 						// `return Msg{...}` or `return Msg(...)` — only fields
 						// taken from a borrowed reference need a retain to
@@ -227,6 +238,7 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
 			g.emitRetainReturnedLitFields(out, prefix, retType, s.Value)
+			g.emitHoistReleases(out, prefix)
 			g.emitReturn(out, prefix, "_ret_tmp")
 		} else if ast.IsStructType(retType) && g.borrowsHeapValue(s.Value) &&
 			g.structHasReleasableField(retType) {
@@ -247,6 +259,7 @@ func (g *Generator) genReturnStmt(out *strings.Builder, s *ast.ReturnStmt, prefi
 			g.genExpr(out, s.Value)
 			out.WriteString(";\n")
 			g.emitRetainBorrowedStructFields(out, prefix, "_ret_tmp", retType)
+			g.emitHoistReleases(out, prefix)
 			g.emitReturn(out, prefix, "_ret_tmp")
 		} else {
 			// Nothing in scope to clean up, but the return expression may

@@ -36,6 +36,7 @@ fn fill(out: &Pending, seed: int): void {
         } else if (kind == "string") {
             assert(reflect.setString(out, i, reflect.fieldName(out, i) + "-" + str.fromInt(seed)))
         }
+
         i = i + 1
     }
 }
@@ -95,5 +96,4 @@ fn main(): void {
 
     fill(p, 42)
     fmt.println(p.currency + " / " + p.firstAt + " / " + str.fromInt(p.sessions))
-
 }

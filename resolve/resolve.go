@@ -1150,6 +1150,10 @@ func (w *walker) expr(expr ast.Expr) ast.Expr {
 		}
 	case *ast.FieldAccessExpr:
 		e.Object = w.expr(e.Object)
+	case *ast.EnumCtorExpr:
+		for i := range e.Args {
+			e.Args[i] = w.expr(e.Args[i])
+		}
 	case *ast.StringInterpExpr:
 		for i := range e.Parts {
 			e.Parts[i] = w.expr(e.Parts[i])

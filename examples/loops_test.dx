@@ -7,8 +7,10 @@ fn main(): void {
         if (i == 10) {
             break
         }
+
         sum += i
     }
+
     assert(sum == 45)
 
     // for loop with continue (skip even numbers)
@@ -17,8 +19,10 @@ fn main(): void {
         if (i % 2 == 0) {
             continue
         }
+
         odd_sum += i
     }
+
     assert(odd_sum == 25)
 
     // for loop with decrement
@@ -26,6 +30,7 @@ fn main(): void {
     for (let i = 5; i > 0; i--) {
         countdown += i
     }
+
     assert(countdown == 15)
 
     // for loop with compound assign
@@ -33,6 +38,7 @@ fn main(): void {
     for (let i = 0; i < 20; i += 5) {
         step_sum += i
     }
+
     assert(step_sum == 30)
 
     // foreach value only
@@ -41,6 +47,7 @@ fn main(): void {
     foreach (nums as n) {
         total += n
     }
+
     assert(total == 60)
 
     // foreach with index
@@ -48,6 +55,7 @@ fn main(): void {
     foreach (nums as i, n) {
         index_sum += i
     }
+
     assert(index_sum == 3)
 
     // while with break
@@ -58,6 +66,7 @@ fn main(): void {
             break
         }
     }
+
     assert(x == 5)
 
     // nested loops with break
@@ -67,9 +76,11 @@ fn main(): void {
             if (j == 3) {
                 break
             }
+
             outer++
         }
     }
+
     assert(outer == 30)
 
     fmt.println("All loop tests passed!")

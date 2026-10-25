@@ -5,6 +5,7 @@ fn promote(b: grade.Band): grade.Band {
     if (b == grade.Band.Pass) {
         return grade.Band.Merit
     }
+
     return grade.Band.Distinction
 }
 
@@ -39,6 +40,7 @@ fn main(): void {
         total = total + grade.points(all[i])
         i = i + 1
     }
+
     assert(total == 6)
 
     let m: grade.Mark = grade.Mark { subject: "transport", band: grade.Band.Distinction }

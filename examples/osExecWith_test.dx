@@ -1,0 +1,60 @@
+// os.execWith: a deadline, and output appended to a file as it arrives.
+import "fmt"
+import "os"
+import "file"
+import "time"
+
+fn main(): void {
+    // Unchanged behaviour with no options: output and error are returned.
+    let plain: os.ExecResult = os.execWith("echo out; echo err >&2; exit 3", os.ExecOptions {})
+    assert(plain.exitCode == 3)
+    assert(plain.output == "out\n")
+    assert(plain.error == "err\n")
+    assert(!plain.timedOut)
+
+    // Appended to a file, in arrival order, and not returned.
+    let log: string = "/tmp/dex_execwith_test.log"
+    file.write(log, "before\n")
+    let streamed: os.ExecResult = os.execWith("echo one; echo two >&2; echo three", os.ExecOptions { appendTo: log })
+    assert(streamed.exitCode == 0)
+    assert(streamed.output == "")
+    assert(file.read(log) == "before\none\ntwo\nthree\n")
+
+    // Readable while the command is still running.
+    let watcher = spawn {
+        time.sleep(400)
+        send(file.read(log))
+    }
+
+    os.execWith("echo early; sleep 1; echo late", os.ExecOptions { appendTo: log })
+    let midway: string = receive(watcher)
+    assert(midway.contains("early"))
+    assert(!midway.contains("late"))
+
+    // A deadline stops the command and what it started: the sleep is a child
+    // of the shell, and must not outlive it.
+    let started: long = time.now()
+    let slow: os.ExecResult = os.execWith("sleep 30 & wait", os.ExecOptions { timeoutMs: 300 })
+    let took: long = time.now() - started
+    assert(slow.timedOut)
+    assert(slow.exitCode == 124)
+    assert(took < 5000)
+    let left: os.ExecResult = os.exec("pgrep -f 'sleep 30$' || true")
+    assert(left.output == "")
+
+    // Options built in place, with a computed path: nothing leaks.
+    for (let i: int = 0; i < 20; i++) {
+        let r: os.ExecResult =
+            os.execWith("true", os.ExecOptions { appendTo: "/tmp/dex_execwith_" + "loop.log", timeoutMs: 5000 })
+        assert(r.exitCode == 0)
+    }
+
+    // A file that cannot be opened is an error, not a crash.
+    let bad: os.ExecResult = os.execWith("echo x", os.ExecOptions { appendTo: "/nonexistent/dir/log" })
+    assert(bad.exitCode == -1)
+    assert(bad.error.contains("could not open"))
+
+    file.remove(log)
+    file.remove("/tmp/dex_execwith_loop.log")
+    fmt.println("os_exec_with_test: all assertions passed")
+}

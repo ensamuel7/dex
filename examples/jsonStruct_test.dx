@@ -149,6 +149,7 @@ fn main(): void {
     if (deepOk != null) {
         assert(deepOk.addr.geo.lat == 5.6)
     }
+
     let deepBad: Employee? = json.decode("{\"name\":\"Ada\",\"addr\":{\"zip\":\"nope\"}}")
     assert(deepBad == null)
 
@@ -186,6 +187,7 @@ fn main(): void {
         let okCount: int = okArr.len()
         assert(okCount == 2)
     }
+
     let notArr: Item[]? = json.decode("{\"label\":\"a\"}")
     assert(notArr == null)
     let badArr: Item[]? = json.decode("garbage")

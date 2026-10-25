@@ -17,6 +17,7 @@ struct Stmt {
         } else {
             self.cols = self.cols + ", " + name
         }
+
         return self
     }
 
@@ -92,5 +93,6 @@ fn main(): void {
         total = total + insertInto("u").col("c").text().len()
         i = i + 1
     }
+
     fmt.println(total)
 }

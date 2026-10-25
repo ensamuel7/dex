@@ -172,6 +172,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 			out.WriteString(inc + "\n")
 		}
 	}
+	out.WriteString(CoreRuntime)
 
 	if g.usesOptional {
 		inc := "#include <stdlib.h>"
@@ -232,11 +233,18 @@ func (g *Generator) Generate(program *ast.Program) string {
 		if g.memCheck {
 			out.WriteString("#define DEX_MEM_CHECK 1\n")
 		}
+		if g.profile {
+			out.WriteString("#define DEX_PROFILE 1\n")
+		}
 		out.WriteString(RefcountRuntime)
 		// The checker needs DexObjHeader, so it follows the refcount runtime,
-		// which forward-declares the four hooks it calls into.
+		// which forward-declares the four hooks it calls into. The profiler
+		// follows it for the same reason.
 		if g.memCheck {
 			out.WriteString(MemCheckRuntime)
+		}
+		if g.profile {
+			out.WriteString(ProfileRuntime)
 		}
 	}
 
@@ -361,6 +369,20 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString(fmt.Sprintf(" } Dex_%s;\n", ed.Name))
 	}
 
+	// Every struct is named before anything is defined. An interface's vtable
+	// names the structs its methods take and return, and a struct may hold an
+	// interface by value, so neither can simply come first; a name is all a
+	// function pointer's parameters need, and the struct definitions below
+	// complete them.
+	for _, mod := range g.importedModules {
+		for _, sd := range mod.Types {
+			out.WriteString(fmt.Sprintf("typedef struct Dex_%s Dex_%s;\n", sd.Name, sd.Name))
+		}
+	}
+	for _, sd := range program.Structs {
+		out.WriteString(fmt.Sprintf("typedef struct Dex_%s Dex_%s;\n", sd.Name, sd.Name))
+	}
+
 	// Emit interface typedef structs (vtable-based)
 	for _, ifaceDef := range program.Interfaces {
 		out.WriteString(fmt.Sprintf("typedef struct {\n"))
@@ -384,21 +406,21 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// Emit struct typedefs (module-provided types first, then user-defined)
 	for _, mod := range g.importedModules {
 		for _, sd := range mod.Types {
-			out.WriteString(fmt.Sprintf("typedef struct {\n"))
+			out.WriteString(fmt.Sprintf("struct Dex_%s {\n", sd.Name))
 			for _, f := range sd.Fields {
 				out.WriteString(fmt.Sprintf("    %s %s;\n", g.cType(f.Type), f.Name))
 			}
-			out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
+			out.WriteString("};\n")
 		}
 	}
 	// A struct holding another struct by value must be declared after it, so the
 	// definitions are ordered by that dependency rather than by source order.
 	for _, sd := range orderStructsByDependency(program.Structs) {
-		out.WriteString(fmt.Sprintf("typedef struct {\n"))
-		for _, f := range sd.Fields {
+		out.WriteString(fmt.Sprintf("struct Dex_%s {\n", sd.Name))
+		for _, f := range ast.LaidOutFields(sd.Fields) {
 			out.WriteString(fmt.Sprintf("    %s %s;\n", g.cType(f.Type), f.Name))
 		}
-		out.WriteString(fmt.Sprintf("} Dex_%s;\n", sd.Name))
+		out.WriteString("};\n")
 	}
 	// After the struct typedefs, because a variant may carry a struct by
 	// value; before the struct cleanup functions, because one of those may
@@ -663,6 +685,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// and lambda wrappers, which may themselves build closures.
 	if g.closureTypes.Len() > 0 {
 		out.WriteString(g.closureTypes.String())
+		out.WriteString("\n")
+	}
+	if g.enumAppenderBodies.Len() > 0 {
+		out.WriteString(g.enumAppenderProtos.String())
+		out.WriteString(g.enumAppenderBodies.String())
 		out.WriteString("\n")
 	}
 	if g.closureWrappers.Len() > 0 {

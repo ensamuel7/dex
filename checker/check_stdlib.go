@@ -336,6 +336,31 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return ast.TypeString, true, nil
 	}
 
+	if e.Module == "ws" && e.Name == "header" {
+		if len(e.Args) != 2 {
+			return 0, true, c.errAt(e.Pos, "ws.header() takes exactly 2 arguments, got %d", len(e.Args))
+		}
+		wsConnType, ok := ast.LookupStructType("Conn")
+		if !ok {
+			return 0, true, c.errAt(e.Pos, "ws.Conn type not registered (internal error)")
+		}
+		arg0Type, err := c.checkExpr(e.Args[0])
+		if err != nil {
+			return 0, true, err
+		}
+		if arg0Type != wsConnType {
+			return 0, true, c.errAt(e.Pos, "ws.header() argument 1 must be ws.Conn, got %s", typeName(arg0Type))
+		}
+		arg1Type, err := c.checkExpr(e.Args[1])
+		if err != nil {
+			return 0, true, err
+		}
+		if arg1Type != ast.TypeString {
+			return 0, true, c.errAt(e.Pos, "ws.header() argument 2 must be string, got %s", typeName(arg1Type))
+		}
+		return ast.TypeString, true, nil
+	}
+
 	// Special case: ws.close(conn)
 	if e.Module == "ws" && e.Name == "close" {
 		if len(e.Args) != 1 {
@@ -412,6 +437,34 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		}
 		if argType != ast.TypeString {
 			return 0, true, c.errAt(e.Pos, "os.exec() argument must be string, got %s", typeName(argType))
+		}
+		e.ResolvedType = execResultType
+		return execResultType, true, nil
+	}
+
+	// os.execWith: a command and ExecOptions, returning ExecResult
+	if e.Module == "os" && e.Name == "execWith" {
+		execResultType, ok := ast.LookupStructType("ExecResult")
+		optsType, ok2 := ast.LookupStructType("ExecOptions")
+		if !ok || !ok2 {
+			return 0, true, c.errAt(e.Pos, "ExecResult or ExecOptions type not registered (internal error)")
+		}
+		if len(e.Args) != 2 {
+			return 0, true, c.errAt(e.Pos, "os.execWith() takes exactly 2 arguments, got %d", len(e.Args))
+		}
+		cmdType, err := c.checkExpr(e.Args[0])
+		if err != nil {
+			return 0, true, err
+		}
+		if cmdType != ast.TypeString {
+			return 0, true, c.errAt(e.Pos, "os.execWith() argument 1 must be string, got %s", typeName(cmdType))
+		}
+		optType, err := c.checkExpr(e.Args[1])
+		if err != nil {
+			return 0, true, err
+		}
+		if optType != optsType {
+			return 0, true, c.errAt(e.Pos, "os.execWith() argument 2 must be os.ExecOptions, got %s", typeName(optType))
 		}
 		e.ResolvedType = execResultType
 		return execResultType, true, nil

@@ -11,9 +11,11 @@ fn join(argv: string[]): string {
         if (i > 0) {
             out.append(" ")
         }
+
         out.append(arg)
         i = i + 1
     }
+
     return out.toString()
 }
 

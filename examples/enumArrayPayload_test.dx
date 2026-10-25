@@ -1,0 +1,16 @@
+enum Shape {
+    Empty
+    Tags(string[])
+}
+
+fn main(): void {
+    let s: Shape = Shape.Empty
+    switch (s) {
+        case Shape.Empty: {
+            assert(true)
+        }
+        default: {
+            assert(false)
+        }
+    }
+}

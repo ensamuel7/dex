@@ -28,11 +28,11 @@ DexArrayString* dex_file_list(const char* path) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
         if (count == cap) {
             cap = cap ? cap * 2 : 16;
-            char** grown = (char**)realloc(names, sizeof(char*) * cap);
+            char** grown = (char**)dex_xrealloc(names, sizeof(char*) * cap);
             if (!grown) break;
             names = grown;
         }
-        names[count] = strdup(e->d_name);
+        names[count] = dex_xstrdup(e->d_name);
         if (!names[count]) break;
         count++;
     }
@@ -53,24 +53,21 @@ DexArrayString* dex_file_list(const char* path) {
 
 const char* dex_file_read(const char* path) {
     FILE* f = fopen(path, "rb");
-    if (!f) {
-        char* empty = (char*)malloc(1);
-        empty[0] = '\0';
-        return empty;
-    }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char* buf = (char*)malloc(len + 1);
-    if (!buf) {
+    size_t cap = 4096, len = 0;
+    char* buf = (char*)dex_xmalloc(cap);
+    if (f) {
+        for (;;) {
+            if (cap - len < 2) {
+                cap *= 2;
+                buf = (char*)dex_xrealloc(buf, cap);
+            }
+            size_t got = fread(buf + len, 1, cap - len - 1, f);
+            len += got;
+            if (got == 0) break;
+        }
         fclose(f);
-        char* empty = (char*)malloc(1);
-        empty[0] = '\0';
-        return empty;
     }
-    fread(buf, 1, len, f);
     buf[len] = '\0';
-    fclose(f);
     return buf;
 }
 
@@ -112,7 +109,7 @@ struct dex_upload_buf {
 static size_t dex_upload_write_cb(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t total = size * nmemb;
     struct dex_upload_buf* buf = (struct dex_upload_buf*)userp;
-    char* ptr = (char*)realloc(buf->data, buf->size + total + 1);
+    char* ptr = (char*)dex_xrealloc(buf->data, buf->size + total + 1);
     if (!ptr) return 0;
     buf->data = ptr;
     memcpy(buf->data + buf->size, contents, total);
@@ -124,7 +121,7 @@ static size_t dex_upload_write_cb(void* contents, size_t size, size_t nmemb, voi
 const char* dex_file_upload(const char* path, const char* url) {
     CURL* curl = curl_easy_init();
     if (!curl) {
-        char* empty = (char*)malloc(1);
+        char* empty = (char*)dex_xmalloc(1);
         empty[0] = '\0';
         return empty;
     }
@@ -135,7 +132,7 @@ const char* dex_file_upload(const char* path, const char* url) {
     curl_mime_filedata(part, path);
 
     struct dex_upload_buf response = {NULL, 0};
-    response.data = (char*)malloc(1);
+    response.data = (char*)dex_xmalloc(1);
     response.data[0] = '\0';
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -149,7 +146,7 @@ const char* dex_file_upload(const char* path, const char* url) {
 
     if (res != CURLE_OK) {
         free(response.data);
-        char* empty = (char*)malloc(1);
+        char* empty = (char*)dex_xmalloc(1);
         empty[0] = '\0';
         return empty;
     }

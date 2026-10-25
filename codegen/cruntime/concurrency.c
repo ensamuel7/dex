@@ -36,7 +36,8 @@ DexChan* dex_chan_new(int elem_size, int cap) {
     ch->head = 0;
     ch->tail = 0;
     ch->closed = 0;
-    ch->data = malloc(elem_size * cap);
+    ch->data = dex_xmalloc(elem_size * cap);
+    DEX_PF_BUF_SET(ch, (size_t)elem_size * cap);
     pthread_mutex_init(&ch->lock, NULL);
     pthread_cond_init(&ch->not_empty, NULL);
     pthread_cond_init(&ch->not_full, NULL);

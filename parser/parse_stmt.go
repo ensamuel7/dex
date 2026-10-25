@@ -25,6 +25,10 @@ func (p *Parser) parseBlock() ([]ast.Stmt, error) {
 }
 
 func (p *Parser) parseStmt() (ast.Stmt, error) {
+	defer p.leave()
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
 	// Collect annotations that may precede let/const
 	if p.check(token.TokenAnnotation) {
 		annotations := p.collectAnnotations()

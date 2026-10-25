@@ -17,6 +17,7 @@ fn main(): void {
             result = -1
         }
     }
+
     assert(result == 20)
 
     // String switch
@@ -34,6 +35,7 @@ fn main(): void {
             handled = -1
         }
     }
+
     assert(handled == 2)
 
     // Default case
@@ -48,6 +50,7 @@ fn main(): void {
             fallback = 99
         }
     }
+
     assert(fallback == 99)
 
     // Char switch
@@ -65,5 +68,6 @@ fn main(): void {
             score = 70
         }
     }
+
     assert(score == 85)
 }

@@ -1,0 +1,27 @@
+// A map encoded to JSON, alone or inside an object literal. Each entry used to
+// leak the text built before it, so an n-entry map leaked n buffers per encode.
+import "fmt"
+import "json"
+
+fn main(): void {
+    let names: map[string, string] = {}
+    names.set("a", "x\"y")
+    names.set("b", "2")
+    names.set("c", "3")
+    let counts: map[string, int] = {}
+    counts.set("one", 1)
+    counts.set("two", 2)
+
+    for (let i: int = 0; i < 50; i++) {
+        let text: string = json.encode(names)
+        let doc: json.Value = json.decode(text)
+        assert(doc["a"].asString() == "x\"y")
+        let nested: json.Value = { data: names, counts: counts }
+        assert(nested["counts"]["two"].asInt() == 2)
+    }
+
+    let empty: map[string, string] = {}
+    assert(json.encode(empty) == "{}")
+
+    fmt.println("json_map_leak_test: all assertions passed")
+}

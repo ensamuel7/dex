@@ -1054,3 +1054,63 @@ func TestModuleMethodCallReachesItsFlatName(t *testing.T) {
 		t.Errorf("typeList = %q", got)
 	}
 }
+
+func TestEnumConstructorArgumentsAreReads(t *testing.T) {
+	assertRules(t, `
+enum Shape {
+    Label(string)
+    Pair(int, int)
+}
+
+fn size(s: Shape): int {
+    switch (s) {
+        case Shape.Label(x): {
+            return x.len()
+        }
+        case Shape.Pair(a, b): {
+            return a + b
+        }
+    }
+}
+
+fn main(): void {
+    let word: string = "w"
+    let first: int = 1
+    let second: int = 2
+    assert(size(Shape.Label(word)) + size(Shape.Pair(first, second)) == 4)
+}
+`)
+}
+
+func TestStructPaddingReportsABetterOrder(t *testing.T) {
+	findings := assertRules(t, `
+struct Loose {
+    on: bool
+    total: long
+    off: bool
+}
+
+#[allow(struct-padding)]
+struct Kept {
+    on: bool
+    total: long
+    off: bool
+}
+
+struct Tight {
+    total: long
+    on: bool
+    off: bool
+}
+
+fn main(): void {
+    let a = Loose { on: true, total: 1, off: false }
+    let b = Kept { on: true, total: 1, off: false }
+    let c = Tight { total: 1, on: true, off: false }
+    assert(a.total + b.total + c.total == 3)
+}
+`, RuleStructPadding)
+	if want := "struct 'Loose' would be 24 bytes in declared order; the compiler lays it out as total, on, off in 16"; findings[0].Msg != want {
+		t.Errorf("got %q, want %q", findings[0].Msg, want)
+	}
+}

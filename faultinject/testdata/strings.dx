@@ -1,0 +1,69 @@
+import "str"
+
+fn label(n: int): string {
+    return "item-" + str.fromInt(n)
+}
+
+fn joined(a: string, b: string): string {
+    return a + "/" + b
+}
+
+fn nested(n: int): string {
+    let head = label(n)
+    let tail = joined(head, label(n + 1))
+    return joined(tail, "${n}:${head}")
+}
+
+fn reassigned(n: int): string {
+    let acc = ""
+    for (let i = 0; i < n; i = i + 1) {
+        acc = acc + label(i)
+    }
+    return acc
+}
+
+fn built(n: int): string {
+    let sb = StringBuilder()
+    for (let i = 0; i < n; i = i + 1) {
+        sb.append(label(i))
+        sb.append(",")
+    }
+    return sb.toString()
+}
+
+fn methods(s: string): int {
+    let csv = s + ",x,y"
+    let parts = csv.split(",")
+    let upper = s.toUpper()
+    if (!upper.isEmpty() && upper.substring(0, 1) == "I") {
+        return parts.len()
+    }
+    return parts.len() + str.fromInt(upper.len()).len()
+}
+
+fn inner(n: int): string {
+    try {
+        return nested(n) + label(n)
+    } catch (e: Exception) {
+        return "inner caught " + e.message
+    }
+}
+
+fn main(): void {
+    let caught = 0
+    for (let round = 0; round < 3; round = round + 1) {
+        try {
+            assert(nested(round).len() > 0)
+            assert(reassigned(4).len() > 0)
+            assert(built(5).len() > 0)
+            assert(methods(label(round)) > 0)
+            assert(inner(round).len() > 0)
+            let a = label(round)
+            let b = joined(a, label(round + 2)) + a
+            assert(b.len() > a.len())
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+    }
+    assert(caught >= 0)
+}

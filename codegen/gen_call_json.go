@@ -84,20 +84,28 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 		var w strings.Builder
 		w.WriteString(fmt.Sprintf("DexString* %s(%s* _m) {\n", wrapperName, mapCType))
 		w.WriteString("    const char* _r = dex_json_new();\n")
+		w.WriteString("    const char* _n;\n")
 		w.WriteString("    for (int _i = 0; _i < _m->cap; _i++) {\n")
 		w.WriteString("        if (!_m->entries[_i].occupied) continue;\n")
 		switch valType {
 		case ast.TypeString:
-			w.WriteString("        _r = dex_json_set(_r, _m->entries[_i].key->data, _m->entries[_i].value->data);\n")
+			w.WriteString("        _n = dex_json_set(_r, _m->entries[_i].key->data, _m->entries[_i].value->data);\n")
 		case ast.TypeInt:
-			w.WriteString("        _r = dex_json_set_int(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+			w.WriteString("        _n = dex_json_set_int(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
 		case ast.TypeBool:
-			w.WriteString("        _r = dex_json_set_bool(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+			w.WriteString("        _n = dex_json_set_bool(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
 		case ast.TypeLong:
-			w.WriteString("        _r = dex_json_set_long(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+			w.WriteString("        _n = dex_json_set_long(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
 		case ast.TypeDouble:
-			w.WriteString("        _r = dex_json_set_double(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+			w.WriteString("        _n = dex_json_set_double(_r, _m->entries[_i].key->data, _m->entries[_i].value);\n")
+		default:
+			w.WriteString("        _n = _r;\n")
 		}
+		// Each dex_json_set* returns a new buffer and leaves the old one to
+		// the caller, which is this loop: every entry leaked the text before it.
+		// They hand back the old one unchanged only when malloc fails.
+		w.WriteString("        if (_n != _r) free((void*)_r);\n")
+		w.WriteString("        _r = _n;\n")
 		w.WriteString("    }\n")
 		w.WriteString("    return dex_string_from_cstr(_r);\n")
 		w.WriteString("}\n")
@@ -110,6 +118,25 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 	if ast.IsStructType(argType) && !ast.IsArrayType(argType) {
 		// Struct stringify: use dex_json_encode_struct
 		def := ast.GetStructDef(argType)
+		if _, isCall := arg.(*ast.CallExpr); isCall {
+			// A returned struct is an rvalue, and C will not take its address.
+			// Bind it first, and release what it owns once its text exists:
+			// nothing else will, since nothing else ever names it.
+			tmp := g.nextTemp()
+			res := g.nextTemp()
+			out.WriteString(fmt.Sprintf("({ %s %s = ", g.cType(argType), tmp))
+			g.genExpr(out, arg)
+			out.WriteString(fmt.Sprintf("; DexString* %s = dex_string_from_cstr(dex_json_encode_struct(&%s, %d, ", res, tmp, len(def.Fields)))
+			g.genStructFieldDescs(out, argType, 0)
+			out.WriteString(")); ")
+			if ast.NeedsRelease(argType) {
+				var rel strings.Builder
+				g.emitReleaseVar(&rel, "", tmp, argType)
+				out.WriteString(strings.ReplaceAll(rel.String(), "\n", " "))
+			}
+			out.WriteString(res + "; })")
+			return
+		}
 		out.WriteString("dex_string_from_cstr(dex_json_encode_struct(&")
 		g.genExpr(out, arg)
 		out.WriteString(fmt.Sprintf(", %d, ", len(def.Fields)))

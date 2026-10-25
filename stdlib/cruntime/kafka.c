@@ -22,7 +22,7 @@
 #define DEX_KAFKA_MAX_CLIENTS 16
 
 static char* dex_kafka_own(const char* s, size_t len) {
-    char* out = (char*)malloc(len + 1);
+    char* out = (char*)dex_xmalloc(len + 1);
     if (!out) return NULL;
     if (len > 0) memcpy(out, s, len);
     out[len] = '\0';

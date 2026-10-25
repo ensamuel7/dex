@@ -47,6 +47,7 @@ fn main(): void {
         total = total + str.fromInt(i).trim().len()
         i = i + 1
     }
+
     assert(total > 0)
     fmt.println(total)
 }

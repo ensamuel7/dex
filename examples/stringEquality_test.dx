@@ -1,0 +1,42 @@
+import "crypto"
+
+fn kind(s: string): int {
+    return match (s) {
+        "alpha" => 1
+        "beta" => 2
+        _ => 0
+    }
+}
+
+fn label(s: string): int {
+    let n: int = 0
+    switch (s) {
+        case "x": {
+            n = 1
+        }
+        case "y": {
+            n = 2
+        }
+    }
+
+    return n
+}
+
+fn main(): void {
+    let a: string = crypto.base64Decode("YWIAY2Q=")
+    let b: string = crypto.base64Decode("YWIAY2U=")
+    assert(a.len() == 5)
+    assert(a != b)
+    assert(!(a == b))
+    assert(a == crypto.base64Decode("YWIAY2Q="))
+    let prefix: string = crypto.base64Decode("YWI=")
+    assert(prefix != a)
+    assert(a != "ab")
+    assert("ab" != a)
+    assert(prefix == "ab")
+    assert(kind("alpha") == 1)
+    assert(kind("beta") == 2)
+    assert(kind("gamma") == 0)
+    assert(label("y") == 2)
+    assert(label("z") == 0)
+}

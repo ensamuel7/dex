@@ -11,6 +11,9 @@ var RefcountRuntime string
 //go:embed cruntime/safety.c
 var SafetyRuntime string
 
+//go:embed cruntime/core.c
+var CoreRuntime string
+
 //go:embed cruntime/strings.c
 var StringRuntime string
 
@@ -55,3 +58,6 @@ var ClosureRuntime string
 
 //go:embed cruntime/memcheck.c
 var MemCheckRuntime string
+
+//go:embed cruntime/profile.c
+var ProfileRuntime string

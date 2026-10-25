@@ -79,10 +79,17 @@ DexJsonValue* dex_jv_int(long n) {
     return v;
 }
 
+static long dex_jv_double_to_long(double d) {
+    if (d != d) return 0;
+    if (d >= 9223372036854775807.0) return __LONG_MAX__;
+    if (d <= -9223372036854775808.0) return -__LONG_MAX__ - 1L;
+    return (long)d;
+}
+
 DexJsonValue* dex_jv_double(double d) {
     DexJsonValue* v = dex_jv_alloc(DEX_JV_NUM);
     v->num = d;
-    v->inum = (long)d;
+    v->inum = dex_jv_double_to_long(d);
     return v;
 }
 
@@ -117,15 +124,16 @@ static int dex_jv_reserve(DexJsonValue* v, int want) {
     if (want <= v->cap) return 1;
     int cap = v->cap ? v->cap * 2 : 8;
     while (cap < want) cap *= 2;
-    DexJsonValue** items = (DexJsonValue**)realloc(v->items, (size_t)cap * sizeof(DexJsonValue*));
+    DexJsonValue** items = (DexJsonValue**)dex_xrealloc(v->items, (size_t)cap * sizeof(DexJsonValue*));
     if (!items) return 0;
     v->items = items;
     if (v->kind == DEX_JV_OBJ) {
-        DexString** keys = (DexString**)realloc(v->keys, (size_t)cap * sizeof(DexString*));
+        DexString** keys = (DexString**)dex_xrealloc(v->keys, (size_t)cap * sizeof(DexString*));
         if (!keys) return 0;
         v->keys = keys;
     }
     v->cap = cap;
+    DEX_PF_BUF_SET(v, (size_t)cap * (sizeof(DexJsonValue*) + (v->kind == DEX_JV_OBJ ? sizeof(DexString*) : 0)));
     return 1;
 }
 
@@ -226,9 +234,9 @@ DexArrayString* dex_jv_keys(DexJsonValue* v) {
 long dex_jv_as_long(DexJsonValue* v) {
     if (!v) return 0;
     switch (v->kind) {
-    case DEX_JV_NUM:  return v->is_int ? v->inum : (long)v->num;
+    case DEX_JV_NUM:  return v->is_int ? v->inum : dex_jv_double_to_long(v->num);
     case DEX_JV_BOOL: return v->b ? 1 : 0;
-    case DEX_JV_STR:  return atol(v->str->data);
+    case DEX_JV_STR:  return dex_parse_long(v->str->data);
     default: return 0;
     }
 }
@@ -240,7 +248,7 @@ double dex_jv_as_double(DexJsonValue* v) {
     switch (v->kind) {
     case DEX_JV_NUM:  return v->is_int ? (double)v->inum : v->num;
     case DEX_JV_BOOL: return v->b ? 1.0 : 0.0;
-    case DEX_JV_STR:  return atof(v->str->data);
+    case DEX_JV_STR:  return dex_parse_double(v->str->data);
     default: return 0.0;
     }
 }
@@ -287,7 +295,7 @@ static int dex_jv_buf_need(DexJvBuf* b, size_t extra) {
     if (b->len + extra + 1 <= b->cap) return 1;
     size_t cap = b->cap ? b->cap : 128;
     while (cap < b->len + extra + 1) cap *= 2;
-    char* nb = (char*)realloc(b->buf, cap);
+    char* nb = (char*)dex_xrealloc(b->buf, cap);
     if (!nb) { b->failed = 1; return 0; }
     b->buf = nb;
     b->cap = cap;
@@ -342,6 +350,7 @@ static void dex_jv_write(DexJvBuf* b, DexJsonValue* v) {
         char tmp[40];
         int n;
         if (v->is_int) n = snprintf(tmp, sizeof(tmp), "%ld", v->inum);
+        else if (v->num != v->num || v->num - v->num != 0) n = snprintf(tmp, sizeof(tmp), "null");
         else n = snprintf(tmp, sizeof(tmp), "%.17g", v->num);
         dex_jv_buf_put(b, tmp, (size_t)n);
         break;
@@ -371,7 +380,7 @@ static void dex_jv_write(DexJvBuf* b, DexJsonValue* v) {
 static const char* dex_jv_encode_cstr(DexJsonValue* v) {
     DexJvBuf b = {NULL, 0, 0, 0};
     dex_jv_write(&b, v);
-    if (b.failed || !b.buf) { free(b.buf); return strdup("null"); }
+    if (b.failed || !b.buf) { free(b.buf); return dex_xstrdup("null"); }
     b.buf[b.len] = '\0';
     return b.buf;
 }
@@ -431,7 +440,7 @@ static DexJsonValue* dex_jv_parse_number(DexJvParser* ps) {
     if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
     memcpy(tmp, start, n);
     tmp[n] = '\0';
-    return is_int ? dex_jv_int(atol(tmp)) : dex_jv_double(atof(tmp));
+    return is_int ? dex_jv_int(dex_parse_long(tmp)) : dex_jv_double(dex_parse_double(tmp));
 }
 
 static DexJsonValue* dex_jv_parse_value(DexJvParser* ps) {

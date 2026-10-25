@@ -218,7 +218,7 @@ static unsigned int dex_db_stmt_seq = 0;
 static int dex_db_pool_size(void) {
     const char* env = getenv("DB_POOL_SIZE");
     if (!env || !*env) return DEX_DB_POOL_SIZE;
-    int n = atoi(env);
+    int n = dex_parse_int(env);
     if (n < 1) n = 1;
     if (n > DEX_DB_POOL_SIZE) n = DEX_DB_POOL_SIZE;
     return n;
@@ -351,7 +351,7 @@ static void dex_db_parse_mysql_dsn(const char* dsn,
             char port_str[16];
             if (val_len > 15) val_len = 15;
             strncpy(port_str, val_start, val_len); port_str[val_len] = '\0';
-            *port = (unsigned int)atoi(port_str);
+            *port = (unsigned int)dex_parse_int(port_str);
         }
     }
 }
@@ -537,7 +537,7 @@ int dex_db_exec(int conn, const char* sql) {
             ExecStatusType status = PQresultStatus(res);
             if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {
                 char* affected = PQcmdTuples(res);
-                n = (affected && affected[0] != '\0') ? atoi(affected) : 0;
+                n = (affected && affected[0] != '\0') ? dex_parse_int(affected) : 0;
                 PQclear(res);
                 break;
             }
@@ -769,13 +769,13 @@ int dex_db_col_int(int rows, int col) {
     } else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
         char* val = PQgetvalue(r->pg_result, r->pg_row, col);
         if (!val || val[0] == '\0') return 0;
-        return atoi(val);
+        return dex_parse_int(val);
 #endif
 
 #ifdef DEX_HAS_MYSQL
     } else if (r->driver == DEX_DB_DRIVER_MYSQL) {
         if (!r->mysql_row || !r->mysql_row[col]) return 0;
-        return atoi(r->mysql_row[col]);
+        return dex_parse_int(r->mysql_row[col]);
 #endif
 
 #ifdef DEX_HAS_MONGO
@@ -785,7 +785,7 @@ int dex_db_col_int(int rows, int col) {
         if (BSON_ITER_HOLDS_INT32(&iter)) return bson_iter_int32(&iter);
         if (BSON_ITER_HOLDS_INT64(&iter)) return (int)bson_iter_int64(&iter);
         if (BSON_ITER_HOLDS_DOUBLE(&iter)) return (int)bson_iter_double(&iter);
-        if (BSON_ITER_HOLDS_UTF8(&iter)) return atoi(bson_iter_utf8(&iter, NULL));
+        if (BSON_ITER_HOLDS_UTF8(&iter)) return dex_parse_int(bson_iter_utf8(&iter, NULL));
         return 0;
 #endif
     }
@@ -810,13 +810,13 @@ long dex_db_col_long(int rows, int col) {
     } else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
         char* val = PQgetvalue(r->pg_result, r->pg_row, col);
         if (!val || val[0] == '\0') return 0;
-        return atol(val);
+        return dex_parse_long(val);
 #endif
 
 #ifdef DEX_HAS_MYSQL
     } else if (r->driver == DEX_DB_DRIVER_MYSQL) {
         if (!r->mysql_row || !r->mysql_row[col]) return 0;
-        return atol(r->mysql_row[col]);
+        return dex_parse_long(r->mysql_row[col]);
 #endif
 
 #ifdef DEX_HAS_MONGO
@@ -826,7 +826,7 @@ long dex_db_col_long(int rows, int col) {
         if (BSON_ITER_HOLDS_INT64(&iter)) return (long)bson_iter_int64(&iter);
         if (BSON_ITER_HOLDS_INT32(&iter)) return (long)bson_iter_int32(&iter);
         if (BSON_ITER_HOLDS_DOUBLE(&iter)) return (long)bson_iter_double(&iter);
-        if (BSON_ITER_HOLDS_UTF8(&iter)) return atol(bson_iter_utf8(&iter, NULL));
+        if (BSON_ITER_HOLDS_UTF8(&iter)) return dex_parse_long(bson_iter_utf8(&iter, NULL));
         return 0;
 #endif
     }
@@ -843,14 +843,14 @@ const char* dex_db_col_str(int rows, int col) {
     if (r->driver == DEX_DB_DRIVER_SQLITE) {
         const unsigned char* text = sqlite3_column_text(r->sqlite_stmt, col);
         if (!text) {
-            char* empty = (char*)malloc(1);
-            if (!empty) return strdup("");
+            char* empty = (char*)dex_xmalloc(1);
+            if (!empty) return dex_xstrdup("");
             empty[0] = '\0';
             return empty;
         }
         size_t len = strlen((const char*)text);
-        char* copy = (char*)malloc(len + 1);
-        if (!copy) return strdup("");
+        char* copy = (char*)dex_xmalloc(len + 1);
+        if (!copy) return dex_xstrdup("");
         memcpy(copy, text, len + 1);
         return copy;
 
@@ -858,14 +858,14 @@ const char* dex_db_col_str(int rows, int col) {
     } else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
         char* val = PQgetvalue(r->pg_result, r->pg_row, col);
         if (!val) {
-            char* empty = (char*)malloc(1);
-            if (!empty) return strdup("");
+            char* empty = (char*)dex_xmalloc(1);
+            if (!empty) return dex_xstrdup("");
             empty[0] = '\0';
             return empty;
         }
         size_t len = (size_t)PQgetlength(r->pg_result, r->pg_row, col);
-        char* copy = (char*)malloc(len + 1);
-        if (!copy) return strdup("");
+        char* copy = (char*)dex_xmalloc(len + 1);
+        if (!copy) return dex_xstrdup("");
         memcpy(copy, val, len);
         copy[len] = '\0';
         return copy;
@@ -874,14 +874,14 @@ const char* dex_db_col_str(int rows, int col) {
 #ifdef DEX_HAS_MYSQL
     } else if (r->driver == DEX_DB_DRIVER_MYSQL) {
         if (!r->mysql_row || !r->mysql_row[col]) {
-            char* empty = (char*)malloc(1);
-            if (!empty) return strdup("");
+            char* empty = (char*)dex_xmalloc(1);
+            if (!empty) return dex_xstrdup("");
             empty[0] = '\0';
             return empty;
         }
         size_t len = strlen(r->mysql_row[col]);
-        char* copy = (char*)malloc(len + 1);
-        if (!copy) return strdup("");
+        char* copy = (char*)dex_xmalloc(len + 1);
+        if (!copy) return dex_xstrdup("");
         memcpy(copy, r->mysql_row[col], len + 1);
         return copy;
 #endif
@@ -890,16 +890,16 @@ const char* dex_db_col_str(int rows, int col) {
     } else if (r->driver == DEX_DB_DRIVER_MONGO) {
         bson_iter_t iter;
         if (!dex_db_mongo_iter_to(r->mongo_doc, col, &iter)) {
-            char* empty = (char*)malloc(1);
-            if (!empty) return strdup("");
+            char* empty = (char*)dex_xmalloc(1);
+            if (!empty) return dex_xstrdup("");
             empty[0] = '\0';
             return empty;
         }
         if (BSON_ITER_HOLDS_UTF8(&iter)) {
             const char* val = bson_iter_utf8(&iter, NULL);
             size_t len = strlen(val);
-            char* copy = (char*)malloc(len + 1);
-            if (!copy) return strdup("");
+            char* copy = (char*)dex_xmalloc(len + 1);
+            if (!copy) return dex_xstrdup("");
             memcpy(copy, val, len + 1);
             return copy;
         }
@@ -919,15 +919,15 @@ const char* dex_db_col_str(int rows, int col) {
             buf[0] = '\0';
         }
         size_t len = strlen(buf);
-        char* copy = (char*)malloc(len + 1);
-        if (!copy) return strdup("");
+        char* copy = (char*)dex_xmalloc(len + 1);
+        if (!copy) return dex_xstrdup("");
         memcpy(copy, buf, len + 1);
         return copy;
 #endif
     }
 
-    char* empty = (char*)malloc(1);
-    if (!empty) return strdup("");
+    char* empty = (char*)dex_xmalloc(1);
+    if (!empty) return dex_xstrdup("");
     empty[0] = '\0';
     return empty;
 }
@@ -1005,13 +1005,13 @@ double dex_db_col_double(int rows, int col) {
     } else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
         char* val = PQgetvalue(r->pg_result, r->pg_row, col);
         if (!val || val[0] == '\0') return 0.0;
-        return atof(val);
+        return dex_parse_double(val);
 #endif
 
 #ifdef DEX_HAS_MYSQL
     } else if (r->driver == DEX_DB_DRIVER_MYSQL) {
         if (!r->mysql_row || !r->mysql_row[col]) return 0.0;
-        return atof(r->mysql_row[col]);
+        return dex_parse_double(r->mysql_row[col]);
 #endif
 
 #ifdef DEX_HAS_MONGO
@@ -1021,7 +1021,7 @@ double dex_db_col_double(int rows, int col) {
         if (BSON_ITER_HOLDS_DOUBLE(&iter)) return bson_iter_double(&iter);
         if (BSON_ITER_HOLDS_INT32(&iter)) return (double)bson_iter_int32(&iter);
         if (BSON_ITER_HOLDS_INT64(&iter)) return (double)bson_iter_int64(&iter);
-        if (BSON_ITER_HOLDS_UTF8(&iter)) return atof(bson_iter_utf8(&iter, NULL));
+        if (BSON_ITER_HOLDS_UTF8(&iter)) return dex_parse_double(bson_iter_utf8(&iter, NULL));
         return 0.0;
 #endif
     }
@@ -1211,11 +1211,11 @@ int dex_db_prepare(int conn, const char* sql) {
         dex_db_stmts[slot].conn_slot = conn;
         memset(dex_db_stmts[slot].prepared_gen, 0, sizeof(dex_db_stmts[slot].prepared_gen));
         dex_db_stmts[slot].prepared_gen[entry] = prepared_at;
-        dex_db_stmts[slot].pg_sql = strdup(sql);
+        dex_db_stmts[slot].pg_sql = dex_xstrdup(sql);
         dex_db_stmts[slot].pg_param_count = 0;
         dex_db_stmts[slot].pg_param_cap = 8;
-        dex_db_stmts[slot].pg_param_values = (char**)calloc(8, sizeof(char*));
-        dex_db_stmts[slot].pg_param_lengths = (int*)calloc(8, sizeof(int));
+        dex_db_stmts[slot].pg_param_values = (char**)dex_xcalloc(8, sizeof(char*));
+        dex_db_stmts[slot].pg_param_lengths = (int*)dex_xcalloc(8, sizeof(int));
         dex_db_stmts[slot].pg_result = NULL;
         dex_db_stmts[slot].pg_current_row = 0;
         dex_db_stmts[slot].pg_num_rows = 0;
@@ -1270,14 +1270,14 @@ void dex_db_bind_int(int stmt_id, int idx, int val) {
         int pidx = idx - 1;
         while (pidx >= s->pg_param_cap) {
             s->pg_param_cap *= 2;
-            s->pg_param_values = (char**)realloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
-            s->pg_param_lengths = (int*)realloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
+            s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
+            s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
         }
         if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
         char buf[32];
         snprintf(buf, sizeof(buf), "%d", val);
         free(s->pg_param_values[pidx]);
-        s->pg_param_values[pidx] = strdup(buf);
+        s->pg_param_values[pidx] = dex_xstrdup(buf);
         s->pg_param_lengths[pidx] = (int)strlen(buf);
 #endif
 #ifdef DEX_HAS_MYSQL
@@ -1306,14 +1306,14 @@ void dex_db_bind_long(int stmt_id, int idx, long val) {
         int pidx = idx - 1;
         while (pidx >= s->pg_param_cap) {
             s->pg_param_cap *= 2;
-            s->pg_param_values = (char**)realloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
-            s->pg_param_lengths = (int*)realloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
+            s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
+            s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
         }
         if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
         char buf[32];
         snprintf(buf, sizeof(buf), "%ld", val);
         free(s->pg_param_values[pidx]);
-        s->pg_param_values[pidx] = strdup(buf);
+        s->pg_param_values[pidx] = dex_xstrdup(buf);
         s->pg_param_lengths[pidx] = (int)strlen(buf);
 #endif
     }
@@ -1334,14 +1334,14 @@ void dex_db_bind_double(int stmt_id, int idx, double val) {
         int pidx = idx - 1;
         while (pidx >= s->pg_param_cap) {
             s->pg_param_cap *= 2;
-            s->pg_param_values = (char**)realloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
-            s->pg_param_lengths = (int*)realloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
+            s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
+            s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
         }
         if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
         char buf[64];
         snprintf(buf, sizeof(buf), "%g", val);
         free(s->pg_param_values[pidx]);
-        s->pg_param_values[pidx] = strdup(buf);
+        s->pg_param_values[pidx] = dex_xstrdup(buf);
         s->pg_param_lengths[pidx] = (int)strlen(buf);
 #endif
     }
@@ -1362,12 +1362,12 @@ void dex_db_bind_str(int stmt_id, int idx, const char* val) {
         int pidx = idx - 1;
         while (pidx >= s->pg_param_cap) {
             s->pg_param_cap *= 2;
-            s->pg_param_values = (char**)realloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
-            s->pg_param_lengths = (int*)realloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
+            s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
+            s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
         }
         if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
         free(s->pg_param_values[pidx]);
-        s->pg_param_values[pidx] = strdup(val);
+        s->pg_param_values[pidx] = dex_xstrdup(val);
         s->pg_param_lengths[pidx] = (int)strlen(val);
 #endif
     }
@@ -1574,7 +1574,7 @@ static const char** dex_db_param_vector(DexArrayString* args, int* count) {
     int n = args ? args->len : 0;
     *count = n;
     if (n == 0) return NULL;
-    const char** values = (const char**)malloc(sizeof(char*) * n);
+    const char** values = (const char**)dex_xmalloc(sizeof(char*) * n);
     if (!values) { *count = 0; return NULL; }
     for (int i = 0; i < n; i++) {
         DexString* v = args->data[i];
@@ -1687,7 +1687,7 @@ int dex_db_exec_params(int conn, const char* sql, DexArrayString* args) {
         ExecStatusType status = PQresultStatus(res);
         if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {
             char* affected = PQcmdTuples(res);
-            n = (affected && affected[0] != '\0') ? atoi(affected) : 0;
+            n = (affected && affected[0] != '\0') ? dex_parse_int(affected) : 0;
             PQclear(res);
             break;
         }

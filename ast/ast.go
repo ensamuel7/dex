@@ -119,6 +119,9 @@ type StructDef struct {
 	Methods           []Function    // methods declared inside the struct body
 	ConstructorParams []StructField // auto-constructor params: struct Foo(x: int) { ... }
 	Doc               string        // documentation string for hover
+	Pos               Pos
+	Annotations       []string
+	DeclaredOrder     bool
 }
 
 // QualifiedStructName is the flat name a module's type is registered under.

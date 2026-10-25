@@ -58,6 +58,14 @@ fn passedThrough(holder: Holder): Holder {
     return holder
 }
 
+// The same, from a function with a heap local of its own: the cleanup that
+// releases the local must not take the parameter's fields with it.
+fn stamped(holder: Holder, at: int): Holder {
+    let note: string = "at " + str.fromInt(at)
+    assert(note.len() > 0)
+    return holder
+}
+
 fn plainOf(values: Plain[]): Plain {
     return values[0]
 }
@@ -93,6 +101,15 @@ fn main(): void {
     let throughItems: Inner[] = through.items
     assert(throughItems.len() == 2)
 
+    let keptId: string = ""
+    for (let i: int = 0; i < 50; i++) {
+        let fresh: Holder = fromOwnArray()
+        let back: Holder = stamped(fresh, i)
+        keptId = back.id
+    }
+
+    assert(keptId == "H1")
+
     // Plain data, which needs no retain and must still work.
     let plains: Plain[] = []
     let p: Plain = Plain { count: 3, ratio: 0.5 }
@@ -111,6 +128,7 @@ fn main(): void {
         total = total + paramItems.len()
         rounds = rounds + 1
     }
+
     assert(total == 800)
     fmt.println("returned " + str.fromInt(total) + " items through borrowed struct returns")
 }

@@ -53,21 +53,6 @@ func (g *Generator) genInterfaceValue(out *strings.Builder, arg ast.Expr, ifaceT
 	out.WriteString(")")
 }
 
-// The receiver is passed as void*, so the concrete method's own first-parameter
-// type does not match the slot. The cast is what makes that explicit rather
-// than a -Werror=incompatible-pointer-types failure.
-func (g *Generator) vtableSlotType(m ast.InterfaceMethod) string {
-	var b strings.Builder
-	b.WriteString(g.cType(m.ReturnType))
-	b.WriteString(" (*)(void*")
-	for _, pt := range m.Params {
-		b.WriteString(", ")
-		b.WriteString(g.cType(pt))
-	}
-	b.WriteString(")")
-	return b.String()
-}
-
 func (g *Generator) structMethodCName(def *ast.StructDef, method string) string {
 	name := def.Name + "_" + method
 	if modName, ok := g.structModules[def.Name]; ok {
@@ -100,7 +85,7 @@ func (g *Generator) genArgMaybeInterface(out *strings.Builder, arg ast.Expr, par
 	// Forwarding an interface value the caller already owns: a borrow, so no
 	// box is built and none is released.
 	if ast.IsInterfaceType(g.typeOfExpr(arg)) {
-		g.genExpr(out, arg)
+		g.genBorrowed(out, arg)
 		return true
 	}
 	// A parameter is borrowed, so the box minted for the coercion has no owner
@@ -121,6 +106,7 @@ func (g *Generator) genArgMaybeInterface(out *strings.Builder, arg ast.Expr, par
 	tmp := g.nextTemp()
 	g.stmtPrelude.WriteString(nested)
 	g.stmtPrelude.WriteString(fmt.Sprintf("%s %s = %s; ", g.cType(paramType), tmp, exprBuf.String()))
+	g.registerTempForUnwind(g.stmtPrelude, tmp, paramType)
 	g.stmtTemps = append(g.stmtTemps, scopeVar{name: tmp, typ: paramType})
 	out.WriteString(tmp)
 	return true
@@ -154,6 +140,10 @@ func interfaceBoxName(structName string) string {
 // interfaceCtorName constructs an interface value from a concrete struct.
 func interfaceCtorName(ifaceName, structName string) string {
 	return "dex_iface_" + ifaceName + "_from_" + structName
+}
+
+func vtableThunkName(ifaceName, structName, method string) string {
+	return "dex_vt_" + ifaceName + "_" + structName + "_" + method
 }
 
 // interfaceElemCleanupName tears down one interface element of a container.
@@ -259,6 +249,23 @@ func (g *Generator) emitInterfaceCtor(out *strings.Builder, sd ast.StructDef, id
 		}
 	}
 
+	structDef := ast.GetStructDef(structType)
+	for _, m := range id.Methods {
+		ret := g.cType(m.ReturnType)
+		out.WriteString(fmt.Sprintf("static %s %s(void* self", ret, vtableThunkName(id.Name, sd.Name, m.Name)))
+		for i, pt := range m.Params {
+			out.WriteString(fmt.Sprintf(", %s a%d", g.cType(pt), i))
+		}
+		out.WriteString(") { ")
+		if m.ReturnType != ast.TypeVoid {
+			out.WriteString("return ")
+		}
+		out.WriteString(fmt.Sprintf("%s((Dex_%s*)self", g.structMethodCName(structDef, m.Name), sd.Name))
+		for i := range m.Params {
+			out.WriteString(fmt.Sprintf(", a%d", i))
+		}
+		out.WriteString("); }\n")
+	}
 	out.WriteString(fmt.Sprintf("static Dex_%s %s(Dex_%s v) {\n",
 		id.Name, interfaceCtorName(id.Name, sd.Name), sd.Name))
 	out.WriteString(fmt.Sprintf("    %s* b = (%s*)dex_obj_alloc(sizeof(%s), %s);\n", box, box, box, destroy))
@@ -267,13 +274,11 @@ func (g *Generator) emitInterfaceCtor(out *strings.Builder, sd ast.StructDef, id
 		g.emitRetainBorrowedStructFields(out, "    ", "b->value", structType)
 	}
 	out.WriteString(fmt.Sprintf("    return (Dex_%s){ ._data = &b->value, ._obj = b, ._vtable = { ", id.Name))
-	structDef := ast.GetStructDef(structType)
 	for i, m := range id.Methods {
 		if i > 0 {
 			out.WriteString(", ")
 		}
-		out.WriteString(fmt.Sprintf(".%s = (%s)%s",
-			m.Name, g.vtableSlotType(m), g.structMethodCName(structDef, m.Name)))
+		out.WriteString(fmt.Sprintf(".%s = %s", m.Name, vtableThunkName(id.Name, sd.Name, m.Name)))
 	}
 	out.WriteString(" } };\n}\n")
 }

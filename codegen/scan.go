@@ -11,6 +11,16 @@ func (g *Generator) scan(program *ast.Program) {
 			g.scanType(f.Type)
 		}
 	}
+	for _, ed := range program.Enums {
+		if ed.HasPayload() {
+			g.usesString = true
+		}
+		for _, payload := range ed.Payloads {
+			for _, t := range payload {
+				g.scanType(t)
+			}
+		}
+	}
 	// Scan global let declarations
 	for i := range program.GlobalLets {
 		g.scanStmt(&program.GlobalLets[i])
@@ -265,6 +275,13 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		g.usesArray = true
 		for _, elem := range e.Elems {
 			g.scanExpr(elem)
+		}
+	case *ast.ObjectLitExpr:
+		// Its values are expressions like any other. Unscanned, a runtime used
+		// only inside a JSON literal, the string checks among them, was never
+		// included and the call did not compile.
+		for _, v := range e.Values {
+			g.scanExpr(v)
 		}
 	case *ast.IndexExpr:
 		g.scanExpr(e.Array)

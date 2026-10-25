@@ -8,7 +8,7 @@ This started before and around the beginning of my undergrad. I was getting into
 
 The real motivation was understanding how everything fits together — lexers, parsers, type checkers, code generation — the full pipeline from source to binary. If it turns into something I can use for personal projects or internal tooling, even better.
 
-Memory is managed by automatic reference counting, not a garbage collector. Strings, arrays, maps, channels and boxed values are refcounted; the compiler decides at every expression whether a value is owned or borrowed, and emits the retain and release. Values a frame held are released even when an exception unwinds past it. There is no runtime pause and nothing to tune, and `DEX_MEM_CHECK=1` builds with a checker that attributes a leak or a double free back to the `.dx` statement that allocated the object.
+Memory is managed by automatic reference counting, not a garbage collector. Strings, arrays, maps, channels and boxed values are refcounted; the compiler decides at every expression whether a value is owned or borrowed, and emits the retain and release. Values a frame held are released even when an exception unwinds past it. There is no runtime pause and nothing to tune, `DEX_MEM_CHECK=1` builds with a checker that attributes a leak or a double free back to the `.dx` statement that allocated the object, and `dex profile` shows which lines use the memory: live bytes over time, and what each line holds at the peak.
 
 This is currently an independent project developed and maintained primarily by me. The long-term goal is to release it publicly and encourage community contributions, but in the near term development will remain focused on a small team, with a few colleagues expected to contribute as the project matures.
 
@@ -64,12 +64,70 @@ dex lint app.dx
 
 ## Docker
 
-Docker images are available for CI/CD or environments where you don't want to install `dex` directly:
+The image `ensamuel7/dexlang` has `dex` and everything it compiles with: gcc,
+git, and the headers for SQLite, PostgreSQL, OpenSSL, libcurl and hiredis. You
+need nothing else installed, which makes it a good fit for CI, or for trying the
+language without installing it.
 
 ```bash
-docker pull dexlang/dexlang:latest
-docker run --rm -v "$(pwd):/workspace" dexlang/dexlang run app.dx
+docker pull ensamuel7/dexlang:0.9.14     # or :latest
 ```
+
+The image's entrypoint is `dex`, and its working directory is `/workspace`, so
+mount your project there and pass a command:
+
+```bash
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang run hello.dx
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang test
+docker run --rm -v "$(pwd):/workspace" ensamuel7/dexlang build hello.dx
+```
+
+`build` writes a **Linux** binary to `build/`, so it runs in a container or on
+a Linux server, not on a Mac or Windows host. On a Linux host, add
+`--user "$(id -u):$(id -g)"` so `build/` belongs to you rather than to root.
+
+A server needs its port published:
+
+```bash
+docker run --rm -p 8080:8080 -v "$(pwd):/workspace" ensamuel7/dexlang run server.dx
+```
+
+### Shipping a program in its own image
+
+Build in the dex image and copy only the binary into a small one:
+
+```dockerfile
+FROM ensamuel7/dexlang:0.9.14 AS build
+WORKDIR /src
+COPY . .
+RUN dex build main.dx
+
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libsqlite3-0 libpq5 libssl3t64 libcurl4t64 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/build/main /usr/local/bin/app
+EXPOSE 8080
+CMD ["app"]
+```
+
+A project with a `dex.mod` needs its libraries fetched first: add
+`RUN dex mod download` before the build. Without a `dex.mod` that command
+fails, so leave it out.
+
+The runtime image must be the same Debian release the dex image is built on
+(13, "trixie"), because the binary links against that release's libraries.
+
+The binary links only the libraries for the modules it imports. A program
+using nothing beyond `fmt` needs libc alone, so the `apt-get` line can go.
+To see exactly what one needs:
+
+```bash
+docker run --rm -v "$(pwd):/workspace" --entrypoint ldd ensamuel7/dexlang build/main
+```
+
+Pin a version tag in a Dockerfile rather than `latest`, so a new release
+cannot change a build that used to work.
 
 ## What It Looks Like
 
@@ -655,10 +713,10 @@ Releases are automated via GitHub Actions. When you push a version tag, the work
 **To cut a release:**
 
 ```bash
-make release VERSION=0.9.7
+make release VERSION=0.9.14
 ```
 
-This creates an annotated tag `v0.9.7` and pushes it. The tag push triggers the workflow which:
+This creates an annotated tag `v0.9.14` and pushes it. The tag push triggers the workflow which:
 - Builds `dex` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
 - Creates a GitHub Release with all 4 tarballs attached
 - Deploys docs to GitHub Pages
@@ -666,7 +724,7 @@ This creates an annotated tag `v0.9.7` and pushes it. The tag push triggers the 
 **To also publish Docker images** (separate from the GitHub release):
 
 ```bash
-make docker-publish DEX_VERSION=0.9.7
+make docker-publish DEX_VERSION=0.9.14
 ```
 
 `make release` and `make docker-publish` are independent — run either or both.

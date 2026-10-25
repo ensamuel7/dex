@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <errno.h>
 #include <unistd.h>
@@ -185,7 +186,7 @@ static int dex_ws_frame_send(int fd, SSL* ssl, const char* payload, size_t len, 
 
     if (!is_server && len > 0) {
         // Mask the payload
-        unsigned char* masked = (unsigned char*)malloc(len);
+        unsigned char* masked = (unsigned char*)dex_xmalloc(len);
         if (!masked) return -1;
         for (size_t i = 0; i < len; i++) {
             masked[i] = (unsigned char)payload[i] ^ mask_key[i % 4];
@@ -203,59 +204,59 @@ static int dex_ws_frame_send(int fd, SSL* ssl, const char* payload, size_t len, 
 
 // Read a WebSocket frame, unmask if needed, return payload length (-1 on error/close)
 static int dex_ws_frame_recv(int fd, SSL* ssl, char* buf, size_t bufsize, int* opcode_out) {
-    unsigned char hdr[2];
-    if (dex_ws_read_exact(fd, ssl, hdr, 2) < 0) return -1;
+    if (bufsize == 0) return -1;
+    for (;;) {
+        unsigned char hdr[2];
+        if (dex_ws_read_exact(fd, ssl, hdr, 2) < 0) return -1;
 
-    int opcode = hdr[0] & 0x0F;
-    int masked = (hdr[1] & 0x80) != 0;
-    uint64_t payload_len = hdr[1] & 0x7F;
+        int opcode = hdr[0] & 0x0F;
+        int masked = (hdr[1] & 0x80) != 0;
+        uint64_t payload_len = hdr[1] & 0x7F;
 
-    if (payload_len == 126) {
-        unsigned char ext[2];
-        if (dex_ws_read_exact(fd, ssl, ext, 2) < 0) return -1;
-        payload_len = ((uint64_t)ext[0] << 8) | ext[1];
-    } else if (payload_len == 127) {
-        unsigned char ext[8];
-        if (dex_ws_read_exact(fd, ssl, ext, 8) < 0) return -1;
-        payload_len = 0;
-        for (int i = 0; i < 8; i++) payload_len = (payload_len << 8) | ext[i];
-    }
-
-    unsigned char mask_key[4] = {0};
-    if (masked) {
-        if (dex_ws_read_exact(fd, ssl, mask_key, 4) < 0) return -1;
-    }
-
-    if (payload_len >= bufsize) payload_len = bufsize - 1;
-
-    size_t total_read = 0;
-    while (total_read < payload_len) {
-        int r = dex_ws_read(fd, ssl, buf + total_read, payload_len - total_read);
-        if (r <= 0) return -1;
-        total_read += (size_t)r;
-    }
-
-    if (masked) {
-        for (size_t i = 0; i < payload_len; i++) {
-            buf[i] ^= mask_key[i % 4];
+        if (payload_len == 126) {
+            unsigned char ext[2];
+            if (dex_ws_read_exact(fd, ssl, ext, 2) < 0) return -1;
+            payload_len = ((uint64_t)ext[0] << 8) | ext[1];
+        } else if (payload_len == 127) {
+            unsigned char ext[8];
+            if (dex_ws_read_exact(fd, ssl, ext, 8) < 0) return -1;
+            payload_len = 0;
+            for (int i = 0; i < 8; i++) payload_len = (payload_len << 8) | ext[i];
         }
+
+        unsigned char mask_key[4] = {0};
+        if (masked) {
+            if (dex_ws_read_exact(fd, ssl, mask_key, 4) < 0) return -1;
+        }
+
+        if (payload_len >= bufsize) return -1;
+
+        size_t total_read = 0;
+        while (total_read < payload_len) {
+            int r = dex_ws_read(fd, ssl, buf + total_read, payload_len - total_read);
+            if (r <= 0) return -1;
+            total_read += (size_t)r;
+        }
+
+        if (masked) {
+            for (size_t i = 0; i < payload_len; i++) {
+                buf[i] ^= mask_key[i % 4];
+            }
+        }
+
+        buf[payload_len] = '\0';
+        if (opcode_out) *opcode_out = opcode;
+
+        if (opcode == 0x9) {
+            unsigned char pong_hdr[2] = {0x8A, 0x00};
+            dex_ws_write(fd, ssl, pong_hdr, 2);
+            continue;
+        }
+
+        if (opcode == 0x8) return -1;
+
+        return (int)payload_len;
     }
-
-    buf[payload_len] = '\0';
-    if (opcode_out) *opcode_out = opcode;
-
-    // Handle ping: auto-reply with pong
-    if (opcode == 0x9) {
-        unsigned char pong_hdr[2] = {0x8A, 0x00};
-        dex_ws_write(fd, ssl, pong_hdr, 2);
-        // Recursive call to get next real message
-        return dex_ws_frame_recv(fd, ssl, buf, bufsize, opcode_out);
-    }
-
-    // Close frame
-    if (opcode == 0x8) return -1;
-
-    return (int)payload_len;
 }
 
 // --- WebSocket server (event-loop driven) ---
@@ -363,13 +364,13 @@ struct DexWsServer {
 static DexWsConn*     dex_ws_conn_table[DEX_WS_MAX_FD];
 
 static DexWsConn* dex_ws_conn_new(DexWsServer* srv, int fd) {
-    DexWsConn* conn = (DexWsConn*)calloc(1, sizeof(DexWsConn));
+    DexWsConn* conn = (DexWsConn*)dex_xcalloc(1, sizeof(DexWsConn));
     if (!conn) return NULL;
     conn->srv = srv;
     conn->fd = fd;
     conn->state = WS_HANDSHAKE_READ;
     conn->read_cap = 4096;
-    conn->read_buf = (char*)malloc(conn->read_cap);
+    conn->read_buf = (char*)dex_xmalloc(conn->read_cap);
     if (!conn->read_buf) {
         free(conn);
         return NULL;
@@ -431,7 +432,7 @@ static unsigned char* dex_ws_build_frame(const char* payload, size_t len, int* o
     }
 
     int total = hlen + (int)len;
-    unsigned char* buf = (unsigned char*)malloc(total);
+    unsigned char* buf = (unsigned char*)dex_xmalloc(total);
     if (!buf) {
         *out_len = 0;
         return NULL;
@@ -459,6 +460,8 @@ static void dex_ws_reset_frame_parser(DexWsConn* conn) {
  *   1 = complete frame available
  *   0 = need more data
  *  -1 = error / close */
+#define DEX_WS_MAX_FRAME 65535
+
 static int dex_ws_parse_frame_incremental(DexWsConn* conn) {
     /* Phase 1: read frame header */
     if (conn->frame_hdr_len < conn->frame_hdr_need) {
@@ -511,11 +514,10 @@ static int dex_ws_parse_frame_incremental(DexWsConn* conn) {
             }
         }
 
-        /* Cap payload to 64KB for safety */
-        if (conn->frame_payload_len > 65535) conn->frame_payload_len = 65535;
+        if (conn->frame_payload_len > DEX_WS_MAX_FRAME) return -1;
 
         /* Allocate payload buffer */
-        conn->frame_payload = (char*)malloc(conn->frame_payload_len + 1);
+        conn->frame_payload = (char*)dex_xmalloc(conn->frame_payload_len + 1);
         if (!conn->frame_payload) return -1;
         conn->frame_payload_read = 0;
 
@@ -760,7 +762,7 @@ void dex_ws_listen(int port) {
 
     /* This listener's own state: event loop, thread pool, notify pipe and the
      * handlers registered on this thread before listen() was called. */
-    DexWsServer* srv = (DexWsServer*)calloc(1, sizeof(DexWsServer));
+    DexWsServer* srv = (DexWsServer*)dex_xcalloc(1, sizeof(DexWsServer));
     if (!srv) { perror("ws server alloc"); close(server_fd); return; }
     srv->server_fd    = server_fd;
     srv->loop         = dex_ev_create(1024);
@@ -910,7 +912,7 @@ void dex_ws_listen(int port) {
                 if (conn->state == WS_HANDSHAKE_READ) {
                     if (conn->read_len >= conn->read_cap - 1) {
                         int new_cap = conn->read_cap * 2;
-                        char* new_buf = (char*)realloc(conn->read_buf, new_cap);
+                        char* new_buf = (char*)dex_xrealloc(conn->read_buf, new_cap);
                         if (!new_buf) {
                             dex_ws_ev_close_conn(conn);
                             continue;
@@ -928,78 +930,35 @@ void dex_ws_listen(int port) {
                     conn->read_len += r;
                     conn->read_buf[conn->read_len] = '\0';
 
-                    /* Check if headers are complete */
-                    if (!strstr(conn->read_buf, "\r\n\r\n")) continue;
-
-                    /* Validate WebSocket upgrade */
-                    if (!strstr(conn->read_buf, "Upgrade: websocket") &&
-                        !strstr(conn->read_buf, "Upgrade: WebSocket")) {
+                    char response[512];
+                    int rlen = dex_ws_handshake_reply(conn->read_buf, srv->subprotocol,
+                                                      conn->path, sizeof(conn->path),
+                                                      response, sizeof(response));
+                    if (rlen == 0) {
+                        if (conn->read_len < DEX_WS_MAX_HANDSHAKE) continue;
+                        const char* big = "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\n\r\n";
+                        write(conn->fd, big, strlen(big));
+                        dex_ws_ev_close_conn(conn);
+                        continue;
+                    }
+                    if (rlen == -1) {
                         const char* bad = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
                         write(conn->fd, bad, strlen(bad));
                         dex_ws_ev_close_conn(conn);
                         continue;
                     }
-
-                    /* Extract path */
-                    if (strncmp(conn->read_buf, "GET ", 4) == 0) {
-                        const char* pstart = conn->read_buf + 4;
-                        const char* pend = strchr(pstart, ' ');
-                        if (pend) {
-                            size_t plen = (size_t)(pend - pstart);
-                            if (plen >= sizeof(conn->path)) plen = sizeof(conn->path) - 1;
-                            memcpy(conn->path, pstart, plen);
-                            conn->path[plen] = '\0';
-                        }
-                    }
-
-                    /* Extract Sec-WebSocket-Key */
-                    const char* key_hdr = strstr(conn->read_buf, "Sec-WebSocket-Key:");
-                    if (!key_hdr) {
+                    if (rlen < 0) {
                         dex_ws_ev_close_conn(conn);
                         continue;
                     }
-                    key_hdr += 18;
-                    while (*key_hdr == ' ') key_hdr++;
-                    char ws_key[64] = {0};
-                    int ki = 0;
-                    while (key_hdr[ki] && key_hdr[ki] != '\r' && key_hdr[ki] != '\n' && ki < 63) {
-                        ws_key[ki] = key_hdr[ki];
-                        ki++;
-                    }
-                    ws_key[ki] = '\0';
-
-                    char accept_key[64];
-                    dex_ws_accept_key(ws_key, accept_key, sizeof(accept_key));
-
-                    /* Build handshake response */
-                    char response[512];
-                    int rlen;
-                    char negotiated[128];
-                    if (dex_ws_client_offers(conn->read_buf, srv->subprotocol,
-                                             negotiated, sizeof(negotiated))) {
-                        rlen = snprintf(response, sizeof(response),
-                            "HTTP/1.1 101 Switching Protocols\r\n"
-                            "Upgrade: websocket\r\n"
-                            "Connection: Upgrade\r\n"
-                            "Sec-WebSocket-Accept: %s\r\n"
-                            "Sec-WebSocket-Protocol: %s\r\n"
-                            "\r\n", accept_key, negotiated);
-                    } else {
-                        rlen = snprintf(response, sizeof(response),
-                            "HTTP/1.1 101 Switching Protocols\r\n"
-                            "Upgrade: websocket\r\n"
-                            "Connection: Upgrade\r\n"
-                            "Sec-WebSocket-Accept: %s\r\n"
-                            "\r\n", accept_key);
-                    }
 
                     /* Queue handshake response as a write item */
-                    DexWsWriteItem* wi = (DexWsWriteItem*)calloc(1, sizeof(DexWsWriteItem));
+                    DexWsWriteItem* wi = (DexWsWriteItem*)dex_xcalloc(1, sizeof(DexWsWriteItem));
                     if (!wi) {
                         dex_ws_ev_close_conn(conn);
                         continue;
                     }
-                    wi->data = (unsigned char*)malloc(rlen);
+                    wi->data = (unsigned char*)dex_xmalloc(rlen);
                     if (!wi->data) {
                         free(wi);
                         dex_ws_ev_close_conn(conn);
@@ -1047,7 +1006,7 @@ void dex_ws_listen(int port) {
                         conn->state = WS_DISPATCHED;
                         dex_ev_del(srv->loop, conn->fd);
 
-                        DexWsWorkItem* item = (DexWsWorkItem*)malloc(sizeof(DexWsWorkItem));
+                        DexWsWorkItem* item = (DexWsWorkItem*)dex_xmalloc(sizeof(DexWsWorkItem));
                         if (!item) {
                             dex_ws_reset_frame_parser(conn);
                             continue;
@@ -1093,7 +1052,7 @@ Dex_Conn dex_ws_connect(const char* url) {
         if (hlen >= sizeof(host)) hlen = sizeof(host) - 1;
         memcpy(host, p, hlen);
         host[hlen] = '\0';
-        port = atoi(colon + 1);
+        port = dex_parse_int(colon + 1);
         if (slash) {
             strncpy(path, slash, sizeof(path) - 1);
         }
@@ -1244,7 +1203,7 @@ void dex_ws_send(Dex_Conn conn, const char* msg) {
         unsigned char* frame_data = dex_ws_build_frame(msg, strlen(msg), &frame_len);
         if (!frame_data) return;
 
-        DexWsWriteItem* item = (DexWsWriteItem*)calloc(1, sizeof(DexWsWriteItem));
+        DexWsWriteItem* item = (DexWsWriteItem*)dex_xcalloc(1, sizeof(DexWsWriteItem));
         if (!item) {
             free(frame_data);
             return;
@@ -1278,7 +1237,7 @@ DexString* dex_ws_receive(Dex_Conn conn) {
     int opcode = 0;
     int n = dex_ws_frame_recv(conn.fd, (SSL*)conn.ssl, buf, sizeof(buf), &opcode);
     if (n < 0) return dex_string_from_lit("");
-    return dex_string_from_cstr(buf);
+    return dex_string_new(buf, (size_t)n);
 }
 
 void dex_ws_close(Dex_Conn conn) {
@@ -1308,4 +1267,26 @@ void dex_ws_close(Dex_Conn conn) {
 #endif
     shutdown(conn.fd, SHUT_RDWR);
     close(conn.fd);
+}
+
+DexString* dex_ws_header(Dex_Conn conn, const char* name) {
+    if (!conn.isServer || conn.fd < 0 || conn.fd >= DEX_WS_MAX_FD) return dex_string_new("", 0);
+    DexWsConn* wc = dex_ws_conn_table[conn.fd];
+    if (!wc || wc->state == WS_HANDSHAKE_READ || !wc->read_buf) return dex_string_new("", 0);
+    size_t nlen = strlen(name);
+    const char* line = strstr(wc->read_buf, "\r\n");
+    while (line) {
+        line += 2;
+        if (line[0] == '\r' && line[1] == '\n') break;
+        if (strncasecmp(line, name, nlen) == 0 && line[nlen] == ':') {
+            const char* v = line + nlen + 1;
+            while (*v == ' ' || *v == '\t') v++;
+            const char* end = strstr(v, "\r\n");
+            if (!end) end = v + strlen(v);
+            while (end > v && (end[-1] == ' ' || end[-1] == '\t')) end--;
+            return dex_string_new(v, (size_t)(end - v));
+        }
+        line = strstr(line, "\r\n");
+    }
+    return dex_string_new("", 0);
 }

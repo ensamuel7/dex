@@ -37,6 +37,7 @@ fn main(): void {
         db.step(ins2)
         i = i + 1
     }
+
     db.finalize(ins2)
 
     let big: int = db.prepare(conn, "INSERT INTO people VALUES (?, ?, ?, ?, ?)")
@@ -88,6 +89,7 @@ fn main(): void {
         assert(p.age > 31)
         assert(!p.name.isEmpty())
     }
+
     // ages 44, 32, 33, 34 — every row is over 31
     assert(seen == 4)
     // free() on a statement handle finalizes it.

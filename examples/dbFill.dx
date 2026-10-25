@@ -19,6 +19,7 @@ fn main(): void {
         fmt.println("no sqlite — skipping")
         return
     }
+
     db.exec(conn, "DROP TABLE IF EXISTS people")
     db.exec(
         conn,
@@ -40,9 +41,11 @@ fn main(): void {
             assert(p.note == "hello")
             assert(reflect.fieldKind(p, 5) == "array")
         }
+
         db.free(rows)
         r = r + 1
     }
+
     db.close(conn)
     fmt.println("300 rows filled, no field named twice")
 }

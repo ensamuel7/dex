@@ -1,5 +1,5 @@
-DEX_VERSION ?= 0.9.7
-IMAGE_NAME  := dexlang/dexlang
+DEX_VERSION ?= 0.9.14
+IMAGE_NAME  := ensamuel7/dexlang
 PREFIX      ?= /usr/local
 
 # Build the compiler from the current source. The version is stamped so a local
@@ -31,11 +31,27 @@ check:
 memcheck:
 	DEX_MEM_CHECK=1 go run . test
 
-.PHONY: build install check memcheck docker-build docker-publish release
+sanitize:
+	DEX_SANITIZE=address,undefined go run . test examples
+
+tsan:
+	DEX_SANITIZE=thread go run . test examples
+
+faultinject:
+	DEX_FAULT=1 go test ./faultinject/ -run TestFaultInjection -v -count=1 -timeout 180m
+
+strict-c:
+	sanitize/strict-c.sh
+
+sanitize-linux:
+	docker build -q -t dex-sanitize -f sanitize/Dockerfile .
+	docker run --rm -v "$(CURDIR)":/repo:ro dex-sanitize sh -c 'mkdir -p /src && tar -C /repo --exclude=./build -cf - . | tar -C /src -xf - && /src/sanitize/run.sh $(MODES)'
+
+.PHONY: build install check memcheck sanitize tsan faultinject strict-c sanitize-linux docker-build docker-publish release
 
 
 docker-build:
-	docker build --build-arg DEX_VERSION=$(DEX_VERSION) -t $(IMAGE_NAME):$(DEX_VERSION) -t $(IMAGE_NAME):latest .
+	docker build --pull --no-cache --build-arg DEX_VERSION=$(DEX_VERSION) -t $(IMAGE_NAME):$(DEX_VERSION) -t $(IMAGE_NAME):latest .
 	@echo "Built $(IMAGE_NAME):$(DEX_VERSION)"
 	@docker run --rm $(IMAGE_NAME):$(DEX_VERSION) version
 

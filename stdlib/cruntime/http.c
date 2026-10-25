@@ -99,7 +99,7 @@ void dex_route(const char* method, const char* path, DexClosure* handler) {
     if (dex_route_count == dex_route_capacity) {
         int grown = dex_route_capacity ? dex_route_capacity * 2 : DEX_ROUTES_INITIAL;
         dex_route_entry* table =
-            (dex_route_entry*)realloc(dex_routes, (size_t)grown * sizeof(dex_route_entry));
+            (dex_route_entry*)dex_xrealloc(dex_routes, (size_t)grown * sizeof(dex_route_entry));
         /* Dropping a route silently is worse than the failure itself: the route
          * simply answers 404 with nothing anywhere to say why. */
         if (!table) {
@@ -247,12 +247,12 @@ static pthread_mutex_t dex_http_completed_mutex = PTHREAD_MUTEX_INITIALIZER;
 static DexHttpConn*   dex_http_conn_table[DEX_HTTP_MAX_FD];
 
 static DexHttpConn* dex_http_conn_new(int fd) {
-    DexHttpConn* conn = (DexHttpConn*)calloc(1, sizeof(DexHttpConn));
+    DexHttpConn* conn = (DexHttpConn*)dex_xcalloc(1, sizeof(DexHttpConn));
     if (!conn) return NULL;
     conn->fd = fd;
     conn->state = HTTP_READING_HEADERS;
     conn->read_cap = 8192;
-    conn->read_buf = (char*)malloc(conn->read_cap);
+    conn->read_buf = (char*)dex_xmalloc(conn->read_cap);
     if (!conn->read_buf) { free(conn); return NULL; }
     conn->read_len = 0;
     conn->content_length = -1;
@@ -511,7 +511,7 @@ static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
                                      const char* extra) {
     int extra_len = (extra && *extra) ? (int)strlen(extra) : 0;
     int needed = 512 + body_len + extra_len * 2 + 8;
-    conn->write_buf = (char*)malloc(needed);
+    conn->write_buf = (char*)dex_xmalloc(needed);
     if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
 
     int hlen = snprintf(conn->write_buf, needed,
@@ -806,8 +806,9 @@ static void dex_listen_on(const char* host, int port) {
     time_t last_sweep = time(NULL);
 
     for (;;) {
-        int n = dex_ev_wait(dex_http_loop, events, 256, 1000);
-
+        /* The sweep runs before the wait, never between the wait and the
+         * events it returned: a connection freed there could still have an
+         * event in the batch, which would then read freed memory. */
         time_t now = time(NULL);
         if (now - last_sweep >= 1) {
             last_sweep = now;
@@ -824,6 +825,8 @@ static void dex_listen_on(const char* host, int port) {
                 dex_http_conn_free(c);
             }
         }
+
+        int n = dex_ev_wait(dex_http_loop, events, 256, 1000);
 
         for (int i = 0; i < n; i++) {
             DexEvent* ev = &events[i];
@@ -906,7 +909,7 @@ static void dex_listen_on(const char* host, int port) {
                 if (conn->read_len >= conn->read_cap - 1) {
                     int new_cap = conn->read_cap * 2;
                     if (new_cap > ceiling + 1) new_cap = ceiling + 1;
-                    char* new_buf = (char*)realloc(conn->read_buf, (size_t)new_cap);
+                    char* new_buf = (char*)dex_xrealloc(conn->read_buf, (size_t)new_cap);
                     if (!new_buf) {
                         dex_ev_del(dex_http_loop, conn->fd);
                         close(conn->fd);
@@ -1078,7 +1081,7 @@ typedef struct {
 static size_t dex_http_write_cb(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t total = size * nmemb;
     dex_http_buf* buf = (dex_http_buf*)userp;
-    char* ptr = realloc(buf->data, buf->len + total + 1);
+    char* ptr = dex_xrealloc(buf->data, buf->len + total + 1);
     if (!ptr) return 0;
     buf->data = ptr;
     memcpy(buf->data + buf->len, contents, total);
@@ -1107,7 +1110,7 @@ static size_t dex_http_header_cb(char* buffer, size_t size, size_t nitems, void*
     while (n > 0 && (buffer[n - 1] == '\n' || buffer[n - 1] == '\r')) n--;
     if (n == 0) return total; // the blank line that closes the block
 
-    char* ptr = realloc(buf->data, buf->len + n + 2);
+    char* ptr = dex_xrealloc(buf->data, buf->len + n + 2);
     if (!ptr) return 0;
     buf->data = ptr;
     memcpy(buf->data + buf->len, buffer, n);
@@ -1176,7 +1179,7 @@ const char* dex_http_header(const char* headers, const char* key, const char* va
     size_t vlen = strlen(value);
     // "Key: Value\n"
     size_t newlen = hlen + klen + 2 + vlen + 1 + 1;
-    char* result = (char*)malloc(newlen);
+    char* result = (char*)dex_xmalloc(newlen);
     if (!result) return "";
     snprintf(result, newlen, "%s%s: %s\n", headers, key, value);
     return result;
@@ -1205,7 +1208,7 @@ static struct curl_slist* dex_http_parse_json_headers(const char* json_str) {
         size_t vlen = (size_t)(vend - vq);
         // Build "Key: Value" header
         size_t hlen = klen + 2 + vlen + 1;
-        char* h = (char*)malloc(hlen);
+        char* h = (char*)dex_xmalloc(hlen);
         if (!h) { p = vend + 1; continue; }
         memcpy(h, kq, klen);
         h[klen] = ':';
@@ -1225,8 +1228,8 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
 
     dex_http_buf buf = {NULL, 0};
     dex_http_buf hbuf = {NULL, 0};
-    buf.data = malloc(1);
-    hbuf.data = malloc(1);
+    buf.data = dex_xmalloc(1);
+    hbuf.data = dex_xmalloc(1);
     if (!buf.data || !hbuf.data) {
         free(buf.data);
         free(hbuf.data);
@@ -1264,7 +1267,7 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
                 const char* end = strchr(p, '\n');
                 if (!end) end = p + strlen(p);
                 size_t hlen = (size_t)(end - p);
-                char* h = (char*)malloc(hlen + 1);
+                char* h = (char*)dex_xmalloc(hlen + 1);
                 if (!h) { p = (*end) ? end + 1 : end; continue; }
                 memcpy(h, p, hlen);
                 h[hlen] = '\0';
@@ -1356,7 +1359,7 @@ Dex_HttpResponse dex_http_request_opts(const char* method, const char* url, cons
 // Form string encoding: "F\tkey\tvalue\n" for fields, "P\tkey\tpath\n" for files
 
 const char* dex_http_form_new(void) {
-    return strdup("");
+    return dex_xstrdup("");
 }
 
 const char* dex_http_form_field(const char* form, const char* key, const char* value) {
@@ -1365,7 +1368,7 @@ const char* dex_http_form_field(const char* form, const char* key, const char* v
     size_t vlen = strlen(value);
     // "F\tkey\tvalue\n"
     size_t newlen = flen + 2 + klen + 1 + vlen + 1 + 1;
-    char* result = (char*)malloc(newlen);
+    char* result = (char*)dex_xmalloc(newlen);
     if (!result) return "";
     snprintf(result, newlen, "%sF\t%s\t%s\n", form, key, value);
     return result;
@@ -1377,7 +1380,7 @@ const char* dex_http_form_file(const char* form, const char* key, const char* pa
     size_t plen = strlen(path);
     // "P\tkey\tpath\n"
     size_t newlen = flen + 2 + klen + 1 + plen + 1 + 1;
-    char* result = (char*)malloc(newlen);
+    char* result = (char*)dex_xmalloc(newlen);
     if (!result) return "";
     snprintf(result, newlen, "%sP\t%s\t%s\n", form, key, path);
     return result;
@@ -1389,8 +1392,8 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
 
     dex_http_buf buf = {NULL, 0};
     dex_http_buf hbuf = {NULL, 0};
-    buf.data = malloc(1);
-    hbuf.data = malloc(1);
+    buf.data = dex_xmalloc(1);
+    hbuf.data = dex_xmalloc(1);
     if (!buf.data || !hbuf.data) {
         free(buf.data);
         free(hbuf.data);
@@ -1419,7 +1422,7 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
                 const char* end = strchr(hp, '\n');
                 if (!end) end = hp + strlen(hp);
                 size_t hlen = (size_t)(end - hp);
-                char* h = (char*)malloc(hlen + 1);
+                char* h = (char*)dex_xmalloc(hlen + 1);
                 if (!h) { hp = (*end) ? end + 1 : end; continue; }
                 memcpy(h, hp, hlen);
                 h[hlen] = '\0';
@@ -1447,9 +1450,9 @@ static Dex_HttpResponse dex_http_post_form_impl(const char* url, const char* for
             if (tab2) {
                 size_t klen = (size_t)(tab2 - key_start);
                 size_t vlen = (size_t)(line_end - tab2 - 1);
-                char* key = (char*)malloc(klen + 1);
+                char* key = (char*)dex_xmalloc(klen + 1);
                 if (!key) goto next_form_line;
-                char* val = (char*)malloc(vlen + 1);
+                char* val = (char*)dex_xmalloc(vlen + 1);
                 if (!val) { free(key); goto next_form_line; }
                 memcpy(key, key_start, klen); key[klen] = '\0';
                 memcpy(val, tab2 + 1, vlen); val[vlen] = '\0';

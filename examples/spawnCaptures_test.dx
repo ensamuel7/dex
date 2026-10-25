@@ -1,0 +1,58 @@
+// A spawn block owns what it captures and what it declares.
+//
+// Locals declared in the body were registered in the enclosing function's
+// scope and released there, which did not compile when one was a struct. And
+// only plain heap captures were retained: an interface's box or a struct's
+// strings were shared with the spawning frame, which released them on return
+// while the thread still read them.
+import "fmt"
+
+interface Namer {
+    fn name(): string
+}
+
+struct Person {
+    first: string
+
+    fn name(): string {
+        return first
+    }
+}
+
+struct Result {
+    ok: bool
+    message: string
+}
+
+fn check(n: string): Result {
+    return Result { ok: n.len() > 2, message: "checked " + n }
+}
+
+// Spawns and returns at once, so the thread outlives this frame and everything
+// it captured would be gone if the thread had not taken its own references.
+fn launch(done: chan string): void {
+    let who: Namer = Person { first: "Ada" + "!" }
+    let label: Result = Result { ok: true, message: "label-" + "x" }
+    spawn {
+        let verdict: Result = check(who.name())
+        if (verdict.ok) {
+            send(done, verdict.message + " " + label.message)
+        } else {
+            send(done, "no")
+        }
+    }
+}
+
+fn main(): void {
+    let done = channel(string)
+    for (let i: int = 0; i < 20; i++) {
+        launch(done)
+    }
+
+    for (let i: int = 0; i < 20; i++) {
+        let got: string = receive(done)
+        assert(got == "checked Ada! label-x")
+    }
+
+    fmt.println("spawn_captures_test: all assertions passed")
+}

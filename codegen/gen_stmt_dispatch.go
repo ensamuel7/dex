@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -26,25 +27,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.narrowedTypes = make(map[string]ast.Type)
 	g.fnHasDefer = containsDefer(fn.Body)
 
-	// Register global variables so all functions can resolve them
-	for name, typ := range g.globalVars {
-		g.varTypes[name] = typ
-		if typ == ast.TypeString {
-			g.strVars[name] = true
-		}
-		if ast.IsArrayType(typ) {
-			g.arrVars[name] = typ
-		}
-		if ast.IsStructType(typ) {
-			g.structVars[name] = typ
-		}
-		if ast.IsMapType(typ) {
-			g.mapVars[name] = typ
-		}
-		if typ == ast.TypeStringBuilder {
-			g.sbVars[name] = true
-		}
-	}
+	g.registerGlobalVars()
 
 	// Register params (not tracked in scope — callee-borrows convention)
 	for _, p := range fn.Params {
@@ -88,6 +71,12 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		out.WriteString(") {\n")
 	}
 
+	// The caller's statement comes back into effect when this returns, so the
+	// rest of the calling statement is not charged to this function's last line.
+	if g.profile && g.usesRefcount {
+		out.WriteString("    DEX_PF_FRAME();\n")
+	}
+
 	// Check if function uses #[region] — emit arena setup
 	fnUsesArena := g.functionUsesRegion(fn)
 
@@ -112,6 +101,8 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	// crash.
 	if fn.Name == "main" {
 		out.WriteString("    setvbuf(stdout, NULL, _IOLBF, 0);\n")
+		out.WriteString("    char _dex_stack_mark;\n")
+		out.WriteString("    dex_install_fault_handler(&_dex_stack_mark);\n")
 	}
 
 	// Handed to the os runtime before anything can call os.args().
@@ -123,6 +114,9 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	// Register the leak report before anything can allocate.
 	if fn.Name == "main" && g.memCheck && g.usesRefcount {
 		out.WriteString("    dex_mc_init();\n")
+	}
+	if fn.Name == "main" && g.profile && g.usesRefcount {
+		out.WriteString("    dex_pf_init();\n")
 	}
 
 	// Initialize thread pool for spawn (must happen before any spawn calls)
@@ -319,7 +313,7 @@ func (g *Generator) genGlobalInit(out *strings.Builder, gl *ast.LetStmt) {
 func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	g.emitSiteMarker(out, stmt, indent)
 	switch stmt.(type) {
-	case *ast.LetStmt, *ast.AssignStmt:
+	case *ast.LetStmt, *ast.AssignStmt, *ast.FieldAssignStmt, *ast.IndexAssignStmt, *ast.SendStmt:
 	case *ast.ReturnStmt:
 		// A return hoists too, but its releases have to land before the return
 		// rather than after it, so the ReturnStmt case emits them itself.
@@ -340,11 +334,20 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 	prefix := strings.Repeat("    ", indent)
 	savedPrelude, savedTemps := g.stmtPrelude, g.stmtTemps
 	g.beginStmtHoist()
+	depth := len(g.scopeStack)
+	declared, scopeMark := 0, ""
+	if depth > 0 {
+		declared, scopeMark = len(g.scopeStack[depth-1].vars), g.scopeStack[depth-1].mark
+	}
 	var body strings.Builder
 	g.genStmtInner(&body, stmt, indent)
 	g.emitHoistPrelude(out, prefix)
 	out.WriteString(body.String())
+	dropsTemps := g.stmtTempMark != ""
 	g.emitHoistReleases(out, prefix)
+	if dropsTemps {
+		g.reregisterScopeVars(out, prefix, depth, declared, scopeMark)
+	}
 	// An assignment replaced what the variable held, and released it. Every
 	// branch of the assignment leaves the new value in the variable, so the
 	// cleanup entry is pointed at it here — once, rather than in each of them.
@@ -352,6 +355,49 @@ func (g *Generator) genStmt(out *strings.Builder, stmt ast.Stmt, indent int) {
 		g.emitUnwindSlotUpdate(out, prefix, assign.Name)
 	}
 	g.stmtPrelude, g.stmtTemps = savedPrelude, savedTemps
+}
+
+func (g *Generator) reregisterScopeVars(out *strings.Builder, prefix string, depth, declared int, scopeMark string) {
+	if depth == 0 || len(g.scopeStack) != depth {
+		return
+	}
+	scope := g.scopeStack[depth-1]
+	if len(scope.vars) == declared {
+		return
+	}
+	if scopeMark == "" && scope.mark != "" {
+		out.WriteString(fmt.Sprintf("%s%s = _dex_cleanup_top;\n", prefix, scope.mark))
+	}
+	for _, sv := range scope.vars[declared:] {
+		switch {
+		case ast.IsInterfaceType(sv.typ):
+			g.emitReregistration(out, prefix, sv.slot, sv.name+"._obj")
+		case ast.IsStructOptionalType(sv.typ):
+			held, _ := unwindHeld(sv.name, sv.typ)
+			g.emitReregistration(out, prefix, sv.slot, held)
+		case g.unwindTrackable(sv.typ):
+			g.emitReregistration(out, prefix, sv.slot, sv.name)
+		case ast.IsStructType(sv.typ):
+			keys := make([]string, 0, len(sv.fieldSlots))
+			for key := range sv.fieldSlots {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if held, ok := unwindHeld(sv.name+"."+key, fieldPathType(sv.typ, key)); ok {
+					g.emitReregistration(out, prefix, sv.fieldSlots[key], held)
+				}
+			}
+		}
+	}
+}
+
+func (g *Generator) emitReregistration(out *strings.Builder, prefix, slot, value string) {
+	if slot == "" {
+		out.WriteString(fmt.Sprintf("%s_dex_cleanup_push(%s);\n", prefix, value))
+		return
+	}
+	out.WriteString(fmt.Sprintf("%s%s = _dex_cleanup_push(%s);\n", prefix, slot, value))
 }
 
 // containsDefer reports whether a body registers any deferred call of its own.
@@ -371,11 +417,11 @@ func containsDefer(body []ast.Stmt) bool {
 
 // emitSiteMarker records the .dx position of the statement about to be
 // generated, so that an allocation made while it runs can be reported against
-// it. Only mem-check builds emit anything: DEX_AT is a no-op macro otherwise,
-// but the marker is also pure noise in the C that DEX_KEEP_C leaves behind, so
-// it is left out entirely rather than emitted and compiled away.
+// it. Only mem-check and profile builds emit anything: DEX_AT is a no-op macro
+// otherwise, but the marker is also pure noise in the C that DEX_KEEP_C leaves
+// behind, so it is left out entirely rather than emitted and compiled away.
 func (g *Generator) emitSiteMarker(out *strings.Builder, stmt ast.Stmt, indent int) {
-	if !g.memCheck || !g.usesRefcount {
+	if !g.siteMarkers() {
 		return
 	}
 	pos := ast.StmtPos(stmt)
@@ -408,4 +454,28 @@ func cStringLit(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// registerGlobalVars makes the module-level variables resolvable by name in the
+// body about to be generated: a function, or a lambda, which reaches a global
+// where it lives rather than through a captured copy.
+func (g *Generator) registerGlobalVars() {
+	for name, typ := range g.globalVars {
+		g.varTypes[name] = typ
+		if typ == ast.TypeString {
+			g.strVars[name] = true
+		}
+		if ast.IsArrayType(typ) {
+			g.arrVars[name] = typ
+		}
+		if ast.IsStructType(typ) {
+			g.structVars[name] = typ
+		}
+		if ast.IsMapType(typ) {
+			g.mapVars[name] = typ
+		}
+		if typ == ast.TypeStringBuilder {
+			g.sbVars[name] = true
+		}
+	}
 }

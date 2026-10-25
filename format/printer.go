@@ -104,7 +104,7 @@ func (p *printer) segmentEnd(lo int) int {
 func (p *printer) separate(prevIdx, curIdx, indent int) {
 	prev, cur := p.it[prevIdx], p.it[curIdx]
 
-	if cur.kind == token.TokenComment && cur.line == prev.line {
+	if cur.kind == token.TokenComment && cur.line == prev.end {
 		p.write(" ")
 		return
 	}
@@ -113,14 +113,14 @@ func (p *printer) separate(prevIdx, curIdx, indent int) {
 		return
 	}
 
-	blank := cur.line-prev.line >= 2
+	blank := cur.line-prev.end >= 2
 	if prev.kind == token.TokenLBrace && p.block[prevIdx] {
 		blank = false
 	}
 	if cur.kind == token.TokenRBrace && p.block[curIdx] {
 		blank = false
 	}
-	if p.wantsBlankBefore(prevIdx, curIdx, indent) {
+	if p.wantsBlankBefore(prevIdx, curIdx, indent) || p.closesStatementBlock(prevIdx, curIdx) {
 		blank = true
 	}
 
@@ -161,6 +161,17 @@ func (p *printer) wantsBlankBefore(prevIdx, curIdx, indent int) bool {
 		return false
 	}
 	return declStart(p.it[curIdx].kind)
+}
+
+func (p *printer) closesStatementBlock(prevIdx, curIdx int) bool {
+	if p.it[prevIdx].kind != token.TokenRBrace || !p.block[prevIdx] {
+		return false
+	}
+	switch p.it[curIdx].kind {
+	case token.TokenRBrace, token.TokenCase, token.TokenDefault:
+		return false
+	}
+	return true
 }
 
 func declStart(k token.TokenKind) bool {
@@ -206,6 +217,11 @@ func (p *printer) flat(lo, hi int) {
 func (p *printer) flatWidth(lo, hi int) int {
 	w := 0
 	for k := lo; k < hi; k++ {
+		// A line comment runs to the end of the line, so nothing after one can
+		// share it: a run with a comment anywhere but last never fits.
+		if p.it[k].kind == token.TokenComment && k < hi-1 {
+			return LineWidth * 4
+		}
 		if k > lo && p.space(k) {
 			w++
 		}
@@ -235,8 +251,18 @@ func (p *printer) broken(lo, hi, cont int) {
 	}
 
 	for k := lo; k < hi; {
-		if k > lo && p.space(k) {
+		// After a comment the line has already been ended, so nothing separates.
+		if k > lo && p.space(k) && p.it[k-1].kind != token.TokenComment {
 			p.write(" ")
+		}
+
+		if p.it[k].kind == token.TokenComment {
+			p.write(p.it[k].text)
+			if k+1 < hi {
+				p.newline(cont)
+			}
+			k++
+			continue
 		}
 
 		j := p.match[k]
@@ -383,12 +409,21 @@ func (p *printer) loosestOps(lo, hi int) []int {
 		case depth == 0 && k > lo && p.opPrecedence(k) == best:
 			// Nothing follows the last operator in the range, so breaking after
 			// it would leave a dangling line.
-			if k+1 < hi {
+			if p.codeAfter(k, hi) {
 				ops = append(ops, k)
 			}
 		}
 	}
 	return ops
+}
+
+func (p *printer) codeAfter(k, hi int) bool {
+	for j := k + 1; j < hi; j++ {
+		if p.it[j].kind != token.TokenComment {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *printer) opPrecedence(i int) int {
@@ -451,6 +486,15 @@ func (p *printer) expand(open, close int, elems []span) {
 
 	p.write(p.it[open].text)
 	for idx, el := range elems {
+		// A comment written on the same line as the comma before it belongs to
+		// the element before the comma, so it stays on that line.
+		for el.lo < el.hi && p.it[el.lo].kind == token.TokenComment && p.it[el.lo].line == p.it[el.lo-1].end {
+			p.write(" " + p.it[el.lo].text)
+			el.lo++
+		}
+		if el.lo >= el.hi {
+			continue
+		}
 		p.newline(inner)
 		// The comma that follows every element but the last shares the line
 		// with it, so the element has one column less to work with. Measuring

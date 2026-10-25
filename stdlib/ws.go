@@ -77,6 +77,13 @@ func init() {
 				CName:      "",
 				Doc:        "Receive a text message from a WebSocket connection (blocking).",
 			},
+			"header": {
+				Params:     nil,
+				ParamNames: []string{"conn", "name"},
+				ReturnType: ast.TypeString,
+				CName:      "",
+				Doc:        "Read a header from a server connection's opening handshake, matched case-insensitively. Returns \"\" when the header is absent or the connection is client-side.",
+			},
 			"close": {
 				Params:     nil,
 				ParamNames: []string{"conn"},

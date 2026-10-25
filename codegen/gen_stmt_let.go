@@ -63,6 +63,9 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 		out.WriteString(fmt.Sprintf("%s%s %s = ", prefix, g.cType(s.Type), s.Name))
 		g.genInterfaceValue(out, s.Value, s.Type)
 		out.WriteString(";\n")
+		if ast.IsInterfaceType(g.typeOfExpr(s.Value)) && g.borrowsHeapValue(s.Value) {
+			out.WriteString(fmt.Sprintf("%sdex_retain(%s._obj);\n", prefix, s.Name))
+		}
 		// The declaration owns the box the coercion minted, so it is released
 		// at scope exit like any other owning local.
 		g.registerScopeVar(out, prefix, s.Name, s.Type)
@@ -109,22 +112,22 @@ func (g *Generator) genLetStmt(out *strings.Builder, s *ast.LetStmt, prefix stri
 			elemCType := g.cType(elemType)
 			cleanupFn := g.structArrayCleanupFunc(elemType)
 			out.WriteString(fmt.Sprintf("%sDexArrayStruct* %s = dex_array_struct_new(sizeof(%s), %s);\n", prefix, s.Name, elemCType, cleanupFn))
+			g.registerScopeVar(out, prefix, s.Name, s.Type)
 			for _, elem := range arrLit.Elems {
 				out.WriteString(prefix)
 				g.genStructArrayLitElem(out, s.Name, elemType, elem)
 				out.WriteString("\n")
 			}
-			g.registerScopeVar(out, prefix, s.Name, s.Type)
 			return
 		}
 		cNewFn := g.arrayNewFunc(arrType)
 		out.WriteString(fmt.Sprintf("%s%s %s = %s();\n", prefix, g.cType(arrType), s.Name, cNewFn))
+		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		for _, elem := range arrLit.Elems {
 			out.WriteString(prefix)
 			g.genArrayLitElem(out, s.Name, arrType, elem)
 			out.WriteString("\n")
 		}
-		g.registerScopeVar(out, prefix, s.Name, s.Type)
 		return
 	}
 	// Special case for string declarations

@@ -8,6 +8,7 @@ struct Registry {
         if (byId.has(id)) {
             idByFd.remove(byId.get(id))
         }
+
         byId.set(id, fd)
         idByFd.set(fd, id)
         mu.unlock()
@@ -19,6 +20,7 @@ struct Registry {
             byId.remove(idByFd.get(fd))
             idByFd.remove(fd)
         }
+
         mu.unlock()
     }
 
@@ -28,6 +30,7 @@ struct Registry {
         if (byId.has(id)) {
             fd = byId.get(id)
         }
+
         mu.unlock()
         return fd
     }
@@ -38,6 +41,7 @@ struct Registry {
         if (idByFd.has(fd)) {
             id = idByFd.get(fd)
         }
+
         mu.unlock()
         return id
     }

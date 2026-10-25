@@ -17,7 +17,8 @@ static DexStringBuilder* dex_sb_new(void) {
     DexStringBuilder* sb = (DexStringBuilder*)dex_obj_alloc(sizeof(DexStringBuilder), dex_sb_destroy);
     sb->cap = 64;
     sb->len = 0;
-    sb->buf = (char*)malloc(64);
+    sb->buf = (char*)dex_xmalloc(64);
+    DEX_PF_BUF_SET(sb, 64);
     sb->buf[0] = '\0';
     return sb;
 }
@@ -25,7 +26,8 @@ static DexStringBuilder* dex_sb_new(void) {
 static void dex_sb_ensure(DexStringBuilder* sb, size_t extra) {
     if (sb->len + extra + 1 > sb->cap) {
         while (sb->len + extra + 1 > sb->cap) sb->cap *= 2;
-        sb->buf = (char*)realloc(sb->buf, sb->cap);
+        sb->buf = (char*)dex_xrealloc(sb->buf, sb->cap);
+        DEX_PF_BUF_SET(sb, sb->cap);
     }
 }
 

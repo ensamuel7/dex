@@ -1,0 +1,30 @@
+struct P {
+    x: int
+}
+
+fn next(calls: int[]): int {
+    calls[0] = calls[0] + 1
+    return 0
+}
+
+fn main(): void {
+    let calls: int[] = [0]
+    let a: int[] = [1, 2]
+    a[next(calls)] = 5
+    assert(calls[0] == 1)
+    assert(a[0] == 5)
+    let n: string[] = ["a"]
+    n[next(calls)] = "b"
+    assert(calls[0] == 2)
+    assert(n[0] == "b")
+    let ps: P[] = [P { x: 1 }]
+    ps[next(calls)] = P { x: 2 }
+    assert(calls[0] == 3)
+    assert(ps[0].x == 2)
+    let v = a[next(calls)]
+    assert(calls[0] == 4)
+    assert(v == 5)
+    let q = ps[next(calls)]
+    assert(calls[0] == 5)
+    assert(q.x == 2)
+}

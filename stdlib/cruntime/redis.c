@@ -55,7 +55,7 @@ static pthread_mutex_t dex_redis_table_lock = PTHREAD_MUTEX_INITIALIZER;
 // it with dex_string_from_cstr, which copies the bytes and frees the buffer. So
 // every return here is freshly allocated, never a literal or a static.
 static char* dex_redis_own(const char* s, size_t len) {
-    char* out = (char*)malloc(len + 1);
+    char* out = (char*)dex_xmalloc(len + 1);
     if (!out) return NULL;
     if (len > 0) memcpy(out, s, len);
     out[len] = '\0';
@@ -120,7 +120,7 @@ static int dex_redis_send(DexRedisSock* s, int argc, const char** argv, const si
     size_t need = 16;
     for (int i = 0; i < argc; i++) need += lens[i] + 32;
 
-    char* out = (char*)malloc(need);
+    char* out = (char*)dex_xmalloc(need);
     if (!out) return -1;
     int pos = snprintf(out, need, "*%d\r\n", argc);
     for (int i = 0; i < argc; i++) {
@@ -159,7 +159,7 @@ static int dex_redis_fill(DexRedisSock* s) {
     if (s->pos > 0 && s->pos == s->len) { s->pos = 0; s->len = 0; }
     if (s->len == s->cap) {
         size_t want = s->cap ? s->cap * 2 : 16384;
-        char* grown = (char*)realloc(s->buf, want);
+        char* grown = (char*)dex_xrealloc(s->buf, want);
         if (!grown) return -1;
         s->buf = grown;
         s->cap = want;
@@ -209,7 +209,7 @@ static DexRedisReply* dex_redis_read_reply(DexRedisSock* s) {
     char* line = dex_redis_read_line(s, &line_len);
     if (!line) return NULL;
 
-    DexRedisReply* r = (DexRedisReply*)calloc(1, sizeof(DexRedisReply));
+    DexRedisReply* r = (DexRedisReply*)dex_xcalloc(1, sizeof(DexRedisReply));
     if (!r) return NULL;
     r->type = line[0];
 
@@ -217,7 +217,7 @@ static DexRedisReply* dex_redis_read_reply(DexRedisSock* s) {
     case '+':
     case '-':
         r->len = line_len - 1;
-        r->str = (char*)malloc(r->len + 1);
+        r->str = (char*)dex_xmalloc(r->len + 1);
         if (!r->str) { free(r); return NULL; }
         memcpy(r->str, line + 1, r->len);
         r->str[r->len] = '\0';
@@ -230,7 +230,7 @@ static DexRedisReply* dex_redis_read_reply(DexRedisSock* s) {
     case '$': {
         long long n = strtoll(line + 1, NULL, 10);
         if (n < 0) { r->is_nil = 1; return r; }
-        r->str = (char*)malloc((size_t)n + 1);
+        r->str = (char*)dex_xmalloc((size_t)n + 1);
         if (!r->str) { free(r); return NULL; }
         if (dex_redis_read_exact(s, r->str, (size_t)n) < 0) { dex_redis_reply_free(r); return NULL; }
         r->str[n] = '\0';
@@ -246,7 +246,7 @@ static DexRedisReply* dex_redis_read_reply(DexRedisSock* s) {
         if (n < 0) { r->is_nil = 1; return r; }
         r->nelems = (int)n;
         if (n > 0) {
-            r->elems = (DexRedisReply**)calloc((size_t)n, sizeof(DexRedisReply*));
+            r->elems = (DexRedisReply**)dex_xcalloc((size_t)n, sizeof(DexRedisReply*));
             if (!r->elems) { free(r); return NULL; }
             for (int i = 0; i < r->nelems; i++) {
                 r->elems[i] = dex_redis_read_reply(s);
@@ -555,8 +555,8 @@ DexArrayString* dex_redis_hgetall(int h, const char* key) {
 char* dex_redis_command(int h, DexArrayString* args) {
     if (!args || args->len == 0) return dex_redis_empty();
     int argc = args->len;
-    const char** argv = (const char**)malloc(sizeof(char*) * argc);
-    size_t* lens = (size_t*)malloc(sizeof(size_t) * argc);
+    const char** argv = (const char**)dex_xmalloc(sizeof(char*) * argc);
+    size_t* lens = (size_t*)dex_xmalloc(sizeof(size_t) * argc);
     if (!argv || !lens) { free(argv); free(lens); return dex_redis_empty(); }
     for (int i = 0; i < argc; i++) {
         argv[i] = args->data[i]->data;

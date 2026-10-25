@@ -318,7 +318,7 @@ func RefInnerType(t Type) Type {
 
 // IsValueType returns true if the type is a value type (not heap-allocated).
 func IsValueType(t Type) bool {
-	return t == TypeInt || t == TypeBool || t == TypeLong || t == TypeDouble || t == TypeChar || IsEnumType(t)
+	return t == TypeInt || t == TypeBool || t == TypeLong || t == TypeDouble || t == TypeChar || (IsEnumType(t) && !IsPayloadEnumType(t))
 }
 
 // Map type registry

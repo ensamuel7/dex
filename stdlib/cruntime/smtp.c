@@ -477,7 +477,7 @@ static char* dex_smtp_encode_subject(const char* subject) {
     // Each 30-byte chunk becomes at most 40 base64 characters inside a 12-byte
     // wrapper, plus 3 for the folding "\r\n ". Rounded up generously.
     size_t cap = (n / 30 + 2) * 64 + 16;
-    char* out = (char*)malloc(cap);
+    char* out = (char*)dex_xmalloc(cap);
     if (!out) return NULL;
 
     size_t used = 0;
@@ -555,7 +555,7 @@ static char* dex_smtp_append_base64(char* p, const char* text) {
     size_t len = strlen(text);
     if (len == 0) return p;
     size_t encoded_len = ((len + 2) / 3) * 4;
-    char* encoded = (char*)malloc(encoded_len + 1);
+    char* encoded = (char*)dex_xmalloc(encoded_len + 1);
     if (!encoded) return p;
     dex_base64_encode((const unsigned char*)text, len, encoded);
     for (size_t i = 0; i < encoded_len; i += 76) {
@@ -588,7 +588,7 @@ static char* dex_smtp_build_message(const char* from, const char* to, const char
     char* subject_header = NULL;
     if (dex_smtp_is_ascii(subject)) {
         size_t n = strlen(subject);
-        subject_header = (char*)malloc(n + 1);
+        subject_header = (char*)dex_xmalloc(n + 1);
         if (!subject_header) return NULL;
         memcpy(subject_header, subject, n + 1);
     } else {
@@ -605,7 +605,7 @@ static char* dex_smtp_build_message(const char* from, const char* to, const char
     size_t b64_len = ((html_len + 2) / 3) * 4;
     size_t cap = body_len * 2 + b64_len + (b64_len / 76 + 1) * 2 +
                  strlen(from) + strlen(to) + strlen(subject_header) + 1024;
-    char* out = (char*)malloc(cap);
+    char* out = (char*)dex_xmalloc(cap);
     if (!out) { free(subject_header); return NULL; }
 
     // Distinct per message, and built from the same clock and pid the
@@ -778,14 +778,14 @@ _Bool dex_smtp_send_html(const char* host, int port,
         if (use_plain) {
             size_t ulen = strlen(username), plen = strlen(password);
             size_t raw_len = 1 + ulen + 1 + plen;
-            unsigned char* raw = (unsigned char*)malloc(raw_len);
+            unsigned char* raw = (unsigned char*)dex_xmalloc(raw_len);
             if (!raw) goto done;
             raw[0] = 0;
             memcpy(raw + 1, username, ulen);
             raw[1 + ulen] = 0;
             memcpy(raw + 2 + ulen, password, plen);
 
-            auth = (char*)malloc(4 * ((raw_len + 2) / 3) + 32);
+            auth = (char*)dex_xmalloc(4 * ((raw_len + 2) / 3) + 32);
             if (!auth) { free(raw); goto done; }
             memcpy(auth, "AUTH PLAIN ", 11);
             dex_base64_encode(raw, raw_len, auth + 11);
@@ -808,7 +808,7 @@ _Bool dex_smtp_send_html(const char* host, int port,
             for (int step = 0; step < 2; step++) {
                 const char* secret = step == 0 ? username : password;
                 size_t slen = strlen(secret);
-                auth = (char*)malloc(4 * ((slen + 2) / 3) + 8);
+                auth = (char*)dex_xmalloc(4 * ((slen + 2) / 3) + 8);
                 if (!auth) goto done;
                 dex_base64_encode((const unsigned char*)secret, slen, auth);
                 strcat(auth, "\r\n");

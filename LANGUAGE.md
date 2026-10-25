@@ -8,6 +8,7 @@ DexLang is a statically-typed language that compiles to C. It is designed for bu
 dex build <file.dx>       # compiles to native binary
 dex run <file.dx>         # compiles and runs
 dex dev <file.dx>         # rebuilds and reruns on every change
+dex profile <file.dx>     # runs with the memory profiler and opens a report
 dex test [file_test.dx]   # runs test files (*_test.dx)
 dex format [path...]      # lays files out the one canonical way
 dex lint <file.dx>        # reports lint findings without building
@@ -18,6 +19,22 @@ dex mod init <path>       # starts a dex.mod naming this project — see Modules
 `build`, `run` and `dev` report lint findings alongside the build unless given
 `--no-lint`; `test` reports them only when given `--lint`. `--lint=strict` fails
 the build when there are any. See [Linting](#linting).
+
+`dex profile` builds with the memory profiler, runs the program, and writes
+`build/<name>.profile.html`: live memory over time, a sortable table of the
+lines that allocate and hold memory (at the peak, at their own peak, at exit,
+and in total), and the source with each line's share beside it. Growth of an
+array, map or string builder is charged to the line that grew it, and held by
+the line that created it. `--no-open` writes the report without opening it;
+`dex profile <file.json>` renders a profile written earlier.
+
+`DEX_PROFILE=1` on `build` or `run` compiles the profiler into the binary
+directly; it writes JSON at exit to `DEX_PROFILE_OUT` (default
+`dex-profile.json`). For a server, `kill -USR1 <pid>` writes a snapshot without
+stopping it, and SIGINT or SIGTERM write one before it exits — in each case only
+if the program has not installed a handler of its own. `DEX_PROFILE_QUIET=1`
+drops the summary printed at exit. The profiler and `DEX_MEM_CHECK` cannot be
+combined.
 
 Pipeline: `.dx` source → tokens → AST (Abstract Syntax Tree) → type check → C code → native binary (via `cc`/`gcc`)
 
@@ -737,6 +754,11 @@ values takes 391ms.
 - One pattern per `case`. Two variants matched by one arm would carry different
   payloads, so there would be no consistent type for a name to have.
 - A payload enum is not a map key or a `json` field; a plain enum still is.
+- `Shape?` is an optional payload enum, absent as `null`.
+- Interpolating a payload enum, concatenating one with a string, or printing
+  one renders its variant and payload: `"${Expr.Add(Expr.Lit(2), Expr.Lit(3))}"`
+  is `"Add(Lit(2), Lit(3))"`, and a variant with no payload is just its name. A
+  plain enum is still an integer and renders as one.
 
 ### Enum usage
 
@@ -1530,6 +1552,12 @@ let add7: fn(int): int = makeAdder(7)
 add7(1)                                // 8
 ```
 
+A module-level variable is not captured. A closure reaches it where it lives,
+as any function does, so it sees writes made after it was built, and
+`defer mu.unlock()` on a module-level mutex unlocks that mutex rather than a
+copy of it. A local of the same name shadows the global and is captured as
+usual.
+
 **Method values** — naming a method without calling it gives that method bound to
 the object it was read from. The receiver travels inside the value:
 
@@ -1759,6 +1787,21 @@ body-checking pass reaches it like any other function.
 | `%=`     | Modulo and assign |
 
 `+` also works for string concatenation when both operands are `string`.
+
+#### Integer overflow and division
+
+`int` and `long` arithmetic wraps on overflow, in two's complement. Dividing by
+zero, with `/`, `%`, `/=` or `%=`, stops the program with
+`runtime error: division by zero`, for `double` as well as the integer types.
+The most negative value divided by `-1` is itself, and its remainder is `0`,
+the same as in Go: on x86 that division faults in C, and on arm64 it quietly
+produces the same answer, so Dex defines it rather than inheriting either.
+
+```dex
+let min: int = -2147483647 - 1
+assert(min / -1 == min)
+assert(min % -1 == 0)
+```
 
 #### Operands must already agree
 
@@ -3379,9 +3422,15 @@ struct Conn {
 | `handleConnect`    | `handleConnect(fn): void`         | Register connect handler (called with path) |
 | `handleDisconnect` | `handleDisconnect(fn): void`      | Register disconnect handler               |
 | `setProtocol`      | `setProtocol(protocol: string): void` | Set the subprotocol offered by this thread's handshakes |
+| `header`           | `header(conn: ws.Conn, name: string): string` | A header from the client's opening handshake, matched case-insensitively; `""` if absent |
 | `listen`           | `listen(port: int): void`         | Start a server on `port`, capturing this thread's registration; blocks |
 
 Message handlers must take `(conn: ws.Conn, msg: string)` and return `void`. Connect handlers take `(conn: ws.Conn, path: string)`. Disconnect handlers take `(conn: ws.Conn)`.
+
+`ws.header` reads the request that opened a server-side connection, so a connect
+handler can authenticate a client before accepting it (by its `Authorization`
+header, say) and reject it with `ws.close`. On a client connection it returns
+`""`.
 
 ```dex
 import "ws"
@@ -3663,6 +3712,50 @@ let id: string = crypto.uuid()
 | `hmacSha256Hex` | `hmacSha256Hex(key: string, message: string): string` | HMAC-SHA-256, lowercase hex |
 | `hmacSha256B64Url` | `hmacSha256B64Url(key: string, message: string): string` | HMAC-SHA-256, unpadded base64url — the encoding a JWS signature is written in |
 | `verifyRs256` | `verifyRs256(message: string, signature: string, modulus: string, exponent: string): bool` | Verify an RS256 signature against an RSA public key given as its two numbers |
+| `hashPassword` | `hashPassword(password: string): string` | Hash a password for storing |
+| `verifyPassword` | `verifyPassword(password: string, stored: string): bool` | Check a password against a stored hash, in constant time |
+| `randomHex` | `randomHex(bytes: int): string` | Random bytes as hex, for session and invite tokens |
+| `encrypt` | `encrypt(keyHex: string, plaintext: string): string` | Encrypt a secret for storing, AES-256-GCM, as base64 |
+| `decrypt` | `decrypt(keyHex: string, sealed: string): string` | Decrypt what `encrypt` produced; `""` if the key is wrong or the input was altered |
+
+#### Passwords
+
+`hashPassword` is the only thing a password should be stored as. It uses
+PBKDF2-HMAC-SHA-256 with a fresh random salt and 600000 iterations, OWASP's
+figure, and writes all three into the result:
+
+```dex
+let stored: string = crypto.hashPassword(password)
+// pbkdf2-sha256$600000$5f0c...$9a1e...
+
+if (crypto.verifyPassword(attempt, stored)) {
+    // signed in
+}
+```
+
+The iteration count travels with each hash, so raising it later still
+verifies every password stored before. `verifyPassword` is false for every
+reason: a wrong password, a malformed hash, a build without OpenSSL.
+
+`randomHex(32)` is 32 bytes from the system's entropy source, 64 hex digits:
+a session token or an invite link. It returns `""` rather than a guessable
+value when the source cannot be read.
+
+#### Secrets at rest
+
+`encrypt` and `decrypt` keep a secret, such as an API token a user entrusts to
+you, unreadable in a database or a backup. The key is 32 bytes as 64 hex
+digits; make one with `randomHex(32)` and keep it outside the database:
+
+```dex
+let key: string = os.env("SECRET_KEY")
+let sealed: string = crypto.encrypt(key, token)   // store this
+let token: string = crypto.decrypt(key, sealed)   // "" if anything is wrong
+```
+
+It is AES-256-GCM with a fresh nonce on every call, so encrypting the same
+secret twice gives different results, and the tag means altered or truncated
+input decrypts to `""` rather than to something wrong.
 
 #### Verifying what somebody else signed
 
@@ -3819,8 +3912,40 @@ struct ExecResult {
   exitCode: int
   output: string
   error: string
+  timedOut: bool
 }
 ```
+
+`os.execWith` runs a command under `ExecOptions`, the way `http.requestWith`
+runs a request under `HttpOptions`. Every field's zero value is its default, so
+`os.ExecOptions {}` behaves exactly like `os.exec`:
+
+```dex
+struct ExecOptions {
+  timeoutMs: int      // 0, the default, waits for ever
+  appendTo: string    // "", the default, returns output and error
+}
+
+let r: os.ExecResult = os.execWith("docker build -t app .", os.ExecOptions {
+    timeoutMs: 600000,
+    appendTo: "build.log"
+})
+if (r.timedOut) {
+    fmt.println("the build took over ten minutes and was stopped")
+}
+```
+
+**`appendTo`** writes stdout and stderr to the file as they arrive, interleaved
+in the order the command wrote them, so another thread can read the file while
+the command runs. They are not also returned: `output` and `error` stay empty,
+and a long build's output is held nowhere but the file. A file that cannot be
+opened gives an exit code of `-1` and says so in `error`.
+
+**`timeoutMs`** stops the command at the deadline, and everything it started
+with it: the command runs in a process group of its own, which receives
+`SIGTERM` and, two seconds later, `SIGKILL`. Without that, `sh -c "docker build"`
+would leave docker running under a shell that had been stopped. A timed-out
+command has `timedOut` set and an exit code of `124`, the code `timeout(1)` uses.
 
 | Function | Signature                       | Description                                        |
 |----------|---------------------------------|----------------------------------------------------|
@@ -3828,6 +3953,7 @@ struct ExecResult {
 | `env`    | `env(name: string): string`     | Read an environment variable (empty string if unset) |
 | `exit`   | `exit(code: int): void`         | Exit the process with the given status code        |
 | `exec`   | `exec(command: string): ExecResult` | Run a shell command and return the result      |
+| `execWith` | `execWith(command: string, options: ExecOptions): ExecResult` | The same, with a deadline and output appended to a file as it arrives |
 
 ### Command-line arguments
 
@@ -3882,6 +4008,11 @@ num.toInt(3.99)                   // 3, truncated toward zero
 
 `toChar` does not accept a `double`: there is no character code for one, and
 rounding it silently would be a conversion nobody asked for.
+
+A `double` outside the target's range saturates to its largest or smallest
+value, and NaN becomes `0`, so a number parsed from untrusted input cannot
+produce an arbitrary integer. A `long` narrowed to `int` keeps its low 32 bits,
+as a conversion does in Go.
 
 ### str
 
@@ -4513,6 +4644,11 @@ if (f != null) {
 A handle is a pointer, so the optional needs no extra representation: NULL is
 the absent value, which is the same thing the C function already meant by it.
 
+A return declared without the `?` is a promise that C never returns NULL. If it
+does, the program stops at that call with
+`runtime error: cio.open returned NULL for a handle declared non-optional`,
+rather than carrying the NULL into the next C function that receives it.
+
 #### What refcounting does not solve
 
 Refcounting tracks how many references a handle has, not what it depends on. A
@@ -4686,6 +4822,25 @@ would otherwise be underlined as though it were broken.
 | `unnecessary-throws` | a `throws` declaration naming a type the function cannot throw |
 | `unreachable-catch` | a `catch` clause that can never run |
 | `unknown-allow` | an `#[allow(...)]` naming a rule that does not exist |
+| `struct-padding` | a struct declared in an order the compiler rearranges to avoid padding |
+
+### Struct size and field order
+
+The compiler lays a struct out with its widest fields first, so the order you
+declare fields in never costs padding: `struct Reading { ok: bool, at: long,
+stale: bool }` is 16 bytes, laid out as `at, ok, stale`, where declared order
+would be 24. Everything you can observe keeps declared order — a struct
+literal, the auto-constructor's parameters, `json.encode`, printing,
+`reflect` field indexes and `db.fill` — only the memory layout changes. A
+standard library struct keeps its declared layout, which its C runtime relies
+on.
+
+Hovering a struct's name shows its size, alignment and padding, and when the
+layout differs from declared order, the order used and what declared order
+would have cost. `struct-padding` reports that difference as a finding, a hint
+in the editor, for anyone who wants the source to read in layout order;
+`#[allow(struct-padding)]` on the struct keeps an order chosen for another
+reason. Sizes are for a 64-bit target.
 
 ### Suppressing a Finding
 

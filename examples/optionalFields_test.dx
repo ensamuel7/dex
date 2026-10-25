@@ -25,6 +25,7 @@ fn bumpIfPresent(c: Counter?): int {
     if (c == null) {
         return 0
     }
+
     return c.bump()
 }
 
@@ -44,6 +45,7 @@ fn nameLength(b: Box): int {
     if (n == null) {
         return 0
     }
+
     return n.len()
 }
 
@@ -52,6 +54,7 @@ fn tagCount(b: Box): int {
     if (t == null) {
         return 0
     }
+
     return t.len()
 }
 
@@ -63,11 +66,13 @@ fn main(): void {
         assert(tagCount(b) == 2)
         i = i + 1
     }
+
     let none: int[]? = []
     if (none != null) {
         none.push(3)
         assert(none.len() == 1)
     }
+
     let points: Point[]? = [Point { x: 1 }]
     if (points != null) {
         assert(points[0].x == 1)
@@ -78,6 +83,7 @@ fn main(): void {
     if (c != null) {
         assert(c.bump() == 2)
     }
+
     assert(bumpIfPresent(held.counter) == 3)
     assert(bumpIfPresent(null) == 0)
 

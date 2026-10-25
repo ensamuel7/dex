@@ -1,0 +1,60 @@
+// A closure reaches a module-level variable where it lives rather than through
+// a copy. `defer mu.unlock()` on a module mutex captured a copy of the mutex,
+// unlocked the copy, and left the real one locked: the second caller hung.
+import "fmt"
+import "modules/guarded"
+
+let mu: mutex = mutex
+let total: int = 0
+
+fn add(n: int): int {
+    mu.lock()
+    defer mu.unlock()
+    total = total + n
+    return total
+}
+
+// A local of the same name is still captured by value, as locals are.
+fn shadowed(): int {
+    let total: int = 7
+    let local: fn(): int = fn(): int {
+        return total
+    }
+
+    total = 8
+    return local()
+}
+
+fn main(): void {
+    // Each of these would block forever on the second call.
+    assert(add(2) == 2)
+    assert(add(3) == 5)
+    assert(guarded.bump() == 1)
+    assert(guarded.bump() == 2)
+
+    // From other threads too.
+    let done = channel(int)
+    for (let i: int = 0; i < 8; i++) {
+        spawn {
+            send(done, add(1))
+        }
+    }
+
+    for (let i: int = 0; i < 8; i++) {
+        receive(done)
+    }
+
+    assert(add(0) == 13)
+
+    // A closure sees writes to a global made after it was built.
+    let read: fn(): int = fn(): int {
+        return total
+    }
+
+    total = 100
+    assert(read() == 100)
+
+    assert(shadowed() == 7)
+
+    fmt.println("defer_global_mutex_test: all assertions passed")
+}

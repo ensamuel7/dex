@@ -36,6 +36,7 @@ fn tree(depth: int): Expr {
         let leaf: Expr = Lit { v: 2 }
         return leaf
     }
+
     let lhs: Expr = tree(depth - 1)
     let rhs: Expr = tree(depth - 1)
     let node: Expr = Add { left: lhs, right: rhs }

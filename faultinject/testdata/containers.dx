@@ -1,0 +1,78 @@
+import "str"
+
+fn counts(n: int): map[string, int] {
+    let m: map[string, int] = {}
+    for (let i = 0; i < n; i = i + 1) {
+        m.set("k" + str.fromInt(i), i)
+    }
+    return m
+}
+
+fn names(n: int): map[int, string] {
+    let m: map[int, string] = {}
+    for (let i = 0; i < n; i = i + 1) {
+        m[i] = "v" + str.fromInt(i)
+    }
+    return m
+}
+
+fn words(n: int): string[] {
+    let out: string[] = []
+    for (let i = 0; i < n; i = i + 1) {
+        out.push("w" + str.fromInt(i))
+    }
+    return out
+}
+
+fn literal(a: string, n: int): string[] {
+    return [a, "x" + a, str.fromInt(n), a + a]
+}
+
+fn walk(n: int): int {
+    let total = 0
+    foreach (words(n) as w) {
+        let bang = w + "!"
+        total = total + bang.len()
+    }
+    foreach (literal("q", n) as i, w) {
+        total = total + i + w.len()
+    }
+    return total
+}
+
+fn mapped(n: int): int {
+    let m = counts(n)
+    let k = names(n)
+    let total = 0
+    foreach (m.keys() as key) {
+        total = total + m.get(key) + key.len()
+    }
+    foreach (k.values() as v) {
+        total = total + v.len()
+    }
+    return total
+}
+
+fn replaced(n: int): int {
+    let w = words(n)
+    w[0] = "replaced " + str.fromInt(n)
+    w = literal(w[0], n)
+    return w.len()
+}
+
+fn main(): void {
+    let caught = 0
+    for (let round = 0; round < 2; round = round + 1) {
+        try {
+            assert(walk(3) > 0)
+            assert(mapped(4) > 0)
+            assert(replaced(3) > 0)
+            let ws = words(3)
+            ws.push(literal("z", round)[1])
+            assert(ws.len() == 4)
+        } catch (e: Exception) {
+            caught = caught + 1
+        }
+    }
+    assert(caught >= 0)
+}

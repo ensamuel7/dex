@@ -45,6 +45,23 @@ func TestCanonicalShape(t *testing.T) {
 				"    )\n}\n",
 		},
 		{
+			// The comment used to end the statement's segment, so each half was
+			// printed flat on its own: `P { a: 1,` / comment / `b: 2 }`.
+			name: "a comment inside a literal keeps the literal expanded around it",
+			in:   "fn f(): P {\n    return P {\n        a: 1, // first\n        // why b\n        b: 2\n    }\n}\n",
+			want: "fn f(): P {\n    return P {\n        a: 1, // first\n        // why b\n        b: 2\n    }\n}\n",
+		},
+		{
+			name: "a comment between call arguments keeps one argument per line",
+			in:   "fn f() {\n    g(1, // one\n    2)\n}\n",
+			want: "fn f() {\n    g(\n        1, // one\n        2\n    )\n}\n",
+		},
+		{
+			name: "a comment in a lambda body inside a call is still a statement's",
+			in:   "fn f() {\n    g(fn(): void {\n        // note\n        h()\n    })\n}\n",
+			want: "fn f() {\n    g(fn(): void {\n        // note\n        h()\n    })\n}\n",
+		},
+		{
 			name: "a struct literal is spaced, and expands when it has to",
 			in:   "fn f(): Point {\n    return Point{x:1,y:2}\n}\n",
 			want: "fn f(): Point {\n    return Point { x: 1, y: 2 }\n}\n",
@@ -265,5 +282,76 @@ func TestHuggedArgumentStillOpensTheGroup(t *testing.T) {
 	got := format(t, in)
 	if !strings.Contains(got, "json.encode({") {
 		t.Errorf("hugged group was not kept on the line:\n%s", got)
+	}
+}
+
+func TestBlankLineAfterAStatementBlock(t *testing.T) {
+	in := `fn getDriver(req: Request): Response {
+    let ctx: Ctx = open(req)
+    if (ctx.rejected) {
+        return denied(ctx)
+    }
+    if (withheld(ctx)) {
+        return unavailable(ctx)
+    }
+    let home: bool = ctx.home
+    let purses: int[] = []
+    if (home) {
+        purses = owned(ctx)
+    } else {
+        purses = []
+    }
+    switch (ctx.kind) {
+        case 0: {
+            return none()
+        }
+        default: {
+            purses.push(1)
+        }
+    }
+    let doubled: int[] = purses.map(fn(x: int): int {
+        return x * 2
+    })
+    return okFor(ctx, doubled)
+}
+`
+	want := `fn getDriver(req: Request): Response {
+    let ctx: Ctx = open(req)
+    if (ctx.rejected) {
+        return denied(ctx)
+    }
+
+    if (withheld(ctx)) {
+        return unavailable(ctx)
+    }
+
+    let home: bool = ctx.home
+    let purses: int[] = []
+    if (home) {
+        purses = owned(ctx)
+    } else {
+        purses = []
+    }
+
+    switch (ctx.kind) {
+        case 0: {
+            return none()
+        }
+        default: {
+            purses.push(1)
+        }
+    }
+
+    let doubled: int[] = purses.map(fn(x: int): int {
+        return x * 2
+    })
+    return okFor(ctx, doubled)
+}
+`
+	if got := format(t, in); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if got := format(t, want); got != want {
+		t.Errorf("not idempotent:\n%s", got)
 	}
 }

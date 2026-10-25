@@ -236,11 +236,16 @@ static void dex_pf_on_alloc(void* ptr, size_t size);
 static void dex_pf_on_free(void* ptr);
 static void dex_pf_buf_set(void* ptr, size_t bytes);
 #define DEX_PF_BUF_SET(obj, bytes) dex_pf_buf_set((obj), (bytes))
+// Writes the profile now. For a runtime that ends the process with _exit,
+// which skips the atexit handler the profile is otherwise written from.
+static void dex_pf_shutdown(void);
+#define DEX_PF_FLUSH() dex_pf_shutdown()
 #else
 #define dex_pf_on_alloc(ptr, size) ((void)0)
 #define dex_pf_on_free(ptr) ((void)0)
 #define DEX_PF_BUF_SET(obj, bytes) ((void)0)
 #define DEX_PF_FRAME() ((void)0)
+#define DEX_PF_FLUSH() ((void)0)
 #endif
 
 static inline void* dex_obj_alloc(size_t size, void (*destroy)(void*)) {

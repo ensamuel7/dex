@@ -198,3 +198,32 @@ func itoa(n int) string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
+
+// The HTTP server replaces the profiler's SIGINT handler with its own and ends
+// the process with _exit, which skips the atexit handler the profile is
+// written from. Its shutdown path has to write the profile itself, or a
+// profiled server stopped with Ctrl-C leaves nothing behind.
+func TestProfileWrittenBeforeServerExit(t *testing.T) {
+	const server = `
+import "http"
+
+fn ok(req: http.HttpRequest): http.HttpResponse {
+    return http.response(200, "ok", "text/plain")
+}
+
+fn main(): void {
+    http.route("GET", "/", ok)
+    http.listen(8080)
+}
+`
+	out := generateWith(t, server, withProfile)
+	assertContains(t, out, "#define DEX_PF_FLUSH() dex_pf_shutdown()")
+	if !strings.Contains(out, "DEX_PF_FLUSH();\n    _exit(0);") {
+		t.Errorf("the HTTP shutdown handler must write the profile before _exit")
+	}
+	if strings.Count(out, "_exit(0);") > strings.Count(out, "DEX_PF_FLUSH();")+1 {
+		// One _exit is a forked worker's, which must not write over the parent's profile.
+		t.Errorf("an _exit path skips the profile: %d exits, %d flushes",
+			strings.Count(out, "_exit(0);"), strings.Count(out, "DEX_PF_FLUSH();"))
+	}
+}

@@ -663,6 +663,7 @@ static volatile sig_atomic_t dex_ws_undrained = 0;
 
 static void dex_ws_hard_exit(int sig) {
     (void)sig;
+    DEX_PF_FLUSH();
     _exit(0);
 }
 
@@ -693,7 +694,10 @@ void dex_ws_request_drain(void) {
         if (srv) dex_notify_pipe_signal(&srv->notify);
     }
     /* No servers to drain: nothing will call _exit later, so do it here. */
-    if (n == 0) _exit(0);
+    if (n == 0) {
+        DEX_PF_FLUSH();
+        _exit(0);
+    }
 }
 
 static void dex_ws_shutdown_handler(int sig) {
@@ -728,6 +732,7 @@ static void dex_ws_drain_server(DexWsServer* srv) {
     /* main is blocked in the HTTP listener and has no reason of its own to
      * return, so the last loop out ends the process. */
     if (__sync_sub_and_fetch(&dex_ws_undrained, 1) <= 0) {
+        DEX_PF_FLUSH();
         _exit(0);
     }
 }

@@ -355,3 +355,145 @@ func TestBlankLineAfterAStatementBlock(t *testing.T) {
 		t.Errorf("not idempotent:\n%s", got)
 	}
 }
+
+// assertFormats checks in formats to exactly want, and that want is a fixed
+// point: formatting it again changes nothing.
+func assertFormats(t *testing.T, in, want string) {
+	t.Helper()
+	if got := format(t, in); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if again := format(t, want); again != want {
+		t.Errorf("not idempotent; formatting the result again gave:\n%s", again)
+	}
+}
+
+// A method chain that does not fit breaks at its dots, one link per line,
+// rather than inside the first call's parentheses. Written one link per line or
+// all on one, it comes out the same: the layout is a function of the code.
+func TestLongChainBreaksAtItsDots(t *testing.T) {
+	want := `fn main(): void {
+    let byAuthor: q.Query = q.from("books")
+        .columns(["title"])
+        .where(q.col("author_name").eq(q.param("who")))
+        .build(LITE)
+    let reprint: q.Insert = q.insertInto("books")
+        .columns(["title", "author_name", "pages"])
+        .values([q.text("Dune"), q.text("Herbert"), q.integer(896)])
+        .onConflict(["title"])
+        .doUpdate(["pages"])
+    let short: q.Select = q.from("t").limit(1)
+}
+`
+	asWritten := `fn main(): void {
+    let byAuthor: q.Query = q.from("books")
+        .columns(["title"])
+        .where(q.col("author_name").eq(q.param("who")))
+        .build(LITE)
+    let reprint: q.Insert = q.insertInto("books")
+        .columns(["title", "author_name", "pages"])
+        .values([q.text("Dune"), q.text("Herbert"), q.integer(896)])
+        .onConflict(["title"])
+        .doUpdate(["pages"])
+    let short: q.Select = q.from("t")
+        .limit(1)
+}
+`
+	oneLine := `fn main(): void {
+    let byAuthor: q.Query = q.from("books").columns(["title"]).where(q.col("author_name").eq(q.param("who"))).build(LITE)
+    let reprint: q.Insert = q.insertInto("books").columns(["title", "author_name", "pages"]).values([q.text("Dune"), q.text("Herbert"), q.integer(896)]).onConflict(["title"]).doUpdate(["pages"])
+    let short: q.Select = q.from("t").limit(1)
+}
+`
+	assertFormats(t, asWritten, want)
+	assertFormats(t, oneLine, want)
+}
+
+// Two links are enough: a two-link builder chain reads better one per line too.
+func TestTwoLinkChainBreaksAtItsDots(t *testing.T) {
+	in := `fn main(): void {
+    let req: Request = client.request("GET", "https://api.example.com/v1/books").header("Authorization", bearer).timeout(30000)
+}
+`
+	want := `fn main(): void {
+    let req: Request = client.request("GET", "https://api.example.com/v1/books")
+        .header("Authorization", bearer)
+        .timeout(30000)
+}
+`
+	assertFormats(t, in, want)
+}
+
+// A chain starting from a bare call keeps that call as its head, and so does a
+// statement that is not an assignment.
+func TestBareCallHeadStaysOnTheLine(t *testing.T) {
+	in := `fn main(): void {
+    return build().where(q.col("author_name").eq(q.param("who"))).orderBy("title", "published_on", "pages").limit(pageSize)
+}
+`
+	want := `fn main(): void {
+    return build()
+        .where(q.col("author_name").eq(q.param("who")))
+        .orderBy("title", "published_on", "pages")
+        .limit(pageSize)
+}
+`
+	assertFormats(t, in, want)
+}
+
+// A link too wide for its own line opens its argument under the link, by the
+// same rules as any other segment.
+func TestLongLinkOpensItsOwnArgument(t *testing.T) {
+	in := `fn main(): void {
+    let reprint: q.Insert = q.insertInto("books").values([q.text("Dune: the original and still the best of them"), q.text("Frank Patrick Herbert"), q.integer(896)]).onConflict(["title"])
+}
+`
+	want := `fn main(): void {
+    let reprint: q.Insert = q.insertInto("books")
+        .values([
+            q.text("Dune: the original and still the best of them"),
+            q.text("Frank Patrick Herbert"),
+            q.integer(896)
+        ])
+        .onConflict(["title"])
+}
+`
+	assertFormats(t, in, want)
+}
+
+// Inside an expanded argument list the links step in from their head. Indented
+// at the argument's own column they would read as further arguments.
+func TestChainInsideAnArgumentIndentsFromItsHead(t *testing.T) {
+	in := `fn main(): void {
+    run(conn, q.from("books").columns(["title", "author_name", "pages"]).where(q.col("author_name").eq(q.param("who"))).build(LITE), args)
+}
+`
+	want := `fn main(): void {
+    run(
+        conn,
+        q.from("books")
+            .columns(["title", "author_name", "pages"])
+            .where(q.col("author_name").eq(q.param("who")))
+            .build(LITE),
+        args
+    )
+}
+`
+	assertFormats(t, in, want)
+}
+
+// One link is not a chain: the line opens a group as before. A module
+// qualifier and a field access are not links either.
+func TestOneLinkIsNotAChain(t *testing.T) {
+	in := `fn main(): void {
+    let rows: Row[] = self.store.queryAll("SELECT title, author_name, pages FROM books WHERE pages > 300").filter(longEnough, alsoPinned)
+}
+`
+	got := format(t, in)
+	if strings.Contains(got, "\n        .filter(") {
+		t.Errorf("a single link was broken at its dot:\n%s", got)
+	}
+	if again := format(t, got); again != got {
+		t.Errorf("not idempotent:\n%s", again)
+	}
+}

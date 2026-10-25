@@ -929,20 +929,15 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 	}
 }
 
-// genThrowMessage emits a throw whose message is built at runtime.
-//
-// The message text is staged into the exception runtime first, then the string
-// that produced it is released, and only then does the throw longjmp. The order
-// is forced: longjmp skips every release the unwound frames would have run, so
-// a message built for the throw — `throw Exception("no " + name)` — had nothing
-// left to own it and leaked one string per throw.
-//
-// A message that was only borrowed is not released, on the usual terms.
 // genThrowMessage emits a throw whose message is not a literal. The order is
 // the whole of it: the message text is staged into the runtime's buffer, the
-// struct's own fields are staged as bytes, whatever the expression allocated is
-// released, and only then does the longjmp happen — after a longjmp there is no
-// way to release anything.
+// struct's own fields are staged as bytes, whatever this frame owned of the
+// thrown value is released, and only then does the longjmp happen — after a
+// longjmp there is no way to release anything. A message built for the throw,
+// `throw Exception("no " + name)`, would otherwise leak once per throw.
+//
+// What the frame owns is decided by thrownStructOwned. A borrowed value is
+// not released at all.
 func (g *Generator) genThrowMessage(out *strings.Builder, prefix string, msg ast.Expr, fromStruct bool) {
 	field := ""
 	if fromStruct {
@@ -966,8 +961,13 @@ func (g *Generator) genThrowMessage(out *strings.Builder, prefix string, msg ast
 		// build, not silently arrive zeroed.
 		out.WriteString(fmt.Sprintf(" _Static_assert(sizeof(%s) <= DEX_EXCEPTION_PAYLOAD_MAX, \"exception payload too large to cross a throw\");", g.cType(typ)))
 		out.WriteString(fmt.Sprintf(" _dex_exc_stage_payload(&%s, sizeof(%s));", tmp, tmp))
-		if ast.NeedsRelease(typ) {
+		if ast.NeedsRelease(typ) && g.thrownStructOwned(msg) {
 			var rel strings.Builder
+			// A literal's borrowed fields are retained first, so the release
+			// below frees only what the literal itself made.
+			if _, _, isLit := structAssignments(msg); isLit {
+				g.emitRetainStructLitFields(&rel, "", tmp, typ, msg)
+			}
 			g.emitReleaseVar(&rel, "", tmp, typ)
 			out.WriteString(" " + strings.ReplaceAll(strings.TrimRight(rel.String(), "\n"), "\n", " "))
 		}
@@ -975,4 +975,25 @@ func (g *Generator) genThrowMessage(out *strings.Builder, prefix string, msg ast
 		out.WriteString(fmt.Sprintf(" dex_release(%s);", tmp))
 	}
 	out.WriteString(fmt.Sprintf(" _dex_throw_staged(%q); }\n", typeName))
+}
+
+// thrownStructOwned reports whether the frame throwing a struct owns it, and
+// so has to release it before the longjmp skips the frame's own cleanup.
+//
+//   - A literal or constructor call is built here. It owns what it minted and
+//     borrows the rest; the caller retains the borrowed fields to even that out.
+//   - A call result is minted, and the throw is its only owner.
+//   - A local is consumed by the throw: the ThrowStmt case has already cleared
+//     its unwind entries, so this release replaces its scope-exit one.
+//   - Anything else is borrowed: a parameter, a field, a switch binding, a
+//     global. Releasing one of those freed the caller's string while the
+//     caller still held it.
+func (g *Generator) thrownStructOwned(msg ast.Expr) bool {
+	if _, _, isLit := structAssignments(msg); isLit {
+		return true
+	}
+	if ident, ok := msg.(*ast.Ident); ok {
+		return g.lookupScopeVar(ident.Name) != nil
+	}
+	return !g.borrowsHeapValue(msg)
 }

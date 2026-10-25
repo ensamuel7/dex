@@ -1,0 +1,144 @@
+// Inside a method, a bare field name means self.field, and a local of the same
+// name shadows it, for every way a name can be bound and only within its block.
+//
+// Only a parameter or a `let` used to count. A foreach variable or a lambda
+// parameter named like a field silently read the field instead, and a switch
+// pattern or catch binding named like one was a type error about the field's
+// type. Each block below binds `item`, `args` or `message` the way it says, and
+// each must read its own binding; outside the block, the field again.
+
+struct Oops(message: string) {}
+
+enum Node {
+    Raw(string, int[])
+    Pair(int[], int[])
+    Other
+}
+
+fn countOf(xs: int[]): int {
+    return xs.len()
+}
+
+struct R {
+    args: string[]
+    item: int
+    message: int
+
+    fn conds(): int {
+        return 0
+    }
+
+    // A foreach variable: 1 + 2 + 3, not 100 three times.
+    fn sumEach(xs: int[]): int {
+        let total: int = 0
+        foreach (xs as item) {
+            total = total + item
+        }
+
+        // The loop is over, so `item` is the field again.
+        return total + item
+    }
+
+    fn sumIndexed(xs: int[]): int {
+        let total: int = 0
+        foreach (xs as item, v) {
+            total = total + item * v
+        }
+
+        return total
+    }
+
+    // A lambda parameter shadows inside the lambda and nowhere else.
+    fn viaLambda(): int {
+        let f: fn(int): int = fn(item: int): int {
+            return item * 2
+        }
+
+        return f(5) + item
+    }
+
+    // A switch pattern's names.
+    fn count(n: Node): int {
+        switch (n) {
+            case Node.Raw(sql, args): {
+                return countOf(args)
+            }
+            default: {
+                return args.len()
+            }
+        }
+    }
+
+    // A pattern named like a method.
+    fn first(n: Node): int {
+        switch (n) {
+            case Node.Pair(conds, rest): {
+                return conds[0] + rest[0]
+            }
+            default: {
+                return conds()
+            }
+        }
+    }
+
+    // A catch binding.
+    fn caught(): string {
+        try {
+            throw Oops("hi")
+        } catch (message: Oops) {
+            return message.message
+        }
+
+        return ""
+    }
+
+    // A `let` in one branch does not shadow the field in its sibling, or after.
+    fn branches(flag: bool): int {
+        if (flag) {
+            let item: int = 1
+            return item
+        } else {
+            return item
+        }
+    }
+
+    fn afterBlock(): int {
+        if (true) {
+            let item: int = 1
+            assert(item == 1)
+        }
+
+        return item
+    }
+
+    // A for loop's own `let` belongs to the loop.
+    fn loopInit(): int {
+        let total: int = 0
+        for (let item: int = 0; item < 3; item++) {
+            total = total + item
+        }
+
+        return total + item
+    }
+}
+
+fn main(): void {
+    let r: R = R { item: 100, args: ["a", "b", "c"], message: 7 }
+
+    assert(r.sumEach([1, 2, 3]) == 106)
+    assert(r.sumIndexed([5, 5, 5]) == 15)
+    assert(r.viaLambda() == 110)
+    assert(r.count(Node.Raw("x", [1])) == 1)
+    assert(r.count(Node.Other) == 3)
+    assert(r.first(Node.Pair([7], [8])) == 15)
+    assert(r.first(Node.Other) == 0)
+    assert(r.caught() == "hi")
+    assert(r.branches(true) == 1)
+    assert(r.branches(false) == 100)
+    assert(r.afterBlock() == 100)
+    assert(r.loopInit() == 103)
+
+    // Nothing above wrote to the fields.
+    assert(r.item == 100)
+    assert(r.message == 7)
+}

@@ -3,9 +3,12 @@ IMAGE_NAME  := ensamuel7/dexlang
 PREFIX      ?= /usr/local
 
 # Build the compiler from the current source. The version is stamped so a local
-# build is distinguishable from an installed release.
+# build is distinguishable from an installed release, and the commit so two
+# local builds of the same version are distinguishable from each other.
+DEX_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+
 build:
-	go build -ldflags "-X main.Version=$(DEX_VERSION)-dev" -o dex .
+	go build -ldflags "-X main.Version=$(DEX_VERSION)-dev -X main.Commit=$(DEX_COMMIT)" -o dex .
 
 # Install that build over whatever `dex` is on PATH. The editor extension shells
 # out to `dex lsp`, so a stale binary there reports errors the current compiler

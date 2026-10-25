@@ -2523,7 +2523,9 @@ directory, and add a library with `dex get`:
 ```
 dex mod init github.com/acme/web
 dex get github.com/acme/greet
-``` A project with no `dex.mod` keeps working exactly as before; it only
+```
+
+A project with no `dex.mod` keeps working exactly as before; it only
 becomes necessary once an import names a module.
 
 **The name is a URL.** `module github.com/acme/web` says what this project is
@@ -2565,6 +2567,36 @@ next to this project. When the library is published, delete the line and the
 same imports read the downloaded copy. A replaced module must still be required,
 so that removing the `replace` leaves a complete `dex.mod`. The path is relative
 to the `dex.mod`, written `./dir` or `../dir`.
+
+**`dex` says which compiler it needs.** A library is released on its own
+schedule, but it is written against some compiler, and a fix or feature it
+relies on is missing from an older one:
+
+```
+module github.com/acme/greet
+
+dex 0.9.14
+```
+
+means this module builds with dex 0.9.14 or later. The version is a release
+without its `v`, and the line is optional. An import that reaches a module
+needing a newer compiler stops there, before any of the module's files are
+read:
+
+```
+main.dx:8:1: github.com/acme/greet needs dex 0.9.14 or later; this is dex 0.9.7
+    upgrade with `dex update`, or `make install` in a compiler checkout
+```
+
+Without it, an old compiler fails *inside* the library, on code that is
+correct, and the error reads as a bug in the library. The program's own
+`dex.mod` is checked the same way. `dex mod init` writes the line for the
+compiler running it, and `dex get` warns when it downloads a release that
+needs a newer one.
+
+A compiler's version ignores a `-dev` suffix, so `0.9.14-dev` satisfies
+`dex 0.9.14`, and a compiler built with a plain `go build`, which reports
+`dev`, is never refused.
 
 #### Getting a library
 
@@ -2610,9 +2642,10 @@ A required module with a `replace` is never downloaded: the folder wins, which
 is what makes a monorepo, or a library being changed alongside the program that
 uses it, work.
 
-Only the main program's `dex.mod` is read, including for imports inside the
-libraries it uses: a library's own module path, and anything it requires, are
-resolved through the program's `require` and `replace` lines.
+Only the main program's `dex.mod` decides where imports come from, including
+imports inside the libraries it uses: a library's own module path, and anything
+it requires, are resolved through the program's `require` and `replace` lines.
+A library's own `dex.mod` is read for one thing only, its `dex` line.
 
 ### fmt
 
@@ -4358,10 +4391,22 @@ What it decides:
   `Box<int>`. A struct or object literal is spaced inside its braces,
   `Point { x: 1 }`; a call or an index is not.
 - **A line break is a consequence of the line not fitting**, never of where the
-  last person pressed return. Anything that fits in 100 columns is one line. A
+  last person pressed return. Anything that fits in 120 columns is one line. A
   call, array or literal that does not fit puts one element per line. An
   expression with no group to open breaks at its loosest-binding operator, and
   its operands line up with each other.
+- **A method chain that does not fit breaks at its dots**, one `.method(..)`
+  per line, one level in from the line its head is on. The head is everything
+  before the first call that is chained onto another call, so `q.from("books")`
+  stays together. It takes at least two such links, and a chain that fits stays
+  on one line:
+
+  ```dex
+  let byAuthor: q.Query = q.from("books")
+      .columns(["title"])
+      .where(q.col("author_name").eq(q.param("who")))
+      .build(LITE)
+  ```
 - **One blank line between declarations**, one after the import block, and at
   most one anywhere else. A comment directly above a declaration stays attached
   to it, with the blank line going above the comment.

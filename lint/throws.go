@@ -191,6 +191,11 @@ func (l *linter) scanGuarded(stmts []ast.Stmt, g guard, e *effects) {
 // recordThrow notes a throw whose type nothing above it catches.
 func (l *linter) recordThrow(s *ast.ThrowStmt, g guard, e *effects) {
 	typ := thrownTypeName(s.Value)
+	// The checker's type is authoritative. Reading the syntax alone named
+	// `throw e` an Exception and `throw makeErr()` a "makeErr".
+	if ast.IsStructType(s.ValueType) {
+		typ = ast.StructName(s.ValueType)
+	}
 	if g.covers(typ) {
 		return
 	}

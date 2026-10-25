@@ -1114,3 +1114,56 @@ fn main(): void {
 		t.Errorf("got %q, want %q", findings[0].Msg, want)
 	}
 }
+
+// A throw names its type through the checker, not the syntax. Only a literal or
+// a constructor call spells the type out; reading the syntax alone named
+// `throw e` an Exception and `throw makeOops(..)` a "makeOops", so a function
+// declaring exactly what it throws drew three findings for each.
+func TestAThrownValueHasItsCheckedType(t *testing.T) {
+	assertRules(t, `
+struct Oops(message: string) {}
+
+let fallback: Oops = Oops("global")
+
+fn makeOops(m: string): Oops {
+    return Oops(m)
+}
+
+fn fromParam(e: Oops): void throws Oops {
+    throw e
+}
+
+fn fromLocal(m: string): void throws Oops {
+    let e: Oops = Oops(m)
+    throw e
+}
+
+fn fromCall(m: string): void throws Oops {
+    throw makeOops(m)
+}
+
+fn fromGlobal(): void throws Oops {
+    throw fallback
+}
+
+fn rethrow(m: string): void throws Oops {
+    try {
+        fromLocal(m)
+    } catch (e: Oops) {
+        throw e
+    }
+}
+
+fn main(): void {
+    try {
+        fromParam(Oops("p"))
+        fromLocal("l")
+        fromCall("c")
+        fromGlobal()
+        rethrow("r")
+    } catch (e: Oops) {
+        assert(e.message != "")
+    }
+}
+`)
+}

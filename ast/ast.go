@@ -680,6 +680,10 @@ func (s *TryCatchStmt) stmtNode() {}
 type ThrowStmt struct {
 	Pos   Pos
 	Value Expr
+	// ValueType is the thrown value's type, set by the checker. Lint reads it
+	// to name what a throw raises: `throw e` and `throw makeErr()` carry their
+	// type nowhere in the syntax.
+	ValueType Type
 }
 
 func (s *ThrowStmt) stmtNode() {}

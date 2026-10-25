@@ -581,6 +581,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if throwable, reason := ast.ThrowableStruct(exprType); !throwable {
 			return c.errAt(s.Pos, "cannot throw %s: %s", typeName(exprType), reason)
 		}
+		s.ValueType = exprType
 		return nil
 
 	case *ast.SendStmt:

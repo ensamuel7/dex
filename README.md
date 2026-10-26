@@ -727,6 +727,12 @@ This creates an annotated tag `v0.9.17` and pushes it. The tag push triggers the
 make docker-publish DEX_VERSION=0.9.17
 ```
 
+This builds the image for linux/amd64 and linux/arm64 with `docker buildx`
+(making a builder named `dexlang-multi` the first time), pushes both under
+the version and `latest`, and runs each to check its version. Set
+`DOCKER_PLATFORMS` to build others. `make docker-build` makes a local image
+for your own machine only, to try before publishing.
+
 `make release` and `make docker-publish` are independent — run either or both.
 
 ---

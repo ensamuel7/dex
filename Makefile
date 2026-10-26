@@ -53,17 +53,29 @@ sanitize-linux:
 .PHONY: build install check memcheck sanitize tsan faultinject strict-c sanitize-linux docker-build docker-publish release
 
 
+# A local image for this machine's own architecture, to try before publishing.
 docker-build:
 	docker build --pull --no-cache --build-arg DEX_VERSION=$(DEX_VERSION) -t $(IMAGE_NAME):$(DEX_VERSION) -t $(IMAGE_NAME):latest .
 	@echo "Built $(IMAGE_NAME):$(DEX_VERSION)"
 	@docker run --rm $(IMAGE_NAME):$(DEX_VERSION) version
 
-docker-publish: docker-build
-	@echo "About to push $(IMAGE_NAME):$(DEX_VERSION) and $(IMAGE_NAME):latest"
+# Every platform in DOCKER_PLATFORMS, built and pushed as one image. Docker's
+# default builder cannot build for more than one platform, so a buildx builder
+# with the docker-container driver is made the first time. Built on a Mac
+# alone, the image was arm64 only and did not run on x86 servers or CI.
+DOCKER_PLATFORMS ?= linux/amd64,linux/arm64
+DOCKER_BUILDER   ?= dexlang-multi
+
+docker-publish:
+	@echo "About to build $(DOCKER_PLATFORMS) and push $(IMAGE_NAME):$(DEX_VERSION) and $(IMAGE_NAME):latest"
 	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
-	docker push $(IMAGE_NAME):$(DEX_VERSION)
-	docker push $(IMAGE_NAME):latest
-	@echo "Published $(IMAGE_NAME):$(DEX_VERSION)"
+	@docker buildx inspect $(DOCKER_BUILDER) > /dev/null 2>&1 || docker buildx create --name $(DOCKER_BUILDER) --driver docker-container > /dev/null
+	docker buildx build --builder $(DOCKER_BUILDER) --platform $(DOCKER_PLATFORMS) --pull --no-cache \
+		--build-arg DEX_VERSION=$(DEX_VERSION) -t $(IMAGE_NAME):$(DEX_VERSION) -t $(IMAGE_NAME):latest --push .
+	@for p in $$(echo $(DOCKER_PLATFORMS) | tr ',' ' '); do \
+		printf '%s: ' $$p; docker run --rm --pull always --platform $$p $(IMAGE_NAME):$(DEX_VERSION) version || exit 1; \
+	done
+	@echo "Published $(IMAGE_NAME):$(DEX_VERSION) for $(DOCKER_PLATFORMS)"
 
 release:
 	@test -n "$(VERSION)" || (echo "Usage: make release VERSION=0.1.4" && exit 1)

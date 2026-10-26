@@ -3744,10 +3744,15 @@ let id: string = crypto.uuid()
 | `sha256Hex` | `sha256Hex(data: string): string` | SHA-256, lowercase hex |
 | `hmacSha256Hex` | `hmacSha256Hex(key: string, message: string): string` | HMAC-SHA-256, lowercase hex |
 | `hmacSha256B64Url` | `hmacSha256B64Url(key: string, message: string): string` | HMAC-SHA-256, unpadded base64url — the encoding a JWS signature is written in |
+| `hmacSha1Hex` | `hmacSha1Hex(key: string, message: string): string` | HMAC-SHA-1, lowercase hex — only where a protocol requires it, such as TOTP |
+| `base32Encode` | `base32Encode(data: string): string` | RFC 4648 base32, upper case, unpadded. Binary-safe |
+| `base32Decode` | `base32Decode(text: string): string` | Decode base32, ignoring case, spaces, `-` and `=`; `""` for any other character. Binary-safe |
 | `verifyRs256` | `verifyRs256(message: string, signature: string, modulus: string, exponent: string): bool` | Verify an RS256 signature against an RSA public key given as its two numbers |
 | `hashPassword` | `hashPassword(password: string): string` | Hash a password for storing |
 | `verifyPassword` | `verifyPassword(password: string, stored: string): bool` | Check a password against a stored hash, in constant time |
 | `randomHex` | `randomHex(bytes: int): string` | Random bytes as hex, for session and invite tokens |
+| `randomBase32` | `randomBase32(bytes: int): string` | Random bytes as base32, for a TOTP secret |
+| `totp` | `totp(secret: string, unixSeconds: long): string` | The six-digit RFC 6238 code an authenticator app shows for a base32 secret |
 | `encrypt` | `encrypt(keyHex: string, plaintext: string): string` | Encrypt a secret for storing, AES-256-GCM, as base64 |
 | `decrypt` | `decrypt(keyHex: string, sealed: string): string` | Decrypt what `encrypt` produced; `""` if the key is wrong or the input was altered |
 
@@ -3789,6 +3794,39 @@ let token: string = crypto.decrypt(key, sealed)   // "" if anything is wrong
 It is AES-256-GCM with a fresh nonce on every call, so encrypting the same
 secret twice gives different results, and the tag means altered or truncated
 input decrypts to `""` rather than to something wrong.
+
+#### Two-factor codes
+
+`totp` gives the code an authenticator app (Google Authenticator, 1Password,
+Authy) shows: RFC 6238 with the settings they all assume — 30-second steps,
+HMAC-SHA-1, six digits. Make a secret once per account, store it sealed with
+`encrypt`, and show it to the person as an `otpauth://` URI, usually as a QR
+code:
+
+```dex
+let secret: string = crypto.randomBase32(20)   // 32 characters
+let uri: string = "otpauth://totp/MyApp:" + email + "?secret=" + secret + "&issuer=MyApp"
+```
+
+The label and issuer should be percent-encoded if they can hold anything but
+letters and digits. To check a code, accept the step before and the step after
+as well, since phone clocks drift, compare with `secureEquals`, and remember
+the last step used so a code cannot be replayed:
+
+```dex
+let now: long = time.unixNow()
+let ok: bool = false
+
+foreach ([now - 30, now, now + 30] as at) {
+    if (crypto.secureEquals(crypto.totp(secret, at), code)) {
+        ok = true
+    }
+}
+```
+
+`base32Decode` forgives the spaces and hyphens people type when copying a
+secret by hand, and refuses anything else with `""`; `totp` returns `""` for a
+secret that does not decode.
 
 #### Verifying what somebody else signed
 
@@ -3847,9 +3885,10 @@ which is right for text and wrong for bytes. Where it matters, the table says
 
 #### OpenSSL
 
-`sha256Hex`, `hmacSha256Hex` and `hmacSha256B64Url` need OpenSSL, found with `pkg-config` the same
-way `wss://` finds it. Without it the module still builds and every call to
-those two returns an empty string after saying so on stderr — so a program that
+`sha256Hex`, `hmacSha256Hex`, `hmacSha256B64Url`, `hmacSha1Hex` and `totp`
+need OpenSSL, found with `pkg-config` the same way `wss://` finds it. Without
+it the module still builds and every call to those returns an empty string
+after saying so on stderr — so a program that
 only mentions a digest on a path it never takes still runs.
 
 ```dex

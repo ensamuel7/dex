@@ -1,0 +1,52 @@
+import "crypto"
+
+fn main(): void {
+    // --- base32, RFC 4648 section 10 (unpadded) ---
+    assert(crypto.base32Encode("") == "")
+    assert(crypto.base32Encode("f") == "MY")
+    assert(crypto.base32Encode("fo") == "MZXQ")
+    assert(crypto.base32Encode("foo") == "MZXW6")
+    assert(crypto.base32Encode("foob") == "MZXW6YQ")
+    assert(crypto.base32Encode("fooba") == "MZXW6YTB")
+    assert(crypto.base32Encode("foobar") == "MZXW6YTBOI")
+    assert(crypto.base32Decode("MZXW6YTBOI") == "foobar")
+    assert(crypto.base32Decode("MZXW6YTBOI======") == "foobar")
+    assert(crypto.base32Decode("mzxw 6ytb-oi") == "foobar")
+    assert(crypto.base32Decode("MZXW1") == "")
+    assert(crypto.base32Decode("") == "")
+
+    // A binary string with zero bytes survives the round trip.
+    let binary: string = crypto.base64Decode("AAECA/8A")
+    assert(binary.len() == 6)
+    let back: string = crypto.base32Decode(crypto.base32Encode(binary))
+    assert(back.len() == 6)
+    assert(crypto.base64Encode(back) == "AAECA/8A")
+
+    // --- random secrets ---
+    let secret: string = crypto.randomBase32(20)
+    assert(secret.len() == 32)
+    assert(crypto.base32Decode(secret).len() == 20)
+    assert(crypto.randomBase32(20) != secret)
+    assert(crypto.randomBase32(0) == "")
+    assert(crypto.randomBase32(1025) == "")
+
+    let mac: string = crypto.hmacSha1Hex("Jefe", "what do ya want for nothing?")
+
+    if (!mac.isEmpty()) {
+        // --- HMAC-SHA-1, RFC 2202 test case 2 ---
+        assert(mac == "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79")
+
+        // --- TOTP, RFC 6238 appendix B (SHA-1, last six digits) ---
+        let rfc: string = crypto.base32Encode("12345678901234567890")
+        assert(rfc == "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        assert(crypto.totp(rfc, 59) == "287082")
+        assert(crypto.totp(rfc, 1111111109) == "081804")
+        assert(crypto.totp(rfc, 1111111111) == "050471")
+        assert(crypto.totp(rfc, 1234567890) == "005924")
+        assert(crypto.totp(rfc, 2000000000) == "279037")
+        assert(crypto.totp(rfc, 20000000000) == "353130")
+        assert(crypto.totp("", 59) == "")
+        assert(crypto.totp("not base32!", 59) == "")
+        assert(crypto.totp(secret, 59).len() == 6)
+    }
+}

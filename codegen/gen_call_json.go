@@ -118,7 +118,7 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 	if ast.IsStructType(argType) && !ast.IsArrayType(argType) {
 		// Struct stringify: use dex_json_encode_struct
 		def := ast.GetStructDef(argType)
-		if _, isCall := arg.(*ast.CallExpr); isCall {
+		if g.jsonStructArgIsRvalue(arg, def) {
 			// A returned struct is an rvalue, and C will not take its address.
 			// Bind it first, and release what it owns once its text exists:
 			// nothing else will, since nothing else ever names it.
@@ -269,4 +269,14 @@ func (g *Generator) jsonDecodeFromString(out *strings.Builder, e *ast.CallExpr) 
 	g.genStructFieldDescs(out, structType, 0)
 	out.WriteString("); _jobj_tmp; })")
 	return
+}
+
+func (g *Generator) jsonStructArgIsRvalue(arg ast.Expr, def *ast.StructDef) bool {
+	switch e := arg.(type) {
+	case *ast.CallExpr:
+		return true
+	case *ast.StructLitExpr:
+		return g.structLitNeedsUnwindGuard(e, def)
+	}
+	return false
 }

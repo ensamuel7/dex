@@ -1,0 +1,28 @@
+import "fmt"
+import "json"
+
+enum Arg {
+    Int(long)
+    Text(string)
+}
+
+struct Built {
+    sql: string
+    args: Arg[]
+}
+
+struct Page {
+    name: string
+}
+
+fn main(): void {
+    let b: Built = Built { sql: "SELECT 1", args: [Arg.Int(1), Arg.Text("x")] }
+
+    let page: string = json.encode(Page { name: b.sql })
+    fmt.println(page)
+    assert(page == "{\"name\":\"SELECT 1\"}")
+
+    let built: string = json.encode(b)
+    fmt.println(built)
+    assert(built.contains("\"sql\":\"SELECT 1\""))
+}

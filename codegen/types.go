@@ -766,7 +766,7 @@ func (g *Generator) genStructFieldDescs(out *strings.Builder, structType ast.Typ
 			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s}", f.Name, fieldOffset, encFn, decFn))
 			continue
 		}
-		if ast.IsStructArrayType(f.Type) && depth < maxJSONStructDepth {
+		if isJSONStructArray(f.Type) && depth < maxJSONStructDepth {
 			encFn, decFn := jsonStructArrayCodecNames(f.Type)
 			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s}", f.Name, fieldOffset, encFn, decFn))
 			continue
@@ -854,6 +854,10 @@ func jsonStructArrayCodecNames(t ast.Type) (string, string) {
 	return "dex_jarr_enc_s_" + name, "dex_jarr_dec_s_" + name
 }
 
+func isJSONStructArray(t ast.Type) bool {
+	return ast.IsStructArrayType(t) && ast.IsStructType(ast.ElementType(t))
+}
+
 // emitArrayFieldCodecs emits one encode/decode pair per array element type that
 // appears as a struct field anywhere in the program, for both primitive element
 // types and struct element types.
@@ -871,7 +875,7 @@ func (g *Generator) emitArrayFieldCodecs(out *strings.Builder, program *ast.Prog
 			if _, ok := arrayCodecSpecs[f.Type]; ok {
 				needed[f.Type] = true
 			}
-			if ast.IsStructArrayType(f.Type) && !seenStructArr[f.Type] {
+			if isJSONStructArray(f.Type) && !seenStructArr[f.Type] {
 				seenStructArr[f.Type] = true
 				structArrs = append(structArrs, f.Type)
 			}

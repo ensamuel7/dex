@@ -1,0 +1,31 @@
+import "fmt"
+import "json"
+import "time"
+
+struct Health {
+    status: string
+    db: string
+    uptime_s: long
+}
+
+struct Oops(message: string) {}
+
+fn risky(fail: bool): int throws Oops {
+    if (fail) {
+        throw Oops("no")
+    }
+    return 1
+}
+
+fn main(): void {
+    let startedAt: long = time.unixNow()
+    let out: string = json.encode(Health { status: "ok", db: "ok", uptime_s: time.unixNow() - startedAt })
+    fmt.println(out)
+    assert(out.startsWith("{\"status\":\"ok\",\"db\":\"ok\",\"uptime_s\":"))
+
+    try {
+        risky(true)
+    } catch (e: Oops) {
+        assert(e.message == "no")
+    }
+}

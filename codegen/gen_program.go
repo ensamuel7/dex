@@ -18,6 +18,9 @@ func (g *Generator) Generate(program *ast.Program) string {
 				key = imp.Alias
 			}
 			g.importedModules[key] = mod
+			if imp.Path == "http" || imp.Path == "ws" {
+				g.usesConcurrency = true
+			}
 		}
 	}
 

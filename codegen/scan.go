@@ -249,6 +249,9 @@ func (g *Generator) scanExpr(expr ast.Expr) {
 		if (e.Module != "" || e.Recv != nil) && (e.Name == "lock" || e.Name == "unlock") {
 			g.usesConcurrency = true
 		}
+		if mod, ok := g.importedModules[e.Module]; ok && mod.Name == "time" && (e.Name == "setTimeout" || e.Name == "setInterval") {
+			g.usesConcurrency = true
+		}
 		// Scan for string method usage — conservatively detect potential string methods.
 		// False positives (e.g. array.len()) are harmless since the included static
 		// functions will simply be unused and stripped by the C compiler.

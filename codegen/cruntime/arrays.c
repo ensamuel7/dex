@@ -22,7 +22,7 @@ DexArrayInt* dex_array_int_new(void) {
     DexArrayInt* a = (DexArrayInt*)dex_obj_alloc(sizeof(DexArrayInt), dex_array_int_destroy);
     a->cap = 8;
     a->len = 0;
-    a->data = (int*)dex_xmalloc(sizeof(int) * a->cap);
+    a->data = (int*)dex_xmallocarray((size_t)a->cap, sizeof(int));
     DEX_PF_BUF_SET(a, sizeof(int) * a->cap);
     if (!a->data) { dex_panic("out of memory"); }
     return a;
@@ -32,7 +32,7 @@ void dex_array_int_push(DexArrayInt* a, int val) {
     if (a->len == a->cap) {
         if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
         a->cap *= 2;
-        a->data = (int*)dex_xrealloc(a->data, sizeof(int) * a->cap);
+        a->data = (int*)dex_xreallocarray(a->data, (size_t)a->cap, sizeof(int));
         DEX_PF_BUF_SET(a, sizeof(int) * a->cap);
         if (!a->data) { dex_panic("out of memory"); }
     }
@@ -100,7 +100,7 @@ DexArrayInt* dex_array_int_slice(DexArrayInt* a, int start, int end) {
     DexArrayInt* result = dex_array_int_new();
     if (count > result->cap) {
         result->cap = count;
-        result->data = (int*)dex_xrealloc(result->data, sizeof(int) * result->cap);
+        result->data = (int*)dex_xreallocarray(result->data, (size_t)result->cap, sizeof(int));
         DEX_PF_BUF_SET(result, sizeof(int) * result->cap);
         if (!result->data) { dex_panic("out of memory"); }
     }
@@ -126,7 +126,7 @@ DexArrayBool* dex_array_bool_new(void) {
     DexArrayBool* a = (DexArrayBool*)dex_obj_alloc(sizeof(DexArrayBool), dex_array_bool_destroy);
     a->cap = 8;
     a->len = 0;
-    a->data = (_Bool*)dex_xmalloc(sizeof(_Bool) * a->cap);
+    a->data = (_Bool*)dex_xmallocarray((size_t)a->cap, sizeof(_Bool));
     DEX_PF_BUF_SET(a, sizeof(_Bool) * a->cap);
     if (!a->data) { dex_panic("out of memory"); }
     return a;
@@ -136,7 +136,7 @@ void dex_array_bool_push(DexArrayBool* a, _Bool val) {
     if (a->len == a->cap) {
         if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
         a->cap *= 2;
-        a->data = (_Bool*)dex_xrealloc(a->data, sizeof(_Bool) * a->cap);
+        a->data = (_Bool*)dex_xreallocarray(a->data, (size_t)a->cap, sizeof(_Bool));
         DEX_PF_BUF_SET(a, sizeof(_Bool) * a->cap);
         if (!a->data) { dex_panic("out of memory"); }
     }
@@ -186,7 +186,7 @@ DexArrayBool* dex_array_bool_slice(DexArrayBool* a, int start, int end) {
     DexArrayBool* result = dex_array_bool_new();
     if (count > result->cap) {
         result->cap = count;
-        result->data = (_Bool*)dex_xrealloc(result->data, sizeof(_Bool) * result->cap);
+        result->data = (_Bool*)dex_xreallocarray(result->data, (size_t)result->cap, sizeof(_Bool));
         DEX_PF_BUF_SET(result, sizeof(_Bool) * result->cap);
         if (!result->data) { dex_panic("out of memory"); }
     }
@@ -215,7 +215,7 @@ DexArrayString* dex_array_string_new(void) {
     DexArrayString* a = (DexArrayString*)dex_obj_alloc(sizeof(DexArrayString), dex_array_string_destroy);
     a->cap = 8;
     a->len = 0;
-    a->data = (DexString**)dex_xmalloc(sizeof(DexString*) * a->cap);
+    a->data = (DexString**)dex_xmallocarray((size_t)a->cap, sizeof(DexString*));
     DEX_PF_BUF_SET(a, sizeof(DexString*) * a->cap);
     if (!a->data) { dex_panic("out of memory"); }
     return a;
@@ -225,7 +225,7 @@ void dex_array_string_push(DexArrayString* a, DexString* val) {
     if (a->len == a->cap) {
         if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
         a->cap *= 2;
-        a->data = (DexString**)dex_xrealloc(a->data, sizeof(DexString*) * a->cap);
+        a->data = (DexString**)dex_xreallocarray(a->data, (size_t)a->cap, sizeof(DexString*));
         DEX_PF_BUF_SET(a, sizeof(DexString*) * a->cap);
         if (!a->data) { dex_panic("out of memory"); }
     }
@@ -297,7 +297,7 @@ DexArrayString* dex_array_string_slice(DexArrayString* a, int start, int end) {
     DexArrayString* result = dex_array_string_new();
     if (count > result->cap) {
         result->cap = count;
-        result->data = (DexString**)dex_xrealloc(result->data, sizeof(DexString*) * result->cap);
+        result->data = (DexString**)dex_xreallocarray(result->data, (size_t)result->cap, sizeof(DexString*));
         DEX_PF_BUF_SET(result, sizeof(DexString*) * result->cap);
         if (!result->data) { dex_panic("out of memory"); }
     }
@@ -326,7 +326,7 @@ DexArrayLong* dex_array_long_new(void) {
     DexArrayLong* a = (DexArrayLong*)dex_obj_alloc(sizeof(DexArrayLong), dex_array_long_destroy);
     a->cap = 8;
     a->len = 0;
-    a->data = (long*)dex_xmalloc(sizeof(long) * a->cap);
+    a->data = (long*)dex_xmallocarray((size_t)a->cap, sizeof(long));
     DEX_PF_BUF_SET(a, sizeof(long) * a->cap);
     if (!a->data) { dex_panic("out of memory"); }
     return a;
@@ -336,7 +336,7 @@ void dex_array_long_push(DexArrayLong* a, long val) {
     if (a->len == a->cap) {
         if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
         a->cap *= 2;
-        a->data = (long*)dex_xrealloc(a->data, sizeof(long) * a->cap);
+        a->data = (long*)dex_xreallocarray(a->data, (size_t)a->cap, sizeof(long));
         DEX_PF_BUF_SET(a, sizeof(long) * a->cap);
         if (!a->data) { dex_panic("out of memory"); }
     }
@@ -404,7 +404,7 @@ DexArrayLong* dex_array_long_slice(DexArrayLong* a, int start, int end) {
     DexArrayLong* result = dex_array_long_new();
     if (count > result->cap) {
         result->cap = count;
-        result->data = (long*)dex_xrealloc(result->data, sizeof(long) * result->cap);
+        result->data = (long*)dex_xreallocarray(result->data, (size_t)result->cap, sizeof(long));
         DEX_PF_BUF_SET(result, sizeof(long) * result->cap);
         if (!result->data) { dex_panic("out of memory"); }
     }
@@ -430,7 +430,7 @@ DexArrayDouble* dex_array_double_new(void) {
     DexArrayDouble* a = (DexArrayDouble*)dex_obj_alloc(sizeof(DexArrayDouble), dex_array_double_destroy);
     a->cap = 8;
     a->len = 0;
-    a->data = (double*)dex_xmalloc(sizeof(double) * a->cap);
+    a->data = (double*)dex_xmallocarray((size_t)a->cap, sizeof(double));
     DEX_PF_BUF_SET(a, sizeof(double) * a->cap);
     if (!a->data) { dex_panic("out of memory"); }
     return a;
@@ -440,7 +440,7 @@ void dex_array_double_push(DexArrayDouble* a, double val) {
     if (a->len == a->cap) {
         if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
         a->cap *= 2;
-        a->data = (double*)dex_xrealloc(a->data, sizeof(double) * a->cap);
+        a->data = (double*)dex_xreallocarray(a->data, (size_t)a->cap, sizeof(double));
         DEX_PF_BUF_SET(a, sizeof(double) * a->cap);
         if (!a->data) { dex_panic("out of memory"); }
     }
@@ -508,7 +508,7 @@ DexArrayDouble* dex_array_double_slice(DexArrayDouble* a, int start, int end) {
     DexArrayDouble* result = dex_array_double_new();
     if (count > result->cap) {
         result->cap = count;
-        result->data = (double*)dex_xrealloc(result->data, sizeof(double) * result->cap);
+        result->data = (double*)dex_xreallocarray(result->data, (size_t)result->cap, sizeof(double));
         DEX_PF_BUF_SET(result, sizeof(double) * result->cap);
         if (!result->data) { dex_panic("out of memory"); }
     }
@@ -534,7 +534,7 @@ DexArrayChar* dex_array_char_new(void) {
     DexArrayChar* a = (DexArrayChar*)dex_obj_alloc(sizeof(DexArrayChar), dex_array_char_destroy);
     a->cap = 8;
     a->len = 0;
-    a->data = (unsigned char*)dex_xmalloc(sizeof(unsigned char) * a->cap);
+    a->data = (unsigned char*)dex_xmallocarray((size_t)a->cap, sizeof(unsigned char));
     DEX_PF_BUF_SET(a, sizeof(unsigned char) * a->cap);
     if (!a->data) { dex_panic("out of memory"); }
     return a;
@@ -544,7 +544,7 @@ void dex_array_char_push(DexArrayChar* a, unsigned char val) {
     if (a->len == a->cap) {
         if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
         a->cap *= 2;
-        a->data = (unsigned char*)dex_xrealloc(a->data, sizeof(unsigned char) * a->cap);
+        a->data = (unsigned char*)dex_xreallocarray(a->data, (size_t)a->cap, sizeof(unsigned char));
         DEX_PF_BUF_SET(a, sizeof(unsigned char) * a->cap);
         if (!a->data) { dex_panic("out of memory"); }
     }
@@ -612,7 +612,7 @@ DexArrayChar* dex_array_char_slice(DexArrayChar* a, int start, int end) {
     DexArrayChar* result = dex_array_char_new();
     if (count > result->cap) {
         result->cap = count;
-        result->data = (unsigned char*)dex_xrealloc(result->data, sizeof(unsigned char) * result->cap);
+        result->data = (unsigned char*)dex_xreallocarray(result->data, (size_t)result->cap, sizeof(unsigned char));
         DEX_PF_BUF_SET(result, sizeof(unsigned char) * result->cap);
         if (!result->data) { dex_panic("out of memory"); }
     }
@@ -649,7 +649,7 @@ DexArrayStruct* dex_array_struct_new(size_t elem_size, DexStructElemCleanup clea
     a->len = 0;
     a->elem_size = elem_size;
     a->cleanup = cleanup;
-    a->data = dex_xmalloc(elem_size * a->cap);
+    a->data = dex_xmallocarray((size_t)a->cap, elem_size);
     DEX_PF_BUF_SET(a, elem_size * a->cap);
     if (!a->data) { dex_panic("out of memory"); }
     return a;
@@ -659,7 +659,7 @@ void dex_array_struct_push(DexArrayStruct* a, const void* val) {
     if (a->len == a->cap) {
         if (a->cap > INT_MAX / 2) { dex_panic("array capacity overflow"); }
         a->cap *= 2;
-        a->data = dex_xrealloc(a->data, a->elem_size * a->cap);
+        a->data = dex_xreallocarray(a->data, (size_t)a->cap, a->elem_size);
         DEX_PF_BUF_SET(a, a->elem_size * a->cap);
         if (!a->data) { dex_panic("out of memory"); }
     }
@@ -712,7 +712,7 @@ DexArrayStruct* dex_array_struct_slice(DexArrayStruct* a, int start, int end) {
     DexArrayStruct* result = dex_array_struct_new(a->elem_size, a->cleanup);
     if (count > result->cap) {
         result->cap = count;
-        result->data = dex_xrealloc(result->data, a->elem_size * result->cap);
+        result->data = dex_xreallocarray(result->data, (size_t)result->cap, a->elem_size);
         DEX_PF_BUF_SET(result, a->elem_size * result->cap);
         if (!result->data) { dex_panic("out of memory"); }
     }

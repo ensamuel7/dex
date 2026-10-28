@@ -1,4 +1,5 @@
 #include <signal.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -114,6 +115,16 @@ static void* dex_xrealloc(void* old, size_t n) {
     void* p = realloc(old, n);
     if (!p && n) dex_out_of_memory();
     return p;
+}
+
+static void* dex_xmallocarray(size_t count, size_t n) {
+    if (n && count > SIZE_MAX / n) dex_out_of_memory();
+    return dex_xmalloc(count * n);
+}
+
+static void* dex_xreallocarray(void* old, size_t count, size_t n) {
+    if (n && count > SIZE_MAX / n) dex_out_of_memory();
+    return dex_xrealloc(old, count * n);
 }
 
 static char* dex_xstrdup(const char* s) {

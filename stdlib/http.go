@@ -27,6 +27,12 @@ func init() {
 				CName:      "",
 				Doc:        "Start the HTTP server bound to one interface. http.listen() binds every interface; this one names the address, for a service behind a proxy that should not also be reachable directly. The host must be an IPv4 address — \"127.0.0.1\", or \"0.0.0.0\" for every interface. Optional third argument is the worker process count (0 = one per CPU).",
 			},
+			"inline": {
+				Params:     []ast.Type{},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_http_set_inline",
+				Doc:        "Run every handler on the thread that owns the sockets instead of handing it to the pool. Call before listen. Each request then costs no thread handoff, lock or wakeup, and its response is written straight away, which is the fastest choice on one core when handlers are short and only touch local state such as an SQLite file. Handlers run one at a time, so a handler that blocks, on an outbound request or a sleep, stalls every connection while it does.",
+			},
 			"threads": {
 				Params:     []ast.Type{ast.TypeInt},
 				ParamNames: []string{"count"},

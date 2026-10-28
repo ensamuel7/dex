@@ -56,6 +56,12 @@ static int dex_route_count = 0;
  * of those it is, so it is the program that says. */
 static int dex_http_thread_count = 0;
 
+static int dex_http_inline = 0;
+
+void dex_http_set_inline(void) {
+    dex_http_inline = 1;
+}
+
 void dex_http_set_threads(int n) {
     dex_http_thread_count = n;
 }
@@ -594,8 +600,7 @@ void dex_route_not_found(DexClosure* handler) {
 }
 
 /* Worker function: run handler, build response, enqueue for event loop */
-static void dex_http_worker_func(void* arg) {
-    DexHttpConn* conn = (DexHttpConn*)arg;
+static void dex_http_run_handler(DexHttpConn* conn) {
 
     /* Extract body from read buffer */
     char* body_data = "";
@@ -711,13 +716,40 @@ static void dex_http_worker_func(void* arg) {
     }
 
     conn->state = HTTP_WRITING;
+}
 
-    /* Enqueue into completed list and signal event loop */
+static void dex_http_worker_func(void* arg) {
+    DexHttpConn* conn = (DexHttpConn*)arg;
+    dex_http_run_handler(conn);
     pthread_mutex_lock(&dex_http_completed_mutex);
     conn->next = dex_http_completed_head;
     dex_http_completed_head = conn;
     pthread_mutex_unlock(&dex_http_completed_mutex);
     dex_notify_pipe_signal(&dex_http_notify);
+}
+
+static void dex_http_flush_inline(DexHttpConn* conn) {
+    while (conn->write_pos < conn->write_len) {
+        int w = (int)write(conn->fd, conn->write_buf + conn->write_pos, conn->write_len - conn->write_pos);
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            dex_ev_mod(dex_http_loop, conn->fd, DEX_EV_WRITE, conn);
+            return;
+        }
+        if (w <= 0) {
+            dex_ev_del(dex_http_loop, conn->fd);
+            close(conn->fd);
+            dex_http_conn_free(conn);
+            return;
+        }
+        conn->write_pos += w;
+    }
+    if (conn->keep_alive) {
+        dex_http_conn_reset(conn);
+    } else {
+        dex_ev_del(dex_http_loop, conn->fd);
+        close(conn->fd);
+        dex_http_conn_free(conn);
+    }
 }
 
 static volatile int dex_server_fd = -1;
@@ -793,7 +825,7 @@ static void dex_listen_on(const char* host, int port) {
 
     /* Initialize event loop, thread pool, and notify pipe */
     dex_http_loop = dex_ev_create(1024);
-    dex_http_pool = dex_pool_create(dex_http_thread_count);
+    if (!dex_http_inline) dex_http_pool = dex_pool_create(dex_http_thread_count);
     dex_http_conn_cap = dex_http_max_conns;
     if (dex_http_conn_cap > DEX_HTTP_MAX_FD - 64) dex_http_conn_cap = DEX_HTTP_MAX_FD - 64;
     struct rlimit rl;
@@ -977,7 +1009,11 @@ static void dex_listen_on(const char* host, int port) {
                 if (conn->state == HTTP_READING_BODY) {
                     int body_received = conn->read_len - conn->headers_end;
                     if (body_received >= conn->content_length) {
-                        /* Request complete — dispatch to worker pool */
+                        if (dex_http_inline) {
+                            dex_http_run_handler(conn);
+                            dex_http_flush_inline(conn);
+                            continue;
+                        }
                         conn->state = HTTP_DISPATCHED;
                         dex_ev_del(dex_http_loop, conn->fd);
                         dex_pool_submit(dex_http_pool, dex_http_worker_func, conn);
@@ -1000,11 +1036,11 @@ static void dex_listen_on(const char* host, int port) {
                 }
                 if (conn->write_pos >= conn->write_len) {
                     /* Response fully sent */
-                    dex_ev_del(dex_http_loop, conn->fd);
                     if (conn->keep_alive) {
                         dex_http_conn_reset(conn);
-                        dex_ev_add(dex_http_loop, conn->fd, DEX_EV_READ, conn);
+                        dex_ev_mod(dex_http_loop, conn->fd, DEX_EV_READ, conn);
                     } else {
+                        dex_ev_del(dex_http_loop, conn->fd);
                         close(conn->fd);
                         dex_http_conn_free(conn);
                     }

@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/resource.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -76,6 +77,9 @@ static int dex_http_max_body  = DEX_HTTP_DEFAULT_MAX_BODY;
 static int dex_http_idle_secs = DEX_HTTP_DEFAULT_IDLE_SECS;
 static int dex_http_max_conns = DEX_HTTP_DEFAULT_MAX_CONNS;
 static int dex_http_live_conns = 0;
+static int dex_http_conn_cap = 0;
+static int dex_http_shed_at = 0;
+static int dex_http_accepting = 1;
 
 /* 0 for any argument keeps that default: a program raising the body limit for
  * uploads should not have to restate the idle timeout to do it. */
@@ -263,7 +267,7 @@ static DexHttpConn* dex_http_conn_new(int fd) {
     if (fd >= 0 && fd < DEX_HTTP_MAX_FD) {
         dex_http_conn_table[fd] = conn;
     }
-    dex_http_live_conns++;
+    __atomic_add_fetch(&dex_http_live_conns, 1, __ATOMIC_RELAXED);
     return conn;
 }
 
@@ -272,7 +276,7 @@ static void dex_http_conn_free(DexHttpConn* conn) {
     if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD) {
         dex_http_conn_table[conn->fd] = NULL;
     }
-    dex_http_live_conns--;
+    __atomic_sub_fetch(&dex_http_live_conns, 1, __ATOMIC_RELAXED);
     free(conn->read_buf);
     free(conn->write_buf);
     free(conn);
@@ -514,6 +518,10 @@ static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
     conn->write_buf = (char*)dex_xmalloc(needed);
     if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
 
+    if (conn->keep_alive && dex_http_shed_at > 0 &&
+        __atomic_load_n(&dex_http_live_conns, __ATOMIC_RELAXED) >= dex_http_shed_at) {
+        conn->keep_alive = 0;
+    }
     int hlen = snprintf(conn->write_buf, needed,
         "HTTP/1.1 %s\r\n"
         "Content-Type: %s\r\n"
@@ -777,7 +785,7 @@ static void dex_listen_on(const char* host, int port) {
         perror("bind"); close(server_fd); return;
     }
 
-    if (listen(server_fd, 1024) < 0) {
+    if (listen(server_fd, SOMAXCONN) < 0) {
         perror("listen"); close(server_fd); return;
     }
 
@@ -786,6 +794,14 @@ static void dex_listen_on(const char* host, int port) {
     /* Initialize event loop, thread pool, and notify pipe */
     dex_http_loop = dex_ev_create(1024);
     dex_http_pool = dex_pool_create(dex_http_thread_count);
+    dex_http_conn_cap = dex_http_max_conns;
+    if (dex_http_conn_cap > DEX_HTTP_MAX_FD - 64) dex_http_conn_cap = DEX_HTTP_MAX_FD - 64;
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY &&
+        (rlim_t)dex_http_conn_cap + 64 > rl.rlim_cur) {
+        dex_http_conn_cap = rl.rlim_cur > 128 ? (int)(rl.rlim_cur - 64) : 64;
+    }
+    dex_http_shed_at = dex_http_conn_cap - dex_http_conn_cap / 16;
     dex_notify_pipe_init(&dex_http_notify);
     memset(dex_http_conn_table, 0, sizeof(dex_http_conn_table));
 
@@ -807,6 +823,10 @@ static void dex_listen_on(const char* host, int port) {
     time_t last_sweep = time(NULL);
 
     for (;;) {
+        if (!dex_http_accepting && dex_http_live_conns < dex_http_conn_cap) {
+            dex_ev_add(dex_http_loop, server_fd, DEX_EV_READ, NULL);
+            dex_http_accepting = 1;
+        }
         /* The sweep runs before the wait, never between the wait and the
          * events it returned: a connection freed there could still have an
          * event in the batch, which would then read freed memory. */
@@ -835,17 +855,15 @@ static void dex_listen_on(const char* host, int port) {
             /* Server fd: accept new connections */
             if (ev->user_data == NULL) {
                 for (;;) {
+                    if (dex_http_live_conns >= dex_http_conn_cap) {
+                        dex_ev_del(dex_http_loop, server_fd);
+                        dex_http_accepting = 0;
+                        break;
+                    }
                     struct sockaddr_in client_addr;
                     socklen_t client_len = sizeof(client_addr);
                     int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
                     if (client_fd < 0) break;
-                    /* Refusing beyond the cap keeps the listener answering:
-                     * accepting without limit means a flood of half-open
-                     * sockets exhausts fds and memory for everyone. */
-                    if (dex_http_live_conns >= dex_http_max_conns) {
-                        close(client_fd);
-                        continue;
-                    }
                     dex_set_nonblocking(client_fd);
                     DexHttpConn* conn = dex_http_conn_new(client_fd);
                     if (!conn) { close(client_fd); continue; }

@@ -39,7 +39,7 @@ func init() {
 				ParamNames: []string{"maxBodyBytes", "idleTimeoutSecs", "maxConnections"},
 				ReturnType: ast.TypeVoid,
 				CName:      "dex_http_set_limits",
-				Doc:        "Bound what one client can cost the server. Call before listen. Defaults are 8 MB, 30 seconds and 8192 connections; a 0 for any argument keeps that default, so raising the body limit for uploads does not mean restating the others. The header block is capped at 32 KB and is not adjustable. A body larger than the limit is answered 413, headers that never terminate 431, and a connection that stops making progress for the idle timeout is closed.",
+				Doc:        "Bound what one client can cost the server. Call before listen. Defaults are 8 MB, 30 seconds and 8192 connections; a 0 for any argument keeps that default, so raising the body limit for uploads does not mean restating the others. The header block is capped at 32 KB and is not adjustable. A body larger than the limit is answered 413, headers that never terminate 431, and a connection that stops making progress for the idle timeout is closed. The connection limit is also held below the process's open-file limit. Past fifteen sixteenths of it, responses carry Connection: close so idle clients reconnect for their next request, and at the limit new connections wait in the listen queue until one closes.",
 			},
 			"notFound": {
 				Params:     nil, // special codegen: function value, like route

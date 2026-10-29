@@ -251,6 +251,7 @@ typedef struct DexHttpConn {
 
     /* Write buffer (response) */
     char*         write_buf;
+    size_t        write_cap;
     int           write_len;
     int           write_pos;       /* how much has been flushed */
 
@@ -297,6 +298,33 @@ static DexHttpConn* dex_http_conn_new(int fd) {
     return conn;
 }
 
+#define DEX_HTTP_POOL_BUF_BYTES 16384
+#define DEX_HTTP_POOL_MAX 256
+static __thread char* dex_http_buf_pool[DEX_HTTP_POOL_MAX];
+static __thread int dex_http_buf_pool_len = 0;
+
+static char* dex_http_buf_take(size_t needed, size_t* cap) {
+    if (dex_http_inline && needed <= DEX_HTTP_POOL_BUF_BYTES) {
+        *cap = DEX_HTTP_POOL_BUF_BYTES;
+        if (dex_http_buf_pool_len > 0) return dex_http_buf_pool[--dex_http_buf_pool_len];
+        return (char*)dex_xmalloc(DEX_HTTP_POOL_BUF_BYTES);
+    }
+    *cap = needed;
+    return (char*)dex_xmalloc(needed);
+}
+
+static void dex_http_release_write_buf(DexHttpConn* conn) {
+    char* b = conn->write_buf;
+    conn->write_buf = NULL;
+    if (!b) return;
+    if (dex_http_inline && conn->write_cap == DEX_HTTP_POOL_BUF_BYTES &&
+        dex_http_buf_pool_len < DEX_HTTP_POOL_MAX) {
+        dex_http_buf_pool[dex_http_buf_pool_len++] = b;
+        return;
+    }
+    free(b);
+}
+
 static void dex_http_conn_free(DexHttpConn* conn) {
     if (!conn) return;
     if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD && dex_http_conn_table[conn->fd] == conn) {
@@ -304,7 +332,7 @@ static void dex_http_conn_free(DexHttpConn* conn) {
     }
     __atomic_sub_fetch(&dex_http_live_conns, 1, __ATOMIC_RELAXED);
     free(conn->read_buf);
-    free(conn->write_buf);
+    dex_http_release_write_buf(conn);
     free(conn->path);
     free(conn);
 }
@@ -322,8 +350,7 @@ static void dex_http_conn_reset(DexHttpConn* conn) {
     free(conn->path);
     conn->path = NULL;
     conn->query = NULL;
-    free(conn->write_buf);
-    conn->write_buf = NULL;
+    dex_http_release_write_buf(conn);
     conn->write_len = 0;
     conn->write_pos = 0;
 }
@@ -576,7 +603,8 @@ static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
 
     size_t needed = 9 + status_len + 16 + ct_len + 18 + (size_t)ndigits + conn_line_len
                   + extra_len * 2 + 2 + (size_t)body_len + 1;
-    conn->write_buf = (char*)dex_xmalloc(needed);
+    dex_http_release_write_buf(conn);
+    conn->write_buf = dex_http_buf_take(needed, &conn->write_cap);
     if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
 
     char* w = conn->write_buf;
@@ -1044,8 +1072,7 @@ static void dex_uring_queue_send(DexHttpConn* conn) {
 static void dex_uring_fail(DexHttpConn* conn, const char* status, const char* body) {
     conn->keep_alive = 0;
     conn->state = HTTP_WRITING;
-    free(conn->write_buf);
-    conn->write_buf = NULL;
+    dex_http_release_write_buf(conn);
     conn->write_pos = 0;
     dex_http_build_response(conn, status, body, "application/json");
     if (!conn->write_buf || conn->write_len <= 0) { dex_uring_close(conn); return; }

@@ -686,7 +686,7 @@ typedef struct {
 } DexJB;
 
 static void dex_jb_grow(DexJB* b, size_t need) {
-    size_t cap = b->cap ? b->cap : 256;
+    size_t cap = b->cap ? b->cap : 1024;
     while (cap < b->len + need) cap *= 2;
     char* p = (char*)dex_xrealloc(b->p, cap);
     if (!p) dex_out_of_memory();
@@ -721,7 +721,20 @@ static inline void dex_jb_double(DexJB* b, double v) {
 
 static inline void dex_jb_str(DexJB* b, const DexString* s) {
     const char* d = s ? s->data : "";
-    size_t n = s ? s->len : 0;
+    size_t n = 0;
+    int clean = 1;
+    for (const unsigned char* q = (const unsigned char*)d; *q; q++, n++) {
+        if (*q < 0x20 || *q == '"' || *q == '\\') { clean = 0; break; }
+    }
+    if (clean) {
+        dex_jb_need(b, n + 2);
+        b->p[b->len++] = '"';
+        memcpy(b->p + b->len, d, n);
+        b->len += n;
+        b->p[b->len++] = '"';
+        return;
+    }
+    n = s ? s->len : 0;
     dex_jb_need(b, n * 6 + 2);
     b->p[b->len++] = '"';
     b->len += dex_json_escape_write(b->p + b->len, d);

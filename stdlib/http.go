@@ -27,6 +27,12 @@ func init() {
 				CName:      "",
 				Doc:        "Start the HTTP server bound to one interface. http.listen() binds every interface; this one names the address, for a service behind a proxy that should not also be reachable directly. The host must be an IPv4 address — \"127.0.0.1\", or \"0.0.0.0\" for every interface. Optional third argument is the worker process count (0 = one per CPU).",
 			},
+			"uring": {
+				Params:     []ast.Type{},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_http_set_uring",
+				Doc:        "Serve with io_uring instead of epoll, on Linux. Call before listen. Accepts, reads, writes and closes are queued on one ring and submitted together, so a pass of the loop costs one system call however many connections it served. Handlers run on the thread that owns the ring, as with http.inline(). Where io_uring is unavailable — another platform, an older kernel, or a container that blocks it — the server says so and uses epoll.",
+			},
 			"inline": {
 				Params:     []ast.Type{},
 				ReturnType: ast.TypeVoid,

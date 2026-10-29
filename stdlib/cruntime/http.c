@@ -7,6 +7,17 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <sys/resource.h>
+#ifdef __linux__
+int accept4(int fd, struct sockaddr* addr, socklen_t* addrlen, int flags);
+#if defined(__has_include)
+#if __has_include(<linux/io_uring.h>)
+#define DEX_HTTP_HAVE_URING 1
+#include <linux/io_uring.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#endif
+#endif
+#endif
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -57,9 +68,15 @@ static int dex_route_count = 0;
 static int dex_http_thread_count = 0;
 
 static int dex_http_inline = 0;
+static int dex_http_uring_requested = 0;
 
 void dex_http_set_inline(void) {
     dex_http_inline = 1;
+}
+
+void dex_http_set_uring(void) {
+    dex_http_inline = 1;
+    dex_http_uring_requested = 1;
 }
 
 void dex_http_set_threads(int n) {
@@ -241,6 +258,8 @@ typedef struct DexHttpConn {
 
     /* Linked list for completed queue */
     struct DexHttpConn* next;
+
+    int           direct;
 } DexHttpConn;
 
 /* Global event-loop state for HTTP server */
@@ -261,7 +280,7 @@ static DexHttpConn* dex_http_conn_new(int fd) {
     if (!conn) return NULL;
     conn->fd = fd;
     conn->state = HTTP_READING_HEADERS;
-    conn->read_cap = 8192;
+    conn->read_cap = 2048;
     conn->read_buf = (char*)dex_xmalloc(conn->read_cap);
     if (!conn->read_buf) { free(conn); return NULL; }
     conn->read_len = 0;
@@ -279,7 +298,7 @@ static DexHttpConn* dex_http_conn_new(int fd) {
 
 static void dex_http_conn_free(DexHttpConn* conn) {
     if (!conn) return;
-    if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD) {
+    if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD && dex_http_conn_table[conn->fd] == conn) {
         dex_http_conn_table[conn->fd] = NULL;
     }
     __atomic_sub_fetch(&dex_http_live_conns, 1, __ATOMIC_RELAXED);
@@ -752,6 +771,403 @@ static void dex_http_flush_inline(DexHttpConn* conn) {
     }
 }
 
+
+#ifdef DEX_HTTP_HAVE_URING
+
+#define DEX_URING_SQ_ENTRIES 4096
+#define DEX_URING_CQ_ENTRIES 65536
+#define DEX_UD_ACCEPT  1
+#define DEX_UD_TIMEOUT 2
+#define DEX_UD_IGNORE  3
+#define DEX_UD_ACCEPT_DIRECT 4
+#define DEX_OP_RECV 1
+#define DEX_OP_SEND 2
+
+typedef struct {
+    int fd;
+    unsigned* sq_head;
+    unsigned* sq_tail;
+    unsigned* sq_mask;
+    unsigned* sq_array;
+    unsigned* cq_head;
+    unsigned* cq_tail;
+    unsigned* cq_mask;
+    struct io_uring_sqe* sqes;
+    struct io_uring_cqe* cqes;
+    unsigned sq_entries;
+    unsigned local_tail;
+} DexUring;
+
+static DexUring dex_uring;
+
+static int dex_uring_setup(DexUring* r) {
+    struct io_uring_params p;
+    unsigned base = IORING_SETUP_CQSIZE;
+    unsigned tries[2] = { base, base };
+#if defined(IORING_SETUP_SINGLE_ISSUER) && defined(IORING_SETUP_DEFER_TASKRUN)
+    tries[0] = base | IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN;
+#endif
+    int fd = -1;
+    for (int i = 0; i < 2 && fd < 0; i++) {
+        memset(&p, 0, sizeof(p));
+        p.flags = tries[i];
+        p.cq_entries = DEX_URING_CQ_ENTRIES;
+        fd = (int)syscall(__NR_io_uring_setup, DEX_URING_SQ_ENTRIES, &p);
+    }
+    if (fd < 0) return -1;
+
+    size_t sq_size = p.sq_off.array + p.sq_entries * sizeof(unsigned);
+    size_t cq_size = p.cq_off.cqes + p.cq_entries * sizeof(struct io_uring_cqe);
+    int single = (p.features & IORING_FEAT_SINGLE_MMAP) != 0;
+    if (single && cq_size > sq_size) sq_size = cq_size;
+
+    void* sq = mmap(NULL, sq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQ_RING);
+    if (sq == MAP_FAILED) { close(fd); return -1; }
+    void* cq = sq;
+    if (!single) {
+        cq = mmap(NULL, cq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_CQ_RING);
+        if (cq == MAP_FAILED) { munmap(sq, sq_size); close(fd); return -1; }
+    }
+    void* sqes = mmap(NULL, p.sq_entries * sizeof(struct io_uring_sqe), PROT_READ | PROT_WRITE,
+                      MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQES);
+    if (sqes == MAP_FAILED) {
+        if (!single) munmap(cq, cq_size);
+        munmap(sq, sq_size);
+        close(fd);
+        return -1;
+    }
+
+    r->fd = fd;
+    r->sq_head = (unsigned*)((char*)sq + p.sq_off.head);
+    r->sq_tail = (unsigned*)((char*)sq + p.sq_off.tail);
+    r->sq_mask = (unsigned*)((char*)sq + p.sq_off.ring_mask);
+    r->sq_array = (unsigned*)((char*)sq + p.sq_off.array);
+    r->cq_head = (unsigned*)((char*)cq + p.cq_off.head);
+    r->cq_tail = (unsigned*)((char*)cq + p.cq_off.tail);
+    r->cq_mask = (unsigned*)((char*)cq + p.cq_off.ring_mask);
+    r->cqes = (struct io_uring_cqe*)((char*)cq + p.cq_off.cqes);
+    r->sqes = (struct io_uring_sqe*)sqes;
+    r->sq_entries = p.sq_entries;
+    r->local_tail = *r->sq_tail;
+    return 0;
+}
+
+static int dex_uring_enter(DexUring* r, unsigned wait_nr) {
+    __atomic_store_n(r->sq_tail, r->local_tail, __ATOMIC_RELEASE);
+    unsigned to_submit = r->local_tail - __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE);
+    for (;;) {
+        int ret = (int)syscall(__NR_io_uring_enter, r->fd, to_submit, wait_nr,
+                               wait_nr ? IORING_ENTER_GETEVENTS : 0, NULL, 0);
+        if (ret >= 0 || errno != EINTR) return ret;
+    }
+}
+
+static struct io_uring_sqe* dex_uring_sqe(DexUring* r) {
+    if (r->local_tail - __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE) >= r->sq_entries) {
+        dex_uring_enter(r, 0);
+        if (r->local_tail - __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE) >= r->sq_entries) return NULL;
+    }
+    unsigned idx = r->local_tail & *r->sq_mask;
+    struct io_uring_sqe* sqe = &r->sqes[idx];
+    memset(sqe, 0, sizeof(*sqe));
+    r->sq_array[idx] = idx;
+    r->local_tail++;
+    return sqe;
+}
+
+#define DEX_URING_ACCEPTS 64
+static int dex_uring_accepts_pending = 0;
+static int dex_uring_direct_pending = 0;
+static int dex_uring_direct_slots = 0;
+static int dex_uring_direct_live = 0;
+static int dex_uring_real_live = 0;
+static int dex_uring_real_cap = 0;
+static DexHttpConn* dex_uring_direct_table[DEX_HTTP_MAX_FD];
+
+static void dex_uring_register_direct(void) {
+#if defined(IORING_RSRC_REGISTER_SPARSE) && defined(IORING_FILE_INDEX_ALLOC)
+    struct rlimit rl;
+    unsigned slots = DEX_HTTP_MAX_FD;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < slots) slots = (unsigned)rl.rlim_cur;
+    struct io_uring_rsrc_register rr;
+    memset(&rr, 0, sizeof(rr));
+    rr.nr = slots;
+    rr.flags = IORING_RSRC_REGISTER_SPARSE;
+    if (syscall(__NR_io_uring_register, dex_uring.fd, IORING_REGISTER_FILES2, &rr, sizeof(rr)) == 0) {
+        dex_uring_direct_slots = (int)slots;
+    }
+#endif
+}
+
+static void dex_uring_target(struct io_uring_sqe* sqe, DexHttpConn* conn) {
+    sqe->fd = conn->fd;
+    if (conn->direct) sqe->flags |= IOSQE_FIXED_FILE;
+}
+static struct __kernel_timespec dex_uring_tick = { 1, 0 };
+
+static int dex_uring_queue_accept(int server_fd, int direct) {
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    if (!sqe) return -1;
+    sqe->opcode = IORING_OP_ACCEPT;
+    sqe->fd = server_fd;
+#ifdef IORING_FILE_INDEX_ALLOC
+    if (direct) {
+        sqe->file_index = IORING_FILE_INDEX_ALLOC;
+        sqe->user_data = DEX_UD_ACCEPT_DIRECT;
+        dex_uring_direct_pending++;
+        dex_uring_accepts_pending++;
+        return 0;
+    }
+#endif
+    sqe->accept_flags = SOCK_CLOEXEC;
+    sqe->user_data = DEX_UD_ACCEPT;
+    dex_uring_accepts_pending++;
+    return 0;
+}
+
+static void dex_uring_arm_accepts(int server_fd) {
+    while (dex_uring_accepts_pending < DEX_URING_ACCEPTS) {
+        int real_pending = dex_uring_accepts_pending - dex_uring_direct_pending;
+        int direct = 0;
+        if (dex_uring_direct_live + dex_uring_direct_pending < dex_uring_direct_slots) {
+            direct = 1;
+        } else if (dex_uring_real_live + real_pending >= dex_uring_real_cap) {
+            break;
+        }
+        if (dex_uring_queue_accept(server_fd, direct) != 0) break;
+    }
+}
+
+static void dex_uring_queue_timeout(void) {
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    if (!sqe) return;
+    sqe->opcode = IORING_OP_TIMEOUT;
+    sqe->addr = (unsigned long)&dex_uring_tick;
+    sqe->len = 1;
+    sqe->user_data = DEX_UD_TIMEOUT;
+}
+
+static void dex_uring_close(DexHttpConn* conn) {
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    if (conn->direct) {
+        if (sqe) {
+            sqe->opcode = IORING_OP_CLOSE;
+            sqe->file_index = (unsigned)conn->fd + 1;
+            sqe->user_data = DEX_UD_IGNORE;
+        }
+        if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD) dex_uring_direct_table[conn->fd] = NULL;
+        dex_uring_direct_live--;
+    } else {
+        if (sqe) {
+            sqe->opcode = IORING_OP_CLOSE;
+            sqe->fd = conn->fd;
+            sqe->user_data = DEX_UD_IGNORE;
+        } else {
+            close(conn->fd);
+        }
+        dex_uring_real_live--;
+    }
+    dex_http_conn_free(conn);
+}
+
+static void dex_uring_shutdown(DexHttpConn* conn) {
+#ifdef IORING_RSRC_REGISTER_SPARSE
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    if (sqe) {
+        sqe->opcode = IORING_OP_SHUTDOWN;
+        dex_uring_target(sqe, conn);
+        sqe->len = SHUT_RDWR;
+        sqe->user_data = DEX_UD_IGNORE;
+        return;
+    }
+#endif
+    if (!conn->direct) shutdown(conn->fd, SHUT_RDWR);
+}
+
+static void dex_uring_queue_recv(DexHttpConn* conn) {
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    if (!sqe) { dex_uring_close(conn); return; }
+    sqe->opcode = IORING_OP_RECV;
+    dex_uring_target(sqe, conn);
+    sqe->addr = (unsigned long)(conn->read_buf + conn->read_len);
+    sqe->len = (unsigned)(conn->read_cap - conn->read_len - 1);
+    sqe->user_data = (unsigned long)conn | DEX_OP_RECV;
+}
+
+static void dex_uring_queue_send(DexHttpConn* conn) {
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    if (!sqe) { dex_uring_close(conn); return; }
+    sqe->opcode = IORING_OP_SEND;
+    dex_uring_target(sqe, conn);
+    sqe->addr = (unsigned long)(conn->write_buf + conn->write_pos);
+    sqe->len = (unsigned)(conn->write_len - conn->write_pos);
+    sqe->msg_flags = MSG_NOSIGNAL;
+    sqe->user_data = (unsigned long)conn | DEX_OP_SEND;
+}
+
+static void dex_uring_fail(DexHttpConn* conn, const char* status, const char* body) {
+    conn->keep_alive = 0;
+    conn->state = HTTP_WRITING;
+    free(conn->write_buf);
+    conn->write_buf = NULL;
+    conn->write_pos = 0;
+    dex_http_build_response(conn, status, body, "application/json");
+    if (!conn->write_buf || conn->write_len <= 0) { dex_uring_close(conn); return; }
+    dex_uring_queue_send(conn);
+}
+
+static void dex_uring_need_more(DexHttpConn* conn) {
+    int ceiling = DEX_HTTP_MAX_HEADER_BYTES;
+    if (conn->state == HTTP_READING_BODY) ceiling = conn->headers_end + conn->content_length;
+    if (conn->read_len >= ceiling) {
+        if (conn->state == HTTP_READING_HEADERS) {
+            dex_uring_fail(conn, "431 Request Header Fields Too Large", "{\"error\": \"Request Header Fields Too Large\"}");
+        } else {
+            dex_uring_fail(conn, "400 Bad Request", "{\"error\": \"Bad Request\"}");
+        }
+        return;
+    }
+    if (conn->read_len >= conn->read_cap - 1) {
+        int new_cap = conn->read_cap * 2;
+        if (new_cap > ceiling + 1) new_cap = ceiling + 1;
+        char* new_buf = (char*)dex_xrealloc(conn->read_buf, (size_t)new_cap);
+        if (!new_buf) { dex_uring_close(conn); return; }
+        conn->read_buf = new_buf;
+        conn->read_cap = new_cap;
+    }
+    if (conn->read_cap - conn->read_len - 1 <= 0) {
+        dex_uring_fail(conn, "400 Bad Request", "{\"error\": \"Bad Request\"}");
+        return;
+    }
+    dex_uring_queue_recv(conn);
+}
+
+static void dex_uring_on_recv(DexHttpConn* conn, int res) {
+    if (res <= 0 || conn->state == HTTP_DONE) { dex_uring_close(conn); return; }
+    conn->read_len += res;
+    conn->read_buf[conn->read_len] = '\0';
+    conn->last_active = time(NULL);
+
+    if (conn->state == HTTP_READING_HEADERS) {
+        int parsed = dex_http_try_parse_headers(conn);
+        if (parsed == -1) { dex_uring_fail(conn, "400 Bad Request", "{\"error\": \"Bad Request\"}"); return; }
+        if (parsed == -2) { dex_uring_fail(conn, "413 Payload Too Large", "{\"error\": \"Payload Too Large\"}"); return; }
+        if (parsed == 1) conn->state = HTTP_READING_BODY;
+    }
+    if (conn->state == HTTP_READING_BODY && conn->read_len - conn->headers_end >= conn->content_length) {
+        dex_http_run_handler(conn);
+        if (!conn->write_buf || conn->write_len <= 0) { dex_uring_close(conn); return; }
+        dex_uring_queue_send(conn);
+        return;
+    }
+    dex_uring_need_more(conn);
+}
+
+static void dex_uring_on_send(DexHttpConn* conn, int res) {
+    if (res <= 0) { dex_uring_close(conn); return; }
+    conn->write_pos += res;
+    if (conn->write_pos < conn->write_len) { dex_uring_queue_send(conn); return; }
+    if (conn->keep_alive) {
+        dex_http_conn_reset(conn);
+        dex_uring_queue_recv(conn);
+    } else {
+        dex_uring_close(conn);
+    }
+}
+
+static void dex_uring_sweep_table(DexHttpConn** table, time_t now) {
+    for (int i = 0; i < DEX_HTTP_MAX_FD; i++) {
+        DexHttpConn* c = table[i];
+        if (!c) continue;
+        if (c->state != HTTP_READING_HEADERS && c->state != HTTP_READING_BODY) continue;
+        if (now - c->last_active < dex_http_idle_secs) continue;
+        c->state = HTTP_DONE;
+        dex_uring_shutdown(c);
+    }
+}
+
+static void dex_uring_sweep(void) {
+    time_t now = time(NULL);
+    dex_uring_sweep_table(dex_http_conn_table, now);
+    dex_uring_sweep_table(dex_uring_direct_table, now);
+}
+
+static int dex_http_uring_run(int server_fd, int port) {
+    if (dex_uring_setup(&dex_uring) != 0) {
+        fprintf(stderr, "[http] io_uring unavailable (%s); using epoll\n", strerror(errno));
+        return -1;
+    }
+    int flags = fcntl(server_fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(server_fd, F_SETFL, flags & ~O_NONBLOCK);
+
+    dex_uring_register_direct();
+    dex_uring_real_cap = dex_http_conn_cap;
+    dex_http_conn_cap = dex_uring_real_cap + dex_uring_direct_slots;
+    dex_http_shed_at = dex_http_conn_cap - dex_http_conn_cap / 16;
+
+    printf("Dex server listening on port %d (io_uring, %d direct slots)\n", port, dex_uring_direct_slots);
+    fflush(stdout);
+
+    dex_uring_queue_timeout();
+    for (;;) {
+        dex_uring_arm_accepts(server_fd);
+        if (dex_uring_enter(&dex_uring, 1) < 0 && errno != EBUSY && errno != EAGAIN) {
+            perror("io_uring_enter");
+            return 0;
+        }
+        unsigned head = *dex_uring.cq_head;
+        unsigned tail = __atomic_load_n(dex_uring.cq_tail, __ATOMIC_ACQUIRE);
+        while (head != tail) {
+            struct io_uring_cqe* cqe = &dex_uring.cqes[head & *dex_uring.cq_mask];
+            unsigned long ud = (unsigned long)cqe->user_data;
+            int res = cqe->res;
+            head++;
+            if (ud == DEX_UD_ACCEPT) {
+                dex_uring_accepts_pending--;
+                if (res >= 0) {
+                    DexHttpConn* conn = (res < DEX_HTTP_MAX_FD) ? dex_http_conn_new(res) : NULL;
+                    if (!conn) { close(res); continue; }
+                    dex_uring_real_live++;
+                    dex_uring_queue_recv(conn);
+                }
+                continue;
+            }
+            if (ud == DEX_UD_ACCEPT_DIRECT) {
+                dex_uring_accepts_pending--;
+                dex_uring_direct_pending--;
+                if (res >= 0 && res < DEX_HTTP_MAX_FD) {
+                    DexHttpConn* conn = dex_http_conn_new(-1);
+                    if (!conn) {
+                        struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+                        if (sqe) { sqe->opcode = IORING_OP_CLOSE; sqe->file_index = (unsigned)res + 1; sqe->user_data = DEX_UD_IGNORE; }
+                        continue;
+                    }
+                    conn->fd = res;
+                    conn->direct = 1;
+                    dex_uring_direct_table[res] = conn;
+                    dex_uring_direct_live++;
+                    dex_uring_queue_recv(conn);
+                } else if (res == -ENFILE) {
+                    dex_uring_direct_slots = dex_uring_direct_live;
+                }
+                continue;
+            }
+            if (ud == DEX_UD_TIMEOUT) {
+                dex_uring_sweep();
+                dex_uring_queue_timeout();
+                continue;
+            }
+            if (ud == DEX_UD_IGNORE) continue;
+            DexHttpConn* conn = (DexHttpConn*)(ud & ~0xFUL);
+            if ((ud & 0xF) == DEX_OP_RECV) dex_uring_on_recv(conn, res);
+            else if ((ud & 0xF) == DEX_OP_SEND) dex_uring_on_send(conn, res);
+        }
+        __atomic_store_n(dex_uring.cq_head, head, __ATOMIC_RELEASE);
+    }
+}
+
+#endif
+
 static volatile int dex_server_fd = -1;
 
 /* Set only by the forked multi-worker model — see the note in dex_listen(). */
@@ -837,6 +1253,9 @@ static void dex_listen_on(const char* host, int port) {
     dex_notify_pipe_init(&dex_http_notify);
     memset(dex_http_conn_table, 0, sizeof(dex_http_conn_table));
 
+#ifdef DEX_HTTP_HAVE_URING
+    if (dex_http_uring_requested && dex_http_uring_run(server_fd, port) == 0) return;
+#endif
     /* Register server fd for accept events */
     dex_ev_add(dex_http_loop, server_fd, DEX_EV_READ, NULL);
 
@@ -894,9 +1313,14 @@ static void dex_listen_on(const char* host, int port) {
                     }
                     struct sockaddr_in client_addr;
                     socklen_t client_len = sizeof(client_addr);
+#ifdef __linux__
+                    int client_fd = accept4(server_fd, (struct sockaddr*)&client_addr, &client_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                    if (client_fd < 0) break;
+#else
                     int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
                     if (client_fd < 0) break;
                     dex_set_nonblocking(client_fd);
+#endif
                     DexHttpConn* conn = dex_http_conn_new(client_fd);
                     if (!conn) { close(client_fd); continue; }
                     dex_ev_add(dex_http_loop, client_fd, DEX_EV_READ, conn);

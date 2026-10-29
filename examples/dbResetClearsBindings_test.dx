@@ -1,0 +1,46 @@
+import "db"
+
+fn resetUnbindsEveryParameter(): void {
+    let c: int = db.open("sqlite", ":memory:")
+    let q: int = db.prepare(c, "SELECT ?1 IS NULL, ?2 IS NULL, coalesce(?1, 'none')")
+    db.bindLong(q, 1, 42)
+    db.bindStr(q, 2, "x")
+    assert(db.step(q))
+    let firstNull: int = db.col(q, 0)
+    assert(firstNull == 0)
+    db.reset(q)
+    assert(db.step(q))
+    let a: int = db.col(q, 0)
+    let b: int = db.col(q, 1)
+    let v: string = db.col(q, 2)
+    assert(a == 1)
+    assert(b == 1)
+    assert(v == "none")
+    db.reset(q)
+    db.finalize(q)
+    db.close(c)
+}
+
+fn reboundStatementSeesOnlyNewValues(): void {
+    let c: int = db.open("sqlite", ":memory:")
+    db.exec(c, "CREATE TABLE t(id INTEGER PRIMARY KEY, n TEXT)")
+    db.exec(c, "INSERT INTO t(id, n) VALUES (0, 'zero'), (1, 'one'), (2, 'two'), (500, 'many')")
+    let q: int = db.prepare(c, "SELECT n FROM t WHERE id = ?")
+    let ids: long[] = [1, 500, 0, 2, 1, 500]
+    let want: string[] = ["one", "many", "zero", "two", "one", "many"]
+    for (let i: int = 0; i < ids.len(); i = i + 1) {
+        db.reset(q)
+        db.bindLong(q, 1, ids[i])
+        assert(db.step(q))
+        let got: string = db.col(q, 0)
+        assert(got == want[i])
+    }
+    db.reset(q)
+    db.finalize(q)
+    db.close(c)
+}
+
+fn main(): void {
+    resetUnbindsEveryParameter()
+    reboundStatementSeesOnlyNewValues()
+}

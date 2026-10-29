@@ -1479,7 +1479,8 @@ void dex_db_reset(int stmt_id) {
 
     if (s->driver == DEX_DB_DRIVER_SQLITE) {
         sqlite3_reset(s->sqlite_stmt);
-        sqlite3_clear_bindings(s->sqlite_stmt);
+        int nparams = sqlite3_bind_parameter_count(s->sqlite_stmt);
+        for (int i = 1; i <= nparams; i++) sqlite3_bind_null(s->sqlite_stmt, i);
         s->sqlite_done = 0;
 #ifdef DEX_HAS_POSTGRES
     } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {

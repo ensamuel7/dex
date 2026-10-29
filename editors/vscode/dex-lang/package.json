@@ -2,7 +2,7 @@
   "name": "dex-lang",
   "displayName": "Dex Language",
   "description": "Syntax highlighting and language support for DexLang (.dx files)",
-  "version": "0.9.23",
+  "version": "0.9.24",
   "publisher": "DexLang",
   "icon": "icons/icon.png",
   "repository": {

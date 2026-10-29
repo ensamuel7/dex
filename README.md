@@ -70,7 +70,7 @@ need nothing else installed, which makes it a good fit for CI, or for trying the
 language without installing it.
 
 ```bash
-docker pull ensamuel7/dexlang:0.9.19     # or :latest
+docker pull ensamuel7/dexlang:0.9.20     # or :latest
 ```
 
 The image's entrypoint is `dex`, and its working directory is `/workspace`, so
@@ -97,7 +97,7 @@ docker run --rm -p 8080:8080 -v "$(pwd):/workspace" ensamuel7/dexlang run server
 Build in the dex image and copy only the binary into a small one:
 
 ```dockerfile
-FROM ensamuel7/dexlang:0.9.19 AS build
+FROM ensamuel7/dexlang:0.9.20 AS build
 WORKDIR /src
 COPY . .
 RUN dex build main.dx
@@ -713,10 +713,10 @@ Releases are automated via GitHub Actions. When you push a version tag, the work
 **To cut a release:**
 
 ```bash
-make release VERSION=0.9.19
+make release VERSION=0.9.20
 ```
 
-This creates an annotated tag `v0.9.19` and pushes it. The tag push triggers the workflow which:
+This creates an annotated tag `v0.9.20` and pushes it. The tag push triggers the workflow which:
 - Builds `dex` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
 - Creates a GitHub Release with all 4 tarballs attached
 - Deploys docs to GitHub Pages
@@ -724,7 +724,7 @@ This creates an annotated tag `v0.9.19` and pushes it. The tag push triggers the
 **To also publish Docker images** (separate from the GitHub release):
 
 ```bash
-make docker-publish DEX_VERSION=0.9.19
+make docker-publish DEX_VERSION=0.9.20
 ```
 
 This builds the image for linux/amd64 and linux/arm64 with `docker buildx`

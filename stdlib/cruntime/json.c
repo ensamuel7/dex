@@ -719,14 +719,27 @@ static inline void dex_jb_double(DexJB* b, double v) {
     b->len += (size_t)snprintf(b->p + b->len, 32, "%g", v);
 }
 
+static inline int dex_jb_clean(const char* d, size_t n) {
+    const uint64_t ones = 0x0101010101010101ULL, highs = 0x8080808080808080ULL;
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t x;
+        memcpy(&x, d + i, 8);
+        uint64_t q = x ^ (ones * '"'), bs = x ^ (ones * '\\');
+        uint64_t hit = ((x - ones * 0x20) & ~x) | ((q - ones) & ~q) | ((bs - ones) & ~bs);
+        if (hit & highs) return 0;
+    }
+    for (; i < n; i++) {
+        unsigned char c = (unsigned char)d[i];
+        if (c < 0x20 || c == '"' || c == '\\') return 0;
+    }
+    return 1;
+}
+
 static inline void dex_jb_str(DexJB* b, const DexString* s) {
     const char* d = s ? s->data : "";
-    size_t n = 0;
-    int clean = 1;
-    for (const unsigned char* q = (const unsigned char*)d; *q; q++, n++) {
-        if (*q < 0x20 || *q == '"' || *q == '\\') { clean = 0; break; }
-    }
-    if (clean) {
+    size_t n = s ? s->len : 0;
+    if (dex_jb_clean(d, n)) {
         dex_jb_need(b, n + 2);
         b->p[b->len++] = '"';
         memcpy(b->p + b->len, d, n);

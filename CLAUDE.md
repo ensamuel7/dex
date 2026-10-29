@@ -230,7 +230,8 @@ decidable at all — which is why `#[debug(cycles)]` is a runtime tool too.
 
 `DEX_SANITIZE` takes a comma list: `address` (or `1`), `undefined`, `thread`,
 `memory`, `leak`. `thread` and `memory` each exclude `address`. Every build
-also takes `DEX_CFLAGS`, appended last, and `dex test` takes any number of
+also takes `DEX_CFLAGS`, appended last, `DEX_SQLITE` (an amalgamation's
+`sqlite3.c` compiled in place of `-lsqlite3`, see LANGUAGE.md), and `dex test` takes any number of
 files or directories.
 
 - `make sanitize` (ASan+UBSan) and `make tsan` run the suite on macOS, whose

@@ -3225,6 +3225,27 @@ freshly-read one moves in, so filling the same struct in a loop does not leak.
 | `free`   | `free(rows: int): void`                       | Free a result set, or finalize a statement |
 | `close`  | `close(conn: int): void`                      | Close a connection                       |
 
+#### Building SQLite in
+
+By default a program links the system's `libsqlite3`. Setting `DEX_SQLITE` to
+the `sqlite3.c` of an [SQLite amalgamation](https://sqlite.org/amalgamation.html)
+compiles that source into the binary instead, with the program's own `-O3 -flto`,
+so calls into SQLite can be inlined. On a server whose requests are mostly
+SQLite reads it runs about 14% fewer instructions per request.
+
+```sh
+DEX_SQLITE=vendor/sqlite-amalgamation-3500400/sqlite3.c dex build server.dx
+```
+
+The `sqlite3.h` beside it is the one compiled against. The build enables the
+same features Debian and Ubuntu's `libsqlite3` does (FTS3/4/5, R-tree, math
+functions, sessions, `SECURE_DELETE`, URI filenames, and their limits) and stays
+thread-safe, so SQL that runs against the system library runs the same way. The
+one exception is `UPDATE ... LIMIT`, which needs SQLite's parser regenerated and
+cannot be enabled in an amalgamation. Pin the version you download and check its
+checksum: the binary then carries that SQLite, and its security fixes arrive
+when you update the pin, not with the system's packages.
+
 #### Bound parameters
 
 `query` and `exec` take a finished string, so any value going into one has to be

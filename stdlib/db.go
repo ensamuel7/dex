@@ -2,7 +2,10 @@ package stdlib
 
 import (
 	_ "embed"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -11,8 +14,62 @@ import (
 //go:embed cruntime/db.c
 var dbRuntime string
 
+var bundledSqliteOptions = []string{
+	"-DSQLITE_THREADSAFE=1",
+	"-DSQLITE_DEFAULT_MEMSTATUS=0",
+	"-DSQLITE_USE_ALLOCA",
+	"-DSQLITE_ALLOW_ROWID_IN_VIEW",
+	"-DSQLITE_DEFAULT_AUTOVACUUM=1",
+	"-DSQLITE_DEFAULT_RECURSIVE_TRIGGERS=1",
+	"-DSQLITE_DEFAULT_SECTOR_SIZE=4096",
+	"-DSQLITE_DIRECT_OVERFLOW_READ",
+	"-DSQLITE_ENABLE_COLUMN_METADATA",
+	"-DSQLITE_ENABLE_DBPAGE_VTAB",
+	"-DSQLITE_ENABLE_DBSTAT_VTAB",
+	"-DSQLITE_ENABLE_FTS3",
+	"-DSQLITE_ENABLE_FTS3_PARENTHESIS",
+	"-DSQLITE_ENABLE_FTS3_TOKENIZER",
+	"-DSQLITE_ENABLE_FTS4",
+	"-DSQLITE_ENABLE_FTS5",
+	"-DSQLITE_ENABLE_MATH_FUNCTIONS",
+	"-DSQLITE_ENABLE_PREUPDATE_HOOK",
+	"-DSQLITE_ENABLE_RTREE",
+	"-DSQLITE_ENABLE_SESSION",
+	"-DSQLITE_ENABLE_STMTVTAB",
+	"-DSQLITE_ENABLE_UNLOCK_NOTIFY",
+	"-DSQLITE_LIKE_DOESNT_MATCH_BLOBS",
+	"-DSQLITE_MAX_SCHEMA_RETRY=25",
+	"-DSQLITE_MAX_VARIABLE_NUMBER=250000",
+	"-DSQLITE_SECURE_DELETE",
+	"-DSQLITE_SOUNDEX",
+	"-DSQLITE_USE_URI=1",
+}
+
+func sqliteFlags(src string) ([]string, error) {
+	if src == "" {
+		return []string{"-lsqlite3"}, nil
+	}
+	abs, err := filepath.Abs(src)
+	if err != nil || filepath.Base(abs) != "sqlite3.c" {
+		return nil, fmt.Errorf("DEX_SQLITE must name an SQLite amalgamation's sqlite3.c, got %q", src)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return nil, fmt.Errorf("DEX_SQLITE: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(abs), "sqlite3.h")); err != nil {
+		return nil, fmt.Errorf("DEX_SQLITE: no sqlite3.h beside %s", abs)
+	}
+	flags := []string{"-I" + filepath.Dir(abs)}
+	flags = append(flags, bundledSqliteOptions...)
+	return append(flags, abs, "-lm"), nil
+}
+
 func detectDbFlags() []string {
-	flags := []string{"-lsqlite3"}
+	flags, err := sqliteFlags(os.Getenv("DEX_SQLITE"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
 	// Check for PostgreSQL
 	if out, err := exec.Command("pg_config", "--includedir").Output(); err == nil {

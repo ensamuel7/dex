@@ -1,0 +1,24 @@
+import "db"
+
+fn main(): void {
+    let c: int = db.openSingleThreaded("sqlite", ":memory:")
+    assert(c != -1)
+    db.exec(c, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+    let ins: int = db.prepare(c, "INSERT INTO t (name) VALUES (?)")
+    for (let i: int = 0; i < 100; i = i + 1) {
+        db.reset(ins)
+        db.bindStr(ins, 1, "n${i}")
+        db.step(ins)
+    }
+    db.reset(ins)
+    let q: int = db.prepare(c, "SELECT count(*), max(name) FROM t")
+    assert(db.step(q))
+    let n: int = db.col(q, 0)
+    let top: string = db.col(q, 1)
+    assert(n == 100)
+    assert(top == "n99")
+    db.reset(q)
+    db.finalize(q)
+    db.finalize(ins)
+    db.close(c)
+}

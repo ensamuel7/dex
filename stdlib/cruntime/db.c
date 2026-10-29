@@ -372,7 +372,7 @@ static _Bool dex_db_mongo_iter_to(const bson_t* doc, int col, bson_iter_t* iter)
 // ==========================================================================
 // dex_db_open
 // ==========================================================================
-int dex_db_open(const char* driver, const char* dsn) {
+static int dex_db_open_with(const char* driver, const char* dsn, int single_threaded) {
     pthread_mutex_lock(&dex_db_mutex);
     int slot = -1;
     for (int i = 0; i < DEX_DB_MAX_CONNS; i++) {
@@ -387,7 +387,9 @@ int dex_db_open(const char* driver, const char* dsn) {
 
     if (strcmp(driver, "sqlite") == 0) {
         sqlite3* db = NULL;
-        int rc = sqlite3_open(dsn, &db);
+        int rc = single_threaded
+            ? sqlite3_open_v2(dsn, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, NULL)
+            : sqlite3_open(dsn, &db);
         if (rc != SQLITE_OK) {
             if (db) sqlite3_close(db);
             pthread_mutex_lock(&dex_db_mutex);
@@ -505,6 +507,14 @@ int dex_db_open(const char* driver, const char* dsn) {
     memset(&dex_db_conns[slot], 0, sizeof(DexDbConn));
     pthread_mutex_unlock(&dex_db_mutex);
     return -1;
+}
+
+int dex_db_open(const char* driver, const char* dsn) {
+    return dex_db_open_with(driver, dsn, 0);
+}
+
+int dex_db_open_single_threaded(const char* driver, const char* dsn) {
+    return dex_db_open_with(driver, dsn, 1);
 }
 
 // ==========================================================================

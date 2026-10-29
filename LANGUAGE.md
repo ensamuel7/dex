@@ -3216,6 +3216,7 @@ freshly-read one moves in, so filling the same struct in a loop does not leak.
 | Function | Signature                                     | Description                              |
 |----------|-----------------------------------------------|------------------------------------------|
 | `open`   | `open(driver: string, dsn: string): int`      | Open a connection, returns handle        |
+| `openSingleThreaded` | `openSingleThreaded(driver: string, dsn: string): int` | Open a connection that is never used by two threads at once (one only `http.inline()` or `http.uring()` handlers touch). For SQLite it skips the lock SQLite otherwise takes on every call. Two threads using it at the same time corrupt it, so a connection shared by the handler pool must use `open` |
 | `exec`   | `exec(conn: int, sql: string): int`           | Execute a statement, returns affected rows |
 | `query`  | `query(conn: int, sql: string): int`          | Execute a query, returns result handle   |
 | `next`   | `next(rows: int): bool`                       | Advance to next row (a result or a prepared statement) |

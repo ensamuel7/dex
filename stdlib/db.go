@@ -71,6 +71,13 @@ func init() {
 				CName:      "dex_db_open",
 				Doc:        "Open a database connection with the given driver and DSN.",
 			},
+			"openSingleThreaded": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeString},
+				ParamNames: []string{"driver", "dsn"},
+				ReturnType: ast.TypeInt,
+				CName:      "dex_db_open_single_threaded",
+				Doc:        "Open a connection that is never used by two threads at once, such as one only http.inline() or http.uring() handlers touch. For SQLite it skips the lock SQLite otherwise takes on every call, which is a few percent of a busy server's CPU. Using it from two threads at the same time corrupts it, so a connection shared by the default handler pool must use db.open. Other drivers behave as with db.open.",
+			},
 			"exec": {
 				Params:     []ast.Type{ast.TypeInt, ast.TypeString},
 				ParamNames: []string{"conn", "query"},

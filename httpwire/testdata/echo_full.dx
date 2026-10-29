@@ -1,0 +1,31 @@
+import "http"
+import "json"
+import "os"
+import "str"
+
+fn echo(req: http.HttpRequest): http.HttpResponse {
+    let body: string = json.encode({ method: req.method, path: req.path, query: req.query, body: req.body, auth: req.headers.get("authorization"), dup: req.headers.get("x-dup"), ctype: req.headers.get("content-type"), count: req.headers.len(), id: req.params.get("id") })
+    return http.response(200, body, "application/json")
+}
+
+fn cookies(req: http.HttpRequest): http.HttpResponse {
+    let h: string = http.header("", "Set-Cookie", "a=1; Path=/")
+    h = http.header(h, "Set-Cookie", "b=2")
+    return http.responseWith(201, "{}", "", h)
+}
+
+fn main(): void {
+    http.route("GET", "/echo", echo)
+    http.route("POST", "/echo", echo)
+    http.route("GET", "/items/:id", echo)
+    http.route("GET", "/cookies", cookies)
+    let mode: string = os.env("MODE")
+    if (mode == "uring") {
+        http.uring()
+    }
+    if (mode == "inline") {
+        http.inline()
+    }
+    http.limits(1024, 5, 0)
+    http.listenOn("127.0.0.1", str.toInt(os.env("PORT")), 1)
+}

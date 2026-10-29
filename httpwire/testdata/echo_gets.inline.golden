@@ -1,0 +1,397 @@
+=== simple
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== query
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 97
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"a=1&b=2","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== bare query mark
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== param
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 96
+Connection: keep-alive
+
+{"method":"GET","path":"/items/42","query":"","body":"","auth":"","dup":"","ctype":"","id":"42"}
+<open>
+=== param empty
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+Content-Length: 22
+Connection: keep-alive
+
+{"error": "Not Found"}
+<open>
+=== not found
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+Content-Length: 22
+Connection: keep-alive
+
+{"error": "Not Found"}
+<open>
+=== wrong method
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+Content-Length: 22
+Connection: keep-alive
+
+{"error": "Not Found"}
+<open>
+=== lowercase method
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+Content-Length: 22
+Connection: keep-alive
+
+{"error": "Not Found"}
+<open>
+=== extra headers
+HTTP/1.1 201 Created
+Content-Type: application/json
+Content-Length: 2
+Connection: keep-alive
+Set-Cookie: a=1; Path=/
+Set-Cookie: b=2
+
+{}
+<open>
+=== keep alive twice
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 93
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"n=2","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== pipelined
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 93
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"n=1","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== pipelined post
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 94
+Connection: keep-alive
+
+{"method":"POST","path":"/echo","query":"","body":"abc","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== split request line
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== split terminator
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== post body
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 106
+Connection: keep-alive
+
+{"method":"POST","path":"/echo","query":"","body":"hello","auth":"","dup":"","ctype":"text/plain","id":""}
+<open>
+=== post body split
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 96
+Connection: keep-alive
+
+{"method":"POST","path":"/echo","query":"","body":"hello","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== post body longer than length
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 93
+Connection: keep-alive
+
+{"method":"POST","path":"/echo","query":"","body":"he","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== zero length
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 91
+Connection: keep-alive
+
+{"method":"POST","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== duplicate length same
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== duplicate length differs
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== length not digits
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== length negative
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== length empty
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== length ten digits
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== length over body limit
+HTTP/1.1 413 Payload Too Large
+Content-Type: application/json
+Content-Length: 30
+Connection: close
+
+{"error": "Payload Too Large"}
+<closed>
+=== length lowercase name
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 93
+Connection: keep-alive
+
+{"method":"POST","path":"/echo","query":"","body":"hi","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== chunked
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== chunked lowercase
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== chunked and length
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+Content-Length: 24
+Connection: close
+
+{"error": "Bad Request"}
+<closed>
+=== header names any case
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 106
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"Bearer abc","dup":"","ctype":"text/x","id":""}
+<open>
+=== duplicate header last wins
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 93
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"two","ctype":"","id":""}
+<open>
+=== header value whitespace
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 102
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"Bearer abc  ","dup":"","ctype":"","id":""}
+<open>
+=== header empty value
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== header without colon
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 93
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"yes","dup":"","ctype":"","id":""}
+<open>
+=== header bare newlines
+
+<open>
+=== header long name
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 95
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"after","dup":"","ctype":"","id":""}
+<open>
+=== many headers
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 94
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"last","ctype":"","id":""}
+<open>
+=== http 1.0
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: close
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<closed>
+=== http 1.0 keep alive header
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: close
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<closed>
+=== version text in path
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+Content-Length: 22
+Connection: keep-alive
+
+{"error": "Not Found"}
+<open>
+=== connection close
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: close
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<closed>
+=== connection close upper
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: close
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<closed>
+=== connection close list
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== leading whitespace
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== tab separated
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: keep-alive
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<open>
+=== no version
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 90
+Connection: close
+
+{"method":"GET","path":"/echo","query":"","body":"","auth":"","dup":"","ctype":"","id":""}
+<closed>
+=== long path
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+Content-Length: 22
+Connection: keep-alive
+
+{"error": "Not Found"}
+<open>
+=== long method
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+Content-Length: 22
+Connection: keep-alive
+
+{"error": "Not Found"}
+<open>
+=== header block too large
+HTTP/1.1 431 Request Header Fields Too Large
+Content-Type: application/json
+Content-Length: 44
+Connection: close
+
+{"error": "Request Header Fields Too Large"}
+<closed>
+=== unicode body
+
+<open>

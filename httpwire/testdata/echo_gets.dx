@@ -14,11 +14,26 @@ fn cookies(req: http.HttpRequest): http.HttpResponse {
     return http.responseWith(201, "{}", "", h)
 }
 
+fn ctype(req: http.HttpRequest): http.HttpResponse {
+    if (req.query == "inject") {
+        return http.response(200, "x", "text/plain\nX-Injected: 1")
+    }
+    let n: int = str.toInt(req.query)
+    let ct: string = "text/"
+    let i: int = 0
+    while (i < n) {
+        ct = ct + "a"
+        i = i + 1
+    }
+    return http.response(200, "x", ct)
+}
+
 fn main(): void {
     http.route("GET", "/echo", echo)
     http.route("POST", "/echo", echo)
     http.route("GET", "/items/:id", echo)
     http.route("GET", "/cookies", cookies)
+    http.route("GET", "/ctype", ctype)
     let mode: string = os.env("MODE")
     if (mode == "uring") {
         http.uring()

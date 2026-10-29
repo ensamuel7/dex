@@ -408,10 +408,12 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
     char save = conn->read_buf[conn->headers_end];
     conn->read_buf[conn->headers_end] = '\0';
 
-    sscanf(conn->read_buf, "%15s", conn->method);
     {
         const char* t = conn->read_buf;
         while (*t && isspace((unsigned char)*t)) t++;
+        int m = 0;
+        while (m < 15 && t[m] && !isspace((unsigned char)t[m])) { conn->method[m] = t[m]; m++; }
+        if (m > 0) conn->method[m] = '\0';
         while (*t && !isspace((unsigned char)*t)) t++;
         while (*t && isspace((unsigned char)*t)) t++;
         size_t n = 0;
@@ -551,32 +553,52 @@ static void dex_http_fill_headers(DexHttpConn* conn, DexMap_str_str* headers) {
 static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
                                      const char* body, int body_len, const char* content_type,
                                      const char* extra) {
-    int extra_len = (extra && *extra) ? (int)strlen(extra) : 0;
-    int needed = 512 + body_len + extra_len * 2 + 8;
-    conn->write_buf = (char*)dex_xmalloc(needed);
-    if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
+    size_t extra_len = (extra && *extra) ? strlen(extra) : 0;
+    size_t status_len = strlen(status);
+    size_t ct_len = strcspn(content_type, "\r\n");
+    if (body_len < 0) body_len = 0;
 
     if (conn->keep_alive && dex_http_shed_at > 0 &&
         __atomic_load_n(&dex_http_live_conns, __ATOMIC_RELAXED) >= dex_http_shed_at) {
         conn->keep_alive = 0;
     }
-    int hlen = snprintf(conn->write_buf, needed,
-        "HTTP/1.1 %s\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %d\r\n"
-        "Connection: %s\r\n",
-        status, content_type, body_len, conn->keep_alive ? "keep-alive" : "close");
+    const char* conn_line = conn->keep_alive ? "\r\nConnection: keep-alive\r\n" : "\r\nConnection: close\r\n";
+    size_t conn_line_len = strlen(conn_line);
+
+    char digits[16];
+    int ndigits = 0;
+    {
+        unsigned v = (unsigned)body_len;
+        char rev[16];
+        do { rev[ndigits++] = (char)('0' + v % 10); v /= 10; } while (v);
+        for (int i = 0; i < ndigits; i++) digits[i] = rev[ndigits - 1 - i];
+    }
+
+    size_t needed = 9 + status_len + 16 + ct_len + 18 + (size_t)ndigits + conn_line_len
+                  + extra_len * 2 + 2 + (size_t)body_len + 1;
+    conn->write_buf = (char*)dex_xmalloc(needed);
+    if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
+
+    char* w = conn->write_buf;
+    memcpy(w, "HTTP/1.1 ", 9); w += 9;
+    memcpy(w, status, status_len); w += status_len;
+    memcpy(w, "\r\nContent-Type: ", 16); w += 16;
+    memcpy(w, content_type, ct_len); w += ct_len;
+    memcpy(w, "\r\nContent-Length: ", 18); w += 18;
+    memcpy(w, digits, (size_t)ndigits); w += ndigits;
+    memcpy(w, conn_line, conn_line_len); w += conn_line_len;
+    size_t hlen = (size_t)(w - conn->write_buf);
 
     if (extra_len > 0) {
         const char* p = extra;
         while (*p) {
             const char* eol = strchr(p, '\n');
-            int len = eol ? (int)(eol - p) : (int)strlen(p);
+            size_t len = eol ? (size_t)(eol - p) : strlen(p);
             if (len > 0 && p[len - 1] == '\r') len--;
             /* A blank or colon-less line is not a header; skip it rather than
              * emit something that would corrupt the response framing. */
-            if (len > 0 && memchr(p, ':', (size_t)len) && hlen + len + 4 < needed) {
-                memcpy(conn->write_buf + hlen, p, (size_t)len);
+            if (len > 0 && memchr(p, ':', len) && hlen + len + 4 < needed) {
+                memcpy(conn->write_buf + hlen, p, len);
                 hlen += len;
                 conn->write_buf[hlen++] = '\r';
                 conn->write_buf[hlen++] = '\n';
@@ -588,8 +610,8 @@ static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
 
     conn->write_buf[hlen++] = '\r';
     conn->write_buf[hlen++] = '\n';
-    memcpy(conn->write_buf + hlen, body, body_len);
-    conn->write_len = hlen + body_len;
+    memcpy(conn->write_buf + hlen, body, (size_t)body_len);
+    conn->write_len = (int)hlen + body_len;
     conn->write_pos = 0;
 }
 

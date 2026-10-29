@@ -73,6 +73,8 @@ var cases = []wireCase{
 	{"long path", []string{"GET /" + big(3000) + " HTTP/1.1\r\n\r\n"}},
 	{"long method", []string{big(40) + " /echo HTTP/1.1\r\n\r\n"}},
 	{"header block too large", []string{"GET /echo HTTP/1.1\r\nX-Big: " + big(40000) + "\r\n\r\n"}},
+	{"long content type", []string{"GET /ctype?2000 HTTP/1.1\r\n\r\n"}},
+	{"content type with line break", []string{"GET /ctype?inject HTTP/1.1\r\n\r\n"}},
 	{"unicode body", []string{"POST /echo HTTP/1.1\r\nContent-Length: 13\r\n\r\n\"héé\" \\ \x01"}},
 }
 

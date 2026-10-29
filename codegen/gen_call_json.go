@@ -116,9 +116,21 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 		return
 	}
 	if ast.IsStructType(argType) && !ast.IsArrayType(argType) {
+		if enc, ok := g.jsonEncoderFor(argType); ok {
+			def := ast.GetStructDef(argType)
+			tmp := g.nextTemp()
+			jb := g.nextTemp()
+			out.WriteString(fmt.Sprintf("({ %s %s = ", g.cType(argType), tmp))
+			g.genExpr(out, arg)
+			out.WriteString(fmt.Sprintf("; DexJB %s = {0}; %s(&%s, &%s); ", jb, enc, jb, tmp))
+			_ = def
+			out.WriteString(g.jsonArgRelease(arg, tmp, argType))
+			out.WriteString(fmt.Sprintf("dex_jb_finish(&%s); })", jb))
+			return
+		}
 		// Struct stringify: use dex_json_encode_struct
 		def := ast.GetStructDef(argType)
-		if g.jsonStructArgIsRvalue(arg, def) {
+		if jsonArgIsTemporary(arg) {
 			// A returned struct is an rvalue, and C will not take its address.
 			// Bind it first, and release what it owns once its text exists:
 			// nothing else will, since nothing else ever names it.
@@ -129,11 +141,7 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 			out.WriteString(fmt.Sprintf("; DexString* %s = dex_string_from_cstr(dex_json_encode_struct(&%s, %d, ", res, tmp, len(def.Fields)))
 			g.genStructFieldDescs(out, argType, 0)
 			out.WriteString(")); ")
-			if ast.NeedsRelease(argType) {
-				var rel strings.Builder
-				g.emitReleaseVar(&rel, "", tmp, argType)
-				out.WriteString(strings.ReplaceAll(rel.String(), "\n", " "))
-			}
+			out.WriteString(g.jsonArgRelease(arg, tmp, argType))
 			out.WriteString(res + "; })")
 			return
 		}
@@ -271,12 +279,45 @@ func (g *Generator) jsonDecodeFromString(out *strings.Builder, e *ast.CallExpr) 
 	return
 }
 
-func (g *Generator) jsonStructArgIsRvalue(arg ast.Expr, def *ast.StructDef) bool {
-	switch e := arg.(type) {
-	case *ast.CallExpr:
+func jsonArgIsTemporary(arg ast.Expr) bool {
+	switch arg.(type) {
+	case *ast.CallExpr, *ast.StructLitExpr:
 		return true
-	case *ast.StructLitExpr:
-		return g.structLitNeedsUnwindGuard(e, def)
 	}
 	return false
+}
+
+func (g *Generator) jsonArgRelease(arg ast.Expr, tmp string, argType ast.Type) string {
+	var rel strings.Builder
+	switch e := arg.(type) {
+	case *ast.CallExpr:
+		if ast.NeedsRelease(argType) {
+			g.emitReleaseVar(&rel, "", tmp, argType)
+		}
+	case *ast.StructLitExpr:
+		g.releaseLitOwnedFields(&rel, tmp, e, argType)
+	}
+	return strings.ReplaceAll(rel.String(), "\n", " ")
+}
+
+func (g *Generator) releaseLitOwnedFields(rel *strings.Builder, path string, lit *ast.StructLitExpr, litType ast.Type) {
+	def := ast.GetStructDef(litType)
+	if def == nil {
+		return
+	}
+	for i, name := range lit.FieldNames {
+		ft := structFieldType(def, name)
+		value := lit.FieldValues[i]
+		field := path + "." + name
+		if nested, ok := value.(*ast.StructLitExpr); ok && ast.IsStructType(ft) {
+			g.releaseLitOwnedFields(rel, field, nested, ft)
+			continue
+		}
+		if !ast.NeedsRelease(ft) {
+			continue
+		}
+		if _, isCall := value.(*ast.CallExpr); isCall || g.isNewAlloc(value) {
+			g.emitReleaseVar(rel, "", field, ft)
+		}
+	}
 }

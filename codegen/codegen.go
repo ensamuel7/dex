@@ -85,6 +85,9 @@ type Generator struct {
 	foreachCounter    int             // unique counter for foreach loop variables
 	spawnCounter      int             // unique counter for spawn wrapper functions
 	spawnWrappers     strings.Builder // collected wrapper functions emitted before main
+	jsonEncoders      map[ast.Type]string
+	jsonEncProtos     strings.Builder
+	jsonEncBodies     strings.Builder
 	routeWrapperCount int             // unique counter for route handler wrappers
 	matchCounter      int             // unique counter for match expression temp vars
 	lambdaCounter     int             // unique counter for lambda/closure functions

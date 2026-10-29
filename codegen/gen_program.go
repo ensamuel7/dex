@@ -699,6 +699,11 @@ func (g *Generator) Generate(program *ast.Program) string {
 		out.WriteString(g.closureWrappers.String())
 		out.WriteString("\n")
 	}
+	if g.jsonEncBodies.Len() > 0 {
+		out.WriteString(g.jsonEncProtos.String())
+		out.WriteString(g.jsonEncBodies.String())
+		out.WriteString("\n")
+	}
 
 	// Emit spawn wrappers (before function bodies)
 	if g.spawnWrappers.Len() > 0 {

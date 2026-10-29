@@ -1,0 +1,31 @@
+import "json"
+
+struct Author {
+    id: long
+    name: string
+}
+
+struct Wrap {
+    author: Author
+    tags: string[]
+}
+
+fn num(n: int): long {
+    return 4
+}
+
+fn main(): void {
+    let s: string = "borrowed " + "string"
+    let tags: string[] = ["x", "y"]
+    let a: Author = Author { id: 1, name: s }
+
+    assert(json.encode(Author { id: num(4), name: "lit ${num(2)}" }) == "{\"id\":4,\"name\":\"lit 4\"}")
+    assert(json.encode(Author { id: 2, name: s }) == "{\"id\":2,\"name\":\"borrowed string\"}")
+    assert(json.encode(Wrap { author: a, tags: tags }) == "{\"author\":{\"id\":1,\"name\":\"borrowed string\"},\"tags\":[\"x\",\"y\"]}")
+    assert(json.encode(Wrap { author: Author { id: 3, name: s }, tags: tags }) == "{\"author\":{\"id\":3,\"name\":\"borrowed string\"},\"tags\":[\"x\",\"y\"]}")
+    assert(json.encode(a) == "{\"id\":1,\"name\":\"borrowed string\"}")
+
+    assert(s == "borrowed string")
+    assert(a.name == "borrowed string")
+    assert(tags.len() == 2)
+}

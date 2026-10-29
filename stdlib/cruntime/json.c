@@ -678,3 +678,67 @@ int dex_json_decode_struct_checked(const char* json, void* out, int num_fields, 
     dex_json_decode_struct(json, out, num_fields, fields);
     return 1;
 }
+
+typedef struct {
+    char* p;
+    size_t len;
+    size_t cap;
+} DexJB;
+
+static void dex_jb_grow(DexJB* b, size_t need) {
+    size_t cap = b->cap ? b->cap : 256;
+    while (cap < b->len + need) cap *= 2;
+    char* p = (char*)dex_xrealloc(b->p, cap);
+    if (!p) dex_out_of_memory();
+    b->p = p;
+    b->cap = cap;
+}
+
+static inline void dex_jb_need(DexJB* b, size_t n) {
+    if (b->len + n > b->cap) dex_jb_grow(b, n);
+}
+
+static inline void dex_jb_raw(DexJB* b, const char* s, size_t n) {
+    dex_jb_need(b, n);
+    memcpy(b->p + b->len, s, n);
+    b->len += n;
+}
+
+static inline void dex_jb_long(DexJB* b, long v) {
+    dex_jb_need(b, 24);
+    b->len += (size_t)dex_json_write_long(b->p + b->len, v);
+}
+
+static inline void dex_jb_bool(DexJB* b, int v) {
+    if (v) dex_jb_raw(b, "true", 4);
+    else dex_jb_raw(b, "false", 5);
+}
+
+static inline void dex_jb_double(DexJB* b, double v) {
+    dex_jb_need(b, 32);
+    b->len += (size_t)snprintf(b->p + b->len, 32, "%g", v);
+}
+
+static inline void dex_jb_str(DexJB* b, const DexString* s) {
+    const char* d = s ? s->data : "";
+    size_t n = s ? s->len : 0;
+    dex_jb_need(b, n * 6 + 2);
+    b->p[b->len++] = '"';
+    b->len += dex_json_escape_write(b->p + b->len, d);
+    b->p[b->len++] = '"';
+}
+
+static inline void dex_jb_codec(DexJB* b, const char* s) {
+    if (s) {
+        dex_jb_raw(b, s, strlen(s));
+        free((void*)s);
+    } else {
+        dex_jb_raw(b, "[]", 2);
+    }
+}
+
+static DexString* dex_jb_finish(DexJB* b) {
+    DexString* s = dex_string_new(b->p ? b->p : "", b->len);
+    free(b->p);
+    return s;
+}

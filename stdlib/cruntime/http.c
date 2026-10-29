@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <errno.h>
 #include <sys/socket.h>
@@ -241,8 +242,8 @@ typedef struct DexHttpConn {
 
     /* Parsed request fields (populated after headers complete) */
     char          method[16];
-    char          path[2048];
-    char          query[2048];
+    char*         path;
+    char*         query;
     int           content_length;
     int           headers_end;     /* offset of body start in read_buf */
     int           header_start;    /* offset of the first header line */
@@ -304,6 +305,7 @@ static void dex_http_conn_free(DexHttpConn* conn) {
     __atomic_sub_fetch(&dex_http_live_conns, 1, __ATOMIC_RELAXED);
     free(conn->read_buf);
     free(conn->write_buf);
+    free(conn->path);
     free(conn);
 }
 
@@ -317,8 +319,9 @@ static void dex_http_conn_reset(DexHttpConn* conn) {
     conn->header_start = -1;
     conn->last_active = time(NULL);
     conn->method[0] = '\0';
-    conn->path[0] = '\0';
-    conn->query[0] = '\0';
+    free(conn->path);
+    conn->path = NULL;
+    conn->query = NULL;
     free(conn->write_buf);
     conn->write_buf = NULL;
     conn->write_len = 0;
@@ -405,15 +408,25 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
     char save = conn->read_buf[conn->headers_end];
     conn->read_buf[conn->headers_end] = '\0';
 
-    /* Parse method and path directly into conn buffers */
-    sscanf(conn->read_buf, "%15s %2047s", conn->method, conn->path);
-
-    /* Split path and query at '?' in-place */
-    char* qmark = strchr(conn->path, '?');
-    if (qmark) {
-        strncpy(conn->query, qmark + 1, sizeof(conn->query) - 1);
-        conn->query[sizeof(conn->query) - 1] = '\0';
-        *qmark = '\0';
+    sscanf(conn->read_buf, "%15s", conn->method);
+    {
+        const char* t = conn->read_buf;
+        while (*t && isspace((unsigned char)*t)) t++;
+        while (*t && !isspace((unsigned char)*t)) t++;
+        while (*t && isspace((unsigned char)*t)) t++;
+        size_t n = 0;
+        while (t[n] && !isspace((unsigned char)t[n]) && n < 2047) n++;
+        free(conn->path);
+        conn->path = (char*)dex_xmalloc(n + 1);
+        if (!conn->path) { conn->read_buf[conn->headers_end] = save; return -1; }
+        memcpy(conn->path, t, n);
+        conn->path[n] = '\0';
+        conn->query = NULL;
+        char* qmark = strchr(conn->path, '?');
+        if (qmark) {
+            *qmark = '\0';
+            conn->query = qmark + 1;
+        }
     }
 
     /* Where the header lines start: just past the request line. */
@@ -632,20 +645,21 @@ static void dex_http_run_handler(DexHttpConn* conn) {
     }
 
     /* Build HttpRequest struct — use known lengths to avoid strlen */
+    const char* cpath = conn->path ? conn->path : "";
     Dex_HttpRequest req;
     req.method = dex_string_new(conn->method, strlen(conn->method));
-    req.path = dex_string_new(conn->path, strlen(conn->path));
+    req.path = dex_string_new(cpath, strlen(cpath));
     req.body = (body_len > 0)
         ? dex_string_new(body_data, (size_t)body_len)
         : dex_string_new("", 0);
-    req.query = dex_string_new(conn->query, strlen(conn->query));
+    req.query = conn->query ? dex_string_new(conn->query, strlen(conn->query)) : dex_string_new("", 0);
     req.params = dex_map_str_str_new();
     req.headers = dex_map_str_str_new();
     dex_http_fill_headers(conn, req.headers);
 
     /* Split incoming path into segments for matching */
     char path_copy[2048];
-    strncpy(path_copy, conn->path, sizeof(path_copy) - 1);
+    strncpy(path_copy, cpath, sizeof(path_copy) - 1);
     path_copy[sizeof(path_copy) - 1] = '\0';
 
     char* req_segments[32];
@@ -675,7 +689,7 @@ static void dex_http_run_handler(DexHttpConn* conn) {
 
         /* Fast path: no params, use exact string match */
         if (r->param_count == 0) {
-            if (strcmp(conn->path, r->pattern) == 0) {
+            if (strcmp(cpath, r->pattern) == 0) {
                 dex_http_apply_response(conn, DEX_CALL_HANDLER(r->handler, req));
                 matched = 1;
                 break;

@@ -17,14 +17,37 @@ var cryptoDigestRuntime string
 //go:embed cruntime/crypto_verify.c
 var cryptoVerifyRuntime string
 
+//go:embed cruntime/crypto_bcrypt.c
+var cryptoBcryptRuntime string
+
 // Order matters: the verifier reuses the base64 alphabet table the digest file
 // defines, and these are concatenated into one translation unit.
-var cryptoRuntime = cryptoRuntimeBase + cryptoDigestRuntime + cryptoVerifyRuntime
+var cryptoRuntime = cryptoRuntimeBase + cryptoDigestRuntime + cryptoVerifyRuntime + cryptoBcryptRuntime
 
 // SHA-256 and HMAC come from OpenSSL, which the ws module already links for
 // wss://. Detected the same way, so a build either has both or neither rather
 // than half-enabling one from a stray include path.
 func detectCryptoFlags() []string {
+	return append(detectSSLFlags(), detectXcryptFlags()...)
+}
+
+func detectXcryptFlags() []string {
+	if exec.Command("pkg-config", "--exists", "libxcrypt").Run() != nil {
+		return nil
+	}
+	flags := []string{"-DDEX_HAS_XCRYPT"}
+	if out, err := exec.Command("pkg-config", "--cflags", "libxcrypt").Output(); err == nil {
+		flags = append(flags, strings.Fields(strings.TrimSpace(string(out)))...)
+	}
+	if out, err := exec.Command("pkg-config", "--libs", "libxcrypt").Output(); err == nil {
+		flags = append(flags, strings.Fields(strings.TrimSpace(string(out)))...)
+	} else {
+		flags = append(flags, "-lcrypt")
+	}
+	return flags
+}
+
+func detectSSLFlags() []string {
 	out, err := exec.Command("pkg-config", "--cflags", "openssl").Output()
 	if err != nil {
 		return nil
@@ -72,6 +95,23 @@ func init() {
 				CName:      "dex_crypto_verify_password",
 				RawParams:  []int{0, 1},
 				Doc:        "Whether a password matches a hash from hashPassword, compared in constant time. False for a malformed hash, and without OpenSSL.",
+			},
+			"bcryptHash": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeInt},
+				ParamNames: []string{"password", "cost"},
+				ReturnType: ast.TypeString,
+				CName:      "dex_crypto_bcrypt_hash",
+				RawParams:  []int{0},
+				RawReturn:  true,
+				Doc:        "Hash a password with bcrypt at a cost from 4 to 31 (10 is common), as $2b$<cost>$<salt><hash>, for systems whose stored hashes are already bcrypt. \"\" for a cost out of range, a password containing a NUL byte, or a build without libxcrypt. bcrypt reads only the first 72 bytes of a password. New systems should prefer hashPassword.",
+			},
+			"bcryptVerify": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeString},
+				ParamNames: []string{"password", "stored"},
+				ReturnType: ast.TypeBool,
+				CName:      "dex_crypto_bcrypt_verify",
+				RawParams:  []int{0, 1},
+				Doc:        "Whether a password matches a bcrypt hash ($2a$, $2b$ or $2y$), compared in constant time. False for a malformed hash, a password containing a NUL byte, and without libxcrypt.",
 			},
 			"encrypt": {
 				Params:     []ast.Type{ast.TypeString, ast.TypeString},

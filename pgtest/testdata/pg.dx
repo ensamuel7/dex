@@ -1,0 +1,119 @@
+import "db"
+import "os"
+import "fmt"
+
+fn check(ok: bool, what: string): void {
+    if (!ok) {
+        fmt.println("FAIL " + what + " (errorCode " + db.errorCode() + ")")
+        os.exit(1)
+    }
+}
+
+fn main(): void {
+    let c: int = db.open("postgres", os.env("DATABASE_URL"))
+    check(c >= 0, "open")
+    db.exec(c, "DROP TABLE IF EXISTS dex_pg_child")
+    db.exec(c, "DROP TABLE IF EXISTS dex_pg")
+    check(db.exec(c, "CREATE TABLE dex_pg (id bigint PRIMARY KEY, name text UNIQUE NOT NULL, bio text)") >= 0, "create")
+    check(db.exec(c, "CREATE TABLE dex_pg_child (pg_id bigint NOT NULL REFERENCES dex_pg (id))") >= 0, "create child")
+
+    let ins: int = db.prepare(c, "INSERT INTO dex_pg (id, name, bio) VALUES ($1, $2, $3) RETURNING id")
+    db.bindLong(ins, 1, 1)
+    db.bindStr(ins, 2, "ada")
+    db.bindNull(ins, 3)
+    check(db.step(ins), "insert with a NULL last parameter")
+    check(db.errorCode() == "", "no error code after success")
+
+    db.reset(ins)
+    db.bindLong(ins, 1, 2)
+    db.bindStr(ins, 2, "ada")
+    db.bindStr(ins, 3, "dup")
+    check(!db.step(ins), "duplicate insert fails")
+    check(db.errorCode() == "23505", "unique violation reports 23505")
+
+    db.reset(ins)
+    db.bindLong(ins, 1, 2)
+    db.bindStr(ins, 2, "grace")
+    db.bindStr(ins, 3, "navy")
+    check(db.step(ins), "insert after a failure")
+    check(db.errorCode() == "", "error code clears")
+
+    let isNull: int = db.prepare(c, "SELECT bio IS NULL FROM dex_pg WHERE id = $1")
+    db.bindLong(isNull, 1, 1)
+    check(db.step(isNull), "select bio")
+    let wasNull: string = db.col(isNull, 0)
+    check(wasNull == "t", "NULL was stored, not an empty string")
+
+    let bios: int = db.prepare(c, "SELECT bio, name FROM dex_pg ORDER BY id")
+    check(db.step(bios), "first bio")
+    check(db.isNull(bios, 0), "isNull on a NULL column")
+    check(!db.isNull(bios, 1), "isNull on a set column")
+    check(db.isNull(bios, 7), "isNull past the last column")
+    check(db.step(bios), "second bio")
+    check(!db.isNull(bios, 0), "isNull on the next row")
+    check(!db.step(bios), "two rows")
+
+    let upd: int = db.prepare(c, "UPDATE dex_pg SET name = COALESCE($2, name), bio = COALESCE($3, bio) WHERE id = $1 RETURNING name, bio")
+    db.bindLong(upd, 1, 2)
+    db.bindNull(upd, 2)
+    db.bindNull(upd, 3)
+    check(db.step(upd), "update with NULLs")
+    let name: string = db.col(upd, 0)
+    let bio: string = db.col(upd, 1)
+    check(name == "grace" && bio == "navy", "COALESCE kept both columns")
+    db.reset(upd)
+    db.bindLong(upd, 1, 2)
+    db.bindNull(upd, 2)
+    db.bindStr(upd, 3, "teal")
+    check(db.step(upd), "update one column")
+    let bio2: string = db.col(upd, 1)
+    check(bio2 == "teal", "bound column changed")
+
+    let skip: int = db.prepare(c, "INSERT INTO dex_pg (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING")
+    db.bindLong(skip, 1, 9)
+    db.bindStr(skip, 2, "nine")
+    check(!db.step(skip), "insert without RETURNING has no row")
+    check(db.affected(skip) == 1, "new row counts one")
+    db.reset(skip)
+    db.bindLong(skip, 1, 9)
+    db.bindStr(skip, 2, "nine again")
+    db.step(skip)
+    check(db.affected(skip) == 0, "skipped conflict counts none")
+    db.reset(skip)
+    check(db.affected(skip) == 0, "reset clears the count")
+    db.exec(c, "DELETE FROM dex_pg WHERE id = 9")
+
+    let child: int = db.prepare(c, "INSERT INTO dex_pg_child (pg_id) VALUES ($1)")
+    db.bindLong(child, 1, 999)
+    check(!db.step(child), "missing parent fails")
+    check(db.errorCode() == "23503", "foreign key violation reports 23503")
+
+    let wide: int = db.prepare(c, "SELECT concat_ws(',', $1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, $11::text), $12::text IS NULL")
+    db.bindNull(wide, 12)
+    db.bindStr(wide, 11, "k")
+    db.bindStr(wide, 1, "a")
+    check(db.step(wide), "twelve parameters, bound out of order")
+    let joined: string = db.col(wide, 0)
+    let lastNull: string = db.col(wide, 1)
+    check(joined == "a,k", "unbound parameters are NULL")
+    check(lastNull == "t", "NULL past the initial capacity")
+
+    check(db.exec(c, "BEGIN") >= 0, "begin")
+    db.reset(ins)
+    db.bindLong(ins, 1, 3)
+    db.bindStr(ins, 2, "linus")
+    db.bindNull(ins, 3)
+    check(db.step(ins), "insert in a transaction")
+    check(db.exec(c, "ROLLBACK") >= 0, "rollback")
+    let count: int = db.prepare(c, "SELECT count(*)::int FROM dex_pg")
+    check(db.step(count), "count")
+    let n: int = db.col(count, 0)
+    check(n == 2, "rolled-back insert is gone")
+
+    check(db.exec(c, "SELECT * FROM no_such_table") < 0, "bad table fails")
+    check(db.errorCode() == "42P01", "undefined table reports 42P01")
+
+    db.exec(c, "DROP TABLE dex_pg_child")
+    db.exec(c, "DROP TABLE dex_pg")
+    fmt.println("ok")
+}

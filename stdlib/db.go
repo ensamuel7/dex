@@ -233,6 +233,33 @@ func init() {
 				CName:      "dex_db_bind_str",
 				Doc:        "Bind a string value to a prepared statement parameter by index (1-based).",
 			},
+			"affected": {
+				Params:     []ast.Type{ast.TypeInt},
+				ParamNames: []string{"stmt"},
+				ReturnType: ast.TypeInt,
+				CName:      "dex_db_affected",
+				Doc:        "How many rows the statement's last step inserted, updated or deleted, such as 0 for an INSERT that ON CONFLICT DO NOTHING skipped. Read it before db.reset.",
+			},
+			"isNull": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeInt},
+				ParamNames: []string{"rows", "col"},
+				ReturnType: ast.TypeBool,
+				CName:      "dex_db_is_null",
+				Doc:        "Whether column col of the current row is SQL NULL, which db.col reads as \"\" or 0. Takes a result or a statement handle, like db.col. True when there is no current row or no such column.",
+			},
+			"bindNull": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeInt},
+				ParamNames: []string{"stmt", "index"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_db_bind_null",
+				Doc:        "Bind SQL NULL to a prepared statement parameter by index (1-based), for an optional value such as COALESCE($2, column).",
+			},
+			"errorCode": {
+				Params:     []ast.Type{},
+				ReturnType: ast.TypeString,
+				CName:      "dex_db_error_code",
+				Doc:        "The SQLSTATE of the last Postgres statement this thread ran, such as \"23505\" for a unique violation, or \"\" when it succeeded. A failure that never reached the server, such as a lost connection, reports \"08006\". Postgres only: SQLite and MySQL statements leave it unchanged.",
+			},
 			"step": {
 				Params:     []ast.Type{ast.TypeInt},
 				ParamNames: []string{"stmt"},

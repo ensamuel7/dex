@@ -313,6 +313,21 @@ static int dex_db_pg_broken(PGconn* pg) {
 }
 #endif
 
+static __thread char dex_db_sqlstate[6];
+
+#ifdef DEX_HAS_POSTGRES
+static void dex_db_pg_note(PGresult* res, int ok) {
+    if (ok) { dex_db_sqlstate[0] = '\0'; return; }
+    const char* st = res ? PQresultErrorField(res, PG_DIAG_SQLSTATE) : NULL;
+    if (!st || strlen(st) != 5) st = "08006";
+    memcpy(dex_db_sqlstate, st, 6);
+}
+#endif
+
+char* dex_db_error_code(void) {
+    return dex_xstrdup(dex_db_sqlstate);
+}
+
 #ifdef DEX_HAS_MYSQL
 // --- MySQL DSN parser ---
 // Format: "host=localhost user=root password=secret dbname=mydb port=3306"
@@ -535,7 +550,7 @@ int dex_db_exec(int conn, const char* sql) {
     } else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
         DexDbPool* pool = &c->pg_pool;
         int entry = dex_db_pool_acquire(pool);
-        if (entry < 0) return -1;
+        if (entry < 0) { dex_db_pg_note(NULL, 0); return -1; }
 
         // Two attempts: a connection checked out a moment ago can still die
         // before the statement lands on it, which is exactly what a database
@@ -545,6 +560,7 @@ int dex_db_exec(int conn, const char* sql) {
         for (int attempt = 0; attempt < 2; attempt++) {
             PGresult* res = PQexec(pool->connections[entry], sql);
             ExecStatusType status = PQresultStatus(res);
+            dex_db_pg_note(res, status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK);
             if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {
                 char* affected = PQcmdTuples(res);
                 n = (affected && affected[0] != '\0') ? dex_parse_int(affected) : 0;
@@ -646,6 +662,7 @@ int dex_db_query(int conn, const char* sql) {
         PGresult* res = NULL;
         for (int attempt = 0; attempt < 2; attempt++) {
             res = PQexec(pool->connections[entry], sql);
+            dex_db_pg_note(res, PQresultStatus(res) == PGRES_TUPLES_OK);
             if (PQresultStatus(res) == PGRES_TUPLES_OK) break;
             int broken = dex_db_pg_broken(pool->connections[entry]);
             if (!broken) {
@@ -846,6 +863,26 @@ long dex_db_col_long(int rows, int col) {
 // ==========================================================================
 // dex_db_col_str
 // ==========================================================================
+_Bool dex_db_is_null(int rows, int col) {
+    DexDbRow _row = dex_db_row(rows);
+    DexDbRow* r = &_row;
+    if (col < 0) return 1;
+    if (r->driver == DEX_DB_DRIVER_SQLITE) {
+        if (!r->sqlite_stmt || col >= sqlite3_column_count(r->sqlite_stmt)) return 1;
+        return sqlite3_column_type(r->sqlite_stmt, col) == SQLITE_NULL;
+#ifdef DEX_HAS_POSTGRES
+    } else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
+        if (!r->pg_result || r->pg_row < 0 || r->pg_row >= PQntuples(r->pg_result) || col >= PQnfields(r->pg_result)) return 1;
+        return PQgetisnull(r->pg_result, r->pg_row, col) != 0;
+#endif
+#ifdef DEX_HAS_MYSQL
+    } else if (r->driver == DEX_DB_DRIVER_MYSQL) {
+        return !r->mysql_row || !r->mysql_row[col];
+#endif
+    }
+    return 1;
+}
+
 const char* dex_db_col_str(int rows, int col) {
     DexDbRow _row = dex_db_row(rows);
     DexDbRow* r = &_row;
@@ -1203,6 +1240,7 @@ int dex_db_prepare(int conn, const char* sql) {
                  "dex_ps_%u", seq);
 
         PGresult* res = PQprepare(pool->connections[entry], dex_db_stmts[slot].pg_stmt_name, sql, 0, NULL);
+        dex_db_pg_note(res, PQresultStatus(res) == PGRES_COMMAND_OK);
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
             fprintf(stderr, "db.prepare error: %s", PQerrorMessage(pool->connections[entry]));
             PQclear(res);
@@ -1265,6 +1303,25 @@ int dex_db_prepare(int conn, const char* sql) {
     return -1;
 }
 
+#ifdef DEX_HAS_POSTGRES
+static int dex_db_pg_param_slot(DexDbStmt* s, int idx) {
+    if (idx < 1 || idx > 65535) return -1;
+    int pidx = idx - 1;
+    if (pidx >= s->pg_param_cap) {
+        int old_cap = s->pg_param_cap;
+        int cap = old_cap;
+        while (pidx >= cap) cap *= 2;
+        s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, cap * sizeof(char*));
+        s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, cap * sizeof(int));
+        memset(s->pg_param_values + old_cap, 0, (cap - old_cap) * sizeof(char*));
+        memset(s->pg_param_lengths + old_cap, 0, (cap - old_cap) * sizeof(int));
+        s->pg_param_cap = cap;
+    }
+    if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+    return pidx;
+}
+#endif
+
 // ==========================================================================
 // dex_db_bind_int
 // ==========================================================================
@@ -1277,13 +1334,8 @@ void dex_db_bind_int(int stmt_id, int idx, int val) {
         sqlite3_bind_int(s->sqlite_stmt, idx, val);
 #ifdef DEX_HAS_POSTGRES
     } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
-        int pidx = idx - 1;
-        while (pidx >= s->pg_param_cap) {
-            s->pg_param_cap *= 2;
-            s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
-            s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
-        }
-        if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+        int pidx = dex_db_pg_param_slot(s, idx);
+        if (pidx < 0) return;
         char buf[32];
         snprintf(buf, sizeof(buf), "%d", val);
         free(s->pg_param_values[pidx]);
@@ -1313,13 +1365,8 @@ void dex_db_bind_long(int stmt_id, int idx, long val) {
         sqlite3_bind_int64(s->sqlite_stmt, idx, (sqlite3_int64)val);
 #ifdef DEX_HAS_POSTGRES
     } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
-        int pidx = idx - 1;
-        while (pidx >= s->pg_param_cap) {
-            s->pg_param_cap *= 2;
-            s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
-            s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
-        }
-        if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+        int pidx = dex_db_pg_param_slot(s, idx);
+        if (pidx < 0) return;
         char buf[32];
         snprintf(buf, sizeof(buf), "%ld", val);
         free(s->pg_param_values[pidx]);
@@ -1341,13 +1388,8 @@ void dex_db_bind_double(int stmt_id, int idx, double val) {
         sqlite3_bind_double(s->sqlite_stmt, idx, val);
 #ifdef DEX_HAS_POSTGRES
     } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
-        int pidx = idx - 1;
-        while (pidx >= s->pg_param_cap) {
-            s->pg_param_cap *= 2;
-            s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
-            s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
-        }
-        if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+        int pidx = dex_db_pg_param_slot(s, idx);
+        if (pidx < 0) return;
         char buf[64];
         snprintf(buf, sizeof(buf), "%g", val);
         free(s->pg_param_values[pidx]);
@@ -1369,16 +1411,29 @@ void dex_db_bind_str(int stmt_id, int idx, const char* val) {
         sqlite3_bind_text(s->sqlite_stmt, idx, val, -1, SQLITE_TRANSIENT);
 #ifdef DEX_HAS_POSTGRES
     } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
-        int pidx = idx - 1;
-        while (pidx >= s->pg_param_cap) {
-            s->pg_param_cap *= 2;
-            s->pg_param_values = (char**)dex_xrealloc(s->pg_param_values, s->pg_param_cap * sizeof(char*));
-            s->pg_param_lengths = (int*)dex_xrealloc(s->pg_param_lengths, s->pg_param_cap * sizeof(int));
-        }
-        if (pidx >= s->pg_param_count) s->pg_param_count = pidx + 1;
+        int pidx = dex_db_pg_param_slot(s, idx);
+        if (pidx < 0) return;
         free(s->pg_param_values[pidx]);
         s->pg_param_values[pidx] = dex_xstrdup(val);
         s->pg_param_lengths[pidx] = (int)strlen(val);
+#endif
+    }
+}
+
+void dex_db_bind_null(int stmt_id, int idx) {
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return;
+    DexDbStmt* s = &dex_db_stmts[_slot];
+
+    if (s->driver == DEX_DB_DRIVER_SQLITE) {
+        sqlite3_bind_null(s->sqlite_stmt, idx);
+#ifdef DEX_HAS_POSTGRES
+    } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        int pidx = dex_db_pg_param_slot(s, idx);
+        if (pidx < 0) return;
+        free(s->pg_param_values[pidx]);
+        s->pg_param_values[pidx] = NULL;
+        s->pg_param_lengths[pidx] = 0;
 #endif
     }
 }
@@ -1407,7 +1462,7 @@ _Bool dex_db_step(int stmt_id) {
             if (s->conn_slot < 0 || s->conn_slot >= DEX_DB_MAX_CONNS) return 0;
             DexDbPool* pool = &dex_db_conns[s->conn_slot].pg_pool;
             int entry = dex_db_pool_acquire(pool);
-            if (entry < 0) return 0;
+            if (entry < 0) { dex_db_pg_note(NULL, 0); return 0; }
 
             for (int attempt = 0; attempt < 2; attempt++) {
                 PGconn* pg = pool->connections[entry];
@@ -1417,6 +1472,7 @@ _Bool dex_db_step(int stmt_id) {
                 // copy with it.
                 if (s->prepared_gen[entry] != pool->generation[entry]) {
                     PGresult* pr = PQprepare(pg, s->pg_stmt_name, s->pg_sql, 0, NULL);
+                    dex_db_pg_note(pr, PQresultStatus(pr) == PGRES_COMMAND_OK);
                     if (PQresultStatus(pr) != PGRES_COMMAND_OK) {
                         int broken = dex_db_pg_broken(pg);
                         if (!broken) {
@@ -1435,6 +1491,7 @@ _Bool dex_db_step(int stmt_id) {
                     s->pg_param_count, (const char* const*)s->pg_param_values,
                     s->pg_param_lengths, NULL, 0);
                 ExecStatusType st = PQresultStatus(s->pg_result);
+                dex_db_pg_note(s->pg_result, st == PGRES_TUPLES_OK || st == PGRES_COMMAND_OK);
                 if (st == PGRES_TUPLES_OK || st == PGRES_COMMAND_OK) break;
 
                 int broken = dex_db_pg_broken(pg);
@@ -1464,6 +1521,24 @@ _Bool dex_db_step(int stmt_id) {
             return 1;
         }
         return 0;
+#endif
+    }
+    return 0;
+}
+
+int dex_db_affected(int stmt_id) {
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return 0;
+    DexDbStmt* s = &dex_db_stmts[_slot];
+    if (s->driver == DEX_DB_DRIVER_SQLITE) {
+        if (s->conn_slot < 0 || s->conn_slot >= DEX_DB_MAX_CONNS) return 0;
+        sqlite3* c = dex_db_conns[s->conn_slot].sqlite_conn;
+        return c ? sqlite3_changes(c) : 0;
+#ifdef DEX_HAS_POSTGRES
+    } else if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        if (!s->pg_result) return 0;
+        const char* n = PQcmdTuples(s->pg_result);
+        return (n && n[0] != '\0') ? dex_parse_int(n) : 0;
 #endif
     }
     return 0;
@@ -1636,6 +1711,7 @@ int dex_db_query_params(int conn, const char* sql, DexArrayString* args) {
     for (int attempt = 0; attempt < 2; attempt++) {
         res = PQexecParams(pool->connections[entry], sql, nparams,
                            NULL, values, NULL, NULL, 0);
+        dex_db_pg_note(res, PQresultStatus(res) == PGRES_TUPLES_OK);
         if (PQresultStatus(res) == PGRES_TUPLES_OK) break;
         int broken = dex_db_pg_broken(pool->connections[entry]);
         if (!broken) {
@@ -1696,6 +1772,7 @@ int dex_db_exec_params(int conn, const char* sql, DexArrayString* args) {
         PGresult* res = PQexecParams(pool->connections[entry], sql, nparams,
                                      NULL, values, NULL, NULL, 0);
         ExecStatusType status = PQresultStatus(res);
+        dex_db_pg_note(res, status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK);
         if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {
             char* affected = PQcmdTuples(res);
             n = (affected && affected[0] != '\0') ? dex_parse_int(affected) : 0;

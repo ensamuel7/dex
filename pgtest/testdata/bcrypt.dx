@@ -1,0 +1,32 @@
+import "crypto"
+import "os"
+import "fmt"
+
+fn check(ok: bool, what: string): void {
+    if (!ok) {
+        fmt.println("FAIL " + what)
+        os.exit(1)
+    }
+}
+
+fn main(): void {
+    let seeded: string = "$2a$10$ZSfEoPvlcsj2XfvsSeK25em4NZ9Jm7ntGqXuLgQfHEeZPYB8899wq"
+    check(crypto.bcryptVerify("password123", seeded), "verifies a $2a$ hash from another library")
+    check(!crypto.bcryptVerify("password124", seeded), "rejects the wrong password")
+    check(!crypto.bcryptVerify("", seeded), "rejects an empty password")
+
+    let h: string = crypto.bcryptHash("hunter2", 10)
+    check(h.startsWith("$2b$10$") && h.len() == 60, "hash shape")
+    check(crypto.bcryptVerify("hunter2", h), "verifies its own hash")
+    check(!crypto.bcryptVerify("hunter3", h), "rejects a different password")
+    let again: string = crypto.bcryptHash("hunter2", 10)
+    check(again != h, "salted")
+
+    check(crypto.bcryptHash("x", 3) == "", "cost below 4 refused")
+    check(crypto.bcryptHash("x", 32) == "", "cost above 31 refused")
+    check(!crypto.bcryptVerify("x", ""), "empty hash")
+    check(!crypto.bcryptVerify("x", "$2b$10$short"), "truncated hash")
+    check(!crypto.bcryptVerify("x", "pbkdf2-sha256$1000$00$00"), "another scheme")
+    check(!crypto.bcryptVerify("x", "$1$abc$def"), "md5crypt refused")
+    fmt.println("ok")
+}

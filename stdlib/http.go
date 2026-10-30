@@ -46,6 +46,20 @@ func init() {
 				CName:      "dex_http_set_threads",
 				Doc:        "How many threads run handlers. Call before listen. 0, the default, sizes the pool from the CPU count with a floor of four — the right hedge when a handler might block on a database or an outbound request. Set it lower when handlers are CPU-bound and serialised behind a lock on a small box, where extra threads only add context switches to work that cannot overlap.",
 			},
+			"fork": {
+				Params:     []ast.Type{ast.TypeInt},
+				ParamNames: []string{"count"},
+				ReturnType: ast.TypeInt,
+				CName:      "dex_http_fork",
+				Doc:        "Split the program into count processes that will share one listening port, and return this process's index: 0 in the original, 1 to count-1 in the copies. 0 means one per CPU. Call it before opening anything a process must own alone, such as a database connection, then open those and call listen with one worker. The copies receive SIGTERM when the original exits. A second call returns the same index without forking again.",
+			},
+			"extraPort": {
+				Params:     []ast.Type{ast.TypeInt},
+				ParamNames: []string{"port"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_http_extra_port",
+				Doc:        "Also serve the same routes on another port of the same host. Call before listen; up to three extra ports. Each listening address takes its own share of client connections, which matters past the roughly 64,000 connections one client address can open to one port.",
+			},
 			"limits": {
 				Params:     []ast.Type{ast.TypeInt, ast.TypeInt, ast.TypeInt},
 				ParamNames: []string{"maxBodyBytes", "idleTimeoutSecs", "maxConnections"},

@@ -1,0 +1,26 @@
+import "http"
+import "os"
+import "str"
+
+let worker: int = -1
+
+fn who(req: http.HttpRequest): http.HttpResponse {
+    return http.response(200, str.fromInt(worker), "text/plain")
+}
+
+fn main(): void {
+    worker = http.fork(4)
+    if (http.fork(4) != worker) {
+        os.exit(3)
+    }
+    http.route("GET", "/who", who)
+    let mode: string = os.env("MODE")
+    if (mode == "uring") {
+        http.uring()
+    }
+    if (mode == "inline") {
+        http.inline()
+    }
+    http.extraPort(str.toInt(os.env("EXTRA_PORT")))
+    http.listenOn("127.0.0.1", str.toInt(os.env("PORT")), 1)
+}

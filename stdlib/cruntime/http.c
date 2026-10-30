@@ -9,6 +9,7 @@
 #include <sys/uio.h>
 #include <sys/resource.h>
 #ifdef __linux__
+#include <sys/prctl.h>
 int accept4(int fd, struct sockaddr* addr, socklen_t* addrlen, int flags);
 #if defined(__has_include)
 #if __has_include(<linux/io_uring.h>)
@@ -104,6 +105,12 @@ static int dex_http_live_conns = 0;
 static int dex_http_conn_cap = 0;
 static int dex_http_shed_at = 0;
 static int dex_http_accepting = 1;
+
+#define DEX_HTTP_MAX_LISTENERS 4
+static int dex_http_extra_ports[DEX_HTTP_MAX_LISTENERS - 1];
+static int dex_http_extra_port_count = 0;
+static int dex_http_listen_fds[DEX_HTTP_MAX_LISTENERS];
+static int dex_http_listen_count = 0;
 
 /* 0 for any argument keeps that default: a program raising the body limit for
  * uploads should not have to restate the idle timeout to do it. */
@@ -967,6 +974,7 @@ typedef struct {
     DexUring u;
     int index;
     int accepts_pending;
+    int listener_pending[DEX_HTTP_MAX_LISTENERS];
     int direct_pending;
     int direct_cap;            /* size of direct and direct_idle */
     int direct_slots;          /* how many of them accepts may fill */
@@ -1249,39 +1257,43 @@ static void dex_uring_target(struct io_uring_sqe* sqe, DexHttpConn* conn) {
 }
 static struct __kernel_timespec dex_uring_tick = { 1, 0 };
 
-static int dex_uring_queue_accept(DexUringRing* r, int server_fd, int direct) {
+static int dex_uring_queue_accept(DexUringRing* r, int server_fd, int direct, int listener) {
     struct io_uring_sqe* sqe = dex_uring_sqe(&r->u);
     if (!sqe) return -1;
     sqe->opcode = IORING_OP_ACCEPT;
     sqe->fd = server_fd;
+    r->listener_pending[listener]++;
+    r->accepts_pending++;
 #ifdef IORING_FILE_INDEX_ALLOC
     if (direct) {
         sqe->file_index = IORING_FILE_INDEX_ALLOC;
-        sqe->user_data = DEX_UD_ACCEPT_DIRECT;
+        sqe->user_data = DEX_UD_ACCEPT_DIRECT + 16 * (unsigned long)listener;
         r->direct_pending++;
-        r->accepts_pending++;
         return 0;
     }
 #endif
     sqe->accept_flags = SOCK_CLOEXEC;
-    sqe->user_data = DEX_UD_ACCEPT;
-    r->accepts_pending++;
+    sqe->user_data = DEX_UD_ACCEPT + 16 * (unsigned long)listener;
     return 0;
 }
 
 /* Every ring accepts into its own direct table while it has room. Only the
- * first ring falls back to ordinary descriptors, which all rings share. */
-static void dex_uring_arm_accepts(DexUringRing* r, int server_fd) {
-    while (r->accepts_pending < DEX_URING_ACCEPTS) {
-        int direct = 0;
-        if (r->direct_live + r->direct_pending < r->direct_slots) {
-            direct = 1;
-        } else {
-            if (r->index != 0) break;
-            int real_pending = r->accepts_pending - r->direct_pending;
-            if (dex_uring_real_live + real_pending >= dex_uring_real_cap) break;
+ * first ring falls back to ordinary descriptors, which all rings share. Each
+ * listening port gets an equal share of a ring's accepts in flight. */
+static void dex_uring_arm_accepts(DexUringRing* r) {
+    int quota = DEX_URING_ACCEPTS / dex_http_listen_count;
+    for (int k = 0; k < dex_http_listen_count; k++) {
+        while (r->listener_pending[k] < quota) {
+            int direct = 0;
+            if (r->direct_live + r->direct_pending < r->direct_slots) {
+                direct = 1;
+            } else {
+                if (r->index != 0) return;
+                int real_pending = r->accepts_pending - r->direct_pending;
+                if (dex_uring_real_live + real_pending >= dex_uring_real_cap) return;
+            }
+            if (dex_uring_queue_accept(r, dex_http_listen_fds[k], direct, k) != 0) return;
         }
-        if (dex_uring_queue_accept(r, server_fd, direct) != 0) break;
     }
 }
 
@@ -1549,8 +1561,9 @@ static void dex_uring_reap(DexUringRing* r) {
         int res = cqe->res;
         unsigned cflags = cqe->flags;
         head++;
-        if (ud == DEX_UD_ACCEPT) {
+        if (ud < 256 && (ud & 0xF) == DEX_UD_ACCEPT) {
             r->accepts_pending--;
+            r->listener_pending[ud >> 4]--;
             if (res >= 0) {
                 DexHttpConn* conn = (res < DEX_HTTP_MAX_FD) ? dex_http_conn_new(res) : NULL;
                 if (!conn) { close(res); continue; }
@@ -1562,8 +1575,9 @@ static void dex_uring_reap(DexUringRing* r) {
             }
             continue;
         }
-        if (ud == DEX_UD_ACCEPT_DIRECT) {
+        if (ud < 256 && (ud & 0xF) == DEX_UD_ACCEPT_DIRECT) {
             r->accepts_pending--;
+            r->listener_pending[ud >> 4]--;
             r->direct_pending--;
             if (res >= 0 && res < r->direct_cap) {
                 DexHttpConn* conn = dex_http_conn_new(-1);
@@ -1644,6 +1658,7 @@ static int dex_uring_link_rings(void) {
 }
 
 static int dex_http_uring_run(int server_fd, int port) {
+    (void)server_fd;
     unsigned slots = dex_uring_direct_limit();
     int real_cap = dex_http_conn_cap;
 
@@ -1682,8 +1697,10 @@ static int dex_http_uring_run(int server_fd, int port) {
         dex_uring_drop_extra_rings();
     }
 
-    int flags = fcntl(server_fd, F_GETFL, 0);
-    if (flags >= 0) fcntl(server_fd, F_SETFL, flags & ~O_NONBLOCK);
+    for (int k = 0; k < dex_http_listen_count; k++) {
+        int flags = fcntl(dex_http_listen_fds[k], F_GETFL, 0);
+        if (flags >= 0) fcntl(dex_http_listen_fds[k], F_SETFL, flags & ~O_NONBLOCK);
+    }
 
     dex_uring_real_cap = real_cap;
     int direct_total = 0;
@@ -1691,17 +1708,19 @@ static int dex_http_uring_run(int server_fd, int port) {
     dex_http_conn_cap = dex_uring_real_cap + direct_total;
     dex_http_shed_at = dex_http_conn_cap - dex_http_conn_cap / 16;
 
+    printf("Dex server listening on port %d", port);
+    for (int i = 0; i < dex_http_extra_port_count; i++) printf(", %d", dex_http_extra_ports[i]);
     if (dex_uring_count > 1) {
-        printf("Dex server listening on port %d (io_uring, %d direct slots across %d rings)\n", port, direct_total, dex_uring_count);
+        printf(" (io_uring, %d direct slots across %d rings)\n", direct_total, dex_uring_count);
     } else {
-        printf("Dex server listening on port %d (io_uring, %d direct slots)\n", port, direct_total);
+        printf(" (io_uring, %d direct slots)\n", direct_total);
     }
     fflush(stdout);
 
     dex_uring_queue_timeout();
     struct epoll_event evs[DEX_URING_MAX_RINGS];
     for (;;) {
-        for (int i = 0; i < dex_uring_count; i++) dex_uring_arm_accepts(&dex_urings[i], server_fd);
+        for (int i = 0; i < dex_uring_count; i++) dex_uring_arm_accepts(&dex_urings[i]);
         if (dex_uring_count == 1) {
             if (dex_uring_enter(&dex_urings[0].u, 1, 1) < 0 && errno != EBUSY && errno != EAGAIN) {
                 perror("io_uring_enter");
@@ -1735,11 +1754,93 @@ static int dex_http_uring_run(int server_fd, int port) {
 
 static volatile int dex_server_fd = -1;
 
+#define DEX_MAX_WORKERS 1024
+#define DEX_AUTO_WORKERS 16
+static pid_t dex_worker_pids[DEX_MAX_WORKERS];
+static int   dex_worker_count = 0;
+
 /* Set only by the forked multi-worker model — see the note in dex_listen(). */
 static int dex_http_share_port = 0;
 
+
+void dex_http_extra_port(int port) {
+    if (port <= 0 || port > 65535) return;
+    for (int i = 0; i < dex_http_extra_port_count; i++) {
+        if (dex_http_extra_ports[i] == port) return;
+    }
+    if (dex_http_extra_port_count >= DEX_HTTP_MAX_LISTENERS - 1) {
+        fprintf(stderr, "[http] at most %d extra ports\n", DEX_HTTP_MAX_LISTENERS - 1);
+        return;
+    }
+    dex_http_extra_ports[dex_http_extra_port_count++] = port;
+}
+
+static void* dex_http_listener_tag(int k) {
+    return k == 0 ? NULL : (void*)(intptr_t)(-16 - k);
+}
+
+static int dex_http_listener_index(void* tag) {
+    if (tag == NULL) return 0;
+    intptr_t v = (intptr_t)tag;
+    if (v <= -17 && v > -16 - DEX_HTTP_MAX_LISTENERS) return (int)(-16 - v);
+    return -1;
+}
+
+static int dex_http_bind_listener(const char* host, int port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { perror("socket"); return -1; }
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+    /* Only the forked worker model needs several processes on one port. Setting
+     * this unconditionally means a second single-worker instance binds silently
+     * alongside the first — including alongside one that is wedged or exiting —
+     * and the kernel then load-balances between them, so a share of requests
+     * vanish into a process that will never answer. Without it, the second
+     * instance fails loudly with EADDRINUSE, which is the truth. */
+    if (dex_http_share_port) {
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    }
+#endif
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (!host || !*host || strcmp(host, "0.0.0.0") == 0) {
+        addr.sin_addr.s_addr = INADDR_ANY;
+    } else if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        fprintf(stderr, "[http] not an IPv4 address to bind: %s\n", host);
+        close(fd);
+        return -1;
+    }
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind"); close(fd); return -1;
+    }
+    if (listen(fd, SOMAXCONN) < 0) {
+        perror("listen"); close(fd); return -1;
+    }
+    dex_set_nonblocking(fd);
+    return fd;
+}
+
+static void dex_http_pause_accepting(void) {
+    for (int k = 0; k < dex_http_listen_count; k++) dex_ev_del(dex_http_loop, dex_http_listen_fds[k]);
+    dex_http_accepting = 0;
+}
+
+static void dex_http_resume_accepting(void) {
+    for (int k = 0; k < dex_http_listen_count; k++) {
+        dex_ev_add(dex_http_loop, dex_http_listen_fds[k], DEX_EV_READ, dex_http_listener_tag(k));
+    }
+    dex_http_accepting = 1;
+}
+
 static void dex_shutdown_handler(int sig) {
     (void)sig;
+    for (int i = 0; i < dex_worker_count; i++) {
+        if (dex_worker_pids[i] > 0) kill(dex_worker_pids[i], SIGTERM);
+    }
+    for (int k = 0; k < dex_http_listen_count; k++) close(dex_http_listen_fds[k]);
     if (dex_server_fd >= 0) close(dex_server_fd);
     /* This handler may have displaced the WebSocket listener's — they install
      * one each and the last to start wins. Exiting here would drop every
@@ -1764,45 +1865,20 @@ static void dex_listen_on(const char* host, int port) {
     signal(SIGINT, dex_shutdown_handler);
     signal(SIGTERM, dex_shutdown_handler);
 
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) { perror("socket"); return; }
+    int server_fd = dex_http_bind_listener(host, port);
+    if (server_fd < 0) return;
     dex_server_fd = server_fd;
-
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-#ifdef SO_REUSEPORT
-    /* Only the forked worker model needs several processes on one port. Setting
-     * this unconditionally means a second single-worker instance binds silently
-     * alongside the first — including alongside one that is wedged or exiting —
-     * and the kernel then load-balances between them, so a share of requests
-     * vanish into a process that will never answer. Without it, the second
-     * instance fails loudly with EADDRINUSE, which is the truth. */
-    if (dex_http_share_port) {
-        setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    dex_http_listen_fds[0] = server_fd;
+    dex_http_listen_count = 1;
+    for (int i = 0; i < dex_http_extra_port_count; i++) {
+        int fd = dex_http_bind_listener(host, dex_http_extra_ports[i]);
+        if (fd < 0) {
+            for (int k = 0; k < dex_http_listen_count; k++) close(dex_http_listen_fds[k]);
+            dex_http_listen_count = 0;
+            return;
+        }
+        dex_http_listen_fds[dex_http_listen_count++] = fd;
     }
-#endif
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    if (!host || !*host || strcmp(host, "0.0.0.0") == 0) {
-        addr.sin_addr.s_addr = INADDR_ANY;
-    } else if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
-        fprintf(stderr, "[http] not an IPv4 address to bind: %s\n", host);
-        close(server_fd);
-        return;
-    }
-
-    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("bind"); close(server_fd); return;
-    }
-
-    if (listen(server_fd, SOMAXCONN) < 0) {
-        perror("listen"); close(server_fd); return;
-    }
-
-    dex_set_nonblocking(server_fd);
 
     /* Initialize event loop, thread pool, and notify pipe */
     dex_http_loop = dex_ev_create(1024);
@@ -1821,13 +1897,14 @@ static void dex_listen_on(const char* host, int port) {
 #ifdef DEX_HTTP_HAVE_URING
     if (dex_http_uring_requested && dex_http_uring_run(server_fd, port) == 0) return;
 #endif
-    /* Register server fd for accept events */
-    dex_ev_add(dex_http_loop, server_fd, DEX_EV_READ, NULL);
+    dex_http_resume_accepting();
 
     /* Register notify pipe for worker completions */
     dex_ev_add(dex_http_loop, dex_http_notify.read_fd, DEX_EV_READ, (void*)(intptr_t)-2);
 
-    printf("Dex server listening on port %d\n", port);
+    printf("Dex server listening on port %d", port);
+    for (int i = 0; i < dex_http_extra_port_count; i++) printf(", %d", dex_http_extra_ports[i]);
+    printf("\n");
     fflush(stdout);
 
     DexEvent events[256];
@@ -1840,8 +1917,7 @@ static void dex_listen_on(const char* host, int port) {
 
     for (;;) {
         if (!dex_http_accepting && dex_http_live_conns < dex_http_conn_cap) {
-            dex_ev_add(dex_http_loop, server_fd, DEX_EV_READ, NULL);
-            dex_http_accepting = 1;
+            dex_http_resume_accepting();
         }
         /* The sweep runs before the wait, never between the wait and the
          * events it returned: a connection freed there could still have an
@@ -1872,21 +1948,21 @@ static void dex_listen_on(const char* host, int port) {
         for (int i = 0; i < n; i++) {
             DexEvent* ev = &events[i];
 
-            /* Server fd: accept new connections */
-            if (ev->user_data == NULL) {
+            int listener = dex_http_listener_index(ev->user_data);
+            if (listener >= 0) {
+                int lfd = dex_http_listen_fds[listener];
                 for (;;) {
                     if (dex_http_live_conns >= dex_http_conn_cap) {
-                        dex_ev_del(dex_http_loop, server_fd);
-                        dex_http_accepting = 0;
+                        dex_http_pause_accepting();
                         break;
                     }
                     struct sockaddr_in client_addr;
                     socklen_t client_len = sizeof(client_addr);
 #ifdef __linux__
-                    int client_fd = accept4(server_fd, (struct sockaddr*)&client_addr, &client_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                    int client_fd = accept4(lfd, (struct sockaddr*)&client_addr, &client_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (client_fd < 0) break;
 #else
-                    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+                    int client_fd = accept(lfd, (struct sockaddr*)&client_addr, &client_len);
                     if (client_fd < 0) break;
                     dex_set_nonblocking(client_fd);
 #endif
@@ -2046,9 +2122,39 @@ static void dex_listen_on(const char* host, int port) {
 
 /* ── Multi-process worker model via SO_REUSEPORT ─────────────────── */
 
-#define DEX_MAX_WORKERS 16
-static pid_t dex_worker_pids[DEX_MAX_WORKERS];
-static int   dex_worker_count = 0;
+static int dex_http_worker_index = -1;
+
+int dex_http_fork(int count) {
+    if (dex_http_worker_index >= 0) return dex_http_worker_index;
+    if (count <= 0) count = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if (count < 1) count = 1;
+    if (count > DEX_MAX_WORKERS) count = DEX_MAX_WORKERS;
+    dex_http_share_port = 1;
+    dex_http_worker_index = 0;
+    if (count == 1) return 0;
+    signal(SIGPIPE, SIG_IGN);
+    pid_t parent = getpid();
+    fflush(stdout);
+    fflush(stderr);
+    for (int i = 1; i < count; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            break;
+        }
+        if (pid == 0) {
+            dex_worker_count = 0;
+            dex_http_worker_index = i;
+#ifdef __linux__
+            prctl(PR_SET_PDEATHSIG, SIGTERM);
+            if (getppid() != parent) _exit(0);
+#endif
+            return i;
+        }
+        dex_worker_pids[dex_worker_count++] = pid;
+    }
+    return 0;
+}
 
 static void dex_multi_shutdown_handler(int sig) {
     (void)sig;
@@ -2066,7 +2172,7 @@ static void dex_listen_multi_on(const char* host, int port, int num_workers) {
     if (num_workers <= 0) {
         num_workers = (int)sysconf(_SC_NPROCESSORS_ONLN);
         if (num_workers < 1) num_workers = 1;
-        if (num_workers > DEX_MAX_WORKERS) num_workers = DEX_MAX_WORKERS;
+        if (num_workers > DEX_AUTO_WORKERS) num_workers = DEX_AUTO_WORKERS;
     }
     if (num_workers == 1) {
         dex_listen_on(host, port);
@@ -2089,6 +2195,7 @@ static void dex_listen_multi_on(const char* host, int port, int num_workers) {
         }
         if (pid == 0) {
             /* Child: run event loop (SO_REUSEPORT allows multiple binds) */
+            dex_worker_count = 0;
             dex_listen_on(host, port);
             _exit(0);
         }

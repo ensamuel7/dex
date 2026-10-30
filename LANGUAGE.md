@@ -3369,12 +3369,28 @@ bindings, so every parameter has to be bound again.
 | `bindLong`   | `bindLong(stmt: int, index: int, value: long): void` | Bind a 64-bit integer                       |
 | `bindDouble` | `bindDouble(stmt: int, index: int, value: double): void` | Bind a double                           |
 | `bindStr`    | `bindStr(stmt: int, index: int, value: string): void`| Bind a string                               |
+| `bindNull`   | `bindNull(stmt: int, index: int): void`              | Bind SQL `NULL`                             |
+| `isNull`     | `isNull(rows: int, col: int): bool`                  | Whether a column of the current row is `NULL` |
+| `affected`   | `affected(stmt: int): int`                           | Rows the last step changed, read before `reset` |
 | `step`       | `step(stmt: int): bool`                              | Run one step; true if a row is available    |
 | `reset`      | `reset(stmt: int): void`                             | Rewind and clear bindings for a re-run      |
 | `finalize`   | `finalize(stmt: int): void`                          | Destroy the statement                       |
 
 `bindInt` truncates past 2^31, which an id column reaches, so bind one with
 `bindLong` — the reason `db.col` hands ids back as `long` is the same.
+
+`db.errorCode()` returns the SQLSTATE of the last Postgres statement the
+calling thread ran, or `""` when it succeeded, so a handler can tell a unique
+violation (`23505`) or a missing foreign key (`23503`) from any other failure.
+A failure that never reached the server reports `08006`.
+
+```dex
+db.reset(stInsertUser)
+db.bindStr(stInsertUser, 1, name)
+if (!db.step(stInsertUser) && db.errorCode() == "23505") {
+    return fail(422, "username or email already taken")
+}
+```
 
 A statement is not safe to step from two threads at once. Guard it with a
 [`mutex`](#mutex) covering the column reads as well as the step, because a

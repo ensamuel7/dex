@@ -215,7 +215,11 @@ var cLibraryNames = func() map[string]bool {
 			"va_list valloc vasprintf vdprintf vfork vfprintf vfscanf vprintf vscanf " +
 			"vsnprintf vsprintf vsscanf w_coredump w_retcode w_stopsig w_stopval " +
 			"w_termsig wait wait3 wait4 waitid waitpid wchar_t wcstombs wctomb wint_t " +
-			"write writev y0 y1 yn ",
+			"write writev y0 y1 yn " +
+			"auto break case char const continue default do double else enum extern float for goto if " +
+			"inline int long register restrict return short signed sizeof static struct switch typedef " +
+			"union unsigned void volatile while asm typeof complex imaginary _Bool _Complex _Atomic " +
+			"_Noreturn _Static_assert _Thread_local _Alignas _Alignof _Generic ",
 	) {
 		names[n] = true
 	}

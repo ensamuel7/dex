@@ -1,0 +1,46 @@
+import "json"
+
+struct Inner {
+    n: int
+}
+
+struct Profile {
+    username: string
+    bio: string?
+    age: int?
+    score: double?
+    ok: bool?
+    big: long?
+    inner: Inner?
+}
+
+fn literalsEncodeNullOrValue(): void {
+    let empty: Profile = Profile { username: "x", bio: null, age: null, score: null, ok: null, big: null, inner: null }
+    assert(json.encode(empty) == "{\"username\":\"x\",\"bio\":null,\"age\":null,\"score\":null,\"ok\":null,\"big\":null,\"inner\":null}")
+    let full: Profile = Profile { username: "y", bio: "b\"q", age: 7, score: 1.5, ok: false, big: 9000000000, inner: Inner { n: 3 } }
+    assert(json.encode(full) == "{\"username\":\"y\",\"bio\":\"b\\\"q\",\"age\":7,\"score\":1.5,\"ok\":false,\"big\":9000000000,\"inner\":{\"n\":3}}")
+}
+
+fn arraysUseTheSameEncoding(): void {
+    let list: Profile[] = [Profile { username: "a", bio: null, age: 1, score: null, ok: true, big: null, inner: null }]
+    assert(json.encode(list) == "[{\"username\":\"a\",\"bio\":null,\"age\":1,\"score\":null,\"ok\":true,\"big\":null,\"inner\":null}]")
+    let none: Profile[] = []
+    assert(json.encode(none) == "[]")
+}
+
+fn assignedFieldsEncode(): void {
+    let p: Profile = Profile { username: "z", bio: null, age: null, score: null, ok: null, big: null, inner: null }
+    p.age = 12
+    p.bio = "later"
+    p.big = 5
+    assert(json.encode(p) == "{\"username\":\"z\",\"bio\":\"later\",\"age\":12,\"score\":null,\"ok\":null,\"big\":5,\"inner\":null}")
+    p.age = null
+    p.bio = null
+    assert(json.encode(p) == "{\"username\":\"z\",\"bio\":null,\"age\":null,\"score\":null,\"ok\":null,\"big\":5,\"inner\":null}")
+}
+
+fn main(): void {
+    literalsEncodeNullOrValue()
+    arraysUseTheSameEncoding()
+    assignedFieldsEncode()
+}

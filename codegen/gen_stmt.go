@@ -605,7 +605,11 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 			} else {
 				out.WriteString(fmt.Sprintf(".%s = ", s.Field))
 			}
-			g.genExpr(out, s.Value)
+			if ast.IsOptionalType(declaredType) && ast.IsValueType(ast.OptionalInnerType(declaredType)) {
+				g.genOptionalArg(out, s.Value, declaredType)
+			} else {
+				g.genExpr(out, s.Value)
+			}
 			out.WriteString(";\n")
 		}
 		if head, path, ok := fieldPathOf(s.Object); ok {

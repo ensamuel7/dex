@@ -31,6 +31,18 @@ func (g *Generator) jsonStructEncodable(t ast.Type, visiting map[ast.Type]bool) 
 				return false
 			}
 		case ast.IsArrayType(f.Type):
+		case ast.IsOptionalType(f.Type):
+			inner := ast.OptionalInnerType(f.Type)
+			switch {
+			case inner == ast.TypeInt, inner == ast.TypeLong, inner == ast.TypeBool,
+				inner == ast.TypeDouble, inner == ast.TypeString:
+			case ast.IsStructType(inner) && !ast.IsArrayType(inner):
+				if !g.jsonStructEncodable(inner, visiting) {
+					return false
+				}
+			default:
+				return false
+			}
 		default:
 			return false
 		}
@@ -83,6 +95,21 @@ func (g *Generator) jsonEncoderFor(t ast.Type) (string, bool) {
 			body.WriteString(fmt.Sprintf("    dex_jb_double(b, %s);\n", field))
 		case f.Type == ast.TypeString:
 			body.WriteString(fmt.Sprintf("    dex_jb_str(b, %s);\n", field))
+		case ast.IsOptionalType(f.Type):
+			inner := ast.OptionalInnerType(f.Type)
+			switch {
+			case inner == ast.TypeString:
+				body.WriteString(fmt.Sprintf("    if (%s) dex_jb_str(b, %s); else dex_jb_raw(b, \"null\", 4);\n", field, field))
+			case inner == ast.TypeInt, inner == ast.TypeLong:
+				body.WriteString(fmt.Sprintf("    if (%s.has_value) dex_jb_long(b, (long)%s.value); else dex_jb_raw(b, \"null\", 4);\n", field, field))
+			case inner == ast.TypeBool:
+				body.WriteString(fmt.Sprintf("    if (%s.has_value) dex_jb_bool(b, %s.value); else dex_jb_raw(b, \"null\", 4);\n", field, field))
+			case inner == ast.TypeDouble:
+				body.WriteString(fmt.Sprintf("    if (%s.has_value) dex_jb_double(b, %s.value); else dex_jb_raw(b, \"null\", 4);\n", field, field))
+			default:
+				sub, _ := g.jsonEncoderFor(inner)
+				body.WriteString(fmt.Sprintf("    if (%s) %s(b, %s); else dex_jb_raw(b, \"null\", 4);\n", field, sub, field))
+			}
 		case ast.IsStructType(f.Type):
 			sub, _ := g.jsonEncoderFor(f.Type)
 			body.WriteString(fmt.Sprintf("    %s(b, &%s);\n", sub, field))

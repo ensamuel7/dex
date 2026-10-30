@@ -327,6 +327,8 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 				g.genInterfaceValue(out, e.FieldValues[i], fieldType)
 			} else if ast.IsStructOptionalType(fieldType) {
 				g.genOptionalStructOwned(out, e.FieldValues[i], fieldType)
+			} else if ast.IsOptionalType(fieldType) && ast.IsValueType(ast.OptionalInnerType(fieldType)) {
+				g.genOptionalArg(out, e.FieldValues[i], fieldType)
 			} else {
 				g.genExpr(out, e.FieldValues[i])
 			}

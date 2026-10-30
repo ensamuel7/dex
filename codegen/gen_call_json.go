@@ -58,6 +58,17 @@ func (g *Generator) genJsonCall(out *strings.Builder, e *ast.CallExpr) bool {
 // genJsonEncodeToString emits an expression producing a DexString* holding the
 // JSON text of `arg`. Shared by json.encode and by json.Value construction, so
 // there is a single definition of how each shape serializes.
+func (g *Generator) jsonStructArrayEncoder(arrType ast.Type) (string, bool) {
+	if !ast.IsStructArrayType(arrType) {
+		return "", false
+	}
+	elem := ast.ElementType(arrType)
+	if !ast.IsStructType(elem) {
+		return "", false
+	}
+	return g.jsonEncoderFor(elem)
+}
+
 func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, argType ast.Type) {
 	if argType == ast.TypeJsonValue {
 		// encode borrows the document, so a freshly-built one — a literal, or the
@@ -178,7 +189,13 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 	g.genExpr(out, arg)
 	out.WriteString(fmt.Sprintf("; DexString* %s = ", res))
 
-	if ast.IsStructArrayType(arrType) {
+	if enc, ok := g.jsonStructArrayEncoder(arrType); ok {
+		elemType := ast.ElementType(arrType)
+		jb := g.nextTemp()
+		out.WriteString(fmt.Sprintf("({ DexJB %s = {0}; dex_jb_raw(&%s, \"[\", 1); ", jb, jb))
+		out.WriteString(fmt.Sprintf("if (%s) for (int _i = 0; _i < %s->len; _i++) { if (_i) dex_jb_raw(&%s, \",\", 1); %s(&%s, (const %s*)((char*)%s->data + (size_t)_i * %s->elem_size)); } ", tmp, tmp, jb, enc, jb, g.cType(elemType), tmp, tmp))
+		out.WriteString(fmt.Sprintf("dex_jb_raw(&%s, \"]\", 1); dex_jb_finish(&%s); })", jb, jb))
+	} else if ast.IsStructArrayType(arrType) {
 		elemType := ast.ElementType(arrType)
 		def := ast.GetStructDef(elemType)
 		out.WriteString(fmt.Sprintf("dex_string_from_cstr(dex_json_stringify_struct_arr(%s, sizeof(%s), %d, ", tmp, g.cType(elemType), len(def.Fields)))

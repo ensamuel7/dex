@@ -172,6 +172,23 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return ast.TypeVoid, true, nil
 	}
 
+	// Special case: http.afterBatch(hook) — hook is any function value taking
+	// nothing and returning bool, so a method bound to the struct holding the
+	// database works as well as a plain function.
+	if e.Module == "http" && e.Name == "afterBatch" {
+		if len(e.Args) != 1 {
+			return 0, true, c.errAt(e.Pos, "http.afterBatch() takes exactly 1 argument, got %d", len(e.Args))
+		}
+		hookType, err := c.checkExpr(e.Args[0])
+		if err != nil {
+			return 0, true, err
+		}
+		if !ast.IsFuncType(hookType) || len(ast.FuncTypeParams(hookType)) != 0 || ast.FuncTypeReturn(hookType) != ast.TypeBool {
+			return 0, true, c.errAt(e.Pos, "http.afterBatch() argument must be a fn(): bool, got %s", typeName(hookType))
+		}
+		return ast.TypeVoid, true, nil
+	}
+
 	// Special case: http.route handler validation (before generic arg check)
 	if e.Module == "http" && e.Name == "route" {
 		if len(e.Args) != 3 {

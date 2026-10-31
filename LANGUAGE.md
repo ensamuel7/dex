@@ -2695,10 +2695,38 @@ http.listen(8080)
 | `notFound` | `notFound(handler): void`                                      | Answer requests no route matched, instead of the built-in 404 body. The handler takes the shapes `route` accepts. Registering twice replaces the first. |
 | `threads`  | `threads(count: int): void`                                    | How many threads run handlers; call before `listen`. `0`, the default, sizes the pool from the CPU count with a floor of four — the right hedge when a handler might block. Set it lower when handlers are CPU-bound and serialised behind a lock on a small box, where extra threads only add context switches. |
 | `inline`   | `inline(): void` | Run every handler on the thread that owns the sockets instead of the pool; call before `listen`. A request then costs no thread handoff, lock or wakeup, and its response is written straight away — the fastest choice on one core when handlers are short and only touch local state such as an SQLite file. Handlers run one at a time, so one that blocks on an outbound request or a sleep stalls every connection. |
-| `uring`    | `uring(): void` | Serve with io_uring instead of epoll, on Linux; call before `listen`. Accepts, reads, writes and closes are queued on one ring and submitted together, so a pass of the loop costs one system call however many connections it served. Handlers run on the ring's thread, as with `inline`. Where io_uring is unavailable — another platform, an older kernel, or a container that blocks it — the server says so and uses epoll. |
-| `limits`   | `limits(maxBodyBytes: int, idleTimeoutSecs: int, maxConnections: int): void` | Bound what one client can cost the server; call before `listen`. Defaults are 8 MB, 30 seconds and 8192 connections, and a `0` for any argument keeps that default — so raising the body limit for uploads does not mean restating the others. The header block is capped at 32 KB and is not adjustable. A body over the limit is answered `413`, headers that never terminate `431`, and a connection that stops making progress for the idle timeout is closed. The connection limit is also held below the process's open-file limit: past fifteen sixteenths of it, responses carry `Connection: close` so idle clients reconnect for their next request, and at the limit new connections wait in the listen queue until one closes. |
+| `uring`    | `uring(): void` | Serve with io_uring instead of epoll, on Linux; call before `listen`. Accepts, reads, writes and closes are queued on one ring and submitted together, so a pass of the loop costs one system call however many connections it served. Handlers run on the ring's thread, as with `inline`. Received bytes land in buffers the ring shares and are copied out per request, so a connection waiting on its client holds no read buffer. A ring's descriptors are capped at the open-file limit, so when `limits` asks for more connections than one ring can hold the server runs several rings on the same thread (up to eight). Where io_uring is unavailable — another platform, an older kernel, or a container that blocks it — the server says so and uses epoll. |
+| `limits`   | `limits(maxBodyBytes: int, idleTimeoutSecs: int, maxConnections: int): void` | Bound what one client can cost the server; call before `listen`. Defaults are 8 MB, 30 seconds and 8192 connections, and a `0` for any argument keeps that default — so raising the body limit for uploads does not mean restating the others. The header block is capped at 32 KB and is not adjustable. A body over the limit is answered `413`, headers that never terminate `431`, and a connection that stops making progress for the idle timeout is closed. The connection limit is also held below the process's open-file limit (under `uring`, below what the rings it opens can hold, which can be several times that limit): past fifteen sixteenths of it, responses carry `Connection: close` so idle clients reconnect for their next request, and at the limit new connections wait in the listen queue until one closes. |
+| `afterBatch` | `afterBatch(hook: fn(): bool): void` | Run `hook` after a batch of handlers and before any of their responses is sent, so handlers can share one transaction and have it committed before a client hears its request succeeded (group commit). Return `true` when the batch's work is durable; return `false` and every request in the batch is answered `500 {"error":"internal server error"}` instead. Under `uring` a batch is every request one pass of the loop served — many, under load; with `inline` or the thread pool it is one request, so the guarantee holds everywhere and only `uring` batches. Registering twice replaces the first. |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
 | `responseWith` | `responseWith(statusCode: int, body: string, contentType: string, headers: string): HttpResponse` | The same, carrying extra response headers |
+
+Group commit with `afterBatch`: writes open a transaction if none is open, and the hook commits it once per batch. Reads in the same batch see those writes, and every response waits for the commit.
+
+```dex
+let inTx: bool = false
+
+fn beginWrite(): void {
+    if (!inTx) {
+        db.exec(conn, "BEGIN")
+        inTx = true
+    }
+}
+
+fn commit(): bool {
+    if (!inTx) {
+        return true
+    }
+    inTx = false
+    if (db.exec(conn, "COMMIT") < 0) {
+        db.exec(conn, "ROLLBACK")
+        return false
+    }
+    return true
+}
+
+http.afterBatch(commit)
+```
 
 Handler functions can take **0 parameters** (backward-compatible) or **1 parameter** of type `http.HttpRequest`. They must return a non-void type (typically `HttpResponse` or `string`).
 

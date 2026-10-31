@@ -262,6 +262,8 @@ typedef struct DexHttpConn {
     struct DexHttpConn* next;
 
     int           direct;
+    unsigned char ring;        /* io_uring: the ring that owns this connection */
+    unsigned char plain_recv;  /* io_uring: the read in flight uses read_buf */
 } DexHttpConn;
 
 /* Global event-loop state for HTTP server */
@@ -831,9 +833,47 @@ static void dex_http_run_handler(DexHttpConn* conn) {
     __atomic_store_n(&conn->state, HTTP_WRITING, __ATOMIC_RELAXED);
 }
 
+/* http.afterBatch: a hook run after a batch of handlers and before any of
+ * their responses is sent, so handlers can share one transaction and have it
+ * committed before anyone hears it succeeded. On io_uring a batch is every
+ * request one pass of the loop served; on epoll and the thread pool it is a
+ * single request, which keeps the guarantee though not the batching. The hook
+ * returns false when the batch failed, and every request in it is then
+ * answered 500 rather than with what its handler said. */
+typedef _Bool (*dex_after_batch_fn)(void* env);
+static DexClosure* dex_http_after_batch = NULL;
+
+/* The hook arrives owned, the convention ws.handleMessage follows, and
+ * replacing it releases the previous one. */
+void dex_http_set_after_batch(DexClosure* hook) {
+    DexClosure* prev = dex_http_after_batch;
+    dex_http_after_batch = hook;
+    if (prev) dex_release(prev);
+}
+
+static _Bool dex_http_call_after_batch(void) {
+    DexClosure* h = dex_http_after_batch;
+    if (!h) return 1;
+    return ((dex_after_batch_fn)h->fn)(h->env);
+}
+
+/* What a request in a failed batch is told. Its own response, including any
+ * extra headers such as Set-Cookie, is discarded. */
+static void dex_http_answer_batch_failed(DexHttpConn* conn) {
+    dex_http_build_response(conn, "500 Internal Server Error",
+                            "{\"error\":\"internal server error\"}", "application/json");
+}
+
+/* The one-request batch of the epoll and pool paths. */
+static void dex_http_after_one(DexHttpConn* conn) {
+    if (!dex_http_after_batch) return;
+    if (!dex_http_call_after_batch()) dex_http_answer_batch_failed(conn);
+}
+
 static void dex_http_worker_func(void* arg) {
     DexHttpConn* conn = (DexHttpConn*)arg;
     dex_http_run_handler(conn);
+    dex_http_after_one(conn);
     pthread_mutex_lock(&dex_http_completed_mutex);
     conn->next = dex_http_completed_head;
     dex_http_completed_head = conn;
@@ -868,6 +908,10 @@ static void dex_http_flush_inline(DexHttpConn* conn) {
 
 #ifdef DEX_HTTP_HAVE_URING
 
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/utsname.h>
+
 #define DEX_URING_SQ_ENTRIES 4096
 #define DEX_URING_CQ_ENTRIES 65536
 #define DEX_UD_ACCEPT  1
@@ -876,6 +920,28 @@ static void dex_http_flush_inline(DexHttpConn* conn) {
 #define DEX_UD_ACCEPT_DIRECT 4
 #define DEX_OP_RECV 1
 #define DEX_OP_SEND 2
+
+/* Rings run on the one loop thread. Each has its own table of direct
+ * descriptors, and the kernel caps a table at the open-file limit, so one ring
+ * holds at most about 65,000 connections however high the program's own limit
+ * is set. Asking http.limits() for more than one ring can hold adds rings; the
+ * default limit never needs a second one. */
+#define DEX_URING_MAX_RINGS 8
+
+/* Received bytes land in buffers the ring owns and are copied out at once into
+ * a per-request buffer, so a connection waiting for its next request holds no
+ * read buffer at all. With a few hundred thousand idle keep-alive clients that
+ * is the difference between a buffer each and a few megabytes in total. */
+/* IORING_REGISTER_PBUF_RING is an enum, so it cannot be tested for directly.
+ * Buffer rings (5.19) predate IORING_SETUP_DEFER_TASKRUN (6.1), which is a
+ * macro: headers that have it have them. */
+#if defined(IORING_SETUP_DEFER_TASKRUN) && defined(IORING_CQE_F_BUFFER)
+#define DEX_URING_HAVE_PBUF 1
+#endif
+#define DEX_URING_BUFS 4096
+#define DEX_URING_BUF_BYTES 2048
+#define DEX_URING_RBUF_BYTES 2048
+#define DEX_URING_RBUF_POOL 1024
 
 typedef struct {
     int fd;
@@ -890,17 +956,99 @@ typedef struct {
     struct io_uring_cqe* cqes;
     unsigned sq_entries;
     unsigned local_tail;
+    void* sq_map;
+    size_t sq_map_size;
+    void* cq_map;
+    size_t cq_map_size;
+    size_t sqes_size;
 } DexUring;
 
-static DexUring dex_uring;
+typedef struct {
+    DexUring u;
+    int index;
+    int accepts_pending;
+    int direct_pending;
+    int direct_cap;            /* size of direct and direct_idle */
+    int direct_slots;          /* how many of them accepts may fill */
+    int direct_live;
+    DexHttpConn** direct;      /* by direct slot */
+    uint32_t* direct_idle;     /* by direct slot: see dex_uring_idle */
+#ifdef DEX_URING_HAVE_PBUF
+    struct io_uring_buf_ring* br;   /* NULL when the kernel has no buffer rings */
+#else
+    void* br;
+#endif
+    char* bufs;
+    unsigned br_tail;
+    int efd;
+} DexUringRing;
 
-static int dex_uring_setup(DexUring* r) {
+static DexUringRing dex_urings[DEX_URING_MAX_RINGS];
+static int dex_uring_count = 0;
+static int dex_uring_epfd = -1;
+static int dex_uring_real_live = 0;
+static int dex_uring_real_cap = 0;
+
+/* The second each connection became idle-eligible (reading, waiting on the
+ * client), or 0 while the loop is working on it. The sweep reads these arrays
+ * and touches a connection only when it has actually timed out, instead of
+ * reading every connection's state once a second. Real descriptors are
+ * indexed by fd, direct ones by slot in their ring's array. */
+static uint32_t dex_uring_real_idle[DEX_HTTP_MAX_FD];
+
+static DexHttpConn* dex_uring_pass_head = NULL;
+
+static char* dex_uring_rbuf_pool[DEX_URING_RBUF_POOL];
+static int dex_uring_rbuf_pool_len = 0;
+
+static inline DexUringRing* dex_uring_ring_of(DexHttpConn* conn) {
+    return &dex_urings[conn->ring];
+}
+
+static inline void dex_uring_idle(DexHttpConn* conn, uint32_t since) {
+    if (conn->direct) {
+        DexUringRing* r = dex_uring_ring_of(conn);
+        if (conn->fd >= 0 && conn->fd < r->direct_cap) r->direct_idle[conn->fd] = since;
+    } else if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD) {
+        dex_uring_real_idle[conn->fd] = since;
+    }
+}
+
+static inline uint32_t dex_uring_now(void) {
+    return (uint32_t)time(NULL);
+}
+
+static void dex_uring_unmap(DexUring* u) {
+    if (u->sqes) munmap(u->sqes, u->sqes_size);
+    if (u->cq_map && u->cq_map != u->sq_map) munmap(u->cq_map, u->cq_map_size);
+    if (u->sq_map) munmap(u->sq_map, u->sq_map_size);
+    if (u->fd >= 0) close(u->fd);
+    memset(u, 0, sizeof(*u));
+    u->fd = -1;
+}
+
+/* Deferred task work keeps completions on the loop thread until it next enters
+ * the ring, which is the cheapest arrangement and the one a lone ring uses.
+ * With several rings the thread sleeps in epoll instead, and it is the ring's
+ * eventfd that has to wake it. Kernels from 6.2 signal that eventfd when
+ * deferred work arrives; on anything older the rings are set up without
+ * deferral, where completions post (and signal) on their own. */
+static int dex_uring_kernel_at_least(int major, int minor) {
+    struct utsname u;
+    if (uname(&u) != 0) return 0;
+    int a = 0, b = 0;
+    if (sscanf(u.release, "%d.%d", &a, &b) != 2) return 0;
+    return a > major || (a == major && b >= minor);
+}
+
+static int dex_uring_setup(DexUring* r, int allow_defer) {
     struct io_uring_params p;
     unsigned base = IORING_SETUP_CQSIZE;
     unsigned tries[2] = { base, base };
 #if defined(IORING_SETUP_SINGLE_ISSUER) && defined(IORING_SETUP_DEFER_TASKRUN)
-    tries[0] = base | IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN;
+    if (allow_defer) tries[0] = base | IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN;
 #endif
+    (void)allow_defer;
     int fd = -1;
     for (int i = 0; i < 2 && fd < 0; i++) {
         memset(&p, 0, sizeof(p));
@@ -922,8 +1070,8 @@ static int dex_uring_setup(DexUring* r) {
         cq = mmap(NULL, cq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_CQ_RING);
         if (cq == MAP_FAILED) { munmap(sq, sq_size); close(fd); return -1; }
     }
-    void* sqes = mmap(NULL, p.sq_entries * sizeof(struct io_uring_sqe), PROT_READ | PROT_WRITE,
-                      MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQES);
+    size_t sqes_size = p.sq_entries * sizeof(struct io_uring_sqe);
+    void* sqes = mmap(NULL, sqes_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQES);
     if (sqes == MAP_FAILED) {
         if (!single) munmap(cq, cq_size);
         munmap(sq, sq_size);
@@ -943,22 +1091,30 @@ static int dex_uring_setup(DexUring* r) {
     r->sqes = (struct io_uring_sqe*)sqes;
     r->sq_entries = p.sq_entries;
     r->local_tail = *r->sq_tail;
+    r->sq_map = sq;
+    r->sq_map_size = sq_size;
+    r->cq_map = cq;
+    r->cq_map_size = cq_size;
+    r->sqes_size = sqes_size;
     return 0;
 }
 
-static int dex_uring_enter(DexUring* r, unsigned wait_nr) {
+/* Submit what is queued. wait_nr > 0 blocks for that many completions; with
+ * getevents and wait_nr 0 it only runs deferred work, so completions that have
+ * arrived are posted, and returns at once. */
+static int dex_uring_enter(DexUring* r, unsigned wait_nr, int getevents) {
     __atomic_store_n(r->sq_tail, r->local_tail, __ATOMIC_RELEASE);
     unsigned to_submit = r->local_tail - __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE);
+    unsigned flags = (wait_nr || getevents) ? IORING_ENTER_GETEVENTS : 0;
     for (;;) {
-        int ret = (int)syscall(__NR_io_uring_enter, r->fd, to_submit, wait_nr,
-                               wait_nr ? IORING_ENTER_GETEVENTS : 0, NULL, 0);
+        int ret = (int)syscall(__NR_io_uring_enter, r->fd, to_submit, wait_nr, flags, NULL, 0);
         if (ret >= 0 || errno != EINTR) return ret;
     }
 }
 
 static struct io_uring_sqe* dex_uring_sqe(DexUring* r) {
     if (r->local_tail - __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE) >= r->sq_entries) {
-        dex_uring_enter(r, 0);
+        dex_uring_enter(r, 0, 0);
         if (r->local_tail - __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE) >= r->sq_entries) return NULL;
     }
     unsigned idx = r->local_tail & *r->sq_mask;
@@ -970,27 +1126,121 @@ static struct io_uring_sqe* dex_uring_sqe(DexUring* r) {
 }
 
 #define DEX_URING_ACCEPTS 64
-static int dex_uring_accepts_pending = 0;
-static int dex_uring_direct_pending = 0;
-static int dex_uring_direct_slots = 0;
-static int dex_uring_direct_live = 0;
-static int dex_uring_real_live = 0;
-static int dex_uring_real_cap = 0;
-static DexHttpConn* dex_uring_direct_table[DEX_HTTP_MAX_FD];
 
-static void dex_uring_register_direct(void) {
-#if defined(IORING_RSRC_REGISTER_SPARSE) && defined(IORING_FILE_INDEX_ALLOC)
+static unsigned dex_uring_direct_limit(void) {
     struct rlimit rl;
     unsigned slots = DEX_HTTP_MAX_FD;
     if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < slots) slots = (unsigned)rl.rlim_cur;
+    return slots;
+}
+
+static void dex_uring_register_direct(DexUringRing* r, unsigned slots) {
+#if defined(IORING_RSRC_REGISTER_SPARSE) && defined(IORING_FILE_INDEX_ALLOC)
     struct io_uring_rsrc_register rr;
     memset(&rr, 0, sizeof(rr));
     rr.nr = slots;
     rr.flags = IORING_RSRC_REGISTER_SPARSE;
-    if (syscall(__NR_io_uring_register, dex_uring.fd, IORING_REGISTER_FILES2, &rr, sizeof(rr)) == 0) {
-        dex_uring_direct_slots = (int)slots;
-    }
+    if (syscall(__NR_io_uring_register, r->u.fd, IORING_REGISTER_FILES2, &rr, sizeof(rr)) != 0) return;
+    r->direct = (DexHttpConn**)dex_xcalloc(slots, sizeof(DexHttpConn*));
+    r->direct_idle = (uint32_t*)dex_xcalloc(slots, sizeof(uint32_t));
+    r->direct_cap = (int)slots;
+    r->direct_slots = (int)slots;
+#else
+    (void)r; (void)slots;
 #endif
+}
+
+#ifdef DEX_URING_HAVE_PBUF
+static inline void dex_uring_buf_put(DexUringRing* r, unsigned bid) {
+    struct io_uring_buf* b = &r->br->bufs[r->br_tail & (DEX_URING_BUFS - 1)];
+    b->addr = (unsigned long)(r->bufs + (size_t)bid * DEX_URING_BUF_BYTES);
+    b->len = DEX_URING_BUF_BYTES;
+    b->bid = (unsigned short)bid;
+    r->br_tail++;
+}
+
+static inline void dex_uring_buf_publish(DexUringRing* r) {
+    __atomic_store_n(&r->br->tail, (unsigned short)r->br_tail, __ATOMIC_RELEASE);
+}
+#endif
+
+/* Register this ring's receive buffers. On a kernel without buffer rings (or
+ * if the memory is not there) the ring keeps r->br NULL and every connection
+ * reads into a buffer of its own, which is how it always worked. */
+static void dex_uring_setup_bufs(DexUringRing* r) {
+    r->br = NULL;
+#ifdef DEX_URING_HAVE_PBUF
+    size_t ring_bytes = DEX_URING_BUFS * sizeof(struct io_uring_buf);
+    size_t buf_bytes = (size_t)DEX_URING_BUFS * DEX_URING_BUF_BYTES;
+    void* br = mmap(NULL, ring_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (br == MAP_FAILED) return;
+    void* bufs = mmap(NULL, buf_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (bufs == MAP_FAILED) { munmap(br, ring_bytes); return; }
+    struct io_uring_buf_reg reg;
+    memset(&reg, 0, sizeof(reg));
+    reg.ring_addr = (unsigned long)br;
+    reg.ring_entries = DEX_URING_BUFS;
+    reg.bgid = 0;
+    if (syscall(__NR_io_uring_register, r->u.fd, IORING_REGISTER_PBUF_RING, &reg, 1) != 0) {
+        munmap(bufs, buf_bytes);
+        munmap(br, ring_bytes);
+        return;
+    }
+    r->br = (struct io_uring_buf_ring*)br;
+    r->bufs = (char*)bufs;
+    r->br_tail = 0;
+    for (unsigned i = 0; i < DEX_URING_BUFS; i++) dex_uring_buf_put(r, i);
+    dex_uring_buf_publish(r);
+#endif
+}
+
+/* A connection's own read buffer, taken when bytes arrive and handed back when
+ * the request is answered. Buffers that grew past the standard size are freed
+ * rather than kept. */
+static char* dex_uring_rbuf_take(void) {
+    if (dex_uring_rbuf_pool_len > 0) return dex_uring_rbuf_pool[--dex_uring_rbuf_pool_len];
+    return (char*)dex_xmalloc(DEX_URING_RBUF_BYTES);
+}
+
+static void dex_uring_rbuf_release(DexHttpConn* conn) {
+    char* b = conn->read_buf;
+    conn->read_buf = NULL;
+    if (b) {
+        if (conn->read_cap == DEX_URING_RBUF_BYTES && dex_uring_rbuf_pool_len < DEX_URING_RBUF_POOL) {
+            dex_uring_rbuf_pool[dex_uring_rbuf_pool_len++] = b;
+        } else {
+            free(b);
+        }
+    }
+    conn->read_cap = 0;
+}
+
+/* How many bytes this request may still take in, and room for that many plus a
+ * terminator. The ceiling is the header cap while headers are read and the
+ * end of the body once Content-Length is known, as dex_uring_need_more applies
+ * it. Returns -1 when memory runs out. */
+static int dex_uring_reserve(DexHttpConn* conn, int want) {
+    int ceiling = DEX_HTTP_MAX_HEADER_BYTES;
+    if (conn->state == HTTP_READING_BODY) ceiling = conn->headers_end + conn->content_length;
+    int room = ceiling - conn->read_len;
+    if (room <= 0) return 0;
+    if (want < room) room = want;
+    if (!conn->read_buf) {
+        conn->read_buf = dex_uring_rbuf_take();
+        if (!conn->read_buf) return -1;
+        conn->read_cap = DEX_URING_RBUF_BYTES;
+    }
+    int need = conn->read_len + room + 1;
+    if (need > conn->read_cap) {
+        int new_cap = conn->read_cap * 2;
+        if (new_cap < need) new_cap = need;
+        if (new_cap > ceiling + 1) new_cap = ceiling + 1;
+        char* nb = (char*)dex_xrealloc(conn->read_buf, (size_t)new_cap);
+        if (!nb) return -1;
+        conn->read_buf = nb;
+        conn->read_cap = new_cap;
+    }
+    return room;
 }
 
 static void dex_uring_target(struct io_uring_sqe* sqe, DexHttpConn* conn) {
@@ -999,8 +1249,8 @@ static void dex_uring_target(struct io_uring_sqe* sqe, DexHttpConn* conn) {
 }
 static struct __kernel_timespec dex_uring_tick = { 1, 0 };
 
-static int dex_uring_queue_accept(int server_fd, int direct) {
-    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+static int dex_uring_queue_accept(DexUringRing* r, int server_fd, int direct) {
+    struct io_uring_sqe* sqe = dex_uring_sqe(&r->u);
     if (!sqe) return -1;
     sqe->opcode = IORING_OP_ACCEPT;
     sqe->fd = server_fd;
@@ -1008,32 +1258,35 @@ static int dex_uring_queue_accept(int server_fd, int direct) {
     if (direct) {
         sqe->file_index = IORING_FILE_INDEX_ALLOC;
         sqe->user_data = DEX_UD_ACCEPT_DIRECT;
-        dex_uring_direct_pending++;
-        dex_uring_accepts_pending++;
+        r->direct_pending++;
+        r->accepts_pending++;
         return 0;
     }
 #endif
     sqe->accept_flags = SOCK_CLOEXEC;
     sqe->user_data = DEX_UD_ACCEPT;
-    dex_uring_accepts_pending++;
+    r->accepts_pending++;
     return 0;
 }
 
-static void dex_uring_arm_accepts(int server_fd) {
-    while (dex_uring_accepts_pending < DEX_URING_ACCEPTS) {
-        int real_pending = dex_uring_accepts_pending - dex_uring_direct_pending;
+/* Every ring accepts into its own direct table while it has room. Only the
+ * first ring falls back to ordinary descriptors, which all rings share. */
+static void dex_uring_arm_accepts(DexUringRing* r, int server_fd) {
+    while (r->accepts_pending < DEX_URING_ACCEPTS) {
         int direct = 0;
-        if (dex_uring_direct_live + dex_uring_direct_pending < dex_uring_direct_slots) {
+        if (r->direct_live + r->direct_pending < r->direct_slots) {
             direct = 1;
-        } else if (dex_uring_real_live + real_pending >= dex_uring_real_cap) {
-            break;
+        } else {
+            if (r->index != 0) break;
+            int real_pending = r->accepts_pending - r->direct_pending;
+            if (dex_uring_real_live + real_pending >= dex_uring_real_cap) break;
         }
-        if (dex_uring_queue_accept(server_fd, direct) != 0) break;
+        if (dex_uring_queue_accept(r, server_fd, direct) != 0) break;
     }
 }
 
 static void dex_uring_queue_timeout(void) {
-    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_urings[0].u);
     if (!sqe) return;
     sqe->opcode = IORING_OP_TIMEOUT;
     sqe->addr = (unsigned long)&dex_uring_tick;
@@ -1042,15 +1295,17 @@ static void dex_uring_queue_timeout(void) {
 }
 
 static void dex_uring_close(DexHttpConn* conn) {
-    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    DexUringRing* r = dex_uring_ring_of(conn);
+    struct io_uring_sqe* sqe = dex_uring_sqe(&r->u);
+    dex_uring_idle(conn, 0);
     if (conn->direct) {
         if (sqe) {
             sqe->opcode = IORING_OP_CLOSE;
             sqe->file_index = (unsigned)conn->fd + 1;
             sqe->user_data = DEX_UD_IGNORE;
         }
-        if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD) dex_uring_direct_table[conn->fd] = NULL;
-        dex_uring_direct_live--;
+        if (conn->fd >= 0 && conn->fd < r->direct_cap) r->direct[conn->fd] = NULL;
+        r->direct_live--;
     } else {
         if (sqe) {
             sqe->opcode = IORING_OP_CLOSE;
@@ -1066,7 +1321,7 @@ static void dex_uring_close(DexHttpConn* conn) {
 
 static void dex_uring_shutdown(DexHttpConn* conn) {
 #ifdef IORING_RSRC_REGISTER_SPARSE
-    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring_ring_of(conn)->u);
     if (sqe) {
         sqe->opcode = IORING_OP_SHUTDOWN;
         dex_uring_target(sqe, conn);
@@ -1078,18 +1333,38 @@ static void dex_uring_shutdown(DexHttpConn* conn) {
     if (!conn->direct) shutdown(conn->fd, SHUT_RDWR);
 }
 
+/* Queue the next read. With a buffer ring the kernel picks the buffer when
+ * data arrives; without one, or for the one read after the ring ran dry
+ * (plain_recv), it reads into the connection's own buffer. */
 static void dex_uring_queue_recv(DexHttpConn* conn) {
-    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    DexUringRing* r = dex_uring_ring_of(conn);
+    if (!r->br || conn->plain_recv) {
+        if (r->br) {
+            /* The ring was out of buffers: one read into memory of our own. */
+            if (dex_uring_reserve(conn, DEX_URING_BUF_BYTES) <= 0) { dex_uring_close(conn); return; }
+        } else if (!conn->read_buf) {
+            conn->read_buf = dex_uring_rbuf_take();
+            if (!conn->read_buf) { dex_uring_close(conn); return; }
+            conn->read_cap = DEX_URING_RBUF_BYTES;
+        }
+    }
+    struct io_uring_sqe* sqe = dex_uring_sqe(&r->u);
     if (!sqe) { dex_uring_close(conn); return; }
     sqe->opcode = IORING_OP_RECV;
     dex_uring_target(sqe, conn);
-    sqe->addr = (unsigned long)(conn->read_buf + conn->read_len);
-    sqe->len = (unsigned)(conn->read_cap - conn->read_len - 1);
+    if (r->br && !conn->plain_recv) {
+        sqe->flags |= IOSQE_BUFFER_SELECT;
+        sqe->buf_group = 0;
+        sqe->len = DEX_URING_BUF_BYTES;
+    } else {
+        sqe->addr = (unsigned long)(conn->read_buf + conn->read_len);
+        sqe->len = (unsigned)(conn->read_cap - conn->read_len - 1);
+    }
     sqe->user_data = (unsigned long)conn | DEX_OP_RECV;
 }
 
 static void dex_uring_queue_send(DexHttpConn* conn) {
-    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring_ring_of(conn)->u);
     if (!sqe) { dex_uring_close(conn); return; }
     sqe->opcode = IORING_OP_SEND;
     dex_uring_target(sqe, conn);
@@ -1102,6 +1377,7 @@ static void dex_uring_queue_send(DexHttpConn* conn) {
 static void dex_uring_fail(DexHttpConn* conn, const char* status, const char* body) {
     conn->keep_alive = 0;
     conn->state = HTTP_WRITING;
+    dex_uring_idle(conn, 0);
     dex_http_release_write_buf(conn);
     conn->write_pos = 0;
     dex_http_build_response(conn, status, body, "application/json");
@@ -1120,6 +1396,11 @@ static void dex_uring_need_more(DexHttpConn* conn) {
         }
         return;
     }
+    if (dex_uring_ring_of(conn)->br) {
+        /* Room is made as bytes arrive (dex_uring_reserve). */
+        dex_uring_queue_recv(conn);
+        return;
+    }
     if (conn->read_len >= conn->read_cap - 1) {
         int new_cap = conn->read_cap * 2;
         if (new_cap > ceiling + 1) new_cap = ceiling + 1;
@@ -1135,11 +1416,14 @@ static void dex_uring_need_more(DexHttpConn* conn) {
     dex_uring_queue_recv(conn);
 }
 
+/* res bytes have been appended to conn->read_buf (or res <= 0: the read
+ * failed or the client closed). */
 static void dex_uring_on_recv(DexHttpConn* conn, int res) {
     if (res <= 0 || conn->state == HTTP_DONE) { dex_uring_close(conn); return; }
     conn->read_len += res;
     conn->read_buf[conn->read_len] = '\0';
     conn->last_active = time(NULL);
+    dex_uring_idle(conn, (uint32_t)conn->last_active);
 
     if (conn->state == HTTP_READING_HEADERS) {
         int parsed = dex_http_try_parse_headers(conn);
@@ -1149,11 +1433,56 @@ static void dex_uring_on_recv(DexHttpConn* conn, int res) {
     }
     if (conn->state == HTTP_READING_BODY && conn->read_len - conn->headers_end >= conn->content_length) {
         dex_http_run_handler(conn);
+        dex_uring_idle(conn, 0);
         if (!conn->write_buf || conn->write_len <= 0) { dex_uring_close(conn); return; }
+        if (dex_http_after_batch) {
+            /* Held until the batch hook has run: see dex_uring_finish_pass. */
+            conn->next = dex_uring_pass_head;
+            dex_uring_pass_head = conn;
+            return;
+        }
         dex_uring_queue_send(conn);
         return;
     }
     dex_uring_need_more(conn);
+}
+
+/* A receive completed. With a buffer ring the bytes are in one of the ring's
+ * buffers, which goes back to the ring as soon as they are copied out. */
+static void dex_uring_on_recv_cqe(DexUringRing* r, DexHttpConn* conn, int res, unsigned cflags) {
+#ifdef DEX_URING_HAVE_PBUF
+    if (r->br && (cflags & IORING_CQE_F_BUFFER)) {
+        unsigned bid = cflags >> IORING_CQE_BUFFER_SHIFT;
+        const char* src = r->bufs + (size_t)bid * DEX_URING_BUF_BYTES;
+        if (res <= 0 || conn->state == HTTP_DONE) {
+            dex_uring_buf_put(r, bid);
+            dex_uring_buf_publish(r);
+            dex_uring_on_recv(conn, res <= 0 ? res : 0);
+            return;
+        }
+        int room = dex_uring_reserve(conn, res);
+        if (room > 0) memcpy(conn->read_buf + conn->read_len, src, (size_t)room);
+        dex_uring_buf_put(r, bid);
+        dex_uring_buf_publish(r);
+        if (room < 0) { dex_uring_close(conn); return; }
+        if (room == 0) { dex_uring_need_more(conn); return; }   /* at the ceiling: 431 or 400 */
+        dex_uring_on_recv(conn, room);
+        return;
+    }
+#endif
+    (void)cflags;
+    if (r->br && !conn->plain_recv) {
+        if (res == -ENOBUFS && conn->state != HTTP_DONE) {
+            conn->plain_recv = 1;
+            dex_uring_queue_recv(conn);
+            return;
+        }
+        /* EOF or an error: no buffer was used. */
+        dex_uring_on_recv(conn, res > 0 ? 0 : res);
+        return;
+    }
+    conn->plain_recv = 0;
+    dex_uring_on_recv(conn, res);
 }
 
 static void dex_uring_on_send(DexHttpConn* conn, int res) {
@@ -1162,100 +1491,243 @@ static void dex_uring_on_send(DexHttpConn* conn, int res) {
     if (conn->write_pos < conn->write_len) { dex_uring_queue_send(conn); return; }
     if (conn->keep_alive) {
         dex_http_conn_reset(conn);
+        if (dex_uring_ring_of(conn)->br) dex_uring_rbuf_release(conn);
+        dex_uring_idle(conn, (uint32_t)conn->last_active);
         dex_uring_queue_recv(conn);
     } else {
         dex_uring_close(conn);
     }
 }
 
-static void dex_uring_sweep_table(DexHttpConn** table, time_t now) {
-    for (int i = 0; i < DEX_HTTP_MAX_FD; i++) {
+/* Every response a pass of the loop produced waits here until the program's
+ * batch hook (http.afterBatch) has run, so a transaction the handlers shared
+ * is committed before any of them is answered. If the hook reports failure,
+ * every request in the batch is answered 500 instead. */
+static void dex_uring_finish_pass(void) {
+    DexHttpConn* c = dex_uring_pass_head;
+    if (!c) return;
+    dex_uring_pass_head = NULL;
+    _Bool ok = dex_http_call_after_batch();
+    while (c) {
+        DexHttpConn* next = c->next;
+        c->next = NULL;
+        if (!ok) dex_http_answer_batch_failed(c);
+        dex_uring_queue_send(c);
+        c = next;
+    }
+}
+
+static void dex_uring_sweep_idle(uint32_t* idle, DexHttpConn** table, int n, uint32_t now) {
+    for (int i = 0; i < n; i++) {
+        uint32_t since = idle[i];
+        if (!since || now - since < (uint32_t)dex_http_idle_secs) continue;
+        idle[i] = 0;
         DexHttpConn* c = table[i];
         if (!c) continue;
         if (c->state != HTTP_READING_HEADERS && c->state != HTTP_READING_BODY) continue;
-        if (now - c->last_active < dex_http_idle_secs) continue;
         c->state = HTTP_DONE;
         dex_uring_shutdown(c);
     }
 }
 
 static void dex_uring_sweep(void) {
-    time_t now = time(NULL);
-    dex_uring_sweep_table(dex_http_conn_table, now);
-    dex_uring_sweep_table(dex_uring_direct_table, now);
+    uint32_t now = dex_uring_now();
+    dex_uring_sweep_idle(dex_uring_real_idle, dex_http_conn_table, DEX_HTTP_MAX_FD, now);
+    for (int i = 0; i < dex_uring_count; i++) {
+        DexUringRing* r = &dex_urings[i];
+        if (r->direct_cap > 0) dex_uring_sweep_idle(r->direct_idle, r->direct, r->direct_cap, now);
+    }
+}
+
+/* Handle every completion that is waiting on one ring. */
+static void dex_uring_reap(DexUringRing* r) {
+    unsigned head = *r->u.cq_head;
+    unsigned tail = __atomic_load_n(r->u.cq_tail, __ATOMIC_ACQUIRE);
+    while (head != tail) {
+        struct io_uring_cqe* cqe = &r->u.cqes[head & *r->u.cq_mask];
+        unsigned long ud = (unsigned long)cqe->user_data;
+        int res = cqe->res;
+        unsigned cflags = cqe->flags;
+        head++;
+        if (ud == DEX_UD_ACCEPT) {
+            r->accepts_pending--;
+            if (res >= 0) {
+                DexHttpConn* conn = (res < DEX_HTTP_MAX_FD) ? dex_http_conn_new(res) : NULL;
+                if (!conn) { close(res); continue; }
+                conn->ring = (unsigned char)r->index;
+                if (r->br) dex_uring_rbuf_release(conn);
+                dex_uring_real_live++;
+                dex_uring_idle(conn, (uint32_t)conn->last_active);
+                dex_uring_queue_recv(conn);
+            }
+            continue;
+        }
+        if (ud == DEX_UD_ACCEPT_DIRECT) {
+            r->accepts_pending--;
+            r->direct_pending--;
+            if (res >= 0 && res < r->direct_cap) {
+                DexHttpConn* conn = dex_http_conn_new(-1);
+                if (!conn) {
+                    struct io_uring_sqe* sqe = dex_uring_sqe(&r->u);
+                    if (sqe) { sqe->opcode = IORING_OP_CLOSE; sqe->file_index = (unsigned)res + 1; sqe->user_data = DEX_UD_IGNORE; }
+                    continue;
+                }
+                conn->fd = res;
+                conn->direct = 1;
+                conn->ring = (unsigned char)r->index;
+                if (r->br) dex_uring_rbuf_release(conn);
+                r->direct[res] = conn;
+                r->direct_live++;
+                dex_uring_idle(conn, (uint32_t)conn->last_active);
+                dex_uring_queue_recv(conn);
+            } else if (res == -ENFILE) {
+                r->direct_slots = r->direct_live;
+            }
+            continue;
+        }
+        if (ud == DEX_UD_TIMEOUT) {
+            dex_uring_sweep();
+            dex_uring_queue_timeout();
+            continue;
+        }
+        if (ud == DEX_UD_IGNORE) continue;
+        DexHttpConn* conn = (DexHttpConn*)(ud & ~0xFUL);
+        if ((ud & 0xF) == DEX_OP_RECV) dex_uring_on_recv_cqe(r, conn, res, cflags);
+        else if ((ud & 0xF) == DEX_OP_SEND) dex_uring_on_send(conn, res);
+    }
+    __atomic_store_n(r->u.cq_head, head, __ATOMIC_RELEASE);
+}
+
+static int dex_uring_has_cqes(DexUringRing* r) {
+    return *r->u.cq_head != __atomic_load_n(r->u.cq_tail, __ATOMIC_ACQUIRE);
+}
+
+/* Undo rings 1..n-1, leaving the first. */
+static void dex_uring_drop_extra_rings(void) {
+    for (int i = 1; i < dex_uring_count; i++) {
+        DexUringRing* r = &dex_urings[i];
+        if (r->efd >= 0) close(r->efd);
+        dex_uring_unmap(&r->u);
+        free(r->direct);
+        free(r->direct_idle);
+#ifdef DEX_URING_HAVE_PBUF
+        if (r->br) {
+            munmap(r->br, DEX_URING_BUFS * sizeof(struct io_uring_buf));
+            munmap(r->bufs, (size_t)DEX_URING_BUFS * DEX_URING_BUF_BYTES);
+        }
+#endif
+        memset(r, 0, sizeof(*r));
+    }
+    dex_uring_count = 1;
+    if (dex_uring_epfd >= 0) { close(dex_uring_epfd); dex_uring_epfd = -1; }
+}
+
+/* Several rings on one thread need one place to sleep: each ring signals an
+ * eventfd when it has completions, and the thread waits on all of them in
+ * epoll. Returns -1 if any part of that is unavailable, and the caller goes
+ * back to one ring. */
+static int dex_uring_link_rings(void) {
+    dex_uring_epfd = epoll_create1(EPOLL_CLOEXEC);
+    if (dex_uring_epfd < 0) return -1;
+    for (int i = 0; i < dex_uring_count; i++) {
+        DexUringRing* r = &dex_urings[i];
+        r->efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (r->efd < 0) return -1;
+        if (syscall(__NR_io_uring_register, r->u.fd, IORING_REGISTER_EVENTFD, &r->efd, 1) != 0) return -1;
+        struct epoll_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLIN | EPOLLET;
+        ev.data.u32 = (unsigned)i;
+        if (epoll_ctl(dex_uring_epfd, EPOLL_CTL_ADD, r->efd, &ev) != 0) return -1;
+    }
+    return 0;
 }
 
 static int dex_http_uring_run(int server_fd, int port) {
-    if (dex_uring_setup(&dex_uring) != 0) {
+    unsigned slots = dex_uring_direct_limit();
+    int real_cap = dex_http_conn_cap;
+
+    /* How many rings the connection limit asks for. */
+    int want = 1;
+    if (dex_http_max_conns > real_cap + (int)slots && slots > 0) {
+        want = (dex_http_max_conns - real_cap + (int)slots - 1) / (int)slots;
+        if (want > DEX_URING_MAX_RINGS) want = DEX_URING_MAX_RINGS;
+        if (want < 1) want = 1;
+    }
+    int defer = want == 1 || dex_uring_kernel_at_least(6, 2);
+
+    memset(dex_urings, 0, sizeof(dex_urings));
+    for (int i = 0; i < DEX_URING_MAX_RINGS; i++) { dex_urings[i].u.fd = -1; dex_urings[i].efd = -1; }
+    if (dex_uring_setup(&dex_urings[0].u, defer) != 0) {
         fprintf(stderr, "[http] io_uring unavailable (%s); using epoll\n", strerror(errno));
         return -1;
     }
+    dex_uring_count = 1;
+    for (int i = 1; i < want; i++) {
+        if (dex_uring_setup(&dex_urings[i].u, defer) != 0) break;
+        dex_uring_count++;
+    }
+    for (int i = 0; i < dex_uring_count; i++) {
+        dex_urings[i].index = i;
+        dex_uring_register_direct(&dex_urings[i], slots);
+        dex_uring_setup_bufs(&dex_urings[i]);
+    }
+    /* An extra ring is only worth having if it holds connections; if any of
+     * them could not register a table, go back to the one ring. */
+    for (int i = 1; i < dex_uring_count; i++) {
+        if (dex_urings[i].direct_cap == 0) { dex_uring_drop_extra_rings(); break; }
+    }
+    if (dex_uring_count > 1 && dex_uring_link_rings() != 0) {
+        fprintf(stderr, "[http] could not link io_uring rings (%s); using one\n", strerror(errno));
+        dex_uring_drop_extra_rings();
+    }
+
     int flags = fcntl(server_fd, F_GETFL, 0);
     if (flags >= 0) fcntl(server_fd, F_SETFL, flags & ~O_NONBLOCK);
 
-    dex_uring_register_direct();
-    dex_uring_real_cap = dex_http_conn_cap;
-    dex_http_conn_cap = dex_uring_real_cap + dex_uring_direct_slots;
+    dex_uring_real_cap = real_cap;
+    int direct_total = 0;
+    for (int i = 0; i < dex_uring_count; i++) direct_total += dex_urings[i].direct_slots;
+    dex_http_conn_cap = dex_uring_real_cap + direct_total;
     dex_http_shed_at = dex_http_conn_cap - dex_http_conn_cap / 16;
 
-    printf("Dex server listening on port %d (io_uring, %d direct slots)\n", port, dex_uring_direct_slots);
+    if (dex_uring_count > 1) {
+        printf("Dex server listening on port %d (io_uring, %d direct slots across %d rings)\n", port, direct_total, dex_uring_count);
+    } else {
+        printf("Dex server listening on port %d (io_uring, %d direct slots)\n", port, direct_total);
+    }
     fflush(stdout);
 
     dex_uring_queue_timeout();
+    struct epoll_event evs[DEX_URING_MAX_RINGS];
     for (;;) {
-        dex_uring_arm_accepts(server_fd);
-        if (dex_uring_enter(&dex_uring, 1) < 0 && errno != EBUSY && errno != EAGAIN) {
-            perror("io_uring_enter");
-            return 0;
-        }
-        unsigned head = *dex_uring.cq_head;
-        unsigned tail = __atomic_load_n(dex_uring.cq_tail, __ATOMIC_ACQUIRE);
-        while (head != tail) {
-            struct io_uring_cqe* cqe = &dex_uring.cqes[head & *dex_uring.cq_mask];
-            unsigned long ud = (unsigned long)cqe->user_data;
-            int res = cqe->res;
-            head++;
-            if (ud == DEX_UD_ACCEPT) {
-                dex_uring_accepts_pending--;
-                if (res >= 0) {
-                    DexHttpConn* conn = (res < DEX_HTTP_MAX_FD) ? dex_http_conn_new(res) : NULL;
-                    if (!conn) { close(res); continue; }
-                    dex_uring_real_live++;
-                    dex_uring_queue_recv(conn);
+        for (int i = 0; i < dex_uring_count; i++) dex_uring_arm_accepts(&dex_urings[i], server_fd);
+        if (dex_uring_count == 1) {
+            if (dex_uring_enter(&dex_urings[0].u, 1, 1) < 0 && errno != EBUSY && errno != EAGAIN) {
+                perror("io_uring_enter");
+                return 0;
+            }
+        } else {
+            int ready = 0;
+            for (int i = 0; i < dex_uring_count; i++) {
+                if (dex_uring_enter(&dex_urings[i].u, 0, 1) < 0 && errno != EBUSY && errno != EAGAIN) {
+                    perror("io_uring_enter");
+                    return 0;
                 }
-                continue;
+                if (dex_uring_has_cqes(&dex_urings[i])) ready = 1;
             }
-            if (ud == DEX_UD_ACCEPT_DIRECT) {
-                dex_uring_accepts_pending--;
-                dex_uring_direct_pending--;
-                if (res >= 0 && res < DEX_HTTP_MAX_FD) {
-                    DexHttpConn* conn = dex_http_conn_new(-1);
-                    if (!conn) {
-                        struct io_uring_sqe* sqe = dex_uring_sqe(&dex_uring);
-                        if (sqe) { sqe->opcode = IORING_OP_CLOSE; sqe->file_index = (unsigned)res + 1; sqe->user_data = DEX_UD_IGNORE; }
-                        continue;
-                    }
-                    conn->fd = res;
-                    conn->direct = 1;
-                    dex_uring_direct_table[res] = conn;
-                    dex_uring_direct_live++;
-                    dex_uring_queue_recv(conn);
-                } else if (res == -ENFILE) {
-                    dex_uring_direct_slots = dex_uring_direct_live;
-                }
-                continue;
+            if (!ready) {
+                /* Nothing to do on any ring: sleep until one signals. The
+                 * eventfds are edge-triggered and never drained; each signal
+                 * is one edge, and an edge that arrives while the loop is busy
+                 * makes this return at once next time, never a lost wakeup. */
+                int n = epoll_wait(dex_uring_epfd, evs, DEX_URING_MAX_RINGS, 1000);
+                if (n < 0 && errno != EINTR) { perror("epoll_wait"); return 0; }
+                for (int i = 0; i < dex_uring_count; i++) dex_uring_enter(&dex_urings[i].u, 0, 1);
             }
-            if (ud == DEX_UD_TIMEOUT) {
-                dex_uring_sweep();
-                dex_uring_queue_timeout();
-                continue;
-            }
-            if (ud == DEX_UD_IGNORE) continue;
-            DexHttpConn* conn = (DexHttpConn*)(ud & ~0xFUL);
-            if ((ud & 0xF) == DEX_OP_RECV) dex_uring_on_recv(conn, res);
-            else if ((ud & 0xF) == DEX_OP_SEND) dex_uring_on_send(conn, res);
         }
-        __atomic_store_n(dex_uring.cq_head, head, __ATOMIC_RELEASE);
+        for (int i = 0; i < dex_uring_count; i++) dex_uring_reap(&dex_urings[i]);
+        dex_uring_finish_pass();
     }
 }
 
@@ -1532,6 +2004,7 @@ static void dex_listen_on(const char* host, int port) {
                     if (body_received >= conn->content_length) {
                         if (dex_http_inline) {
                             dex_http_run_handler(conn);
+                            dex_http_after_one(conn);
                             dex_http_flush_inline(conn);
                             continue;
                         }

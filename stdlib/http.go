@@ -31,7 +31,7 @@ func init() {
 				Params:     []ast.Type{},
 				ReturnType: ast.TypeVoid,
 				CName:      "dex_http_set_uring",
-				Doc:        "Serve with io_uring instead of epoll, on Linux. Call before listen. Accepts, reads, writes and closes are queued on one ring and submitted together, so a pass of the loop costs one system call however many connections it served. Handlers run on the thread that owns the ring, as with http.inline(). Where io_uring is unavailable — another platform, an older kernel, or a container that blocks it — the server says so and uses epoll.",
+				Doc:        "Serve with io_uring instead of epoll, on Linux. Call before listen. Accepts, reads, writes and closes are queued on one ring and submitted together, so a pass of the loop costs one system call however many connections it served. Handlers run on the thread that owns the ring, as with http.inline(). Where io_uring is unavailable — another platform, an older kernel, or a container that blocks it — the server says so and uses epoll. Received bytes land in buffers the ring shares, so a connection waiting on its client holds no read buffer. When http.limits asks for more connections than one ring can hold (a ring is capped at the open-file limit), the server runs several rings on the same thread, up to eight.",
 			},
 			"inline": {
 				Params:     []ast.Type{},
@@ -52,6 +52,13 @@ func init() {
 				ReturnType: ast.TypeVoid,
 				CName:      "dex_http_set_limits",
 				Doc:        "Bound what one client can cost the server. Call before listen. Defaults are 8 MB, 30 seconds and 8192 connections; a 0 for any argument keeps that default, so raising the body limit for uploads does not mean restating the others. The header block is capped at 32 KB and is not adjustable. A body larger than the limit is answered 413, headers that never terminate 431, and a connection that stops making progress for the idle timeout is closed. The connection limit is also held below the process's open-file limit. Past fifteen sixteenths of it, responses carry Connection: close so idle clients reconnect for their next request, and at the limit new connections wait in the listen queue until one closes.",
+			},
+			"afterBatch": {
+				Params:     nil, // special codegen: function value, like notFound
+				ParamNames: []string{"hook"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Run hook, a fn(): bool, after a batch of handlers and before any of their responses is sent, so handlers can share one database transaction and have it committed before a client hears its request succeeded (group commit). Return true when the batch's work is durable; return false and every request in the batch is answered 500 {\"error\":\"internal server error\"} instead of what its handler returned. Under http.uring() a batch is every request one pass of the event loop served, which under load is many; with http.inline() or the thread pool it is a single request, so the guarantee holds everywhere but only io_uring batches. On the thread pool the hook runs on the worker that ran the handler. Registering twice replaces the first.",
 			},
 			"notFound": {
 				Params:     nil, // special codegen: function value, like route

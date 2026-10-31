@@ -37,6 +37,15 @@ func (g *Generator) genWebCall(out *strings.Builder, e *ast.CallExpr) bool {
 		return true
 	}
 
+	// http.afterBatch(hook) — the runtime keeps the hook, so it is handed an
+	// owned reference, and replacing one releases the last.
+	if e.Module == "http" && e.Name == "afterBatch" {
+		out.WriteString("dex_http_set_after_batch(")
+		g.genOwnedClosureArg(out, e.Args[0])
+		out.WriteString(")")
+		return true
+	}
+
 	// http.response(statusCode, body, contentType) and
 	// http.responseWith(..., headers) -> HttpResponse struct literal.
 	// Retain borrowed string refs for ownership transfer to the worker thread.

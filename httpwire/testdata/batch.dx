@@ -1,0 +1,80 @@
+import "http"
+import "db"
+import "os"
+import "str"
+import "json"
+
+let conn: int = -1
+let stIns: int = -1
+let stCount: int = -1
+let inTx: bool = false
+let failNext: bool = false
+let batches: int = 0
+
+fn begin(): void {
+    if (!inTx) {
+        db.exec(conn, "BEGIN")
+        inTx = true
+    }
+}
+
+fn commit(): bool {
+    batches = batches + 1
+    if (!inTx) {
+        return true
+    }
+    inTx = false
+    if (failNext) {
+        failNext = false
+        db.exec(conn, "ROLLBACK")
+        return false
+    }
+    if (db.exec(conn, "COMMIT") < 0) {
+        db.exec(conn, "ROLLBACK")
+        return false
+    }
+    return true
+}
+
+fn add(req: http.HttpRequest): http.HttpResponse {
+    begin()
+    db.reset(stIns)
+    db.bindStr(stIns, 1, req.query)
+    db.step(stIns)
+    db.reset(stIns)
+    return http.response(201, "{\"ok\":true}", "application/json")
+}
+
+fn count(req: http.HttpRequest): http.HttpResponse {
+    db.reset(stCount)
+    db.step(stCount)
+    let n: long = db.col(stCount, 0)
+    db.reset(stCount)
+    return http.response(200, json.encode({ n: n, batches: batches }), "application/json")
+}
+
+fn arm(req: http.HttpRequest): http.HttpResponse {
+    failNext = true
+    return http.response(200, "{}", "application/json")
+}
+
+fn main(): void {
+    conn = db.openSingleThreaded("sqlite", os.env("DB"))
+    db.exec(conn, "PRAGMA journal_mode=WAL")
+    db.exec(conn, "CREATE TABLE IF NOT EXISTS t (v TEXT)")
+    stIns = db.prepare(conn, "INSERT INTO t (v) VALUES (?)")
+    stCount = db.prepare(conn, "SELECT count(*) FROM t")
+    http.route("POST", "/add", add)
+    http.route("GET", "/count", count)
+    http.route("POST", "/arm", arm)
+    http.afterBatch(commit)
+    let mode: string = os.env("MODE")
+    if (mode == "uring") {
+        http.uring()
+    }
+    if (mode == "inline") {
+        http.inline()
+    }
+    http.limits(0, 30, str.toInt(os.env("MAXC")))
+    http.listenOn("127.0.0.1", str.toInt(os.env("PORT")), 1)
+}

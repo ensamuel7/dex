@@ -533,12 +533,7 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
  *
  * Values are trimmed of leading spaces and of the trailing CR. A header line
  * with no colon is skipped rather than guessed at. */
-static void dex_http_fill_headers(DexHttpConn* conn, DexMap_str_str* headers) {
-    if (conn->header_start < 0 || conn->headers_end <= conn->header_start) return;
-
-    const char* p = conn->read_buf + conn->header_start;
-    const char* limit = conn->read_buf + conn->headers_end;
-
+static void dex_http_parse_header_lines(const char* p, const char* limit, DexMap_str_str* headers) {
     while (p < limit) {
         const char* eol = p;
         while (eol < limit && *eol != '\n') eol++;
@@ -563,13 +558,42 @@ static void dex_http_fill_headers(DexHttpConn* conn, DexMap_str_str* headers) {
 
                 DexString* key = dex_string_new(name, (size_t)name_len);
                 DexString* val = dex_string_new(vp, (size_t)(value_len > 0 ? value_len : 0));
-                dex_map_str_str_set(headers, key, val);
+                dex_map_str_str_set_raw(headers, key, val);
                 dex_release(key);
                 dex_release(val);
             }
         }
         p = (eol < limit) ? eol + 1 : limit;
     }
+}
+
+/* The header lines of one request, copied out of the connection's read buffer
+ * so the map they fill owns them outright. The read buffer is reset for the
+ * next request on the connection as soon as this response is queued, and a
+ * handler may keep req.headers for longer than that. */
+typedef struct {
+    DexMapLazy base;
+    size_t len;
+    char bytes[];
+} DexHttpLazyHeaders;
+
+static void dex_http_headers_fill(void* map, DexMapLazy* self) {
+    DexHttpLazyHeaders* h = (DexHttpLazyHeaders*)self;
+    dex_http_parse_header_lines(h->bytes, h->bytes + h->len, (DexMap_str_str*)map);
+}
+
+/* Give req.headers this request's headers. They are parsed the first time the
+ * handler (or anything it hands the map to) uses the map, not here, so a
+ * handler that never reads a header never pays for the strings. The entries,
+ * their order and every lookup are the same as parsing them up front. */
+static void dex_http_fill_headers(DexHttpConn* conn, DexMap_str_str* headers) {
+    if (conn->header_start < 0 || conn->headers_end <= conn->header_start) return;
+    size_t len = (size_t)(conn->headers_end - conn->header_start);
+    DexHttpLazyHeaders* h = (DexHttpLazyHeaders*)dex_xmalloc(sizeof(DexHttpLazyHeaders) + len);
+    h->base.fill = dex_http_headers_fill;
+    h->len = len;
+    memcpy(h->bytes, conn->read_buf + conn->header_start, len);
+    headers->lazy = &h->base;
 }
 
 /* Build the write buffer for a response */
@@ -696,9 +720,10 @@ static void dex_http_run_handler(DexHttpConn* conn) {
 
     /* Build HttpRequest struct — use known lengths to avoid strlen */
     const char* cpath = conn->path ? conn->path : "";
+    size_t cpath_len = strlen(cpath);
     Dex_HttpRequest req;
     req.method = dex_string_new(conn->method, strlen(conn->method));
-    req.path = dex_string_new(cpath, strlen(cpath));
+    req.path = dex_string_new(cpath, cpath_len);
     req.body = (body_len > 0)
         ? dex_string_new(body_data, (size_t)body_len)
         : dex_string_new("", 0);
@@ -708,9 +733,12 @@ static void dex_http_run_handler(DexHttpConn* conn) {
     dex_http_fill_headers(conn, req.headers);
 
     /* Split incoming path into segments for matching */
+    /* Truncated to the buffer exactly as strncpy did, without strncpy
+     * zero-filling all 2 KB of it on every request. */
     char path_copy[2048];
-    strncpy(path_copy, cpath, sizeof(path_copy) - 1);
-    path_copy[sizeof(path_copy) - 1] = '\0';
+    size_t path_copy_len = cpath_len < sizeof(path_copy) - 1 ? cpath_len : sizeof(path_copy) - 1;
+    memcpy(path_copy, cpath, path_copy_len);
+    path_copy[path_copy_len] = '\0';
 
     char* req_segments[32];
     int req_segment_count = 0;

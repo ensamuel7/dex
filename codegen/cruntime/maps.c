@@ -3,6 +3,8 @@
 // Uses DexObjHeader for reference counting.
 // Capacity is always a power of 2 for fast bitwise masking.
 
+#include <sched.h>
+
 // FNV-1a hash for strings
 static unsigned int dex_hash_str(const char* data, int len) {
     unsigned int h = 2166136261u;
@@ -35,6 +37,52 @@ static unsigned int dex_hash_int(int key) {
 // KEY_COPY(k): expression to copy/retain a key for storage
 // VAL_COPY(v): expression to copy/retain a value for storage
 
+/* A map whose contents are produced the first time anything looks at it.
+ *
+ * The http server builds a header map for every request, and most handlers
+ * never read it. Rather than parse every header into strings up front, the
+ * server attaches one of these, and the first operation on the map -- any
+ * operation, through any of the functions below -- runs `fill` and then frees
+ * it. Until then the map holds no entries; afterwards it is an ordinary map
+ * and nothing can tell it was ever lazy. Code that never touches the map pays
+ * for neither the fill nor the strings.
+ *
+ * The block is one dex_xmalloc allocation that owns everything `fill` reads, so
+ * a map kept past the request it came from (stored in a global, sent on a
+ * channel) never points into a buffer that has since been reused. `fill`
+ * inserts with the type's _set_raw, which does not check for laziness, and
+ * must not free the block: the map does that, once, after `fill` returns, or
+ * in destroy if the map dies unread.
+ *
+ * Two threads may reach a still-lazy map at once (a handler and something it
+ * spawned, both holding the request). The first to swap `lazy_busy` to 1 runs
+ * the fill; any other waits until it publishes `lazy = NULL` with release
+ * ordering, so every reader sees the finished entries. Once filled the cost is
+ * one acquire load per operation, which on x86 is a plain load. */
+typedef struct DexMapLazy DexMapLazy;
+struct DexMapLazy {
+    void (*fill)(void* map, DexMapLazy* self);
+};
+
+static void dex_map_lazy_force(void* map, DexMapLazy** slot, int* busy) {
+    if (__atomic_exchange_n(busy, 1, __ATOMIC_ACQ_REL) == 0) {
+        DexMapLazy* l = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+        if (l) {
+            l->fill(map, l);
+            __atomic_store_n(slot, (DexMapLazy*)NULL, __ATOMIC_RELEASE);
+            free(l);
+        }
+        return;
+    }
+    while (__atomic_load_n(slot, __ATOMIC_ACQUIRE)) sched_yield();
+}
+
+#define DEX_MAP_FORCE(m) \
+    do { \
+        if (__builtin_expect(__atomic_load_n(&(m)->lazy, __ATOMIC_ACQUIRE) != NULL, 0)) \
+            dex_map_lazy_force((m), &(m)->lazy, &(m)->lazy_busy); \
+    } while (0)
+
 /* What a lookup answers when the key is absent. Scalars are zero; a string is
  * an empty string, never NULL, so `.isEmpty()` on the result is always safe. */
 #define DEX_MISSING_ZERO(T) ((T)0)
@@ -60,10 +108,13 @@ typedef struct { \
     DexMapEntry_##SUFFIX* entries; \
     int cap; \
     int len; \
+    DexMapLazy* lazy;   /* pending contents, or NULL: see DexMapLazy */ \
+    int lazy_busy; \
 } DexMap_##SUFFIX; \
 \
 static void dex_map_##SUFFIX##_destroy(void* ptr) { \
     DexMap_##SUFFIX* m = (DexMap_##SUFFIX*)ptr; \
+    free(m->lazy); \
     for (int i = 0; i < m->cap; i++) { \
         if (m->entries[i].occupied) { \
             KEY_RELEASE(m->entries[i].key); \
@@ -77,6 +128,8 @@ static DexMap_##SUFFIX* dex_map_##SUFFIX##_new(void) { \
     DexMap_##SUFFIX* m = (DexMap_##SUFFIX*)dex_obj_alloc(sizeof(DexMap_##SUFFIX), dex_map_##SUFFIX##_destroy); \
     m->cap = 16; \
     m->len = 0; \
+    m->lazy = NULL; \
+    m->lazy_busy = 0; \
     m->entries = (DexMapEntry_##SUFFIX*)dex_xcalloc((size_t)m->cap, sizeof(DexMapEntry_##SUFFIX)); \
     DEX_PF_BUF_SET(m, (size_t)m->cap * sizeof(DexMapEntry_##SUFFIX)); \
     if (!m->entries) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); } \
@@ -109,7 +162,8 @@ static void dex_map_##SUFFIX##_resize(DexMap_##SUFFIX* m, int newCap) { \
     free(oldEntries); \
 } \
 \
-static void dex_map_##SUFFIX##_set(DexMap_##SUFFIX* m, KEY_TYPE key, VAL_TYPE value) { \
+/* Insert without forcing a pending fill; only a DexMapLazy fill calls it. */ \
+static void dex_map_##SUFFIX##_set_raw(DexMap_##SUFFIX* m, KEY_TYPE key, VAL_TYPE value) { \
     if (m->len * 4 >= m->cap * 3) { \
         dex_map_##SUFFIX##_resize(m, m->cap * 2); \
     } \
@@ -131,7 +185,17 @@ static void dex_map_##SUFFIX##_set(DexMap_##SUFFIX* m, KEY_TYPE key, VAL_TYPE va
     m->len++; \
 } \
 \
+static inline void dex_map_##SUFFIX##_force(DexMap_##SUFFIX* m) { \
+    DEX_MAP_FORCE(m); \
+} \
+\
+static void dex_map_##SUFFIX##_set(DexMap_##SUFFIX* m, KEY_TYPE key, VAL_TYPE value) { \
+    DEX_MAP_FORCE(m); \
+    dex_map_##SUFFIX##_set_raw(m, key, value); \
+} \
+\
 static VAL_TYPE dex_map_##SUFFIX##_get(DexMap_##SUFFIX* m, KEY_TYPE key) { \
+    DEX_MAP_FORCE(m); \
     int mask = m->cap - 1; \
     unsigned int hv = HASH_KEY(key); \
     unsigned int h = hv & (unsigned int)mask; \
@@ -151,6 +215,7 @@ static VAL_TYPE dex_map_##SUFFIX##_get(DexMap_##SUFFIX* m, KEY_TYPE key) { \
 } \
 \
 static _Bool dex_map_##SUFFIX##_has(DexMap_##SUFFIX* m, KEY_TYPE key) { \
+    DEX_MAP_FORCE(m); \
     int mask = m->cap - 1; \
     unsigned int hv = HASH_KEY(key); \
     unsigned int h = hv & (unsigned int)mask; \
@@ -164,6 +229,7 @@ static _Bool dex_map_##SUFFIX##_has(DexMap_##SUFFIX* m, KEY_TYPE key) { \
 } \
 \
 static void dex_map_##SUFFIX##_remove(DexMap_##SUFFIX* m, KEY_TYPE key) { \
+    DEX_MAP_FORCE(m); \
     int mask = m->cap - 1; \
     unsigned int hv = HASH_KEY(key); \
     unsigned int h = hv & (unsigned int)mask; \
@@ -193,10 +259,12 @@ static void dex_map_##SUFFIX##_remove(DexMap_##SUFFIX* m, KEY_TYPE key) { \
 } \
 \
 static int dex_map_##SUFFIX##_len(DexMap_##SUFFIX* m) { \
+    DEX_MAP_FORCE(m); \
     return m->len; \
 } \
 \
 static void dex_map_##SUFFIX##_clear(DexMap_##SUFFIX* m) { \
+    DEX_MAP_FORCE(m); \
     for (int i = 0; i < m->cap; i++) { \
         if (m->entries[i].occupied) { \
             KEY_RELEASE(m->entries[i].key); \
@@ -225,6 +293,7 @@ static void dex_map_##SUFFIX##_clear(DexMap_##SUFFIX* m) { \
 // Keys function macro: returns an array of keys
 #define DEX_MAP_KEYS_DEFINE(KEY_TYPE, KEY_ARRAY_TYPE, SUFFIX, KEY_PUSH_FN, KEY_ARRAY_NEW_FN) \
 static KEY_ARRAY_TYPE* dex_map_##SUFFIX##_keys(DexMap_##SUFFIX* m) { \
+    DEX_MAP_FORCE(m); \
     KEY_ARRAY_TYPE* arr = KEY_ARRAY_NEW_FN(); \
     for (int i = 0; i < m->cap; i++) { \
         if (m->entries[i].occupied) { \
@@ -237,6 +306,7 @@ static KEY_ARRAY_TYPE* dex_map_##SUFFIX##_keys(DexMap_##SUFFIX* m) { \
 // Values function macro: returns an array of values
 #define DEX_MAP_VALUES_DEFINE(VAL_TYPE, VAL_ARRAY_TYPE, SUFFIX, VAL_PUSH_FN, VAL_ARRAY_NEW_FN) \
 static VAL_ARRAY_TYPE* dex_map_##SUFFIX##_values(DexMap_##SUFFIX* m) { \
+    DEX_MAP_FORCE(m); \
     VAL_ARRAY_TYPE* arr = VAL_ARRAY_NEW_FN(); \
     for (int i = 0; i < m->cap; i++) { \
         if (m->entries[i].occupied) { \

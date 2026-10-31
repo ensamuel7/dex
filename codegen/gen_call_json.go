@@ -85,6 +85,9 @@ func (g *Generator) genJsonEncodeToString(out *strings.Builder, arg ast.Expr, ar
 		w.WriteString(fmt.Sprintf("DexString* %s(%s* _m) {\n", wrapperName, mapCType))
 		w.WriteString("    const char* _r = dex_json_new();\n")
 		w.WriteString("    const char* _n;\n")
+		// The loop reads the entries directly, so a map still waiting on a
+		// lazy fill (an http request's headers) is filled first.
+		w.WriteString(fmt.Sprintf("    dex_map_%s_force(_m);\n", suffix))
 		w.WriteString("    for (int _i = 0; _i < _m->cap; _i++) {\n")
 		w.WriteString("        if (!_m->entries[_i].occupied) continue;\n")
 		switch valType {

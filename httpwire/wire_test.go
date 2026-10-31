@@ -75,6 +75,11 @@ var cases = []wireCase{
 	{"header block too large", []string{"GET /echo HTTP/1.1\r\nX-Big: " + big(40000) + "\r\n\r\n"}},
 	{"long content type", []string{"GET /ctype?2000 HTTP/1.1\r\n\r\n"}},
 	{"content type with line break", []string{"GET /ctype?inject HTTP/1.1\r\n\r\n"}},
+	{"headers kept", []string{"GET /keep HTTP/1.1\r\nX-Keep: first\r\nX-Other: o\r\n\r\n"}},
+	{"headers kept read later", []string{"GET /kept HTTP/1.1\r\nX-Keep: second-request-overwrites-this-buffer\r\n\r\n"}},
+	{"headers whole map", []string{"GET /headers HTTP/1.1\r\nX-One: 1\r\nX-Two: 2\r\nx-one: again\r\n\r\n"}},
+	{"headers whole map none", []string{"GET /headers HTTP/1.1\r\n\r\n"}},
+	{"headers whole map keep alive", []string{"GET /headers HTTP/1.1\r\nX-One: a\r\n\r\n", "GET /headers HTTP/1.1\r\nX-Two: b\r\n\r\n"}},
 	{"unicode body", []string{"POST /echo HTTP/1.1\r\nContent-Length: 13\r\n\r\n\"héé\" \\ \x01"}},
 }
 

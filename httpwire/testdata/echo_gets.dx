@@ -8,6 +8,34 @@ fn echo(req: http.HttpRequest): http.HttpResponse {
     return http.response(200, body, "application/json")
 }
 
+// Headers kept past the request they arrived on, and read on a later one.
+let kept: map[string, string] = {}
+
+fn keep(req: http.HttpRequest): http.HttpResponse {
+    kept = req.headers
+    return http.response(200, "{}", "application/json")
+}
+
+fn readKept(req: http.HttpRequest): http.HttpResponse {
+    return http.response(200, json.encode({ keep: kept.get("x-keep"), has: kept.has("x-keep"), count: kept.len() }), "application/json")
+}
+
+// Every way to read the whole map: keys, values, has, len and json.encode.
+fn allHeaders(req: http.HttpRequest): http.HttpResponse {
+    let ks: string[] = req.headers.keys()
+    let vs: string[] = req.headers.values()
+    let out: string = json.encode(req.headers)
+    let i: int = 0
+    while (i < ks.len()) {
+        out = out + "|" + ks[i] + "=" + vs[i]
+        i = i + 1
+    }
+    if (req.headers.has("x-one")) {
+        out = out + "|has"
+    }
+    return http.response(200, out, "text/plain")
+}
+
 fn cookies(req: http.HttpRequest): http.HttpResponse {
     let h: string = http.header("", "Set-Cookie", "a=1; Path=/")
     h = http.header(h, "Set-Cookie", "b=2")
@@ -33,6 +61,9 @@ fn main(): void {
     http.route("POST", "/echo", echo)
     http.route("GET", "/items/:id", echo)
     http.route("GET", "/cookies", cookies)
+    http.route("GET", "/keep", keep)
+    http.route("GET", "/kept", readKept)
+    http.route("GET", "/headers", allHeaders)
     http.route("GET", "/ctype", ctype)
     let mode: string = os.env("MODE")
     if (mode == "uring") {

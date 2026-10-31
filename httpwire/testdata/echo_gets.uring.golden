@@ -408,6 +408,51 @@ Connection: keep-alive
 
 x
 <open>
+=== headers kept
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 2
+Connection: keep-alive
+
+{}
+<open>
+=== headers kept read later
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 37
+Connection: keep-alive
+
+{"keep":"first","has":true,"count":2}
+<open>
+=== headers whole map
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 56
+Connection: keep-alive
+
+{"x-one": "again", "x-two": "2"}|x-one=again|x-two=2|has
+<open>
+=== headers whole map none
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 2
+Connection: keep-alive
+
+{}
+<open>
+=== headers whole map keep alive
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 26
+Connection: keep-alive
+
+{"x-one": "a"}|x-one=a|hasHTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 22
+Connection: keep-alive
+
+{"x-two": "b"}|x-two=b
+<open>
 === unicode body
 
 <open>

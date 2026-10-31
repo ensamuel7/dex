@@ -84,6 +84,26 @@ static void dex_ev_destroy(DexEventLoop* loop) {
     free(loop);
 }
 
+#if defined(__APPLE__)
+/* Remove both of a descriptor's filters, whichever are registered.
+ *
+ * Without EV_RECEIPT, kevent() stops at the first change that fails and
+ * applies none after it. Deleting a read filter that was never added fails
+ * with ENOENT, so the write-filter delete queued behind it was silently
+ * dropped: a connection that had been waiting to write kept its write filter
+ * when it went back to reading, and from then on was reported twice per wait.
+ * The http loop freed a connection on one of those events and then read it on
+ * the other. EV_RECEIPT makes kevent apply every change and report each
+ * outcome separately; a filter that was not there is not an error here. */
+static void dex_kq_delete_filters(int kqfd, int fd) {
+    struct kevent changes[2];
+    struct kevent receipts[2];
+    EV_SET(&changes[0], fd, EVFILT_READ, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
+    EV_SET(&changes[1], fd, EVFILT_WRITE, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
+    (void)kevent(kqfd, changes, 2, receipts, 2, NULL);
+}
+#endif
+
 static int dex_ev_add(DexEventLoop* loop, int fd, int events, void* user_data) {
 #ifdef __linux__
     struct epoll_event ev;
@@ -118,17 +138,11 @@ static int dex_ev_mod(DexEventLoop* loop, int fd, int events, void* user_data) {
     if (events & DEX_EV_WRITE) ev.events |= EPOLLOUT;
     return epoll_ctl(loop->epfd, EPOLL_CTL_MOD, fd, &ev);
 #elif defined(__APPLE__)
-    /* kqueue: disable both, then re-enable requested */
-    struct kevent changes[4];
+    /* kqueue: remove both, then add back what was requested */
+    struct kevent changes[2];
     int nchanges = 0;
-    EV_SET(&changes[nchanges], fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    nchanges++;
-    EV_SET(&changes[nchanges], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-    nchanges++;
-    /* Ignore errors from deleting filters that were not registered */
-    kevent(loop->kqfd, changes, nchanges, NULL, 0, NULL);
+    dex_kq_delete_filters(loop->kqfd, fd);
 
-    nchanges = 0;
     if (events & DEX_EV_READ) {
         EV_SET(&changes[nchanges], fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, user_data);
         nchanges++;
@@ -150,11 +164,7 @@ static int dex_ev_del(DexEventLoop* loop, int fd) {
 #ifdef __linux__
     return epoll_ctl(loop->epfd, EPOLL_CTL_DEL, fd, NULL);
 #elif defined(__APPLE__)
-    struct kevent changes[2];
-    EV_SET(&changes[0], fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    EV_SET(&changes[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-    /* Ignore errors — filter may not be registered */
-    kevent(loop->kqfd, changes, 2, NULL, 0, NULL);
+    dex_kq_delete_filters(loop->kqfd, fd);
     return 0;
 #else
     return -1;
@@ -184,16 +194,31 @@ static int dex_ev_wait(DexEventLoop* loop, DexEvent* out, int max, int timeout_m
         tsp = &ts;
     }
     int n = kevent(loop->kqfd, NULL, 0, kevs, max, tsp);
+    if (n <= 0) return n;
+    /* kqueue reports each filter separately, so a descriptor watched for both
+     * reading and writing can come back twice in one batch. epoll reports a
+     * descriptor once with both bits set, and callers are written for that: a
+     * handler that closes and frees a connection on one event must not find a
+     * second event for it later in the same batch. Fold them together. */
+    int m = 0;
     for (int i = 0; i < n; i++) {
-        out[i].user_data = kevs[i].udata;
-        out[i].fd = (int)kevs[i].ident;
-        out[i].events = 0;
-        if (kevs[i].filter == EVFILT_READ)  out[i].events |= DEX_EV_READ;
-        if (kevs[i].filter == EVFILT_WRITE) out[i].events |= DEX_EV_WRITE;
-        if (kevs[i].flags & EV_ERROR)       out[i].events |= DEX_EV_ERROR;
-        if (kevs[i].flags & EV_EOF)         out[i].events |= DEX_EV_READ; /* treat EOF as readable */
+        int bits = 0;
+        if (kevs[i].filter == EVFILT_READ)  bits |= DEX_EV_READ;
+        if (kevs[i].filter == EVFILT_WRITE) bits |= DEX_EV_WRITE;
+        if (kevs[i].flags & EV_ERROR)       bits |= DEX_EV_ERROR;
+        if (kevs[i].flags & EV_EOF)         bits |= DEX_EV_READ; /* treat EOF as readable */
+        int j = 0;
+        while (j < m && !(out[j].fd == (int)kevs[i].ident && out[j].user_data == kevs[i].udata)) j++;
+        if (j < m) {
+            out[j].events |= bits;
+            continue;
+        }
+        out[m].user_data = kevs[i].udata;
+        out[m].fd = (int)kevs[i].ident;
+        out[m].events = bits;
+        m++;
     }
-    return n;
+    return m;
 #else
     return -1;
 #endif

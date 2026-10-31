@@ -826,7 +826,9 @@ static void dex_http_run_handler(DexHttpConn* conn) {
             "{\"error\": \"Not Found\"}", "application/json");
     }
 
-    conn->state = HTTP_WRITING;
+    /* Atomic because on a pool this runs on a worker while the event loop's
+     * idle sweep reads every connection's state, this one included. */
+    __atomic_store_n(&conn->state, HTTP_WRITING, __ATOMIC_RELAXED);
 }
 
 static void dex_http_worker_func(void* arg) {
@@ -1380,8 +1382,12 @@ static void dex_listen_on(const char* host, int port) {
                 if (!c) continue;
                 /* A dispatched connection is owned by a worker thread and a
                  * writing one is mid-response; neither is idle, and freeing
-                 * either from here would pull it out from under its owner. */
-                if (c->state != HTTP_READING_HEADERS && c->state != HTTP_READING_BODY) continue;
+                 * either from here would pull it out from under its owner.
+                 * A worker may be setting state as this reads it, hence the
+                 * atomic load; nothing else is read until the state says the
+                 * loop owns the connection. */
+                DexHttpState st = __atomic_load_n(&c->state, __ATOMIC_RELAXED);
+                if (st != HTTP_READING_HEADERS && st != HTTP_READING_BODY) continue;
                 if (now - c->last_active < dex_http_idle_secs) continue;
                 dex_ev_del(dex_http_loop, c->fd);
                 close(c->fd);

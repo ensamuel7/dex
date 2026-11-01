@@ -74,6 +74,20 @@ func init() {
 				CName:      "",
 				Doc:        "Run hook, a fn(): bool, after a batch of handlers and before any of their responses is sent, so handlers can share one database transaction and have it committed before a client hears its request succeeded (group commit). Return true when the batch's work is durable; return false and every request in the batch is answered 500 {\"error\":\"internal server error\"} instead of what its handler returned. Under http.uring() a batch is every request one pass of the event loop served, which under load is many; with http.inline() or the thread pool it is a single request, so the guarantee holds everywhere but only io_uring batches. On the thread pool the hook runs on the worker that ran the handler. Registering twice replaces the first.",
 			},
+			"hold": {
+				Params:     []ast.Type{},
+				ReturnType: ast.TypeInt,
+				CName:      "dex_http_hold",
+				Doc:        "Take a ticket for the request this handler is serving, so the http.afterBatch hook can answer it with http.reply. Handlers collect their batch's work, the hook runs it as one query, and replies to each ticket before any response is sent. Returns -1 when there is no hook, when called outside a handler or a second time for the same request; answer from the handler then. A request the hook does not reply to is sent what its handler returned, so return a fallback such as a 500.",
+			},
+			"reply": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeInt, ast.TypeString, ast.TypeString},
+				ParamNames: []string{"ticket", "statusCode", "body", "contentType"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_http_reply",
+				RawParams:  []int{2},
+				Doc:        "Answer a request http.hold took a ticket for, from the http.afterBatch hook of the batch that took it. An empty contentType means application/json. A ticket from another batch, one already answered, or a call outside the hook is ignored.",
+			},
 			"notFound": {
 				Params:     nil, // special codegen: function value, like route
 				ParamNames: []string{"handler"},

@@ -715,7 +715,17 @@ void dex_route_not_found(DexClosure* handler) {
 }
 
 /* Worker function: run handler, build response, enqueue for event loop */
+static __thread DexHttpConn* dex_http_running = NULL;
+
+static void dex_http_run_handler_body(DexHttpConn* conn);
+
 static void dex_http_run_handler(DexHttpConn* conn) {
+    dex_http_running = conn;
+    dex_http_run_handler_body(conn);
+    dex_http_running = NULL;
+}
+
+static void dex_http_run_handler_body(DexHttpConn* conn) {
 
     /* Extract body from read buffer */
     char* body_data = "";
@@ -871,10 +881,63 @@ static void dex_http_answer_batch_failed(DexHttpConn* conn) {
                             "{\"error\":\"internal server error\"}", "application/json");
 }
 
+/* http.hold and http.reply: a handler takes a ticket for its request, and
+ * the batch hook answers it, so one query can serve every request of a batch.
+ * A ticket names its batch as well as its request, and is honoured only while
+ * that batch's hook runs, so a stale one is ignored rather than answering
+ * whichever request now holds its slot. A request the hook does not answer
+ * gets what its handler returned. */
+#define DEX_HTTP_HOLD_MAX 0xFFFF
+static __thread DexHttpConn** dex_http_held = NULL;
+static __thread int dex_http_held_len = 0;
+static __thread int dex_http_held_cap = 0;
+static unsigned dex_http_hold_batches = 0;
+static __thread unsigned dex_http_hold_batch = 0;
+static __thread _Bool dex_http_in_hook = 0;
+
+int dex_http_hold(void) {
+    DexHttpConn* c = dex_http_running;
+    if (!c || !dex_http_after_batch || dex_http_held_len >= DEX_HTTP_HOLD_MAX) return -1;
+    if (dex_http_held_len == dex_http_held_cap) {
+        int cap = dex_http_held_cap ? dex_http_held_cap * 2 : 256;
+        DexHttpConn** grown = (DexHttpConn**)dex_xrealloc(dex_http_held, (size_t)cap * sizeof(DexHttpConn*));
+        if (!grown) return -1;
+        dex_http_held = grown;
+        dex_http_held_cap = cap;
+    }
+    if (!dex_http_hold_batch) {
+        dex_http_hold_batch = __atomic_add_fetch(&dex_http_hold_batches, 1, __ATOMIC_RELAXED) % 0x7FFF + 1;
+    }
+    dex_http_running = NULL;
+    int slot = dex_http_held_len++;
+    dex_http_held[slot] = c;
+    return (int)((dex_http_hold_batch << 16) | (unsigned)slot);
+}
+
+void dex_http_reply(int ticket, int status, DexString* body, const char* content_type) {
+    if (!dex_http_in_hook || ticket < 0 || !dex_http_hold_batch) return;
+    if (((unsigned)ticket >> 16) != dex_http_hold_batch) return;
+    int slot = ticket & DEX_HTTP_HOLD_MAX;
+    if (slot >= dex_http_held_len || !dex_http_held[slot]) return;
+    DexHttpConn* c = dex_http_held[slot];
+    dex_http_held[slot] = NULL;
+    const char* ct = (content_type && *content_type) ? content_type : "application/json";
+    dex_http_build_response_full(c, dex_http_status_text(status), body->data, (int)body->len, ct, NULL);
+}
+
+static _Bool dex_http_run_batch_hook(void) {
+    dex_http_in_hook = 1;
+    _Bool ok = dex_http_call_after_batch();
+    dex_http_in_hook = 0;
+    dex_http_held_len = 0;
+    dex_http_hold_batch = 0;
+    return ok;
+}
+
 /* The one-request batch of the epoll and pool paths. */
 static void dex_http_after_one(DexHttpConn* conn) {
     if (!dex_http_after_batch) return;
-    if (!dex_http_call_after_batch()) dex_http_answer_batch_failed(conn);
+    if (!dex_http_run_batch_hook()) dex_http_answer_batch_failed(conn);
 }
 
 static void dex_http_worker_func(void* arg) {
@@ -1519,12 +1582,13 @@ static void dex_uring_finish_pass(void) {
     DexHttpConn* c = dex_uring_pass_head;
     if (!c) return;
     dex_uring_pass_head = NULL;
-    _Bool ok = dex_http_call_after_batch();
+    _Bool ok = dex_http_run_batch_hook();
     while (c) {
         DexHttpConn* next = c->next;
         c->next = NULL;
         if (!ok) dex_http_answer_batch_failed(c);
-        dex_uring_queue_send(c);
+        if (!c->write_buf || c->write_len <= 0) dex_uring_close(c);
+        else dex_uring_queue_send(c);
         c = next;
     }
 }

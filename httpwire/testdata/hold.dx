@@ -1,0 +1,78 @@
+import "http"
+import "os"
+import "str"
+import "json"
+
+struct Pending {
+    ticket: int
+    n: long
+}
+
+let pending: Pending[] = []
+let skipped: int[] = []
+let lastTicket: int = -1
+let maxBatch: int = 0
+
+fn square(req: http.HttpRequest): http.HttpResponse {
+    let n: long = str.toLong(req.query)
+    let t: int = http.hold()
+    if (t < 0) {
+        return http.response(200, json.encode({ sq: n * n, batch: 1 }), "application/json")
+    }
+    if (http.hold() >= 0) {
+        return http.response(500, "{\"error\":\"second ticket\"}", "application/json")
+    }
+    http.reply(t, 500, "{\"error\":\"replied outside the hook\"}", "")
+    pending.push(Pending { ticket: t, n: n })
+    return http.response(500, "{\"error\":\"not replied\"}", "application/json")
+}
+
+fn unanswered(req: http.HttpRequest): http.HttpResponse {
+    let t: int = http.hold()
+    if (t >= 0) {
+        skipped.push(t)
+    }
+    return http.response(418, "{\"fallback\":true}", "application/json")
+}
+
+fn stats(req: http.HttpRequest): http.HttpResponse {
+    return http.response(200, json.encode({ maxBatch: maxBatch }), "application/json")
+}
+
+fn flush(): bool {
+    let size: int = pending.len()
+    if (size > maxBatch) {
+        maxBatch = size
+    }
+    if (lastTicket >= 0) {
+        http.reply(lastTicket, 500, "{\"error\":\"stale ticket\"}", "")
+    }
+    let i: int = 0
+    while (i < size) {
+        let p: Pending = pending[i]
+        http.reply(p.ticket, 200, json.encode({ sq: p.n * p.n, batch: size }), "application/json")
+        http.reply(p.ticket, 500, "{\"error\":\"replied twice\"}", "")
+        lastTicket = p.ticket
+        i = i + 1
+    }
+    let none: Pending[] = []
+    pending = none
+    let noTickets: int[] = []
+    skipped = noTickets
+    return true
+}
+
+fn main(): void {
+    http.route("GET", "/sq", square)
+    http.route("GET", "/skip", unanswered)
+    http.route("GET", "/stats", stats)
+    http.afterBatch(flush)
+    let mode: string = os.env("MODE")
+    if (mode == "uring") {
+        http.uring()
+    }
+    if (mode == "inline") {
+        http.inline()
+    }
+    http.listenOn("127.0.0.1", str.toInt(os.env("PORT")), 1)
+}

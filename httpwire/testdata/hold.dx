@@ -71,6 +71,10 @@ fn main(): void {
     if (mode == "uring") {
         http.uring()
     }
+    let window: string = os.env("WINDOW")
+    if (!window.isEmpty()) {
+        http.batchWindow(str.toInt(window))
+    }
     if (mode == "inline") {
         http.inline()
     }

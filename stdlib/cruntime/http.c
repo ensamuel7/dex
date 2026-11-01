@@ -888,6 +888,13 @@ static void dex_http_answer_batch_failed(DexHttpConn* conn) {
  * whichever request now holds its slot. A request the hook does not answer
  * gets what its handler returned. */
 #define DEX_HTTP_HOLD_MAX 0xFFFF
+static int dex_http_batch_window_ms = 0;
+
+void dex_http_set_batch_window(int ms) {
+    if (ms < 0) ms = 0;
+    if (ms > 1000) ms = 1000;
+    dex_http_batch_window_ms = ms;
+}
 static __thread DexHttpConn** dex_http_held = NULL;
 static __thread int dex_http_held_len = 0;
 static __thread int dex_http_held_cap = 0;
@@ -988,6 +995,7 @@ static void dex_http_flush_inline(DexHttpConn* conn) {
 #define DEX_UD_TIMEOUT 2
 #define DEX_UD_IGNORE  3
 #define DEX_UD_ACCEPT_DIRECT 4
+#define DEX_UD_WINDOW 5
 #define DEX_OP_RECV 1
 #define DEX_OP_SEND 2
 
@@ -1068,6 +1076,14 @@ static int dex_uring_real_cap = 0;
 static uint32_t dex_uring_real_idle[DEX_HTTP_MAX_FD];
 
 static DexHttpConn* dex_uring_pass_head = NULL;
+static int dex_uring_pass_count = 0;
+
+/* http.batchWindow: the batch stays open until its first request is this old,
+ * or this full, and a timeout on the ring wakes the loop when it is due. */
+#define DEX_URING_BATCH_MAX 4096
+static uint64_t dex_uring_batch_opened = 0;
+static int dex_uring_window_armed = 0;
+static struct __kernel_timespec dex_uring_window_ts;
 
 static char* dex_uring_rbuf_pool[DEX_URING_RBUF_POOL];
 static int dex_uring_rbuf_pool_len = 0;
@@ -1360,6 +1376,24 @@ static void dex_uring_arm_accepts(DexUringRing* r) {
     }
 }
 
+static uint64_t dex_uring_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+static void dex_uring_queue_window(uint64_t ms) {
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_urings[0].u);
+    if (!sqe) return;
+    dex_uring_window_ts.tv_sec = (long long)(ms / 1000);
+    dex_uring_window_ts.tv_nsec = (long long)(ms % 1000) * 1000000;
+    sqe->opcode = IORING_OP_TIMEOUT;
+    sqe->addr = (unsigned long)&dex_uring_window_ts;
+    sqe->len = 1;
+    sqe->user_data = DEX_UD_WINDOW;
+    dex_uring_window_armed = 1;
+}
+
 static void dex_uring_queue_timeout(void) {
     struct io_uring_sqe* sqe = dex_uring_sqe(&dex_urings[0].u);
     if (!sqe) return;
@@ -1514,6 +1548,7 @@ static void dex_uring_on_recv(DexHttpConn* conn, int res) {
             /* Held until the batch hook has run: see dex_uring_finish_pass. */
             conn->next = dex_uring_pass_head;
             dex_uring_pass_head = conn;
+            dex_uring_pass_count++;
             return;
         }
         dex_uring_queue_send(conn);
@@ -1581,6 +1616,17 @@ static void dex_uring_on_send(DexHttpConn* conn, int res) {
 static void dex_uring_finish_pass(void) {
     DexHttpConn* c = dex_uring_pass_head;
     if (!c) return;
+    if (dex_http_batch_window_ms > 0 && dex_uring_pass_count < DEX_URING_BATCH_MAX) {
+        uint64_t now = dex_uring_now_ms();
+        if (!dex_uring_batch_opened) dex_uring_batch_opened = now ? now : 1;
+        uint64_t age = now - dex_uring_batch_opened;
+        if (age < (uint64_t)dex_http_batch_window_ms) {
+            if (!dex_uring_window_armed) dex_uring_queue_window((uint64_t)dex_http_batch_window_ms - age);
+            return;
+        }
+    }
+    dex_uring_batch_opened = 0;
+    dex_uring_pass_count = 0;
     dex_uring_pass_head = NULL;
     _Bool ok = dex_http_run_batch_hook();
     while (c) {
@@ -1669,6 +1715,7 @@ static void dex_uring_reap(DexUringRing* r) {
             continue;
         }
         if (ud == DEX_UD_IGNORE) continue;
+        if (ud == DEX_UD_WINDOW) { dex_uring_window_armed = 0; continue; }
         DexHttpConn* conn = (DexHttpConn*)(ud & ~0xFUL);
         if ((ud & 0xF) == DEX_OP_RECV) dex_uring_on_recv_cqe(r, conn, res, cflags);
         else if ((ud & 0xF) == DEX_OP_SEND) dex_uring_on_send(conn, res);

@@ -121,3 +121,74 @@ func TestHoldReply(t *testing.T) {
 		})
 	}
 }
+
+// http.batchWindow: a lone request is answered once its window closes, though
+// nothing else arrives to wake the loop, and concurrent requests share a batch.
+func TestBatchWindow(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the server runtime's io_uring loop is Linux only")
+	}
+	dir := t.TempDir()
+	dex := filepath.Join(dir, "dex")
+	if out, err := exec.Command("go", "build", "-o", dex, "..").CombinedOutput(); err != nil {
+		t.Fatalf("build dex: %v\n%s", err, out)
+	}
+	src, _ := filepath.Abs(filepath.Join("testdata", "hold.dx"))
+	bin := buildServer(t, dex, src, dir)
+	t.Setenv("WINDOW", "40")
+	addr := startServer(t, bin, "uring")
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	r := bufio.NewReader(conn)
+	for i := 0; i < 3; i++ {
+		start := time.Now()
+		code, body, err := getBody(r, conn, "/sq?7")
+		took := time.Since(start)
+		if err != nil || code != 200 || body != `{"sq":49,"batch":1}` {
+			t.Fatalf("lone request: %d %q %v", code, body, err)
+		}
+		if took < 30*time.Millisecond || took > 900*time.Millisecond {
+			t.Fatalf("lone request answered after %v, want about the 40 ms window", took)
+		}
+	}
+
+	const clients = 32
+	var wg sync.WaitGroup
+	errs := make(chan string, clients)
+	for c := 0; c < clients; c++ {
+		wg.Add(1)
+		go func(c int) {
+			defer wg.Done()
+			cc, err := net.Dial("tcp", addr)
+			if err != nil {
+				errs <- err.Error()
+				return
+			}
+			defer cc.Close()
+			cc.SetDeadline(time.Now().Add(10 * time.Second))
+			code, body, err := getBody(bufio.NewReader(cc), cc, fmt.Sprintf("/sq?%d", c))
+			if err != nil || code != 200 || !strings.HasPrefix(body, fmt.Sprintf(`{"sq":%d,`, c*c)) {
+				errs <- fmt.Sprintf("/sq?%d: %d %s %v", c, code, body, err)
+			}
+		}(c)
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Fatal(e)
+	}
+	_, body, err := getBody(r, conn, "/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var max int
+	fmt.Sscanf(body, `{"maxBatch":%d}`, &max)
+	if max < 8 {
+		t.Fatalf("32 concurrent requests in a 40 ms window: largest batch %d", max)
+	}
+}

@@ -1,0 +1,53 @@
+struct Box {
+    n: int
+}
+
+fn ins(b: Box, k: int): int {
+    return b.n + k
+}
+
+fn total(n: int): int {
+    return n * 2
+}
+
+fn twice(n: int): int {
+    return n * 2
+}
+
+fn label(n: int): string {
+    return "n${n}"
+}
+
+fn apply(f: fn(int): int, x: int): int {
+    return f(x)
+}
+
+fn scaled(total: int): int {
+    return total(total) + 1
+}
+
+fn useAsValue(): int {
+    return apply(total, 5)
+}
+
+fn main(): void {
+    let ins: Box = Box { n: 1 }
+    assert(ins(ins, 2) == 3)
+
+    let total: int = total(4)
+    assert(total == 8)
+
+    assert(scaled(3) == 7)
+    assert(useAsValue() == 10)
+
+    let twice: fn(int): int = fn(x: int): int {
+        return x * 3
+    }
+    assert(twice(5) == 15)
+
+    let labels: string[] = ["a"]
+    foreach (labels as label) {
+        assert(label == "a")
+    }
+    assert(label(4) == "n4")
+}

@@ -1354,6 +1354,7 @@ func RenameCCollisions(program *ast.Program) {
 	for _, gl := range program.GlobalLets {
 		taken[gl.Name] = true
 	}
+	renameShadowedFunctions(program, taken)
 	renames := map[string]string{}
 	pick := func(name string) {
 		if name == "main" || !cLibraryNames[name] {
@@ -1399,4 +1400,108 @@ func RenameCCollisions(program *ast.Program) {
 			gl.Name = to
 		}
 	}
+}
+
+const (
+	shadowNone = iota
+	shadowValue
+	shadowCallable
+)
+
+func renameShadowedFunctions(program *ast.Program, taken map[string]bool) {
+	funcs := map[string]bool{}
+	for _, fn := range program.Functions {
+		if fn.Name != "main" {
+			funcs[fn.Name] = true
+		}
+	}
+	kinds := make([]map[string]int, len(program.Functions))
+	renames := map[string]string{}
+	for i := range program.Functions {
+		kinds[i] = shadowKinds(&program.Functions[i], funcs)
+		for name, kind := range kinds[i] {
+			if kind == shadowValue && renames[name] == "" {
+				to := "dx_" + name
+				for taken[to] || cLibraryNames[to] {
+					to += "_"
+				}
+				taken[to] = true
+				renames[name] = to
+			}
+		}
+	}
+	if len(renames) == 0 {
+		return
+	}
+	for i := range program.Functions {
+		fn := &program.Functions[i]
+		walkStmtsWith(fn.Body, func(ast.Stmt) {}, func(expr ast.Expr) ast.Expr {
+			switch e := expr.(type) {
+			case *ast.CallExpr:
+				if to, ok := renames[e.Name]; ok && e.Module == "" && kinds[i][e.Name] != shadowCallable {
+					e.Name = to
+				}
+			case *ast.Ident:
+				if to, ok := renames[e.Name]; ok && kinds[i][e.Name] == shadowNone {
+					e.Name = to
+				}
+			}
+			return nil
+		})
+		if to, ok := renames[fn.Name]; ok {
+			fn.Name = to
+		}
+	}
+	for i := range program.GlobalLets {
+		if program.GlobalLets[i].Value == nil {
+			continue
+		}
+		walkStmtsWith([]ast.Stmt{&ast.ExprStmt{Expr: program.GlobalLets[i].Value}}, func(ast.Stmt) {}, func(expr ast.Expr) ast.Expr {
+			switch e := expr.(type) {
+			case *ast.CallExpr:
+				if to, ok := renames[e.Name]; ok && e.Module == "" {
+					e.Name = to
+				}
+			case *ast.Ident:
+				if to, ok := renames[e.Name]; ok {
+					e.Name = to
+				}
+			}
+			return nil
+		})
+	}
+}
+
+func shadowKinds(fn *ast.Function, funcs map[string]bool) map[string]int {
+	kinds := map[string]int{}
+	note := func(name string, t ast.Type, known bool) {
+		if !funcs[name] {
+			return
+		}
+		if !known || t == ast.TypeInferred || ast.IsFuncType(t) {
+			kinds[name] = shadowCallable
+		} else if kinds[name] != shadowCallable {
+			kinds[name] = shadowValue
+		}
+	}
+	for _, p := range fn.Params {
+		note(p.Name, p.Type, true)
+	}
+	scope := func(names []string) func() {
+		for _, n := range names {
+			note(n, ast.TypeInferred, false)
+		}
+		return func() {}
+	}
+	walkStmtsScoped(fn.Body, scope, func(st ast.Stmt) {
+		if s, ok := st.(*ast.LetStmt); ok {
+			if s.Name != "" {
+				note(s.Name, s.Type, true)
+			}
+			for _, n := range s.Names {
+				note(n, s.Type, true)
+			}
+		}
+	}, func(expr ast.Expr) ast.Expr { return nil })
+	return kinds
 }

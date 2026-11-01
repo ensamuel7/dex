@@ -2698,6 +2698,9 @@ http.listen(8080)
 | `uring`    | `uring(): void` | Serve with io_uring instead of epoll, on Linux; call before `listen`. Accepts, reads, writes and closes are queued on one ring and submitted together, so a pass of the loop costs one system call however many connections it served. Handlers run on the ring's thread, as with `inline`. Received bytes land in buffers the ring shares and are copied out per request, so a connection waiting on its client holds no read buffer. A ring's descriptors are capped at the open-file limit, so when `limits` asks for more connections than one ring can hold the server runs several rings on the same thread (up to eight). Where io_uring is unavailable — another platform, an older kernel, or a container that blocks it — the server says so and uses epoll. |
 | `limits`   | `limits(maxBodyBytes: int, idleTimeoutSecs: int, maxConnections: int): void` | Bound what one client can cost the server; call before `listen`. Defaults are 8 MB, 30 seconds and 8192 connections, and a `0` for any argument keeps that default — so raising the body limit for uploads does not mean restating the others. The header block is capped at 32 KB and is not adjustable. A body over the limit is answered `413`, headers that never terminate `431`, and a connection that stops making progress for the idle timeout is closed. The connection limit is also held below the process's open-file limit (under `uring`, below what the rings it opens can hold, which can be several times that limit): past fifteen sixteenths of it, responses carry `Connection: close` so idle clients reconnect for their next request, and at the limit new connections wait in the listen queue until one closes. |
 | `afterBatch` | `afterBatch(hook: fn(): bool): void` | Run `hook` after a batch of handlers and before any of their responses is sent, so handlers can share one transaction and have it committed before a client hears its request succeeded (group commit). Return `true` when the batch's work is durable; return `false` and every request in the batch is answered `500 {"error":"internal server error"}` instead. Under `uring` a batch is every request one pass of the loop served — many, under load; with `inline` or the thread pool it is one request, so the guarantee holds everywhere and only `uring` batches. Registering twice replaces the first. |
+| `hold` | `hold(): int` | Take a ticket for the request this handler is serving, so the `afterBatch` hook can answer it with `reply`: handlers collect their batch's work, the hook runs it as one query and replies to each ticket before any response is sent. Returns `-1` when there is no hook, outside a handler, or a second time for the same request; answer from the handler then. A request the hook does not reply to is sent what its handler returned, so return a fallback such as a `500`. |
+| `reply` | `reply(ticket: int, statusCode: int, body: string, contentType: string): void` | Answer a request `hold` took a ticket for, from the `afterBatch` hook of the batch that took it. An empty `contentType` means `application/json`. A ticket from another batch, one already answered, or a call outside the hook is ignored. |
+| `batchWindow` | `batchWindow(ms: int): void` | Under `uring`, keep a batch open until its first request has waited `ms` milliseconds (or 4,096 requests have joined), so the `afterBatch` hook serves more requests per run. Every response in the batch waits for the hook, so this adds up to `ms` to each one's latency. `0`, the default, closes a batch after every pass of the loop; at most `1000`. Call before `listen`; other backends run the hook per request and ignore it. |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
 | `responseWith` | `responseWith(statusCode: int, body: string, contentType: string, headers: string): HttpResponse` | The same, carrying extra response headers |
 
@@ -2727,6 +2730,41 @@ fn commit(): bool {
 
 http.afterBatch(commit)
 ```
+
+Batched reads with `hold` and `reply`: each handler queues what it needs with its ticket, and the hook answers the whole batch from one query.
+
+```dex
+struct Wanted {
+    ticket: int
+    slug: string
+}
+
+let wanted: Wanted[] = []
+
+fn article(req: http.HttpRequest): http.HttpResponse {
+    let slug: string = req.params.get("slug")
+    let t: int = http.hold()
+    if (t < 0) {
+        return readOne(slug)
+    }
+    wanted.push(Wanted { ticket: t, slug: slug })
+    return http.response(500, "{\"error\":\"not answered\"}", "application/json")
+}
+
+fn answer(): bool {
+    for (let i: int = 0; i < wanted.len(); i = i + 1) {
+        http.reply(wanted[i].ticket, 200, bodyFor(wanted[i].slug), "")
+    }
+    let none: Wanted[] = []
+    wanted = none
+    return true
+}
+
+http.afterBatch(answer)
+http.batchWindow(20)
+```
+
+`bodyFor` here stands for reading the rows one `unnest($1::text[])` query returned for every slug in the batch.
 
 Handler functions can take **0 parameters** (backward-compatible) or **1 parameter** of type `http.HttpRequest`. They must return a non-void type (typically `HttpResponse` or `string`).
 

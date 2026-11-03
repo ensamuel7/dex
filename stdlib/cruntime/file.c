@@ -6,6 +6,9 @@
 #include <dirent.h>
 #include <curl/curl.h>
 
+/* Guarded as os.args is: the array runtime is emitted only for a program that
+ * uses arrays, and importing file without calling list() must still compile. */
+#ifdef DEX_HAVE_ARRAYS
 static int dex_file_name_cmp(const void* a, const void* b) {
     return strcmp(*(const char* const*)a, *(const char* const*)b);
 }
@@ -50,6 +53,7 @@ DexArrayString* dex_file_list(const char* path) {
     }
     return out;
 }
+#endif
 
 const char* dex_file_read(const char* path) {
     FILE* f = fopen(path, "rb");

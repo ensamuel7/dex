@@ -1,0 +1,34 @@
+// A struct built in an argument or receiver position, from a variable the
+// caller still holds: the struct takes its own reference, so the variable is
+// released once, at its own scope exit.
+//
+// The string is built large on purpose. A small one freed twice corrupts the
+// heap silently; one this size is unmapped on free, so a second release faults.
+import "fmt"
+import "os"
+
+struct Box(s: string) {
+    fn size(): int { return self.s.len() }
+}
+
+fn main(): void {
+    let big: string = "0123456789abcdef"
+    for (let i: int = 0; i < 14; i++) {
+        big = big + big
+    }
+
+    // Constructor as a method receiver.
+    let n: int = Box(big).size()
+    assert(n == big.len())
+
+    // Literal as hoisted options.
+    let r: os.ExecResult = os.execWith("wc -c", os.ExecOptions { input: big })
+    assert(r.output.trim() == "${big.len()}")
+    let q: os.ExecResult = os.runWith(["wc", "-c"], os.ExecOptions { input: big, dir: "/" })
+    assert(q.output.trim() == "${big.len()}")
+
+    // Still intact after all three.
+    assert(big.len() == 262144)
+    assert(big.substring(0, 4) == "0123")
+    fmt.println("hoisted_literal_fields_test: all assertions passed")
+}

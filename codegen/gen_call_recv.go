@@ -163,6 +163,17 @@ func (g *Generator) hoistReceiver(expr ast.Expr, recvType ast.Type) (string, boo
 	tmp := g.nextTemp()
 	g.stmtPrelude.WriteString(nested)
 	g.stmtPrelude.WriteString(fmt.Sprintf("%s %s = %s; ", g.cType(recvType), tmp, exprBuf.String()))
+	// A struct literal is a C compound literal: it copies a borrowed field's
+	// pointer without a reference, while the temporary below releases every
+	// field once the statement is done. Retained here, as a `let` of the same
+	// literal is, or the variable it borrowed from is released twice --
+	// `os.execWith(cmd, os.ExecOptions { input: body })` freed `body` at the
+	// call and again at scope exit.
+	if ast.IsStructType(recvType) && ast.NeedsRelease(recvType) {
+		if _, _, isLit := structAssignments(expr); isLit {
+			g.emitRetainStructLitFields(g.stmtPrelude, "", tmp, recvType, expr)
+		}
+	}
 
 	var owned bool
 	switch {

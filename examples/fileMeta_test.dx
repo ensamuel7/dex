@@ -1,0 +1,92 @@
+// file: permissions, ownership, links, recursive removal, atomic writes, locks.
+import "fmt"
+import "file"
+import "os"
+
+fn main(): void {
+    let root: string = "/tmp/dex_filemeta_test"
+    file.removeAll(root)
+    assert(file.mkdirp(root + "/a/b/c"))
+    assert(file.isDir(root + "/a/b"))
+
+    // Modes are octal strings, both ways.
+    let p: string = root + "/a/conf"
+    assert(file.write(p, "x"))
+    assert(file.chmod(p, "0640"))
+    assert(file.mode(p) == "0640")
+    assert(file.chmod(p, "755"))
+    assert(file.mode(p) == "0755")
+    assert(!file.chmod(p, "0999"))
+    assert(!file.chmod(p, "rwx"))
+    assert(!file.chmod(p, ""))
+    assert(!file.chmod(p, "07777777"))
+    assert(file.mode(p) == "0755")
+    assert(file.mode(root + "/missing") == "")
+
+    // Owner and group of what we just made are ours.
+    let me: os.ExecResult = os.run(["id", "-u"])
+    let uid: int = file.uid(p)
+    assert("${uid}\n" == me.output)
+    assert(file.gid(p) >= 0)
+    assert(file.uid(root + "/missing") == -1)
+    // -1 leaves both unchanged: allowed for anyone.
+    assert(file.chown(p, -1, -1))
+
+    // Links are described, not followed.
+    let link: string = root + "/a/link"
+    assert(file.symlink(p, link))
+    assert(file.isLink(link))
+    assert(!file.isLink(p))
+    assert(file.readlink(link) == p)
+    assert(file.readlink(p) == "")
+    let dirLink: string = root + "/dirlink"
+    assert(file.symlink(root + "/a", dirLink))
+    assert(!file.isDir(dirLink))
+
+    // Atomic write: content and mode land together, binary-safe.
+    let conf: string = root + "/atomic.conf"
+    assert(file.writeAtomic(conf, "one\n", "0600"))
+    assert(file.read(conf) == "one\n")
+    assert(file.mode(conf) == "0600")
+    assert(file.writeAtomic(conf, "two\n", "0644"))
+    assert(file.read(conf) == "two\n")
+    assert(file.mode(conf) == "0644")
+    assert(!file.writeAtomic(conf, "three\n", "9"))
+    assert(file.read(conf) == "two\n")
+    assert(!file.writeAtomic(root + "/no/such/dir/f", "x", "0644"))
+    // No temporaries are left beside it.
+    let names: string[] = file.list(root)
+    for (let i: int = 0; i < names.len(); i++) {
+        assert(!names[i].contains(".tmp"))
+    }
+
+    // removeAll does not follow a link out of the tree it is removing.
+    let outside: string = "/tmp/dex_filemeta_outside"
+    file.removeAll(outside)
+    assert(file.mkdirp(outside))
+    assert(file.write(outside + "/keep", "k"))
+    assert(file.symlink(outside, root + "/a/b/escape"))
+    assert(file.removeAll(root))
+    assert(!file.exists(root))
+    assert(file.exists(outside + "/keep"))
+    assert(file.removeAll(outside))
+    assert(file.removeAll(root))
+    assert(!file.removeAll(""))
+    assert(!file.removeAll("/"))
+
+    // Locks: taken, released, taken again.
+    let lockPath: string = "/tmp/dex_filemeta.lock"
+    let h: int = file.lock(lockPath)
+    assert(h >= 0)
+    assert(file.unlock(h))
+    let h2: int = file.lock(lockPath)
+    assert(h2 >= 0)
+    // Another process cannot take it while we hold it.
+    let other: os.ExecResult = os.run(["sh", "-c", "command -v flock >/dev/null || exit 9; flock -n " + lockPath + " true"])
+    assert(other.exitCode != 0)
+    assert(file.unlock(h2))
+    assert(!file.unlock(-1))
+    file.remove(lockPath)
+
+    fmt.println("file_meta_test: all assertions passed")
+}

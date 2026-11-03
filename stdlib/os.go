@@ -51,16 +51,31 @@ func init() {
 				CName:      "",
 				Doc:        "Run a shell command under ExecOptions: a deadline, and a file its output is appended to as it arrives.",
 			},
+			// os.run and os.runWith are special-cased in checker/codegen, as os.exec is
+			"run": {
+				Params:     nil,
+				ParamNames: []string{"args"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Run a program with each array element as one argument, exactly as given, with no shell: args[0] is found on PATH. Returns an ExecResult.",
+			},
+			"runWith": {
+				Params:     nil,
+				ParamNames: []string{"args", "options"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "os.run under ExecOptions: a deadline, an output file, stdin input and a working directory.",
+			},
 		},
 		Types: []ast.StructDef{
 			{
 				Name: "ExecResult",
-				Doc:  "Represents the result of running a shell command via os.exec().",
+				Doc:  "Represents the result of running a command via os.exec(), os.run() and their With forms.",
 				Fields: []ast.StructField{
 					{Name: "exitCode", Type: ast.TypeInt, Doc: "Exit code of the command (0 = success)."},
 					{Name: "output", Type: ast.TypeString, Doc: "Standard output captured from the command."},
 					{Name: "error", Type: ast.TypeString, Doc: "Standard error captured from the command."},
-					{Name: "timedOut", Type: ast.TypeBool, Doc: "The command was stopped at its deadline (os.execWith only); exitCode is then 124."},
+					{Name: "timedOut", Type: ast.TypeBool, Doc: "The command was stopped at its deadline (os.execWith and os.runWith only); exitCode is then 124."},
 				},
 			},
 			{
@@ -69,6 +84,8 @@ func init() {
 				Fields: []ast.StructField{
 					{Name: "timeoutMs", Type: ast.TypeInt, Doc: "Stop the command and everything it started after this long. 0, the default, waits for ever."},
 					{Name: "appendTo", Type: ast.TypeString, Doc: "Append stdout and stderr to this file as they arrive, interleaved in the order written, instead of returning them. \"\", the default, returns them in output and error."},
+					{Name: "input", Type: ast.TypeString, Doc: "Written to the command's stdin, which is then closed. Binary-safe. \"\", the default, leaves stdin inherited."},
+					{Name: "dir", Type: ast.TypeString, Doc: "The directory the command runs in. \"\", the default, is the caller's. A directory that does not exist makes the command exit 127."},
 				},
 			},
 		},

@@ -4034,6 +4034,48 @@ file.size("uploads/2026/08/photo.jpg")
 | `mkdirp` | `mkdirp(path: string): bool` | Create a directory and its parents |
 | `sha256Hex` | `sha256Hex(path: string): string` | SHA-256 of the contents, streamed. Needs OpenSSL |
 | `putUrl` | `putUrl(path: string, url: string, headers: string): int` | PUT the file's bytes to a URL; returns the HTTP status |
+| `writeAtomic` | `writeAtomic(path: string, content: string, mode: string): bool` | Write through a temporary renamed into place, mode set first. Binary-safe |
+| `chmod` | `chmod(path: string, mode: string): bool` | Set permissions from an octal string such as `"0644"` |
+| `chown` | `chown(path: string, uid: int, gid: int): bool` | Set owner and group; `-1` leaves one as it is. A link is changed, not followed |
+| `mode` | `mode(path: string): string` | Permissions as four octal digits, or `""` if missing |
+| `uid` | `uid(path: string): int` | Owning user id, or `-1` if missing |
+| `gid` | `gid(path: string): int` | Owning group id, or `-1` if missing |
+| `isDir` | `isDir(path: string): bool` | Is it a directory (a link to one is not) |
+| `isLink` | `isLink(path: string): bool` | Is it a symbolic link |
+| `symlink` | `symlink(target: string, link: string): bool` | Create a symbolic link at `link` pointing to `target` |
+| `readlink` | `readlink(path: string): string` | Where a link points, or `""` if it is not one |
+| `removeAll` | `removeAll(path: string): bool` | Remove a file or a whole tree. True if it is gone |
+| `lock` | `lock(path: string): int` | Exclusive lock on path, waiting until free. A handle, or `-1` |
+| `unlock` | `unlock(handle: int): bool` | Release a lock |
+
+**Modes are octal strings**, `"0644"` or `"755"`, both into `chmod` and
+`writeAtomic` and out of `mode`. Dex has no octal literal, and `420` for 0644
+is a mistake no reader catches. Anything that is not one to four octal digits
+is refused, and the call returns `false` having changed nothing.
+
+**Nothing follows a symbolic link it is pointed at.** `chown` is `lchown`, and
+`mode`, `uid`, `gid` and `isDir` describe the link itself. `removeAll` removes a
+link inside the tree it is removing and never what the link points to. A
+program running as root that tidies a user's directory must not be steered by
+a link the user planted to `/etc`. `removeAll` refuses `""` and `"/"`, so a path
+built from an empty variable cannot empty the machine.
+
+**`writeAtomic`** is how to write a file another program reads while you write
+it — a config a daemon reloads, a map a mail server looks up. The content goes
+to a temporary beside the destination, gets its mode, is flushed to disk and is
+renamed over the destination, so a reader sees the old file or the new one and
+never a part, and the new file is never visible with the wrong permissions.
+
+```dex
+let lock: int = file.lock("/run/myapp/render.lock")
+file.writeAtomic("/etc/postfix/virtual", rendered, "0640")
+file.chown("/etc/postfix/virtual", 0, postfixGid)
+file.unlock(lock)
+```
+
+**`lock`** is an advisory `flock`: it keeps out other holders of the same lock,
+in this process or another, and nothing else. The lock file is created if
+missing and is left behind afterwards.
 
 `putUrl` sends the bytes straight from disk to the socket without their ever
 becoming a `string`, which is what makes uploading an arbitrary binary — to S3,
@@ -4102,6 +4144,8 @@ runs a request under `HttpOptions`. Every field's zero value is its default, so
 struct ExecOptions {
   timeoutMs: int      // 0, the default, waits for ever
   appendTo: string    // "", the default, returns output and error
+  input: string       // "", the default, leaves stdin inherited
+  dir: string         // "", the default, runs in the caller's directory
 }
 
 let r: os.ExecResult = os.execWith("docker build -t app .", os.ExecOptions {
@@ -4131,7 +4175,38 @@ command has `timedOut` set and an exit code of `124`, the code `timeout(1)` uses
 | `env`    | `env(name: string): string`     | Read an environment variable (empty string if unset) |
 | `exit`   | `exit(code: int): void`         | Exit the process with the given status code        |
 | `exec`   | `exec(command: string): ExecResult` | Run a shell command and return the result      |
-| `execWith` | `execWith(command: string, options: ExecOptions): ExecResult` | The same, with a deadline and output appended to a file as it arrives |
+| `execWith` | `execWith(command: string, options: ExecOptions): ExecResult` | The same, under ExecOptions |
+| `run`    | `run(args: string[]): ExecResult` | Run a program with these arguments, with no shell |
+| `runWith` | `runWith(args: string[], options: ExecOptions): ExecResult` | The same, under ExecOptions |
+
+### Running a program without a shell
+
+`os.exec` hands its string to `/bin/sh`, which is what makes pipes and
+redirection work — and what makes a value spliced into the string able to
+start a second command. `os.run` takes the program and its arguments as an
+array and starts it directly: each element arrives as exactly one argument,
+with no word splitting, globbing, variables or `;`. `args[0]` is looked up on
+`PATH`.
+
+```dex
+// domain came from a request. With os.exec, "x.com; rm -rf /" is two commands.
+let r: os.ExecResult = os.run(["certbot", "certonly", "--webroot", "-w", root, "-d", domain])
+
+// Input on stdin, in a working directory.
+let check: os.ExecResult = os.runWith(["postmap", "-q", address, "hash:virtual"], os.ExecOptions {
+    dir: "/etc/postfix"
+})
+let keys: os.ExecResult = os.runWith(["openssl", "rsa", "-pubout"], os.ExecOptions { input: privatePem })
+```
+
+Use `os.run` whenever any argument is not a constant. A program that cannot be
+started — not on `PATH`, or `dir` missing — exits `127`, as a shell reports it;
+an empty array runs nothing and reports `127` too.
+
+**`input`** is written to the command's stdin, which is then closed. It is fed
+while the output is read, so a command that writes as much as it reads — `cat`
+on a large input — does not deadlock, and a command that exits without reading
+it does not stop the caller with `SIGPIPE`. It is binary-safe.
 
 ### Command-line arguments
 

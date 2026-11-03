@@ -350,6 +350,29 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 		return
 	}
 
+	// os.run / os.runWith — the argv array is borrowed for the call; the
+	// options are hoisted as os.execWith's are.
+	if e.Module == "os" && (e.Name == "run" || e.Name == "runWith") {
+		if e.Name == "run" {
+			out.WriteString("dex_os_run_plain(")
+			g.genBorrowed(out, e.Args[0])
+			out.WriteString(")")
+			return
+		}
+		optsType := g.typeOfExpr(e.Args[1])
+		opts, hoisted := g.hoistReceiver(e.Args[1], optsType)
+		out.WriteString("dex_os_run_argv(")
+		g.genBorrowed(out, e.Args[0])
+		out.WriteString(", ")
+		if hoisted {
+			out.WriteString(opts)
+		} else {
+			g.genExpr(out, e.Args[1])
+		}
+		out.WriteString(")")
+		return
+	}
+
 	// HTTP client functions — bridge string args and wrap string returns
 	if e.Module == "http" {
 		switch e.Name {

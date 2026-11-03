@@ -1,0 +1,71 @@
+// os.run and os.runWith: a program and its arguments, with no shell between.
+import "fmt"
+import "os"
+import "file"
+import "time"
+
+fn main(): void {
+    // Each element is one argument, exactly as given.
+    let r: os.ExecResult = os.run(["printf", "%s|", "a b", "*", "$HOME"])
+    assert(r.exitCode == 0)
+    assert(r.output == "a b|*|$HOME|")
+
+    // Shell syntax in an argument is just bytes: nothing after the ';' runs.
+    let marker: string = "/tmp/dex_osrun_injected"
+    file.remove(marker)
+    let inj: os.ExecResult = os.run(["echo", "x; touch " + marker, "$(touch " + marker + ")", "`touch " + marker + "`"])
+    assert(inj.exitCode == 0)
+    assert(!file.exists(marker))
+    assert(inj.output.contains("x; touch"))
+
+    // stderr and the exit code come back separately.
+    let fail: os.ExecResult = os.run(["sh", "-c", "echo out; echo err >&2; exit 7"])
+    assert(fail.exitCode == 7)
+    assert(fail.output == "out\n")
+    assert(fail.error == "err\n")
+
+    // A program that does not exist exits 127; so does an empty argv.
+    assert(os.run(["dex-no-such-program-xyz"]).exitCode == 127)
+    let empty: string[] = []
+    assert(os.run(empty).exitCode == 127)
+
+    // stdin input, larger than a pipe buffer, while the program writes as much
+    // back: feeding and draining in one loop must not deadlock.
+    let big: string = "0123456789abcdef"
+    for (let i: int = 0; i < 14; i++) {
+        big = big + big
+    }
+    let echoed: os.ExecResult = os.runWith(["cat"], os.ExecOptions { input: big, timeoutMs: 10000 })
+    assert(!echoed.timedOut)
+    assert(echoed.output.len() == big.len())
+    assert(echoed.output == big)
+
+    // A program that exits without reading its input does not take us with it.
+    let early: os.ExecResult = os.runWith(["true"], os.ExecOptions { input: big })
+    assert(early.exitCode == 0)
+
+    // The working directory.
+    let wd: os.ExecResult = os.runWith(["pwd", "-P"], os.ExecOptions { dir: "/" })
+    assert(wd.output == "/\n")
+    assert(os.runWith(["pwd"], os.ExecOptions { dir: "/nonexistent/dir" }).exitCode == 127)
+
+    // A deadline stops it.
+    let started: long = time.now()
+    let slow: os.ExecResult = os.runWith(["sleep", "30"], os.ExecOptions { timeoutMs: 300 })
+    assert(slow.timedOut)
+    assert(slow.exitCode == 124)
+    assert(time.now() - started < 5000)
+
+    // os.execWith gains input and dir too.
+    let sh: os.ExecResult = os.execWith("cat; pwd -P", os.ExecOptions { input: "in\n", dir: "/" })
+    assert(sh.output == "in\n/\n")
+
+    // Built in place in a loop: nothing leaks.
+    for (let i: int = 0; i < 20; i++) {
+        let name: string = "loop" + "${i}"
+        let q: os.ExecResult = os.runWith(["echo", name], os.ExecOptions { input: "x" + name })
+        assert(q.output == name + "\n")
+    }
+
+    fmt.println("os_run_test: all assertions passed")
+}

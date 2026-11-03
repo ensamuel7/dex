@@ -95,6 +95,21 @@ func init() {
 				RawParams:  []int{2},
 				Doc:        "Answer a request http.hold took a ticket for, from the http.afterBatch hook of the batch that took it. An empty contentType means application/json. A ticket from another batch, one already answered, or a call outside the hook is ignored.",
 			},
+			"lanes": {
+				Params:     nil, // special codegen: function value, like afterBatch
+				ParamNames: []string{"count", "serve"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Start count lane processes (1 to 16) that answer requests handlers pass on with http.relay. A lane gathers what every worker relays to it and calls serve, a fn(lane: int, payloads: string[]): void, with the whole batch, so one query can answer requests from every worker at once instead of a few from each. serve answers payloads[i] with http.reply(i, ...); one it leaves unanswered gets 500. A lane is its own process: it opens what it needs, such as its database connection, itself, and the batch it is serving waits on nothing else. While a lane is busy, the next batch gathers; with http.batchWindow set before this call, a batch also stays open until its first request has waited that long. Call before http.fork and listen, on Linux; elsewhere it does nothing and http.relay returns false.",
+			},
+			"relay": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeString},
+				ParamNames: []string{"lane", "payload"},
+				ReturnType: ast.TypeBool,
+				CName:      "dex_http_relay",
+				RawParams:  []int{1},
+				Doc:        "Pass the request this handler is serving to lane, one of the lanes http.lanes started, with payload as what that lane's serve is handed. The response the lane replies with is sent to the client, and the worker serves other connections meanwhile. Returns true when the request was passed on, in which case whatever the handler returns is discarded; false under a backend other than http.uring(), outside a handler, for a lane that does not exist or has stopped, so the handler answers itself. If a lane stops while requests wait on it, each is answered 503.",
+			},
 			"notFound": {
 				Params:     nil, // special codegen: function value, like route
 				ParamNames: []string{"handler"},

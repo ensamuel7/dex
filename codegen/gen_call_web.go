@@ -46,6 +46,15 @@ func (g *Generator) genWebCall(out *strings.Builder, e *ast.CallExpr) bool {
 		return true
 	}
 
+	if e.Module == "http" && e.Name == "lanes" {
+		out.WriteString("dex_http_lanes(")
+		g.genExpr(out, e.Args[0])
+		out.WriteString(", ")
+		g.genOwnedClosureArg(out, e.Args[1])
+		out.WriteString(")")
+		return true
+	}
+
 	// http.response(statusCode, body, contentType) and
 	// http.responseWith(..., headers) -> HttpResponse struct literal.
 	// Retain borrowed string refs for ownership transfer to the worker thread.

@@ -271,6 +271,7 @@ typedef struct DexHttpConn {
     int           direct;
     unsigned char ring;        /* io_uring: the ring that owns this connection */
     unsigned char plain_recv;  /* io_uring: the read in flight uses read_buf */
+    int           relay_slot;
 } DexHttpConn;
 
 /* Global event-loop state for HTTP server */
@@ -334,8 +335,11 @@ static void dex_http_release_write_buf(DexHttpConn* conn) {
     free(b);
 }
 
+static void dex_lane_forget(DexHttpConn* conn);
+
 static void dex_http_conn_free(DexHttpConn* conn) {
     if (!conn) return;
+    if (conn->relay_slot) dex_lane_forget(conn);
     if (conn->fd >= 0 && conn->fd < DEX_HTTP_MAX_FD && dex_http_conn_table[conn->fd] == conn) {
         dex_http_conn_table[conn->fd] = NULL;
     }
@@ -921,7 +925,10 @@ int dex_http_hold(void) {
     return (int)((dex_http_hold_batch << 16) | (unsigned)slot);
 }
 
+static _Bool dex_lane_store_reply(int ticket, int status, DexString* body, const char* content_type);
+
 void dex_http_reply(int ticket, int status, DexString* body, const char* content_type) {
+    if (dex_lane_store_reply(ticket, status, body, content_type)) return;
     if (!dex_http_in_hook || ticket < 0 || !dex_http_hold_batch) return;
     if (((unsigned)ticket >> 16) != dex_http_hold_batch) return;
     int slot = ticket & DEX_HTTP_HOLD_MAX;
@@ -940,6 +947,366 @@ static _Bool dex_http_run_batch_hook(void) {
     dex_http_hold_batch = 0;
     return ok;
 }
+
+static int dex_http_worker_index;
+
+#define DEX_LANE_MAX 16
+#define DEX_LANE_BATCH_MAX 4096
+#define DEX_LANE_FRAME_MAX (64u << 20)
+#define DEX_LANE_SLOT_BITS 20
+
+typedef struct {
+    DexHttpConn* conn;
+    uint32_t     gen;
+    int          lane;
+    int          next_free;
+} DexLaneSlot;
+
+typedef struct {
+    int    fd;
+    int    dead;
+    int    recv_inflight;
+    int    send_inflight;
+    char*  out;
+    size_t out_len, out_cap;
+    char*  sending;
+    size_t send_len, send_pos, send_cap;
+    char*  in;
+    size_t in_len, in_cap;
+} DexLaneLink;
+
+static int dex_lane_count = 0;
+static pid_t dex_lane_owner = 0;
+static DexLaneSlot* dex_lane_slots = NULL;
+static int dex_lane_slots_len = 0;
+static int dex_lane_slots_cap = 0;
+static int dex_lane_free_head = -1;
+static DexLaneLink dex_lane_links[DEX_LANE_MAX];
+static int dex_lane_uring_live = 0;
+
+static int dex_lane_serving = 0;
+static int dex_lane_batch_len = 0;
+static int* dex_lane_reply_status = NULL;
+static DexString** dex_lane_reply_body = NULL;
+static char** dex_lane_reply_ct = NULL;
+
+static void dex_lane_forget(DexHttpConn* conn) {
+    int slot = conn->relay_slot - 1;
+    conn->relay_slot = 0;
+    if (slot < 0 || slot >= dex_lane_slots_len || dex_lane_slots[slot].conn != conn) return;
+    dex_lane_slots[slot].conn = NULL;
+    dex_lane_slots[slot].gen = (dex_lane_slots[slot].gen + 1) & 0xFFF;
+    dex_lane_slots[slot].next_free = dex_lane_free_head;
+    dex_lane_free_head = slot;
+}
+
+static int dex_lane_slot_take(DexHttpConn* conn, int lane) {
+    int slot = dex_lane_free_head;
+    if (slot >= 0) {
+        dex_lane_free_head = dex_lane_slots[slot].next_free;
+    } else {
+        if (dex_lane_slots_len >= (1 << DEX_LANE_SLOT_BITS)) return -1;
+        if (dex_lane_slots_len == dex_lane_slots_cap) {
+            int cap = dex_lane_slots_cap ? dex_lane_slots_cap * 2 : 1024;
+            DexLaneSlot* grown = (DexLaneSlot*)dex_xrealloc(dex_lane_slots, (size_t)cap * sizeof(DexLaneSlot));
+            if (!grown) return -1;
+            dex_lane_slots = grown;
+            dex_lane_slots_cap = cap;
+        }
+        slot = dex_lane_slots_len++;
+        dex_lane_slots[slot].gen = 0;
+    }
+    dex_lane_slots[slot].conn = conn;
+    dex_lane_slots[slot].lane = lane;
+    dex_lane_slots[slot].next_free = -1;
+    conn->relay_slot = slot + 1;
+    return slot;
+}
+
+static _Bool dex_lane_store_reply(int ticket, int status, DexString* body, const char* content_type) {
+    if (!dex_lane_serving) return 0;
+    if (ticket < 0 || ticket >= dex_lane_batch_len || dex_lane_reply_status[ticket]) return 1;
+    dex_lane_reply_status[ticket] = status > 0 ? status : 500;
+    dex_retain(body);
+    dex_lane_reply_body[ticket] = body;
+    dex_lane_reply_ct[ticket] = (content_type && *content_type) ? dex_xstrdup(content_type) : NULL;
+    return 1;
+}
+
+static int dex_lane_grow(char** buf, size_t* cap, size_t need) {
+    if (need <= *cap) return 0;
+    size_t cap2 = *cap ? *cap : 65536;
+    while (cap2 < need) {
+        if (cap2 > ((size_t)1 << 40)) return -1;
+        cap2 *= 2;
+    }
+    char* grown = (char*)dex_xrealloc(*buf, cap2);
+    if (!grown) return -1;
+    *buf = grown;
+    *cap = cap2;
+    return 0;
+}
+
+static void dex_lane_put32(char* p, uint32_t v) { memcpy(p, &v, 4); }
+static uint32_t dex_lane_get32(const char* p) { uint32_t v; memcpy(&v, p, 4); return v; }
+
+#ifdef __linux__
+#include <sys/un.h>
+#include <sys/epoll.h>
+#include <poll.h>
+#include <stddef.h>
+
+static socklen_t dex_lane_addr(struct sockaddr_un* sa, pid_t owner, int lane) {
+    memset(sa, 0, sizeof(*sa));
+    sa->sun_family = AF_UNIX;
+    int n = snprintf(sa->sun_path + 1, sizeof(sa->sun_path) - 1, "dex-lane-%d-%d", (int)owner, lane);
+    return (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + (size_t)n);
+}
+
+typedef struct {
+    int    fd;
+    char*  in;
+    size_t in_len, in_cap;
+    char*  out;
+    size_t out_len, out_cap;
+} DexLaneClient;
+
+typedef struct {
+    int        client;
+    uint32_t   id;
+    DexString* payload;
+} DexLaneItem;
+
+typedef void (*dex_lane_serve_fn)(void* env, int lane, DexArrayString* payloads);
+
+static void dex_lane_send_all(DexLaneClient* c) {
+    size_t pos = 0;
+    while (c->fd >= 0 && pos < c->out_len) {
+        ssize_t w = send(c->fd, c->out + pos, c->out_len - pos, MSG_NOSIGNAL);
+        if (w > 0) { pos += (size_t)w; continue; }
+        if (w < 0 && errno == EINTR) continue;
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd p = { c->fd, POLLOUT, 0 };
+            poll(&p, 1, 1000);
+            continue;
+        }
+        close(c->fd);
+        c->fd = -1;
+    }
+    c->out_len = 0;
+}
+
+static void dex_lane_answer(DexLaneClient* c, uint32_t id, int status, DexString* body, const char* ct) {
+    if (c->fd < 0) return;
+    const char* data = body ? body->data : "{\"error\":\"internal server error\"}";
+    size_t blen = body ? body->len : strlen(data);
+    size_t ctlen = ct ? strlen(ct) : 0;
+    if (ctlen > 255) ctlen = 255;
+    size_t flen = 4 + 2 + 1 + ctlen + blen;
+    if (flen > DEX_LANE_FRAME_MAX || dex_lane_grow(&c->out, &c->out_cap, c->out_len + 4 + flen) < 0) {
+        data = "{\"error\":\"internal server error\"}";
+        blen = strlen(data);
+        ctlen = 0;
+        status = 500;
+        flen = 4 + 2 + 1 + blen;
+        if (dex_lane_grow(&c->out, &c->out_cap, c->out_len + 4 + flen) < 0) return;
+    }
+    char* w = c->out + c->out_len;
+    uint16_t st = (uint16_t)status;
+    dex_lane_put32(w, (uint32_t)flen);
+    dex_lane_put32(w + 4, id);
+    memcpy(w + 8, &st, 2);
+    w[10] = (char)(unsigned char)ctlen;
+    if (ctlen) memcpy(w + 11, ct, ctlen);
+    memcpy(w + 11 + ctlen, data, blen);
+    c->out_len += 4 + flen;
+}
+
+__attribute__((noreturn)) static void dex_lane_run(int lane, int listen_fd, DexClosure* serve) {
+    int ep = epoll_create1(EPOLL_CLOEXEC);
+    if (ep < 0) _exit(1);
+    struct epoll_event ev = { .events = EPOLLIN, .data.u64 = (uint64_t)-1 };
+    epoll_ctl(ep, EPOLL_CTL_ADD, listen_fd, &ev);
+    DexLaneClient* clients = NULL;
+    int nclients = 0, capclients = 0;
+    DexLaneItem* queue = NULL;
+    int qlen = 0, qcap = 0;
+    uint64_t opened = 0;
+    struct epoll_event evs[64];
+    for (;;) {
+        int timeout = -1;
+        if (qlen > 0) {
+            timeout = 0;
+            if (dex_http_batch_window_ms > 0 && qlen < DEX_LANE_BATCH_MAX) {
+                struct timespec ts;
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                uint64_t now = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+                uint64_t age = now - opened;
+                if (age < (uint64_t)dex_http_batch_window_ms) timeout = (int)((uint64_t)dex_http_batch_window_ms - age);
+            }
+        }
+        int n = epoll_wait(ep, evs, 64, timeout);
+        if (n < 0 && errno != EINTR) _exit(1);
+        for (int e = 0; e < n; e++) {
+            if (evs[e].data.u64 == (uint64_t)-1) {
+                for (;;) {
+                    int fd = accept4(listen_fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
+                    if (fd < 0) break;
+                    if (nclients == capclients) {
+                        int cap = capclients ? capclients * 2 : 64;
+                        DexLaneClient* grown = (DexLaneClient*)dex_xrealloc(clients, (size_t)cap * sizeof(DexLaneClient));
+                        if (!grown) { close(fd); break; }
+                        clients = grown;
+                        capclients = cap;
+                    }
+                    memset(&clients[nclients], 0, sizeof(DexLaneClient));
+                    clients[nclients].fd = fd;
+                    struct epoll_event cev = { .events = EPOLLIN, .data.u64 = (uint64_t)nclients };
+                    epoll_ctl(ep, EPOLL_CTL_ADD, fd, &cev);
+                    nclients++;
+                }
+                continue;
+            }
+            int ci = (int)evs[e].data.u64;
+            DexLaneClient* c = &clients[ci];
+            for (;;) {
+                if (c->fd < 0) break;
+                if (dex_lane_grow(&c->in, &c->in_cap, c->in_len + 65536) < 0) { close(c->fd); c->fd = -1; break; }
+                ssize_t r = recv(c->fd, c->in + c->in_len, c->in_cap - c->in_len, MSG_DONTWAIT);
+                if (r < 0 && errno == EINTR) continue;
+                if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+                if (r <= 0) { close(c->fd); c->fd = -1; break; }
+                c->in_len += (size_t)r;
+            }
+            size_t pos = 0;
+            while (c->in_len - pos >= 8) {
+                uint32_t flen = dex_lane_get32(c->in + pos);
+                if (flen < 4 || flen > DEX_LANE_FRAME_MAX) { if (c->fd >= 0) close(c->fd); c->fd = -1; pos = c->in_len; break; }
+                if (c->in_len - pos < 4 + (size_t)flen) break;
+                if (qlen == qcap) {
+                    int cap = qcap ? qcap * 2 : 1024;
+                    DexLaneItem* grown = (DexLaneItem*)dex_xrealloc(queue, (size_t)cap * sizeof(DexLaneItem));
+                    if (!grown) _exit(1);
+                    queue = grown;
+                    qcap = cap;
+                }
+                if (qlen == 0) {
+                    struct timespec ts;
+                    clock_gettime(CLOCK_MONOTONIC, &ts);
+                    opened = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+                }
+                queue[qlen].client = ci;
+                queue[qlen].id = dex_lane_get32(c->in + pos + 4);
+                queue[qlen].payload = dex_string_new(c->in + pos + 8, flen - 4);
+                qlen++;
+                pos += 4 + (size_t)flen;
+            }
+            if (pos > 0) {
+                memmove(c->in, c->in + pos, c->in_len - pos);
+                c->in_len -= pos;
+            }
+        }
+        if (qlen == 0) continue;
+        if (dex_http_batch_window_ms > 0 && qlen < DEX_LANE_BATCH_MAX) {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            uint64_t now = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+            if (now - opened < (uint64_t)dex_http_batch_window_ms) continue;
+        }
+        int take = qlen < DEX_LANE_BATCH_MAX ? qlen : DEX_LANE_BATCH_MAX;
+        DexArrayString* payloads = dex_array_string_new();
+        for (int i = 0; i < take; i++) {
+            dex_array_string_push(payloads, queue[i].payload);
+            dex_release(queue[i].payload);
+            queue[i].payload = NULL;
+        }
+        dex_lane_reply_status = (int*)dex_xcalloc((size_t)take, sizeof(int));
+        dex_lane_reply_body = (DexString**)dex_xcalloc((size_t)take, sizeof(DexString*));
+        dex_lane_reply_ct = (char**)dex_xcalloc((size_t)take, sizeof(char*));
+        if (!dex_lane_reply_status || !dex_lane_reply_body || !dex_lane_reply_ct) _exit(1);
+        dex_lane_batch_len = take;
+        dex_lane_serving = 1;
+        ((dex_lane_serve_fn)serve->fn)(serve->env, lane, payloads);
+        dex_lane_serving = 0;
+        dex_lane_batch_len = 0;
+        dex_release(payloads);
+        for (int i = 0; i < take; i++) {
+            DexLaneClient* c = &clients[queue[i].client];
+            int st = dex_lane_reply_status[i];
+            dex_lane_answer(c, queue[i].id, st ? st : 500, st ? dex_lane_reply_body[i] : NULL, dex_lane_reply_ct[i]);
+            if (dex_lane_reply_body[i]) dex_release(dex_lane_reply_body[i]);
+            free(dex_lane_reply_ct[i]);
+        }
+        free(dex_lane_reply_status);
+        free(dex_lane_reply_body);
+        free(dex_lane_reply_ct);
+        dex_lane_reply_status = NULL;
+        dex_lane_reply_body = NULL;
+        dex_lane_reply_ct = NULL;
+        for (int i = 0; i < nclients; i++) {
+            if (clients[i].out_len) dex_lane_send_all(&clients[i]);
+        }
+        memmove(queue, queue + take, (size_t)(qlen - take) * sizeof(DexLaneItem));
+        qlen -= take;
+        if (qlen > 0) {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            opened = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+        }
+    }
+}
+
+void dex_http_lanes(int count, DexClosure* serve) {
+    if (dex_lane_count > 0 || count < 1 || count > DEX_LANE_MAX || dex_http_worker_index >= 0) {
+        if (serve) dex_release(serve);
+        return;
+    }
+    signal(SIGPIPE, SIG_IGN);
+    pid_t owner = getpid();
+    fflush(stdout);
+    fflush(stderr);
+    int started = 0;
+    for (int i = 0; i < count; i++) {
+        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+        if (fd < 0) break;
+        struct sockaddr_un sa;
+        socklen_t len = dex_lane_addr(&sa, owner, i);
+        if (bind(fd, (struct sockaddr*)&sa, len) < 0 || listen(fd, 1024) < 0) { close(fd); break; }
+        pid_t pid = fork();
+        if (pid < 0) { close(fd); break; }
+        if (pid == 0) {
+            prctl(PR_SET_PDEATHSIG, SIGTERM);
+            if (getppid() != owner) _exit(0);
+            dex_lane_run(i, fd, serve);
+        }
+        close(fd);
+        started++;
+    }
+    dex_lane_owner = owner;
+    dex_lane_count = started;
+    for (int i = 0; i < DEX_LANE_MAX; i++) dex_lane_links[i].fd = -1;
+    if (serve) dex_release(serve);
+}
+
+static int dex_lane_connect(int lane) {
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un sa;
+    socklen_t len = dex_lane_addr(&sa, dex_lane_owner, lane);
+    for (int tries = 0; tries < 50; tries++) {
+        if (connect(fd, (struct sockaddr*)&sa, len) == 0) return fd;
+        if (errno != ECONNREFUSED && errno != ENOENT && errno != EAGAIN) break;
+        usleep(20000);
+    }
+    close(fd);
+    return -1;
+}
+#else
+void dex_http_lanes(int count, DexClosure* serve) {
+    (void)count;
+    if (serve) dex_release(serve);
+}
+#endif
 
 /* The one-request batch of the epoll and pool paths. */
 static void dex_http_after_one(DexHttpConn* conn) {
@@ -996,6 +1363,8 @@ static void dex_http_flush_inline(DexHttpConn* conn) {
 #define DEX_UD_IGNORE  3
 #define DEX_UD_ACCEPT_DIRECT 4
 #define DEX_UD_WINDOW 5
+#define DEX_UD_LANE_SEND 6
+#define DEX_UD_LANE_RECV 7
 #define DEX_OP_RECV 1
 #define DEX_OP_SEND 2
 
@@ -1543,6 +1912,12 @@ static void dex_uring_on_recv(DexHttpConn* conn, int res) {
     if (conn->state == HTTP_READING_BODY && conn->read_len - conn->headers_end >= conn->content_length) {
         dex_http_run_handler(conn);
         dex_uring_idle(conn, 0);
+        if (conn->relay_slot) {
+            dex_http_release_write_buf(conn);
+            conn->write_len = 0;
+            conn->write_pos = 0;
+            return;
+        }
         if (!conn->write_buf || conn->write_len <= 0) { dex_uring_close(conn); return; }
         if (dex_http_after_batch) {
             /* Held until the batch hook has run: see dex_uring_finish_pass. */
@@ -1639,6 +2014,142 @@ static void dex_uring_finish_pass(void) {
     }
 }
 
+static void dex_lane_arm_recv(int lane) {
+    DexLaneLink* L = &dex_lane_links[lane];
+    if (L->dead || L->fd < 0 || L->recv_inflight) return;
+    if (L->in_cap - L->in_len < 65536 && dex_lane_grow(&L->in, &L->in_cap, L->in_len + 65536) < 0) return;
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_urings[0].u);
+    if (!sqe) return;
+    sqe->opcode = IORING_OP_RECV;
+    sqe->fd = L->fd;
+    sqe->addr = (unsigned long)(L->in + L->in_len);
+    sqe->len = (unsigned)(L->in_cap - L->in_len);
+    sqe->user_data = DEX_UD_LANE_RECV + 16 * (unsigned long)lane;
+    L->recv_inflight = 1;
+}
+
+static void dex_lane_send_next(int lane) {
+    DexLaneLink* L = &dex_lane_links[lane];
+    if (L->dead || L->fd < 0 || L->send_inflight) return;
+    if (L->send_pos >= L->send_len) {
+        if (!L->out_len) return;
+        char* b = L->sending; size_t cap = L->send_cap;
+        L->sending = L->out; L->send_cap = L->out_cap; L->send_len = L->out_len; L->send_pos = 0;
+        L->out = b; L->out_cap = cap; L->out_len = 0;
+    }
+    struct io_uring_sqe* sqe = dex_uring_sqe(&dex_urings[0].u);
+    if (!sqe) return;
+    sqe->opcode = IORING_OP_SEND;
+    sqe->fd = L->fd;
+    sqe->addr = (unsigned long)(L->sending + L->send_pos);
+    sqe->len = (unsigned)(L->send_len - L->send_pos);
+    sqe->msg_flags = MSG_NOSIGNAL;
+    sqe->user_data = DEX_UD_LANE_SEND + 16 * (unsigned long)lane;
+    L->send_inflight = 1;
+}
+
+static void dex_lane_answer_conn(DexHttpConn* conn, int status, const char* ct, const char* body, int len) {
+    dex_lane_forget(conn);
+    conn->write_pos = 0;
+    dex_http_build_response_full(conn, dex_http_status_text(status), body, len, ct, NULL);
+    if (!conn->write_buf || conn->write_len <= 0) { dex_uring_close(conn); return; }
+    dex_uring_queue_send(conn);
+}
+
+static void dex_lane_fail(int lane) {
+    DexLaneLink* L = &dex_lane_links[lane];
+    L->dead = 1;
+    L->out_len = 0;
+    L->send_len = L->send_pos = 0;
+    for (int i = 0; i < dex_lane_slots_len; i++) {
+        DexHttpConn* conn = dex_lane_slots[i].conn;
+        if (!conn || dex_lane_slots[i].lane != lane) continue;
+        dex_lane_answer_conn(conn, 503, "application/json", "{\"error\":\"service unavailable\"}", 31);
+    }
+}
+
+static void dex_lane_on_send(int lane, int res) {
+    if (lane < 0 || lane >= dex_lane_count) return;
+    DexLaneLink* L = &dex_lane_links[lane];
+    L->send_inflight = 0;
+    if (L->dead) return;
+    if (res <= 0) { dex_lane_fail(lane); return; }
+    L->send_pos += (size_t)res;
+    dex_lane_send_next(lane);
+}
+
+static void dex_lane_on_recv(int lane, int res) {
+    if (lane < 0 || lane >= dex_lane_count) return;
+    DexLaneLink* L = &dex_lane_links[lane];
+    L->recv_inflight = 0;
+    if (L->dead) return;
+    if (res <= 0) { dex_lane_fail(lane); return; }
+    L->in_len += (size_t)res;
+    size_t pos = 0;
+    while (L->in_len - pos >= 8) {
+        uint32_t flen = dex_lane_get32(L->in + pos);
+        if (flen < 7 || flen > DEX_LANE_FRAME_MAX) { dex_lane_fail(lane); return; }
+        if (L->in_len - pos < 4 + (size_t)flen) {
+            if (dex_lane_grow(&L->in, &L->in_cap, pos + 4 + (size_t)flen) < 0) { dex_lane_fail(lane); return; }
+            break;
+        }
+        const char* f = L->in + pos + 4;
+        uint32_t id = dex_lane_get32(f);
+        uint16_t status;
+        memcpy(&status, f + 4, 2);
+        size_t ctlen = (unsigned char)f[6];
+        if (7 + ctlen > flen) { dex_lane_fail(lane); return; }
+        int slot = (int)(id & ((1u << DEX_LANE_SLOT_BITS) - 1));
+        uint32_t gen = id >> DEX_LANE_SLOT_BITS;
+        pos += 4 + (size_t)flen;
+        if (slot >= dex_lane_slots_len) continue;
+        DexLaneSlot* s = &dex_lane_slots[slot];
+        if (!s->conn || s->gen != gen || s->lane != lane) continue;
+        char ct[256];
+        if (ctlen) memcpy(ct, f + 7, ctlen);
+        ct[ctlen] = '\0';
+        dex_lane_answer_conn(s->conn, status, ctlen ? ct : "application/json", f + 7 + ctlen, (int)(flen - 7 - ctlen));
+    }
+    if (pos > 0) {
+        memmove(L->in, L->in + pos, L->in_len - pos);
+        L->in_len -= pos;
+    }
+    dex_lane_arm_recv(lane);
+}
+
+static void dex_lane_flush(void) {
+    for (int i = 0; i < dex_lane_count; i++) {
+        DexLaneLink* L = &dex_lane_links[i];
+        if (L->fd < 0 || L->dead) continue;
+        dex_lane_arm_recv(i);
+        dex_lane_send_next(i);
+    }
+}
+
+static _Bool dex_lane_relay_uring(int lane, DexString* payload) {
+    DexHttpConn* c = dex_http_running;
+    if (!c || !dex_lane_uring_live || c->relay_slot) return 0;
+    DexLaneLink* L = &dex_lane_links[lane];
+    if (L->dead) return 0;
+    if (L->fd < 0) {
+        L->fd = dex_lane_connect(lane);
+        if (L->fd < 0) { L->dead = 1; return 0; }
+    }
+    size_t plen = payload ? payload->len : 0;
+    if (plen + 4 > DEX_LANE_FRAME_MAX) return 0;
+    if (dex_lane_grow(&L->out, &L->out_cap, L->out_len + 8 + plen) < 0) return 0;
+    int slot = dex_lane_slot_take(c, lane);
+    if (slot < 0) return 0;
+    uint32_t id = (dex_lane_slots[slot].gen << DEX_LANE_SLOT_BITS) | (uint32_t)slot;
+    char* w = L->out + L->out_len;
+    dex_lane_put32(w, (uint32_t)(plen + 4));
+    dex_lane_put32(w + 4, id);
+    if (plen) memcpy(w + 8, payload->data, plen);
+    L->out_len += 8 + plen;
+    dex_http_running = NULL;
+    return 1;
+}
+
 static void dex_uring_sweep_idle(uint32_t* idle, DexHttpConn** table, int n, uint32_t now) {
     for (int i = 0; i < n; i++) {
         uint32_t since = idle[i];
@@ -1716,6 +2227,8 @@ static void dex_uring_reap(DexUringRing* r) {
         }
         if (ud == DEX_UD_IGNORE) continue;
         if (ud == DEX_UD_WINDOW) { dex_uring_window_armed = 0; continue; }
+        if (ud < 256 && (ud & 0xF) == DEX_UD_LANE_SEND) { dex_lane_on_send((int)(ud >> 4), res); continue; }
+        if (ud < 256 && (ud & 0xF) == DEX_UD_LANE_RECV) { dex_lane_on_recv((int)(ud >> 4), res); continue; }
         DexHttpConn* conn = (DexHttpConn*)(ud & ~0xFUL);
         if ((ud & 0xF) == DEX_OP_RECV) dex_uring_on_recv_cqe(r, conn, res, cflags);
         else if ((ud & 0xF) == DEX_OP_SEND) dex_uring_on_send(conn, res);
@@ -1829,6 +2342,7 @@ static int dex_http_uring_run(int server_fd, int port) {
     fflush(stdout);
 
     dex_uring_queue_timeout();
+    dex_lane_uring_live = 1;
     struct epoll_event evs[DEX_URING_MAX_RINGS];
     for (;;) {
         for (int i = 0; i < dex_uring_count; i++) dex_uring_arm_accepts(&dex_urings[i]);
@@ -1858,10 +2372,21 @@ static int dex_http_uring_run(int server_fd, int port) {
         }
         for (int i = 0; i < dex_uring_count; i++) dex_uring_reap(&dex_urings[i]);
         dex_uring_finish_pass();
+        dex_lane_flush();
     }
 }
 
 #endif
+
+_Bool dex_http_relay(int lane, DexString* payload) {
+#if defined(DEX_HTTP_HAVE_URING) && defined(__linux__)
+    if (lane < 0 || lane >= dex_lane_count) return 0;
+    return dex_lane_relay_uring(lane, payload);
+#else
+    (void)lane; (void)payload;
+    return 0;
+#endif
+}
 
 static volatile int dex_server_fd = -1;
 

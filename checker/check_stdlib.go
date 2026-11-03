@@ -189,6 +189,28 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		return ast.TypeVoid, true, nil
 	}
 
+	if e.Module == "http" && e.Name == "lanes" {
+		if len(e.Args) != 2 {
+			return 0, true, c.errAt(e.Pos, "http.lanes() takes exactly 2 arguments, got %d", len(e.Args))
+		}
+		countType, err := c.checkExpr(e.Args[0])
+		if err != nil {
+			return 0, true, err
+		}
+		if countType != ast.TypeInt {
+			return 0, true, c.errAt(e.Pos, "http.lanes() argument 1 must be int, got %s", typeName(countType))
+		}
+		serveType, err := c.checkExpr(e.Args[1])
+		if err != nil {
+			return 0, true, err
+		}
+		params := ast.FuncTypeParams(serveType)
+		if !ast.IsFuncType(serveType) || len(params) != 2 || params[0] != ast.TypeInt || params[1] != ast.TypeArrayString || ast.FuncTypeReturn(serveType) != ast.TypeVoid {
+			return 0, true, c.errAt(e.Pos, "http.lanes() argument 2 must be a fn(int, string[]): void, got %s", typeName(serveType))
+		}
+		return ast.TypeVoid, true, nil
+	}
+
 	// Special case: http.route handler validation (before generic arg check)
 	if e.Module == "http" && e.Name == "route" {
 		if len(e.Args) != 3 {

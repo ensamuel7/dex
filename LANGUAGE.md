@@ -2701,6 +2701,8 @@ http.listen(8080)
 | `hold` | `hold(): int` | Take a ticket for the request this handler is serving, so the `afterBatch` hook can answer it with `reply`: handlers collect their batch's work, the hook runs it as one query and replies to each ticket before any response is sent. Returns `-1` when there is no hook, outside a handler, or a second time for the same request; answer from the handler then. A request the hook does not reply to is sent what its handler returned, so return a fallback such as a `500`. |
 | `reply` | `reply(ticket: int, statusCode: int, body: string, contentType: string): void` | Answer a request `hold` took a ticket for, from the `afterBatch` hook of the batch that took it. An empty `contentType` means `application/json`. A ticket from another batch, one already answered, or a call outside the hook is ignored. |
 | `batchWindow` | `batchWindow(ms: int): void` | Under `uring`, keep a batch open until its first request has waited `ms` milliseconds (or 4,096 requests have joined), so the `afterBatch` hook serves more requests per run. Every response in the batch waits for the hook, so this adds up to `ms` to each one's latency. `0`, the default, closes a batch after every pass of the loop; at most `1000`. Call before `listen`; other backends run the hook per request and ignore it. |
+| `lanes` | `lanes(count: int, serve: fn(int, string[]): void): void` | Start `count` lane processes (1 to 16) that answer the requests handlers pass on with `relay`. A lane gathers what every worker relays to it and calls `serve(lane, payloads)` with the whole batch, so one query answers requests from all workers instead of a few from each. `serve` answers `payloads[i]` with `reply(i, ...)`; one it leaves unanswered gets `500`. A lane is its own process and opens what it needs, such as its database connection, itself. The next batch gathers while a lane is busy; with `batchWindow` set before this call, a batch also stays open until its first request has waited that long. Call before `fork` and `listen`, on Linux; elsewhere it does nothing. |
+| `relay` | `relay(lane: int, payload: string): bool` | Pass the request this handler is serving to `lane`, with `payload` as what that lane's `serve` is handed. The lane's reply is sent to the client, and the worker serves other connections meanwhile. Returns `true` when the request was passed on, and what the handler returns is then discarded; `false` under a backend other than `uring`, outside a handler, or for a lane that does not exist or has stopped, and the handler answers itself. Requests waiting on a lane that stops are answered `503`. |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
 | `responseWith` | `responseWith(statusCode: int, body: string, contentType: string, headers: string): HttpResponse` | The same, carrying extra response headers |
 
@@ -2765,6 +2767,39 @@ http.batchWindow(20)
 ```
 
 `bodyFor` here stands for reading the rows one `unnest($1::text[])` query returned for every slug in the batch.
+
+`hold` batches what one worker process serves. With `fork`, every worker batches on its own, so each batch holds a few requests. `lanes` and `relay` batch across workers: each worker relays a request to a lane process, and the lane runs one query for everything relayed to it from all workers. A payload is a string, so a handler encodes what the lane needs, and the lane builds the whole response.
+
+```dex
+let conn: int = -1
+
+fn serve(lane: int, payloads: string[]): void {
+    if (conn < 0) {
+        conn = db.openSingleThreaded("postgres", os.env("DATABASE_URL"))
+    }
+    let bodies: string[] = bodiesFor(conn, payloads)
+    for (let i: int = 0; i < payloads.len(); i = i + 1) {
+        http.reply(i, 200, bodies[i], "")
+    }
+}
+
+fn article(req: http.HttpRequest): http.HttpResponse {
+    if (http.relay(0, req.params.get("slug"))) {
+        return http.response(500, "{\"error\":\"not answered\"}", "application/json")
+    }
+    return readOne(req.params.get("slug"))
+}
+
+fn main(): void {
+    http.lanes(1, serve)
+    http.fork(0)
+    http.route("GET", "/api/articles/:slug", article)
+    http.uring()
+    http.listen(8080, 1)
+}
+```
+
+`bodiesFor` here stands for one `unnest($1::text[])` query over every slug in the batch, returning one response body per payload.
 
 Handler functions can take **0 parameters** (backward-compatible) or **1 parameter** of type `http.HttpRequest`. They must return a non-void type (typically `HttpResponse` or `string`).
 

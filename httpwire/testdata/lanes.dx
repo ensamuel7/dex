@@ -1,0 +1,74 @@
+import "http"
+import "os"
+import "str"
+import "json"
+
+let worker: int = 0
+
+fn serve(lane: int, payloads: string[]): void {
+    let seen: int[] = []
+    foreach (payloads as p) {
+        let w: int = str.toInt(p.split(",")[1])
+        if (!seen.contains(w)) {
+            seen.push(w)
+        }
+    }
+    http.reply(-1, 500, "{\"error\":\"bad ticket\"}", "")
+    http.reply(payloads.len(), 500, "{\"error\":\"bad ticket\"}", "")
+    let i: int = 0
+    while (i < payloads.len()) {
+        let parts: string[] = payloads[i].split(",")
+        if (parts[0] != "skip") {
+            let n: long = str.toLong(parts[0])
+            http.reply(i, 200, json.encode({ sq: n * n, lane: lane, batch: payloads.len(), workers: seen.len() }), "")
+            http.reply(i, 500, "{\"error\":\"replied twice\"}", "")
+        }
+        i = i + 1
+    }
+}
+
+fn square(req: http.HttpRequest): http.HttpResponse {
+    let n: long = str.toLong(req.query)
+    let lane: int = 0
+    if (n % 2 == 1) {
+        lane = 1
+    }
+    if (http.relay(lane, "${n},${worker}")) {
+        return http.response(500, "{\"error\":\"relayed but answered\"}", "application/json")
+    }
+    return http.response(200, json.encode({ sq: n * n, direct: true }), "application/json")
+}
+
+fn skip(req: http.HttpRequest): http.HttpResponse {
+    if (http.relay(0, "skip,${worker}")) {
+        return http.response(418, "{\"error\":\"relayed but answered\"}", "application/json")
+    }
+    return http.response(500, "{\"error\":\"internal server error\"}", "application/json")
+}
+
+fn missing(req: http.HttpRequest): http.HttpResponse {
+    if (http.relay(7, "1,${worker}")) {
+        return http.response(500, "{\"error\":\"relayed to a missing lane\"}", "application/json")
+    }
+    return http.response(200, "{\"missing\":true}", "application/json")
+}
+
+fn main(): void {
+    let window: string = os.env("WINDOW")
+    if (!window.isEmpty()) {
+        http.batchWindow(str.toInt(window))
+    }
+    http.lanes(2, serve)
+    worker = http.fork(2)
+    http.route("GET", "/sq", square)
+    http.route("GET", "/skip", skip)
+    http.route("GET", "/missing", missing)
+    let mode: string = os.env("MODE")
+    if (mode == "uring") {
+        http.uring()
+    }
+    if (mode == "inline") {
+        http.inline()
+    }
+    http.listenOn("127.0.0.1", str.toInt(os.env("PORT")), 1)
+}

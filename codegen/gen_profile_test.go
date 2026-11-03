@@ -221,10 +221,10 @@ fn main(): void {
 	if !strings.Contains(out, "DEX_PF_FLUSH();\n    _exit(0);") {
 		t.Errorf("the HTTP shutdown handler must write the profile before _exit")
 	}
-	if strings.Count(out, "_exit(0);") > strings.Count(out, "DEX_PF_FLUSH();")+2 {
-		// Two _exits are forked workers', which must not write over the parent's profile:
-		// one ending the listen-multi worker, one an http.fork copy orphaned before it could
-		// ask to follow its parent.
+	if strings.Count(out, "_exit(0);") > strings.Count(out, "DEX_PF_FLUSH();")+3 {
+		// Three _exits are forked children's, which must not write over the parent's profile:
+		// one ending the listen-multi worker, and an http.fork copy and an http.lanes lane
+		// orphaned before they could ask to follow their parent.
 		t.Errorf("an _exit path skips the profile: %d exits, %d flushes",
 			strings.Count(out, "_exit(0);"), strings.Count(out, "DEX_PF_FLUSH();"))
 	}

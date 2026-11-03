@@ -129,11 +129,14 @@ static void dex_pool_destroy(DexThreadPool* pool) {
 /* ── Global spawn pool ───────────────────────────────────────────── */
 
 static DexThreadPool* _dex_spawn_pool = NULL;
+static pthread_once_t _dex_spawn_pool_once = PTHREAD_ONCE_INIT;
+
+static void dex_spawn_pool_create(void) {
+    _dex_spawn_pool = dex_pool_create(0); /* 0 = auto-detect CPU count */
+}
 
 static void dex_spawn_pool_init(void) {
-    if (!_dex_spawn_pool) {
-        _dex_spawn_pool = dex_pool_create(0); /* 0 = auto-detect CPU count */
-    }
+    pthread_once(&_dex_spawn_pool_once, dex_spawn_pool_create);
 }
 
 static void dex_spawn_pool_shutdown(void) {
@@ -144,5 +147,6 @@ static void dex_spawn_pool_shutdown(void) {
 }
 
 static void dex_spawn_submit(void (*func)(void*), void* arg) {
+    dex_spawn_pool_init();
     dex_pool_submit(_dex_spawn_pool, func, arg);
 }

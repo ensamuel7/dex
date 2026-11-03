@@ -119,11 +119,6 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		out.WriteString("    dex_pf_init();\n")
 	}
 
-	// Initialize thread pool for spawn (must happen before any spawn calls)
-	if fn.Name == "main" && g.usesConcurrency {
-		out.WriteString("    dex_spawn_pool_init();\n")
-	}
-
 	// Initialize global variables at the top of main()
 	if fn.Name == "main" && len(g.globalLets) > 0 {
 		for i := range g.globalLets {

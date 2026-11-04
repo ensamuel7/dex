@@ -3448,9 +3448,40 @@ bindings, so every parameter has to be bound again.
 | `step`       | `step(stmt: int): bool`                              | Run one step; true if a row is available    |
 | `reset`      | `reset(stmt: int): void`                             | Rewind and clear bindings for a re-run      |
 | `finalize`   | `finalize(stmt: int): void`                          | Destroy the statement                       |
+| `send`       | `send(stmt: int): int`                               | Run a bound Postgres statement without waiting; returns a result handle |
 
 `bindInt` truncates past 2^31, which an id column reaches, so bind one with
 `bindLong` — the reason `db.col` hands ids back as `long` is the same.
+
+#### Pipelining
+
+`step` waits for the database every time, so a server that runs one statement
+per request spends most of a request waiting on the network. `send` runs a bound
+statement without waiting and returns a result handle. Every statement sent on a
+connection before one of their results is read goes out together and comes back
+in one round trip, and each is still its own transaction, so one failing does
+not undo the others. The statement's bindings are cleared, so it can be bound
+and sent again at once.
+
+```dex
+let rows: int[] = []
+foreach (ids as id) {
+    db.bindLong(byId, 1, id)
+    rows.push(db.send(byId))
+}
+foreach (rows as r) {
+    if (db.next(r)) {
+        let name: string = db.col(r, 0)
+    }
+    db.free(r)
+}
+```
+
+Read a sent result with `next`, `col`, `affected` and `errorCode`, which
+reports the result being read, and release it with `free`. Using the connection
+any other way, with `step`, `query` or `exec`, first waits for what is in
+flight. A connection's sends and their reads belong to one thread. `send` is
+Postgres only.
 
 `db.errorCode()` returns the SQLSTATE of the last Postgres statement the
 calling thread ran, or `""` when it succeeded, so a handler can tell a unique

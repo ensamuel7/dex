@@ -1,6 +1,7 @@
 import "db"
 import "os"
 import "fmt"
+import "num"
 
 fn check(ok: bool, what: string): void {
     if (!ok) {
@@ -112,6 +113,65 @@ fn main(): void {
 
     check(db.exec(c, "SELECT * FROM no_such_table") < 0, "bad table fails")
     check(db.errorCode() == "42P01", "undefined table reports 42P01")
+
+    let byId: int = db.prepare(c, "SELECT name FROM dex_pg WHERE id = $1")
+    let sent: int[] = []
+    for (let i: int = 0; i < 300; i = i + 1) {
+        let id: long = num.toLong((i % 3) + 1)
+        db.bindLong(byId, 1, id)
+        sent.push(db.send(byId))
+    }
+    db.bindLong(child, 1, 999)
+    let orphan: int = db.send(child)
+    db.bindLong(skip, 1, 10)
+    db.bindStr(skip, 2, "ten")
+    let added: int = db.send(skip)
+    db.bindLong(byId, 1, 10)
+    let seesAdded: int = db.send(byId)
+    db.bindLong(byId, 1, 1)
+    let unread: int = db.send(byId)
+    check(orphan >= 0 && added >= 0 && seesAdded >= 0 && unread >= 0, "send returns handles")
+    for (let i: int = 0; i < 300; i = i + 1) {
+        let k: int = i % 3
+        let got: bool = db.next(sent[i])
+        check(db.errorCode() == "", "sent read has no error")
+        if (k == 2) {
+            check(!got, "no row for a missing id")
+        } else {
+            check(got, "a row for each sent read")
+            let who: string = db.col(sent[i], 0)
+            check((k == 0 && who == "ada") || (k == 1 && who == "grace"), "sent results come back in order")
+            check(!db.next(sent[i]), "one row each")
+        }
+        db.free(sent[i])
+    }
+    check(!db.next(orphan), "sent foreign key violation has no row")
+    check(db.errorCode() == "23503", "sent failure reports its own SQLSTATE")
+    check(db.affected(orphan) == 0, "failed send changed nothing")
+    check(db.affected(added) == 1, "a send after a failed one still commits")
+    check(!db.next(added), "insert without RETURNING has no row")
+    check(db.errorCode() == "", "error code clears on the next read")
+    check(db.next(seesAdded), "a later send sees an earlier send's write")
+    let ten: string = db.col(seesAdded, 0)
+    check(ten == "ten", "row written in the same round trip")
+    db.free(orphan)
+    db.free(added)
+    db.free(seesAdded)
+    db.free(unread)
+
+    db.bindLong(byId, 1, 2)
+    let pending: int = db.send(byId)
+    db.reset(count)
+    check(db.step(count), "a step while a send is pending")
+    let n2: int = db.col(count, 0)
+    check(n2 == 3, "step sees the committed rows")
+    check(db.next(pending), "pending send is read after the step")
+    let grace: string = db.col(pending, 0)
+    check(grace == "grace", "pending send keeps its row")
+    db.free(pending)
+    db.bindLong(byId, 1, 1)
+    db.free(db.send(byId))
+    check(db.exec(c, "DELETE FROM dex_pg WHERE id = 10") == 1, "exec after a freed unread send")
 
     db.exec(c, "DROP TABLE dex_pg_child")
     db.exec(c, "DROP TABLE dex_pg")

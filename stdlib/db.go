@@ -238,7 +238,7 @@ func init() {
 				ParamNames: []string{"stmt"},
 				ReturnType: ast.TypeInt,
 				CName:      "dex_db_affected",
-				Doc:        "How many rows the statement's last step inserted, updated or deleted, such as 0 for an INSERT that ON CONFLICT DO NOTHING skipped. Read it before db.reset.",
+				Doc:        "How many rows the statement's last step inserted, updated or deleted, such as 0 for an INSERT that ON CONFLICT DO NOTHING skipped. Read it before db.reset. Takes a result from db.send too.",
 			},
 			"isNull": {
 				Params:     []ast.Type{ast.TypeInt, ast.TypeInt},
@@ -258,7 +258,7 @@ func init() {
 				Params:     []ast.Type{},
 				ReturnType: ast.TypeString,
 				CName:      "dex_db_error_code",
-				Doc:        "The SQLSTATE of the last Postgres statement this thread ran, such as \"23505\" for a unique violation, or \"\" when it succeeded. A failure that never reached the server, such as a lost connection, reports \"08006\". Postgres only: SQLite and MySQL statements leave it unchanged.",
+				Doc:        "The SQLSTATE of the last Postgres statement this thread ran, or of the db.send result it last started reading, such as \"23505\" for a unique violation, or \"\" when it succeeded. A failure that never reached the server, such as a lost connection, reports \"08006\". Postgres only: SQLite and MySQL statements leave it unchanged.",
 			},
 			"step": {
 				Params:     []ast.Type{ast.TypeInt},
@@ -266,6 +266,13 @@ func init() {
 				ReturnType: ast.TypeBool,
 				CName:      "dex_db_step",
 				Doc:        "Execute one step of a prepared statement. Returns true if a row is available.",
+			},
+			"send": {
+				Params:     []ast.Type{ast.TypeInt},
+				ParamNames: []string{"stmt"},
+				ReturnType: ast.TypeInt,
+				CName:      "dex_db_send",
+				Doc:        "Send a bound Postgres statement without waiting for it, and return a result handle for its rows, or -1. Statements sent on one connection before any of their results is read share one round trip; each is still its own transaction. The statement's bindings are cleared, so it can be bound and sent again at once. Read the result with db.next, db.col, db.affected and db.errorCode, and release it with db.free.",
 			},
 			"reset": {
 				Params:     []ast.Type{ast.TypeInt},

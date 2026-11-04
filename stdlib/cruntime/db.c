@@ -6,6 +6,8 @@
 #include <sqlite3.h>
 #ifdef DEX_HAS_POSTGRES
 #include <libpq-fe.h>
+#include <poll.h>
+#include <errno.h>
 #endif
 #ifdef DEX_HAS_MYSQL
 #include <mysql/mysql.h>
@@ -15,7 +17,8 @@
 #endif
 
 #define DEX_DB_MAX_CONNS 16
-#define DEX_DB_MAX_RESULTS 64
+#define DEX_DB_MAX_RESULTS 1024
+#define DEX_DB_PIPE_MAX 1024
 #define DEX_DB_MAX_STMTS 64
 #define DEX_DB_POOL_SIZE 16
 
@@ -48,6 +51,10 @@ typedef struct {
     char dsn[1024];
     pthread_mutex_t lock;
     pthread_cond_t available;
+    int pipe_active;
+    int pipe_entry;
+    int pipe_count;
+    int pipe_items[DEX_DB_PIPE_MAX];
 } DexDbPool;
 #endif
 
@@ -82,6 +89,7 @@ typedef struct {
     int pg_nrows;
     int pool_entry;   // index into the pool's connections array
     int pool_conn;    // which DexDbConn slot this came from
+    int piped;
 #endif
 #ifdef DEX_HAS_MYSQL
     // MySQL
@@ -156,6 +164,10 @@ typedef struct {
 // a statement handle to them.
 _Bool dex_db_step(int stmt_id);
 void dex_db_finalize(int stmt_id);
+#ifdef DEX_HAS_POSTGRES
+static void dex_db_pipe_collect(DexDbPool* pool);
+static void dex_db_result_settle(DexDbResult* r);
+#endif
 
 // A statement handle back to its slot, or -1 if the handle is not one.
 static int dex_db_stmt_slot(int handle) {
@@ -189,6 +201,9 @@ static DexDbRow dex_db_row(int handle) {
     if (handle < 0 || handle >= DEX_DB_MAX_RESULTS) return row;
     DexDbResult* r = &dex_db_results[handle];
     if (r->driver <= 0) return row;
+#ifdef DEX_HAS_POSTGRES
+    dex_db_result_settle(r);
+#endif
     row.driver = r->driver;
     row.sqlite_stmt = r->sqlite_stmt;
 #ifdef DEX_HAS_POSTGRES
@@ -257,6 +272,7 @@ static int dex_db_pg_revive(DexDbPool* pool, int entry) {
 // Returns a pool index whose connection has just been checked, or -1 when the
 // database cannot be reached at all. Blocks while every entry is busy.
 static int dex_db_pool_acquire(DexDbPool* pool) {
+    dex_db_pipe_collect(pool);
     pthread_mutex_lock(&pool->lock);
     int entry = -1;
     while (entry < 0) {
@@ -288,6 +304,7 @@ static int dex_db_pool_acquire(DexDbPool* pool) {
 // "any" entry cannot guarantee — it can hand back the same one every time.
 static int dex_db_pool_acquire_entry(DexDbPool* pool, int entry) {
     if (entry < 0 || entry >= pool->size) return 0;
+    dex_db_pipe_collect(pool);
     pthread_mutex_lock(&pool->lock);
     while (pool->in_use[entry]) {
         pthread_cond_wait(&pool->available, &pool->lock);
@@ -764,6 +781,7 @@ _Bool dex_db_next(int rows) {
 
 #ifdef DEX_HAS_POSTGRES
     } else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
+        dex_db_result_settle(r);
         r->pg_row++;
         return r->pg_row < r->pg_nrows;
 #endif
@@ -1129,6 +1147,9 @@ void dex_db_free(int rows) {
     }
 #ifdef DEX_HAS_POSTGRES
     else if (r->driver == DEX_DB_DRIVER_POSTGRES) {
+        if (r->piped == 2 && r->pool_conn >= 0 && r->pool_conn < DEX_DB_MAX_CONNS) {
+            dex_db_pipe_collect(&dex_db_conns[r->pool_conn].pg_pool);
+        }
         // The connection went back at query time; only the rows are left.
         if (r->pg_result) PQclear(r->pg_result);
     }
@@ -1161,6 +1182,7 @@ void dex_db_close(int conn) {
 #ifdef DEX_HAS_POSTGRES
     else if (c->driver == DEX_DB_DRIVER_POSTGRES) {
         DexDbPool* pool = &c->pg_pool;
+        dex_db_pipe_collect(pool);
         for (int i = 0; i < pool->size; i++) {
             if (pool->connections[i]) PQfinish(pool->connections[i]);
         }
@@ -1527,6 +1549,16 @@ _Bool dex_db_step(int stmt_id) {
 }
 
 int dex_db_affected(int stmt_id) {
+#ifdef DEX_HAS_POSTGRES
+    if (stmt_id >= 0 && stmt_id < DEX_DB_MAX_RESULTS) {
+        DexDbResult* r = &dex_db_results[stmt_id];
+        if (r->driver != DEX_DB_DRIVER_POSTGRES) return 0;
+        dex_db_result_settle(r);
+        if (!r->pg_result) return 0;
+        const char* n = PQcmdTuples(r->pg_result);
+        return (n && n[0] != '\0') ? dex_parse_int(n) : 0;
+    }
+#endif
     int _slot = dex_db_stmt_slot(stmt_id);
     if (_slot < 0) return 0;
     DexDbStmt* s = &dex_db_stmts[_slot];
@@ -1542,6 +1574,182 @@ int dex_db_affected(int stmt_id) {
 #endif
     }
     return 0;
+}
+
+#ifdef DEX_HAS_POSTGRES
+static int dex_db_pipe_wait(PGconn* pg, short events) {
+    struct pollfd p;
+    p.fd = PQsocket(pg);
+    p.events = events;
+    p.revents = 0;
+    if (p.fd < 0) return 0;
+    for (;;) {
+        int n = poll(&p, 1, -1);
+        if (n > 0) return 1;
+        if (n < 0 && errno != EINTR) return 0;
+    }
+}
+
+static int dex_db_pipe_flush(PGconn* pg) {
+    for (;;) {
+        int f = PQflush(pg);
+        if (f == 0) return 1;
+        if (f < 0) return 0;
+        if (!dex_db_pipe_wait(pg, POLLIN | POLLOUT)) return 0;
+        if (!PQconsumeInput(pg)) return 0;
+    }
+}
+
+static PGresult* dex_db_pipe_next(PGconn* pg, int* ok) {
+    while (PQisBusy(pg)) {
+        if (!dex_db_pipe_wait(pg, POLLIN) || !PQconsumeInput(pg)) {
+            *ok = 0;
+            return NULL;
+        }
+    }
+    return PQgetResult(pg);
+}
+
+static void dex_db_pipe_collect(DexDbPool* pool) {
+    if (!pool->pipe_active) return;
+    int entry = pool->pipe_entry;
+    PGconn* pg = pool->connections[entry];
+    int ok = dex_db_pipe_flush(pg);
+    for (int i = 0; i < pool->pipe_count; i++) {
+        PGresult* first = NULL;
+        while (ok) {
+            PGresult* got = dex_db_pipe_next(pg, &ok);
+            if (!got) break;
+            if (!first) first = got;
+            else PQclear(got);
+        }
+        if (ok) {
+            PGresult* sync = dex_db_pipe_next(pg, &ok);
+            if (!sync || PQresultStatus(sync) != PGRES_PIPELINE_SYNC) ok = 0;
+            if (sync) PQclear(sync);
+        }
+        int slot = pool->pipe_items[i];
+        if (slot < 0 || dex_db_results[slot].driver != DEX_DB_DRIVER_POSTGRES || dex_db_results[slot].piped != 2) {
+            if (first) PQclear(first);
+            continue;
+        }
+        DexDbResult* r = &dex_db_results[slot];
+        r->pg_result = first;
+        r->pg_row = -1;
+        r->pg_nrows = (first && PQresultStatus(first) == PGRES_TUPLES_OK) ? PQntuples(first) : 0;
+        r->piped = 1;
+    }
+    pool->pipe_active = 0;
+    pool->pipe_count = 0;
+    if (!ok || !PQexitPipelineMode(pg)) {
+        PQreset(pg);
+        pool->generation[entry]++;
+    }
+    PQsetnonblocking(pg, 0);
+    dex_db_pool_release(pool, entry);
+}
+
+static void dex_db_result_settle(DexDbResult* r) {
+    if (r->driver != DEX_DB_DRIVER_POSTGRES || !r->piped) return;
+    if (r->piped == 2 && r->pool_conn >= 0 && r->pool_conn < DEX_DB_MAX_CONNS) {
+        dex_db_pipe_collect(&dex_db_conns[r->pool_conn].pg_pool);
+    }
+    if (r->piped == 2) {
+        r->pg_result = NULL;
+        r->pg_row = -1;
+        r->pg_nrows = 0;
+    }
+    ExecStatusType st = r->pg_result ? PQresultStatus(r->pg_result) : PGRES_FATAL_ERROR;
+    dex_db_pg_note(r->pg_result, st == PGRES_TUPLES_OK || st == PGRES_COMMAND_OK);
+    r->piped = 0;
+}
+
+static void dex_db_pg_clear_params(DexDbStmt* s) {
+    for (int i = 0; i < s->pg_param_count; i++) {
+        free(s->pg_param_values[i]);
+        s->pg_param_values[i] = NULL;
+    }
+    s->pg_param_count = 0;
+}
+#endif
+
+int dex_db_send(int stmt_id) {
+    int _slot = dex_db_stmt_slot(stmt_id);
+    if (_slot < 0) return -1;
+    DexDbStmt* s = &dex_db_stmts[_slot];
+#ifdef DEX_HAS_POSTGRES
+    if (s->driver == DEX_DB_DRIVER_POSTGRES) {
+        if (s->conn_slot < 0 || s->conn_slot >= DEX_DB_MAX_CONNS) return -1;
+        DexDbPool* pool = &dex_db_conns[s->conn_slot].pg_pool;
+        if (pool->pipe_active && pool->pipe_count + 2 > DEX_DB_PIPE_MAX) dex_db_pipe_collect(pool);
+
+        pthread_mutex_lock(&dex_db_mutex);
+        int rslot = -1;
+        for (int i = 0; i < DEX_DB_MAX_RESULTS; i++) {
+            if (dex_db_results[i].driver == DEX_DB_DRIVER_NONE) {
+                rslot = i;
+                dex_db_results[i].driver = -1;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&dex_db_mutex);
+        if (rslot < 0) {
+            dex_db_pg_clear_params(s);
+            dex_db_pg_note(NULL, 0);
+            return -1;
+        }
+
+        if (!pool->pipe_active) {
+            int entry = dex_db_pool_acquire(pool);
+            if (entry < 0 || !PQenterPipelineMode(pool->connections[entry])) {
+                if (entry >= 0) dex_db_pool_release(pool, entry);
+                pthread_mutex_lock(&dex_db_mutex);
+                memset(&dex_db_results[rslot], 0, sizeof(DexDbResult));
+                pthread_mutex_unlock(&dex_db_mutex);
+                dex_db_pg_clear_params(s);
+                dex_db_pg_note(NULL, 0);
+                return -1;
+            }
+            PQsetnonblocking(pool->connections[entry], 1);
+            pool->pipe_active = 1;
+            pool->pipe_entry = entry;
+            pool->pipe_count = 0;
+        }
+
+        int entry = pool->pipe_entry;
+        PGconn* pg = pool->connections[entry];
+        int sent = 1;
+        if (s->prepared_gen[entry] != pool->generation[entry]) {
+            sent = PQsendPrepare(pg, s->pg_stmt_name, s->pg_sql, 0, NULL) && PQpipelineSync(pg);
+            if (sent) {
+                pool->pipe_items[pool->pipe_count++] = -1;
+                s->prepared_gen[entry] = pool->generation[entry];
+            }
+        }
+        if (sent) {
+            sent = PQsendQueryPrepared(pg, s->pg_stmt_name, s->pg_param_count,
+                (const char* const*)s->pg_param_values, s->pg_param_lengths, NULL, 0) && PQpipelineSync(pg);
+        }
+        dex_db_pg_clear_params(s);
+
+        pthread_mutex_lock(&dex_db_mutex);
+        memset(&dex_db_results[rslot], 0, sizeof(DexDbResult));
+        dex_db_results[rslot].driver = DEX_DB_DRIVER_POSTGRES;
+        dex_db_results[rslot].pg_row = -1;
+        dex_db_results[rslot].pool_entry = -1;
+        dex_db_results[rslot].pool_conn = s->conn_slot;
+        dex_db_results[rslot].piped = 2;
+        pthread_mutex_unlock(&dex_db_mutex);
+        if (sent) {
+            pool->pipe_items[pool->pipe_count++] = rslot;
+        } else {
+            dex_db_pipe_collect(pool);
+        }
+        return rslot;
+    }
+#endif
+    fprintf(stderr, "db.send: only Postgres statements can be sent\n");
+    return -1;
 }
 
 // ==========================================================================

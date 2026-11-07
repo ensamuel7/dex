@@ -171,6 +171,41 @@ func (g *Generator) genHandleOutCall(out *strings.Builder, e *ast.CallExpr, fd *
 	out.WriteString("})")
 }
 
+// genExternalStringCall is a call whose returned string needs more than a copy:
+// a length the callee wrote, or a deallocator of the library's own. Both have to
+// run after the call and around the copy, so it is a statement expression rather
+// than a wrapper around the call.
+//
+// A sized string is copied by length, so a NUL does not end it. A NULL pointer or
+// a negative length, which is how a C function says it has nothing, is "".
+func (g *Generator) genExternalStringCall(out *strings.Builder, e *ast.CallExpr, fd *stdlib.FuncDef) {
+	ptr, str := g.nextTemp(), g.nextTemp()
+	out.WriteString(fmt.Sprintf("({ const char* %s = %s(", ptr, fd.CName))
+	for i, arg := range e.Args {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		g.genStdlibArg(out, arg, fd, i)
+	}
+	out.WriteString("); ")
+	if fd.ReturnSized {
+		size := g.nextTemp()
+		out.WriteString(fmt.Sprintf("long long %s = (long long)(", size))
+		g.genExpr(out, e.Args[fd.ReturnSizeParam])
+		out.WriteString(fmt.Sprintf("); DexString* %s = (%s && %s > 0) ? dex_string_new(%s, (size_t)%s) : dex_string_new(\"\", 0); ",
+			str, ptr, size, ptr, size))
+	} else {
+		out.WriteString(fmt.Sprintf("DexString* %s = dex_string_copy_cstr(%s); ", str, ptr))
+	}
+	switch {
+	case fd.ReturnFreer != "":
+		out.WriteString(fmt.Sprintf("if (%s) %s((void*)%s); ", ptr, fd.ReturnFreer, ptr))
+	case !fd.BorrowedReturn:
+		out.WriteString(fmt.Sprintf("free((void*)%s); ", ptr))
+	}
+	out.WriteString(str + "; })")
+}
+
 func (g *Generator) isHandleOutCall(call *ast.CallExpr) bool {
 	if call.Module == "" {
 		return false

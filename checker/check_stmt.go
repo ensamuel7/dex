@@ -433,6 +433,9 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if call, ok := s.Value.(*ast.CallExpr); ok && call.Module == "json" && call.Name == "decode" {
 			call.ResolvedType = varType
 		}
+		if err := c.typeEmptyLiteral(s.Value, varType); err != nil {
+			return err
+		}
 		exprType, err := c.checkExpr(s.Value)
 		if err != nil {
 			return err
@@ -515,6 +518,9 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		}
 		if !found {
 			return c.errAt(s.Pos, "struct '%s' has no field '%s'", ast.DisplayStructName(def.Name), s.Field)
+		}
+		if err := c.typeEmptyLiteral(s.Value, fieldType); err != nil {
+			return err
 		}
 		valType, err := c.checkExpr(s.Value)
 		if err != nil {

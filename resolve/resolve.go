@@ -358,6 +358,11 @@ func renameModuleRefs(fn *ast.Function, names map[string]string) {
 	if len(names) == 0 {
 		return
 	}
+	// A default is written at the declaring file's top level, so no parameter or
+	// local of the function can shadow what it names.
+	for i := range fn.Params {
+		renameModuleRefsInExpr(fn.Params[i].DefaultValue, names)
+	}
 	keys := make(map[string]bool, len(names))
 	for k := range names {
 		keys[k] = true
@@ -417,8 +422,10 @@ func resolveQualifiedGlobals(program *ast.Program) {
 	for _, gl := range program.GlobalLets {
 		globals[gl.Name] = true
 	}
+	private := map[string]bool{}
 	for _, fn := range program.Functions {
 		globals[fn.Name] = true
+		private[fn.Name] = fn.IsPrivate
 	}
 	modules := make(map[string]bool, len(program.UserModules))
 	for _, m := range program.UserModules {
@@ -459,8 +466,41 @@ func resolveQualifiedGlobals(program *ast.Program) {
 	// became a function value, and the condition stopped being a bool. The
 	// module is unreachable by that name inside such a function, which is what
 	// shadowing means everywhere else.
+	// A default is written at the file's top level, where no local can shadow a
+	// module, but the checker pastes it into each call, where one can: in a caller
+	// with a local named `other`, `other.limit()` would be a method on the local.
+	// So a default names what it means in the flat namespace, leaving nothing for
+	// the caller's scope to capture. A private function stays qualified, so the
+	// checker still refuses it.
+	//
+	// A rewrite can replace the whole expression, so it writes back, and a method's
+	// signature reads its own copy of the parameter (see below).
+	rewriteDefaults := func(params []ast.Param) {
+		for i := range params {
+			if params[i].DefaultValue == nil {
+				continue
+			}
+			params[i].DefaultValue = walkExpr(params[i].DefaultValue, func(expr ast.Expr) ast.Expr {
+				if call, ok := expr.(*ast.CallExpr); ok && modules[call.Module] {
+					flat := call.Module + "_" + call.Name
+					if globals[flat] && !private[flat] {
+						call.Module, call.Name = "", flat
+					}
+					return nil
+				}
+				return rewrite(modules, expr)
+			})
+		}
+	}
+	for i := range program.Structs {
+		for j := range program.Structs[i].Methods {
+			rewriteDefaults(program.Structs[i].Methods[j].Params)
+		}
+	}
+
 	for i := range program.Functions {
 		fn := &program.Functions[i]
+		rewriteDefaults(fn.Params)
 		visible := withoutShadowed(modules, fn)
 		if len(visible) == 0 {
 			continue
@@ -670,6 +710,12 @@ func (r *resolver) resolveModuleFile(filePath, absPath, moduleName string) error
 		visible := withoutShadowed(ownNames, fn)
 		for _, stmt := range fn.Body {
 			prefixCallsInStmt(stmt, moduleName, visible)
+		}
+		// The checker pastes a default into each call, wherever that call is, so
+		// it has to name what it means in the flat namespace. It is written at
+		// the file's top level, so it sees ownNames as a global initialiser does.
+		for j := range fn.Params {
+			prefixCallsInExpr(fn.Params[j].DefaultValue, moduleName, ownNames)
 		}
 	}
 	// Function bodies that were not renamed (main) still reference this module's
@@ -963,6 +1009,16 @@ func (ls localScopes) bind(name string) {
 	ls[len(ls)-1][name] = true
 }
 
+// bindLet binds what a `let` declares, in either form: one name or several.
+func bindLet(ls localScopes, let *ast.LetStmt) {
+	if let.Name != "" {
+		ls.bind(let.Name)
+	}
+	for _, n := range let.Names {
+		ls.bind(n)
+	}
+}
+
 func (ls localScopes) has(name string) bool {
 	for i := len(ls) - 1; i >= 0; i-- {
 		if ls[i][name] {
@@ -986,12 +1042,7 @@ func rewriteFieldRefs(body []ast.Stmt, fieldNames, methodNames map[string]bool, 
 		if let, ok := st.(*ast.LetStmt); ok {
 			// A local declared here shadows any field of the same name from this
 			// point to the end of its block.
-			if let.Name != "" {
-				scopes.bind(let.Name)
-			}
-			for _, n := range let.Names {
-				scopes.bind(n)
-			}
+			bindLet(scopes, let)
 		}
 	}
 

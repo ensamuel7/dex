@@ -40,12 +40,24 @@ func (l *linter) idents() map[string]bool {
 	}
 	for i := range l.program.Functions {
 		resolve.VisitStmts(l.program.Functions[i].Body, nil, collect)
+		visitDefaults(&l.program.Functions[i], collect)
 	}
 	for i := range l.program.GlobalLets {
 		resolve.VisitExpr(l.program.GlobalLets[i].Value, collect)
 	}
 	l.identCache = names
 	return names
+}
+
+// visitDefaults visits a function's parameter defaults. A default is not in the
+// body, and it reaches the call sites only where a call leaves the argument out,
+// so a name used only by a default would read as unused without this.
+func visitDefaults(fn *ast.Function, visit func(ast.Expr)) {
+	for i := range fn.Params {
+		if fn.Params[i].DefaultValue != nil {
+			resolve.VisitExpr(fn.Params[i].DefaultValue, visit)
+		}
+	}
 }
 
 // usedAsValue reports whether a function is referred to without being called.
@@ -84,6 +96,7 @@ func (l *linter) calls() map[string]bool {
 	}
 	for i := range l.program.Functions {
 		resolve.VisitStmts(l.program.Functions[i].Body, nil, collect)
+		visitDefaults(&l.program.Functions[i], collect)
 	}
 	for i := range l.program.GlobalLets {
 		resolve.VisitExpr(l.program.GlobalLets[i].Value, collect)
@@ -191,6 +204,7 @@ func (l *linter) checkImports() {
 	}
 	for i := range l.program.Functions {
 		resolve.VisitStmts(l.program.Functions[i].Body, nil, collect)
+		visitDefaults(&l.program.Functions[i], collect)
 	}
 	for i := range l.program.GlobalLets {
 		resolve.VisitExpr(l.program.GlobalLets[i].Value, collect)

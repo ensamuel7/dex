@@ -271,3 +271,30 @@ func TestModuleAliasResolvesQualifiedType(t *testing.T) {
 		t.Errorf("u.Item resolved to type %d, want util_2_Item (%d)", got, want)
 	}
 }
+
+// `sized by` and `freed by` are soft keywords, and read in either order.
+func TestExternalSizedBy(t *testing.T) {
+	for _, decl := range []string{
+		`fn f(n: &long): owned string sized by n freed by "lib_free" = "g"`,
+		`fn f(n: &long): owned string freed by "lib_free" sized by n = "g"`,
+	} {
+		prog := parseExtern(t, "external module m {\n"+decl+"\n}\nfn main(): void {}\n")
+		f := prog.Externals[0].Funcs[0]
+		if f.ReturnSizedBy != "n" || f.ReturnFreer != "lib_free" || !f.OwnedReturn || f.CName != "g" {
+			t.Errorf("%s: parsed as %+v", decl, f)
+		}
+	}
+	// A parameter, a variable or a function may still be called `sized`.
+	parseExtern(t, "external module m {\nfn sized(sized: int): int\n}\nfn main(): void {\n    let sized: int = 1\n    assert(sized == 1)\n}\n")
+}
+
+func TestExternalSizedByErrors(t *testing.T) {
+	for decl, want := range map[string]string{
+		`fn f(n: &long): string sized n`:                 "expected 'by' after 'sized'",
+		`fn f(n: &long): string sized by "n"`:            "expected the parameter holding the length",
+		`fn f(n: &long): string sized by n sized by n`:   "'sized by' is given twice",
+		`fn f(): owned string freed by "a" freed by "b"`: "'freed by' is given twice",
+	} {
+		parseExternalFails(t, "external module m {\n"+decl+"\n}\nfn main(): void {}\n", want)
+	}
+}

@@ -43,6 +43,9 @@ func (c *Checker) checkInterfaceMethodCall(e *ast.CallExpr, ifaceType ast.Type, 
 			display, e.Name, len(sig.Params), len(e.Args))
 	}
 	for i, arg := range e.Args {
+		if err := c.typeEmptyLiteral(arg, sig.Params[i]); err != nil {
+			return 0, err
+		}
 		argType, err := c.checkExpr(arg)
 		if err != nil {
 			return 0, err

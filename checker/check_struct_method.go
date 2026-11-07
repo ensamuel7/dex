@@ -33,6 +33,9 @@ func (c *Checker) checkStructMethodCall(e *ast.CallExpr, structType ast.Type, di
 		return 0, true, c.errAt(e.Pos, "%s.%s() takes exactly %d argument(s), got %d", display, e.Name, len(sig.Params), len(e.Args))
 	}
 	for i, arg := range e.Args {
+		if err := c.typeEmptyLiteral(arg, sig.Params[i]); err != nil {
+			return 0, true, err
+		}
 		argType, err := c.checkExpr(arg)
 		if err != nil {
 			return 0, true, err

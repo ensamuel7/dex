@@ -1167,3 +1167,24 @@ fn main(): void {
 }
 `)
 }
+
+// A name used only by a parameter default is used. A default is not in the body,
+// and reaches a call only where the call leaves the argument out.
+func TestADefaultCountsAsAUse(t *testing.T) {
+	assertRules(t, `
+import "time"
+
+private fn only(): int {
+    return 1
+}
+
+fn f(n: int = only(), m: long = time.now()): long {
+    assert(n > 0)
+    return m
+}
+
+fn main(): void {
+    assert(f(1, 2) == 2)
+}
+`)
+}

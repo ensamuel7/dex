@@ -1,0 +1,102 @@
+// Bytes coming back from C. A string return is read with strlen, so it stops at
+// the first NUL; `sized by n` names the out-parameter the function writes the
+// length to, and the string is that many bytes, whatever they are.
+//
+// A library wrapping a binary protocol needs this: without it, everything works
+// on text and the first image or protobuf payload is silently cut short.
+
+import "num"
+
+external module b {
+    include "bytes.h"
+
+    type Msg closed by "bytes_msg_free"
+
+    fn plain(n: &long): string sized by n = "bytes_plain"
+    fn intLength(n: &int): string sized by n = "bytes_int_length"
+    fn owned(n: &long): owned string sized by n = "bytes_owned"
+    fn ownedFreed(n: &long): owned string sized by n freed by "bytes_free" = "bytes_owned"
+    fn freedFirst(n: &long): owned string freed by "bytes_free" sized by n = "bytes_owned"
+    fn freedCount(): int = "bytes_freed_count"
+    fn nothing(n: &long): string sized by n = "bytes_null"
+    fn ownedNothing(n: &long): owned string sized by n = "bytes_owned_null"
+    fn negative(n: &long): string sized by n = "bytes_negative"
+    fn ownedNegative(n: &long): owned string sized by n = "bytes_owned_negative"
+    fn empty(n: &long): string sized by n = "bytes_empty"
+    fn echo(s: string, len: long, n: &long): owned string sized by n = "bytes_echo"
+    fn newMsg(): Msg = "bytes_msg_new"
+    fn value(m: Msg, n: &long): string sized by n = "bytes_msg_value"
+
+    // Not sized: still stops at the NUL, as it always has.
+    fn unsized(n: &long): string = "bytes_plain"
+}
+
+fn isExpected(s: string): bool {
+    return s.len() == 5 &&
+        s.charAt(0) == 'a' &&
+        s.charAt(1) == 'b' &&
+        num.toInt(s.charAt(2)) == 0 &&
+        s.charAt(3) == 'c' &&
+        s.charAt(4) == 'd'
+}
+
+struct Reader {
+    last: string
+
+    fn read(): int {
+        let n: long = 0
+        self.last = b.plain(n)
+        return self.last.len()
+    }
+}
+
+fn main(): void {
+    let n: long = 0
+    let i: int = 0
+
+    // The three ownership forms, and either order of the two clauses.
+    assert(isExpected(b.plain(n)))
+    assert(n == 5)
+    assert(isExpected(b.intLength(i)))
+    assert(i == 5)
+    assert(isExpected(b.owned(n)))
+    let before: int = b.freedCount()
+    assert(isExpected(b.ownedFreed(n)))
+    assert(isExpected(b.freedFirst(n)))
+    assert(b.freedCount() == before + 2)
+
+    // Nothing to return: a NULL or a negative length is empty, and still freed.
+    assert(b.nothing(n).isEmpty())
+    assert(b.ownedNothing(n).isEmpty())
+    assert(b.negative(n).isEmpty())
+    assert(b.ownedNegative(n).isEmpty())
+    assert(b.empty(n).isEmpty())
+
+    // Round trip: into C as a pointer and a length, back out by length.
+    let s: string = b.plain(n)
+    assert(isExpected(b.echo(s, n, n)))
+    let longer: string = s + s + "tail"
+    let echoed: string = b.echo(longer, 14, n)
+    assert(echoed.len() == 14 && echoed == longer)
+
+    // A handle's payload, in a let, in a field, through a method.
+    let m: Msg = b.newMsg()
+    let payload: string = b.value(m, n)
+    assert(isExpected(payload))
+    let r: Reader = Reader { last: "" }
+    assert(r.read() == 5)
+    assert(isExpected(r.last))
+
+    // In a condition and a loop, where nothing can be hoisted ahead of the call.
+    for (let k: int = 0; k < 100; k++) {
+        if (b.owned(n).len() != 5) {
+            assert(false)
+        }
+
+        let again: string = b.value(m, n)
+        assert(again.len() == 5)
+    }
+
+    // An undeclared length is what it always was.
+    assert(b.unsized(n).len() == 2)
+}

@@ -644,7 +644,12 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		ctyp := g.cType(valType)
 		out.WriteString(fmt.Sprintf("%s{ %s _send_val = ", prefix, ctyp))
 		g.genExpr(out, s.Value)
-		out.WriteString("; dex_chan_send(")
+		// The receiver owns what it receives (isNewAlloc says a receive mints), so
+		// a borrowed value takes a reference here. Without one, `send(ch, local)`
+		// handed over a string the sender then released at its scope exit.
+		out.WriteString("; ")
+		g.emitRetainMovedArg(out, "_send_val", s.Value)
+		out.WriteString(" dex_chan_send(")
 		if s.Target != nil {
 			g.genExpr(out, s.Target)
 		} else {

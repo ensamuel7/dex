@@ -141,6 +141,21 @@ func unwindHeld(expr string, typ ast.Type) (string, bool) {
 	return "", false
 }
 
+// unwindWatched is unwindHeld for a value that may change while the entry stands:
+// the field's address rather than the pointer it holds now, which the runtime
+// reads at the throw. See _dex_cleanup_settle.
+func unwindWatched(expr string, typ ast.Type) (string, bool) {
+	switch {
+	case ast.IsHeapType(typ), ast.IsHeapOptionalType(typ):
+		return fmt.Sprintf("DEX_WATCH(&%s)", expr), true
+	case ast.IsStructOptionalType(typ):
+		return fmt.Sprintf("DEX_WATCH_BOX(&%s)", expr), true
+	case ast.IsInterfaceType(typ):
+		return fmt.Sprintf("DEX_WATCH(&%s._obj)", expr), true
+	}
+	return "", false
+}
+
 func fieldPathType(typ ast.Type, path string) ast.Type {
 	for _, part := range strings.Split(path, ".") {
 		def := ast.GetStructDef(typ)
@@ -295,8 +310,14 @@ func (g *Generator) registerTempForUnwind(out *strings.Builder, name string, typ
 	if !g.usesExceptions {
 		return
 	}
+	// A struct's method may replace a field of the temporary, as a fluent chain
+	// does, so its entries read the field at the throw rather than now.
+	collect := unwindHeld
+	if ast.IsStructType(typ) {
+		collect = unwindWatched
+	}
 	var held []string
-	g.collectUnwindHeld(name, typ, &held, 0)
+	g.collectUnwindHeld(name, typ, collect, &held, 0)
 	for _, h := range held {
 		out.WriteString(fmt.Sprintf("_dex_cleanup_push(%s); ", h))
 	}
@@ -305,8 +326,8 @@ func (g *Generator) registerTempForUnwind(out *strings.Builder, name string, typ
 	}
 }
 
-func (g *Generator) collectUnwindHeld(expr string, typ ast.Type, held *[]string, depth int) {
-	if h, ok := unwindHeld(expr, typ); ok {
+func (g *Generator) collectUnwindHeld(expr string, typ ast.Type, entry func(string, ast.Type) (string, bool), held *[]string, depth int) {
+	if h, ok := entry(expr, typ); ok {
 		*held = append(*held, h)
 		return
 	}
@@ -318,7 +339,7 @@ func (g *Generator) collectUnwindHeld(expr string, typ ast.Type, held *[]string,
 		return
 	}
 	for _, f := range def.Fields {
-		g.collectUnwindHeld(expr+"."+f.Name, f.Type, held, depth+1)
+		g.collectUnwindHeld(expr+"."+f.Name, f.Type, entry, held, depth+1)
 	}
 }
 
@@ -861,6 +882,35 @@ func (g *Generator) isScopeVar(name string) bool {
 	return false
 }
 
+// noteLocalsACallCanWrite reports each local a call may write through a pointer:
+// a method's receiver, a struct passed as an argument, and anything passed to a
+// reference parameter. A struct is included even by value, since telling needs
+// the callee, and polymorphic callees such as db.fill have no parameter list to
+// ask. Too many only keeps a local in memory across a try.
+func (g *Generator) noteLocalsACallCanWrite(call *ast.CallExpr, note func(string)) {
+	if call.IsMethodCall && call.Module != "" {
+		head, _, _ := strings.Cut(call.Module, ".")
+		note(head)
+	}
+	var params []ast.Type
+	if fd, ok := g.lookupFunc(call.Module, call.Name); ok && call.Module != "" {
+		params = fd.Params
+	} else if fn, ok := g.funcs[call.Name]; ok && call.Module == "" {
+		for _, p := range fn.Params {
+			params = append(params, p.Type)
+		}
+	}
+	for i, arg := range call.Args {
+		head := headIdentName(arg)
+		if head == "" {
+			continue
+		}
+		if ast.IsStructType(g.varTypes[head]) || (i < len(params) && ast.IsRefType(params[i])) {
+			note(head)
+		}
+	}
+}
+
 func (g *Generator) emitTryWrittenEscapes(out *strings.Builder, prefix string, body []ast.Stmt) {
 	declared := map[string]bool{}
 	var written []string
@@ -897,7 +947,15 @@ func (g *Generator) emitTryWrittenEscapes(out *strings.Builder, prefix string, b
 			case *ast.FieldAssignStmt:
 				note(headIdentName(s.Object))
 			}
-		}, nil)
+		}, func(ex ast.Expr) {
+			// A call writes through the local's address, which the setjmp cannot
+			// see any more than an assignment: read in the catch, a struct a
+			// method had just replaced a field of held the pointer from before
+			// the try, which that method had already released.
+			if call, ok := ex.(*ast.CallExpr); ok {
+				g.noteLocalsACallCanWrite(call, note)
+			}
+		})
 	}
 	for _, name := range written {
 		out.WriteString(fmt.Sprintf("%s__asm__ volatile(\"\" : : \"r\"(&%s) : \"memory\");\n", prefix, name))

@@ -22,6 +22,7 @@ func (g *Generator) genCallRefreshingUnwind(out *strings.Builder, e *ast.CallExp
 		return
 	}
 	var clear, refresh strings.Builder
+	var owned []string
 	for _, w := range written {
 		sv := g.lookupScopeVar(w.name)
 		keys := make([]string, 0, len(sv.fieldSlots))
@@ -40,14 +41,35 @@ func (g *Generator) genCallRefreshingUnwind(out *strings.Builder, e *ast.CallExp
 			if !ok {
 				continue
 			}
-			clear.WriteString(fmt.Sprintf("_dex_cleanup_set(%s, 0); ", sv.fieldSlots[key]))
-			refresh.WriteString(fmt.Sprintf("_dex_cleanup_set(%s, %s); ", sv.fieldSlots[key], held))
+			// While the call runs the field's value is the callee's business, so
+			// the entry watches the field, and a throw reads what it holds then.
+			watched, _ := unwindWatched(w.name+"."+key, fieldPathType(sv.typ, key))
+			slot := sv.fieldSlots[key]
+			clear.WriteString(fmt.Sprintf("_dex_cleanup_set(%s, %s); ", slot, watched))
+			// A call in another's arguments, a.f(a.g()), must not end the watch:
+			// the outer call has yet to run, and may replace the field too. Only
+			// the outermost call goes back to the plain pointer.
+			if !g.watchedSlots[slot] {
+				refresh.WriteString(fmt.Sprintf("_dex_cleanup_set(%s, %s); ", slot, held))
+				owned = append(owned, slot)
+			}
 		}
 	}
-	if refresh.Len() == 0 {
+	if clear.Len() == 0 {
 		g.genCallExpr(out, e)
 		return
 	}
+	if g.watchedSlots == nil {
+		g.watchedSlots = map[string]bool{}
+	}
+	for _, slot := range owned {
+		g.watchedSlots[slot] = true
+	}
+	defer func() {
+		for _, slot := range owned {
+			delete(g.watchedSlots, slot)
+		}
+	}()
 	typ := g.typeOfExpr(e)
 	if typ == ast.TypeVoid {
 		out.WriteString("({ " + clear.String())
@@ -249,7 +271,7 @@ func (g *Generator) genGuardedFieldValue(out *strings.Builder, fieldType ast.Typ
 	}
 	out.WriteString("; ")
 	var held []string
-	g.collectUnwindHeld(tmp, fieldType, &held, 0)
+	g.collectUnwindHeld(tmp, fieldType, unwindHeld, &held, 0)
 	for _, h := range held {
 		out.WriteString(fmt.Sprintf("_dex_cleanup_push(%s); ", h))
 	}

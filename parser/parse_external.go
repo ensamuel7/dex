@@ -154,12 +154,28 @@ func (p *Parser) parseExternalFunc(moduleName string) (*ast.ExternalFunc, error)
 		if err != nil {
 			return nil, err
 		}
-		if p.softKeyword("freed") {
+		// Either order reads naturally: `sized by n freed by "f"`, or the reverse.
+		for p.softKeyword("freed") || p.softKeyword("sized") {
+			word := p.current().Value
 			p.advance()
 			if !p.softKeyword("by") {
-				return nil, p.errorf("expected 'by' after 'freed' on %s.%s", moduleName, name)
+				return nil, p.errorf("expected 'by' after '%s' on %s.%s", word, moduleName, name)
 			}
 			p.advance()
+			if word == "sized" {
+				if fn.ReturnSizedBy != "" {
+					return nil, p.errorf("'sized by' is given twice on %s.%s", moduleName, name)
+				}
+				if !p.check(token.TokenIdent) {
+					return nil, p.errorf("expected the parameter holding the length on %s.%s, as in sized by n", moduleName, name)
+				}
+				fn.ReturnSizedBy = p.current().Value
+				p.advance()
+				continue
+			}
+			if fn.ReturnFreer != "" {
+				return nil, p.errorf("'freed by' is given twice on %s.%s", moduleName, name)
+			}
 			if !p.check(token.TokenString) {
 				return nil, p.errorf("expected the freeing function in quotes on %s.%s, as in freed by \"sqlite3_free\"", moduleName, name)
 			}

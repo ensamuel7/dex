@@ -91,6 +91,11 @@ Every C name a block supplies — `= "symbol"`, `closed by`, `freed by` — is
 pasted into the generated C, so `validCSymbol` holds each to a C identifier,
 for the same reason `validLinkFlag` restricts flags.
 
+`sized by n` is a soft keyword beside `freed by`, in either order. `FromExternal`
+turns the name into `FuncDef.ReturnSizeParam`, and `genExternalStringCall` reads
+that argument after the call, copying by length instead of `strlen`. A NULL or a
+negative length is `""`: a negative one would otherwise become a huge `size_t`.
+
 `owned` is a soft keyword in the return position, not an annotation: `#[owned]`
 already means no-aliasing on a variable, and a marker deciding whether `free`
 runs is semantics rather than advice. There is no `#[raw]` for parameters —
@@ -413,11 +418,39 @@ nested struct and registering an optional, a `T?` box or an interface's `_obj`
 under a dotted slot key; `emitUnwindPathUpdate` keeps each slot current after a
 field write. A call that may mutate a struct local's fields — a mutating
 method, a `&T` argument, `reflect.setString`, `db.fill` — goes through
-`gen_unwind_refresh.go`, which clears those slots before the call and refreshes
-them after. If that callee itself throws, the field it was writing leaks, one
-object per throw: the caller cannot know the new value and the dead frame
-cannot be read. That and allocations failing inside runtime constructors are
-what the fault-injection sweep still finds leaking.
+`gen_unwind_refresh.go`, which **watches** those slots for the length of the
+call and refreshes them after.
+
+A watched entry holds the field's address, tagged in the low bits (`DEX_WATCH`,
+and `DEX_WATCH_BOX` for a `T?`, whose pointer addresses the value rather than the
+header). The caller cannot know a value the callee is about to write, and if the
+callee throws it never will; but `_dex_cleanup_settle` runs at every throw
+*before* the `longjmp`, while the frames being unwound are still intact, and turns
+each watched entry above the catching try's height into the pointer that field
+holds then. So the first property above still holds where it matters: by the time
+the unwind runs, in the catching frame, every entry is a plain pointer, and
+`finally` and deferred calls see nothing new. Three things hold it together:
+
+- **Settling stops at the catching try's height** (`cleanup_mark`, recorded on the
+  frame). An entry below it belongs to a frame that carries on, whose call may
+  yet replace the field, so it has to stay watched.
+- **A nested call leaves the watch to the outermost.** In `a.f(a.g())` a refresh
+  after `g` would put a plain pointer back while `f` has yet to run.
+  `watchedSlots` is what `genCallRefreshingUnwind` keeps it in.
+- **A struct temporary's entries are always watched** (`registerTempForUnwind`):
+  it has no slots to update, and a fluent chain's method replaces its fields. An
+  entry holding the old pointer named freed memory, not just a leak.
+
+`writesThrough` is deliberately over-approximate, and with this that costs a store
+rather than a leak, so it needs no call graph. A writer it cannot see, through a
+`&T` held in another struct, still leaves a plain entry: registering every struct
+field as watched would close that too, at the cost of touching every program that
+throws. Allocations failing inside runtime constructors are what the
+fault-injection sweep still finds leaking.
+
+A struct local a call in the try body writes has to stay in memory across the
+`setjmp`, for the reason an assigned one does below: `noteLocalsACallCanWrite`
+feeds `emitTryWrittenEscapes`, or the catch reads the pointer from before the call.
 
 Registration is guarded on `_dex_exc_top >= 0`: with no exception frame live a
 throw exits the process and nothing unwinds, so the push is a load and a branch.
@@ -811,6 +844,31 @@ and retains a borrowed `T?`. `examples/optionalStruct_test.dx` covers each path.
 The box goes on the cleanup stack as its header pointer, or NULL when empty,
 with a slot when the variable is reassigned (`registerScopeVar`/`unwindHeld`).
 
+## An empty literal takes its type from where it goes
+
+`[]` and `{}` have no type of their own. `typeEmptyLiteral` gives them the
+target's at each site that compares against a known type: every kind of call's
+parameters, constructor arguments, enum payloads, assignments. It wraps
+`applyTargetType` rather than being that, because the wrapped function also sets
+`db.col` and `json.decode` result types and JSON-marks object literals, which an
+argument position must not start doing. `ArrayLitExpr.Targeted` says the target
+was applied: `ElemType` cannot, since `TypeInt` is 0, which is why `int[]` alone
+failed at the sites that already passed a target down.
+
+## A default parameter means what it meant where it was written
+
+The checker pastes a parameter's `DefaultValue` into each call that leaves the
+argument out, as the same node, wherever the call is. So resolve gives a default
+the renames a function body gets (`renameModuleRefs`, the prefixer,
+`resolveQualifiedGlobals`), against the file's top level, since no local of the
+function can shadow it. `resolveQualifiedGlobals` also flattens a call to another
+module's function, `other.f()` to `other_f()`, because a caller with a local
+named `other` would otherwise capture it; a private function stays qualified so
+the checker refuses it. A method's signature reads `sd.Methods`, not the flattened
+copy, so a pass that replaces the node has to do both. Lint counts a default as a
+use (`visitDefaults`). A single-file program has no prefix to protect it: a caller
+with a local named like the global a default reads gets the local.
+
 ## Maps reject what they cannot represent
 
 The map runtime is generated per key/value suffix pair, and `mapKeySuffix` /
@@ -945,6 +1003,9 @@ or a use-after-free, so change them deliberately:
 - **A map read of a string mints.** `dex_map_*_get` returns its value
   retained, so `m["k"]` is owned (`isMapHeapRead`), and `if (m["k"] == "v")`
   releases it like any other minted operand.
+- **A send hands over a reference.** A receive mints (`isNewAlloc`), so `send`
+  retains a borrowed value through `emitRetainMovedArg`. It did not, and
+  `send(ch, local)` gave the receiver a string the sender's scope exit had freed.
 - **A local written in a try body escapes before the `setjmp`.** After a
   `longjmp` a local the body changed may be read from a register holding its
   old value, which was a double free when the old value had been released.
@@ -961,6 +1022,14 @@ or a use-after-free, so change them deliberately:
   `switch` bodies and object literals, and compound assignment, destructuring,
   lambda, match and interpolation bodies were missed for longer than that —
   which is why `x += mod.f()` was not module-prefixed.
+- The walker knows scope. `walkStmtsScoped`'s callback gets the names each block's
+  header binds (a foreach variable, a catch binding, case patterns, a lambda's
+  parameters), so a pass asking whether a name is local never lists binding forms
+  itself. `rewriteFieldRefs`, `collectDeclaredNames`, `DeclaredInFrame` and
+  `FreeNames` all do; `FreeNames` is what a `spawn` or lambda captures.
+  `collectReferencedVars` in the checker, which enforces the `#[owned]`,
+  `#[noEscape]` and `#[region]` capture rules, is still a hand-written walk and
+  misses enum constructors, object literals and method receivers.
 - A pass that only *inspects* uses the read-only wrappers in `resolve/visit.go`
   (`VisitStmts`, `VisitExpr`) rather than the mutating walker, whose callback
   result is a replacement node: a visitor written against it truncates its own

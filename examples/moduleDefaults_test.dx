@@ -1,0 +1,51 @@
+// A parameter default may name what its module can see: a constant or a function
+// of its own, or of a module it imports. The checker pastes a default into each
+// call that leaves the argument out, wherever that call is, so the default has
+// to mean what it meant where it was written. It was left out of the module
+// prefixing that function bodies get, and `fn wait(ms: int = WAIT)` in a library
+// reported `undefined variable 'WAIT'` against correct code.
+
+import "modules/defaults"
+
+fn main(): void {
+    assert(defaults.wait() == 30000)
+    assert(defaults.wait(5) == 5)
+    assert(defaults.named() == "dee")
+    assert(defaults.named("x") == "x")
+    assert(defaults.viaFn() == 30001)
+    assert(defaults.viaFn(1) == 1)
+    assert(defaults.viaPrivate() == 9)
+
+    // Twice, because each call evaluates the default afresh and owns the result.
+    assert(defaults.viaHeap() == "title")
+    assert(defaults.viaHeap() == "title")
+    assert(defaults.viaHeap("x") == "x")
+
+    assert(defaults.viaOther() == 7)
+    assert(defaults.viaOther(1) == 1)
+    assert(defaults.viaOtherFn() == "other!14")
+    assert(defaults.viaOtherFn(1, "s") == "s1")
+    assert(defaults.viaExpr() == 60008)
+    assert(defaults.sameName() == 30000)
+    assert(defaults.sameName(2) == 2)
+    assert(defaults.fromInside() == 60007)
+
+    let b: defaults.Box = defaults.makeBox()
+    assert(b.take() == "title30008")
+    assert(b.take(1, "s", 2) == "s4")
+    assert(b.fromMethod() == "title30008")
+
+    callerNames()
+}
+
+// A caller's locals must not capture what a default names, even when they share
+// a name with the module it reached for. `other` here is an int; the default of
+// viaOtherFn means the module.
+fn callerNames(): void {
+    let other: int = -2
+    let WAIT: int = -1
+    assert(other + WAIT == -3)
+    assert(defaults.wait() == 30000)
+    assert(defaults.viaOther() == 7)
+    assert(defaults.viaOtherFn() == "other!14")
+}

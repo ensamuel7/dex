@@ -50,6 +50,11 @@ type FuncDef struct {
 	BorrowedReturn bool
 
 	ReturnFreer string
+
+	// ReturnSized says the string's length is what the callee wrote through
+	// parameter ReturnSizeParam, from `sized by` on an external declaration.
+	ReturnSized     bool
+	ReturnSizeParam int
 }
 
 // IsRawParam reports whether argument idx is handed over as a DexString*.
@@ -157,7 +162,7 @@ func FromExternal(em ast.ExternalModule) *Module {
 		}
 	}
 	for _, f := range em.Funcs {
-		m.Funcs[f.Name] = FuncDef{
+		def := FuncDef{
 			Params:         f.Params,
 			ParamNames:     f.ParamNames,
 			ReturnType:     f.ReturnType,
@@ -166,6 +171,12 @@ func FromExternal(em ast.ExternalModule) *Module {
 			ReturnFreer:    f.ReturnFreer,
 			Doc:            "external " + em.Name + "." + f.Name,
 		}
+		for i, name := range f.ParamNames {
+			if f.ReturnSizedBy != "" && name == f.ReturnSizedBy {
+				def.ReturnSized, def.ReturnSizeParam = true, i
+			}
+		}
+		m.Funcs[f.Name] = def
 	}
 	return m
 }

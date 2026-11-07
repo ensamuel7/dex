@@ -221,7 +221,7 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 		}
 		if len(e.Elems) == 0 {
 			// A target type may already have been supplied, as for map literals.
-			if e.ElemType != 0 || ast.IsStructType(e.ElemType) {
+			if e.Targeted || e.ElemType != 0 {
 				if ast.IsStructType(e.ElemType) {
 					return ast.StructArrayTypeOf(e.ElemType), nil
 				}
@@ -477,6 +477,9 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 				ast.DisplayStructName(e.EnumName), e.Variant, len(fields), len(e.Args))
 		}
 		for i, arg := range e.Args {
+			if err := c.typeEmptyLiteral(arg, fields[i]); err != nil {
+				return 0, err
+			}
 			at, err := c.checkExpr(arg)
 			if err != nil {
 				return 0, err
@@ -887,6 +890,9 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 						return 0, c.errAt(e.Pos, "%s() constructor takes exactly %d argument(s), got %d", e.Name, len(ctorParams), len(e.Args))
 					}
 					for i, arg := range e.Args {
+						if err := c.typeEmptyLiteral(arg, ctorParams[i]); err != nil {
+							return 0, err
+						}
 						argType, err := c.checkExpr(arg)
 						if err != nil {
 							return 0, err
@@ -916,6 +922,9 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 					return 0, c.errAt(e.Pos, "%s.%s() takes exactly %d argument(s), got %d", e.Module, e.Name, len(sig.Params), len(e.Args))
 				}
 				for i, arg := range e.Args {
+					if err := c.typeEmptyLiteral(arg, sig.Params[i]); err != nil {
+						return 0, err
+					}
 					argType, err := c.checkExpr(arg)
 					if err != nil {
 						return 0, err
@@ -949,6 +958,9 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 						return 0, err
 					}
 					continue
+				}
+				if err := c.typeEmptyLiteral(arg, funcDef.Params[i]); err != nil {
+					return 0, err
 				}
 				argType, err := c.checkExpr(arg)
 				if err != nil {
@@ -999,6 +1011,9 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 				return 0, c.errAt(e.Pos, "function variable '%s' expects %d arguments, got %d", e.Name, len(fnParams), len(e.Args))
 			}
 			for i, arg := range e.Args {
+				if err := c.typeEmptyLiteral(arg, fnParams[i]); err != nil {
+					return 0, err
+				}
 				argType, err := c.checkExpr(arg)
 				if err != nil {
 					return 0, err
@@ -1030,6 +1045,9 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 				return 0, c.errAt(e.Pos, "%s() constructor takes exactly %d argument(s), got %d", e.Name, len(ctorParams), len(e.Args))
 			}
 			for i, arg := range e.Args {
+				if err := c.typeEmptyLiteral(arg, ctorParams[i]); err != nil {
+					return 0, err
+				}
 				argType, err := c.checkExpr(arg)
 				if err != nil {
 					return 0, err
@@ -1064,6 +1082,9 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 			return 0, c.errAt(e.Pos, "function '%s' expects %d arguments, got %d", e.Name, len(sig.Params), len(e.Args))
 		}
 		for i, arg := range e.Args {
+			if err := c.typeEmptyLiteral(arg, sig.Params[i]); err != nil {
+				return 0, err
+			}
 			argType, err := c.checkExpr(arg)
 			if err != nil {
 				return 0, err

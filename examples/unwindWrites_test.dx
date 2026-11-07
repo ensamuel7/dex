@@ -1,0 +1,330 @@
+// A throw out of a call that wrote to a struct.
+//
+// A struct local's fields are on the cleanup stack as pointers, and a call that
+// may replace one cannot tell its caller the new pointer until it returns, which
+// a throw means it never does. So everything the method had put in the struct
+// leaked, and a statement temporary, whose entry was the pointer from before the
+// call, released a value the method had already freed: a leak at best and a
+// double free at worst. Each function below ends in a throw with its struct in a
+// different state. Nothing may be alive afterwards, and nothing may be freed twice.
+//
+//   DEX_MEM_CHECK=1 DEX_MEM_LEAKS=error go run . run examples/unwindWrites_test.dx
+
+struct Oops(message: string) {}
+
+struct Other(message: string) {}
+
+interface Named {
+    fn name(): string
+}
+
+struct Tag {
+    label: string
+
+    fn name(): string {
+        return self.label
+    }
+}
+
+struct Inner {
+    note: string
+    nums: int[]
+
+    fn setNote(s: string): void {
+        self.note = s
+    }
+}
+
+struct Acc {
+    note: string
+    items: string[]
+    counts: map[string, int]
+    inner: Inner
+    maybe: string?
+    box: Tag?
+    who: Named
+
+    // Writes each kind of field, then throws from where it stands.
+    fn writeAll(s: string): void throws Oops {
+        self.note = s + "1"
+        self.items.push(s + "2")
+        self.counts.set(s + "3", 3)
+        self.inner.setNote(s + "4")
+        self.inner.nums.push(4)
+        self.maybe = s + "5"
+        self.box = Tag { label: s + "6" }
+        self.who = Tag { label: s + "7" }
+        throw Oops("all")
+    }
+
+    // Replaces a field twice, so the old values are gone by the time it throws.
+    fn replaceTwice(s: string): void throws Oops {
+        self.note = s + "a"
+        self.note = s + "b"
+        fails(self.note)
+    }
+
+    // Only reads: passing a field along must not lose the rest of the receiver.
+    fn onlyReads(): void throws Oops {
+        fails(self.note)
+    }
+
+    // Through a sibling, which is what writes.
+    fn viaSibling(s: string): void throws Oops {
+        self.replaceTwice(s)
+    }
+
+    // Writes, catches its own failure, writes again and returns normally.
+    fn recovers(s: string): void {
+        self.note = s + "x"
+        try {
+            fails(s)
+        } catch (e: Oops) {
+            self.note = e.message + "y"
+        }
+    }
+
+    // A method on a field that is itself a struct.
+    fn writeInner(s: string): void throws Oops {
+        self.inner.setNote(s + "n")
+        fails(s)
+    }
+
+    fn value(): string {
+        self.note = self.note + "v"
+        return self.note
+    }
+
+    fn bump(): int {
+        self.note = self.note + "v"
+        return 1
+    }
+
+    fn takesInt(n: int): int throws Oops {
+        self.note = "t" + "t"
+        throw Oops("x")
+    }
+
+    fn takes(s: string): void throws Oops {
+        self.note = s + "t"
+        fails(s)
+    }
+}
+
+fn fails(s: string): void throws Oops {
+    throw Oops("no: " + s)
+}
+
+fn fresh(s: string): Acc {
+    return Acc {
+        note: s + "note",
+        items: [s + "item"],
+        counts: {},
+        inner: Inner { note: s + "inner", nums: [] },
+        maybe: s + "maybe",
+        box: Tag { label: s + "box" },
+        who: Tag { label: s + "who" }
+    }
+}
+
+fn throughLocal(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    a.writeAll(s)
+}
+
+fn throughReplace(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    a.replaceTwice(s)
+}
+
+fn throughReads(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    a.onlyReads()
+}
+
+fn throughSibling(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    a.viaSibling(s)
+}
+
+fn throughInner(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    a.writeInner(s)
+}
+
+// Writing through a reference parameter is the same question.
+fn writesThrough(a: &Acc, s: string): void throws Oops {
+    a.note = s + "ref"
+    a.inner.setNote(s + "refinner")
+    fails(s)
+}
+
+fn throughRef(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    writesThrough(a, s)
+}
+
+// A fluent chain on a temporary: mark replaces a heap value, so an entry holding
+// the pointer from before the call names freed memory.
+struct B {
+    note: string
+    tags: string[]
+
+    fn mark(s: string): &B {
+        self.note = s + "?"
+        self.tags.push(s + "!")
+        return self
+    }
+
+    fn done(): int throws Oops {
+        throw Oops("no")
+    }
+}
+
+fn makeB(s: string): B {
+    return B { note: s + "old", tags: [] }
+}
+
+fn chain(s: string): int throws Oops {
+    return makeB(s).mark("x").mark("y").done()
+}
+
+// The call's own arguments call into the receiver too. The inner call used to end
+// the outer one's watch, so a field the outer call then replaced was released
+// twice. A condition has no statement to hoist the argument into, so it is the
+// shape where the two calls truly nest.
+fn nestedCalls(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    a.takes(a.value())
+}
+
+fn nestedInACondition(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    if (a.takesInt(a.bump()) > 0) {
+        assert(false)
+    }
+}
+
+// Unwinding through a try whose clauses all decline, and a finally.
+fn declined(s: string): void throws Oops {
+    let a: Acc = fresh(s)
+    try {
+        a.replaceTwice(s)
+    } catch (e: Other) {
+        assert(false)
+    }
+}
+
+fn withFinally(s: string, log: string[]): void throws Oops {
+    let a: Acc = fresh(s)
+    try {
+        a.writeAll(s)
+    } finally {
+        log.push("finally")
+    }
+}
+
+fn withDefer(s: string, log: string[]): void throws Oops {
+    let a: Acc = fresh(s)
+    defer log.push(a.note)
+    a.replaceTwice(s)
+}
+
+fn sameFrame(s: string): void {
+    // The catch is in the frame that holds the struct, so the struct is alive
+    // afterwards, holds what the method wrote, and is released at scope exit.
+    let a: Acc = fresh(s)
+    try {
+        a.writeAll(s)
+        assert(false)
+    } catch (e: Oops) {
+        assert(a.note == s + "1")
+        assert(a.items.len() == 2)
+        assert(a.inner.note == s + "4")
+        assert(a.who.name() == s + "7")
+    }
+
+    a.note = s + "after"
+    assert(a.note == s + "after")
+}
+
+fn sameFrameThenThrow(s: string): void throws Oops {
+    // Caught once with the struct still live, then a second throw leaves the
+    // frame altogether.
+    let a: Acc = fresh(s)
+    try {
+        a.replaceTwice(s)
+    } catch (e: Oops) {
+        assert(a.note == s + "b")
+    }
+
+    a.replaceTwice(s + "2")
+}
+
+fn caught(f: fn(string): void, s: string): void {
+    try {
+        f(s)
+        assert(false)
+    } catch (e: Oops) {
+        assert(!e.message.isEmpty())
+    }
+}
+
+fn main(): void {
+    let s: string = "s" + "tr"
+    for (let i: int = 0; i < 25; i++) {
+        caught(throughLocal, s)
+        caught(throughReplace, s)
+        caught(throughReads, s)
+        caught(throughSibling, s)
+        caught(throughInner, s)
+        caught(throughRef, s)
+        caught(nestedCalls, s)
+        caught(nestedInACondition, s)
+        caught(declined, s)
+        caught(sameFrameThenThrow, s)
+        sameFrame(s)
+
+        try {
+            chain(s)
+            assert(false)
+        } catch (e: Oops) {
+            assert(e.message == "no")
+        }
+
+        let log: string[] = []
+        try {
+            withFinally(s, log)
+        } catch (e: Oops) {
+            assert(log.len() == 1)
+        }
+
+        try {
+            withDefer(s, log)
+        } catch (e: Oops) {
+            assert(log.len() == 2)
+        }
+
+        // Nothing unwinds, so the write stands and the struct is released as usual.
+        let a: Acc = fresh(s)
+        a.recovers(s)
+        assert(a.note == "no: stry")
+    }
+
+    // On a worker thread, which has a cleanup stack of its own.
+    let done = channel(int)
+    spawn {
+        let got: int = 0
+        for (let i: int = 0; i < 25; i++) {
+            try {
+                throughLocal(s)
+            } catch (e: Oops) {
+                got = got + 1
+            }
+        }
+
+        send(done, got)
+    }
+
+    assert(receive(done) == 25)
+}

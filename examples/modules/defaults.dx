@@ -1,0 +1,80 @@
+// Parameter defaults naming this module's own names, and another module's.
+// examples/moduleDefaults_test.dx calls them from outside.
+
+import "defaultsOther" as "other"
+
+const WAIT: int = 30000
+const NAME: string = "dee"
+
+private fn secret(): int {
+    return 9
+}
+
+fn base(): int {
+    return WAIT + 1
+}
+
+fn title(): string {
+    return "ti" + "tle"
+}
+
+fn wait(ms: int = WAIT): int {
+    return ms
+}
+
+fn named(s: string = NAME): string {
+    return s
+}
+
+fn viaFn(n: int = base()): int {
+    return n
+}
+
+// A default belongs to the file that wrote it, so it may call what is private
+// to that file, wherever the call that leaves the argument out happens to be.
+fn viaPrivate(n: int = secret()): int {
+    return n
+}
+
+// A call returning a heap value runs afresh for each call that needs it.
+fn viaHeap(s: string = title()): string {
+    return s
+}
+
+fn viaOther(n: int = other.LIMIT): int {
+    return n
+}
+
+fn viaOtherFn(n: int = other.computed(), s: string = other.label()): string {
+    return s + n
+}
+
+fn viaExpr(n: int = WAIT + base() + other.LIMIT): int {
+    return n
+}
+
+// A parameter named like the constant its default names: the default still
+// means the constant, because it is written at the file's top level.
+fn sameName(WAIT: int = WAIT): int {
+    return WAIT
+}
+
+fn fromInside(): int {
+    return wait() + viaOther() + sameName()
+}
+
+struct Box {
+    n: int
+
+    fn take(ms: int = WAIT, s: string = title(), o: int = other.LIMIT): string {
+        return s + (self.n + ms + o)
+    }
+
+    fn fromMethod(): string {
+        return self.take()
+    }
+}
+
+fn makeBox(): Box {
+    return Box { n: 1 }
+}

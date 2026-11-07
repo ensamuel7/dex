@@ -1,0 +1,19 @@
+// The module examples/modules/defaults.dx names from its parameter defaults.
+
+const LIMIT: int = 7
+
+fn computed(): int {
+    return LIMIT * 2
+}
+
+fn label(): string {
+    return "other" + "!"
+}
+
+private fn hidden(): int {
+    return 1
+}
+
+fn useHidden(): int {
+    return hidden()
+}

@@ -1,0 +1,11 @@
+// Parameters and types examples/emptyLiteral_test.dx reaches through a module.
+
+struct Bag(items: int[]) {}
+
+fn count(xs: string[]): int {
+    return xs.len()
+}
+
+fn withDefaults(xs: int[] = [], tags: map[string, string] = {}): int {
+    return xs.len() + tags.len()
+}

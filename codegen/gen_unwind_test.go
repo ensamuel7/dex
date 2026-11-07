@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -281,4 +282,127 @@ fn main(): void {
 }
 `)
 	assertNotContains(t, out, "dex_retain(a.label)")
+}
+
+// cFunctionBody returns the definition of a generated C function.
+func cFunctionBody(t *testing.T, out, name string) string {
+	t.Helper()
+	def := regexp.MustCompile(`(?m)^[A-Za-z_][A-Za-z_0-9* ]* ` + name + `\([^)]*\) \{$`).FindStringIndex(out)
+	if def == nil {
+		t.Fatalf("no definition of %s", name)
+	}
+	body := out[def[0]:]
+	return body[:strings.Index(body, "\n}\n")]
+}
+
+const watchedWrite = `struct Oops(message: string) {}
+
+struct W {
+    note: string
+
+    fn write(s: string): int throws Oops {
+        self.note = s + "!"
+        throw Oops("no")
+    }
+
+    fn bump(): int {
+        self.note = self.note + "v"
+        return 1
+    }
+}
+
+fn makeW(): W {
+    return W { note: "a" + "b" }
+}
+
+fn run(): void throws Oops {
+    let w: W = makeW()
+    if (w.write("x") > 0) {
+        assert(false)
+    }
+}
+
+fn nested(): void throws Oops {
+    let w: W = makeW()
+    if (w.write("" + w.bump()) > 0) {
+        assert(false)
+    }
+}
+
+fn chained(): int throws Oops {
+    return makeW().write("x")
+}
+
+fn sameFrame(): void {
+    let w: W = makeW()
+    try {
+        let n: int = w.write("x")
+        assert(n == 0)
+    } catch (e: Oops) {
+        assert(w.note == "x!")
+    }
+}
+
+fn main(): void {
+    try {
+        run()
+        nested()
+        assert(chained() == 0)
+    } catch (e: Oops) {
+        sameFrame()
+    }
+}
+`
+
+// While a call may replace a field, its cleanup entry watches the field rather
+// than naming a pointer the call may free, and goes back to a plain pointer after.
+func TestWritingCallWatchesTheFieldItMayReplace(t *testing.T) {
+	out := generate(t, watchedWrite)
+	line := lineContaining(t, out, "W_write(&w, ")
+	watch := strings.Index(line, "DEX_WATCH(&w.note)")
+	call := strings.Index(line, "W_write(&w, ")
+	refresh := strings.LastIndex(line, ", w.note);")
+	if watch < 0 || refresh < 0 || !(watch < call && call < refresh) {
+		t.Errorf("want the entry watched, then the call, then a plain pointer:\n%s", line)
+	}
+}
+
+// A call in another call's arguments must not end the outer call's watch, or the
+// field the outer call replaces has a stale pointer on the cleanup stack.
+func TestNestedWritingCallLeavesTheWatchToTheOutermost(t *testing.T) {
+	out := generate(t, watchedWrite)
+	body := cFunctionBody(t, out, "nested")
+	if n := strings.Count(body, ", w.note);"); n != 1 {
+		t.Errorf("want one refresh, by the outermost call, got %d:\n%s", n, body)
+	}
+}
+
+// A struct temporary's method can replace a field, as a fluent chain does, so its
+// entries watch the fields rather than holding pointers from before the call.
+func TestStructTemporaryIsWatched(t *testing.T) {
+	out := generate(t, watchedWrite)
+	body := cFunctionBody(t, out, "chained")
+	if !strings.Contains(body, "_dex_cleanup_push(DEX_WATCH(&") {
+		t.Errorf("a struct temporary's field is not watched:\n%s", body)
+	}
+}
+
+// A local a call in the try body writes through has to stay in memory across the
+// setjmp, or the catch reads the value from before the call.
+func TestLocalACallWritesEscapesBeforeTheTry(t *testing.T) {
+	out := generate(t, watchedWrite)
+	body := cFunctionBody(t, out, "sameFrame")
+	escape := strings.Index(body, `"r"(&w)`)
+	setjmp := strings.Index(body, "DEX_SETJMP")
+	if escape < 0 || escape > setjmp {
+		t.Errorf("want w's address taken ahead of the setjmp:\n%s", body)
+	}
+}
+
+// Every way out of a throw settles the watched entries, while the frames they
+// point into are still there.
+func TestEveryThrowSettlesBeforeItJumps(t *testing.T) {
+	if got, want := strings.Count(ExceptionRuntime, "_dex_cleanup_settle();\n    DEX_LONGJMP"), strings.Count(ExceptionRuntime, "DEX_LONGJMP(_dex"); got != want {
+		t.Errorf("%d of %d longjmps settle first", got, want)
+	}
 }

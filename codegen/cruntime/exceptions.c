@@ -33,6 +33,9 @@ typedef struct {
     // matches on: there is no inheritance to walk, only a name to compare.
     const char* type;
     int active;
+    // The cleanup stack's height when this try was entered: everything above it
+    // is what a throw caught here unwinds past.
+    size_t cleanup_mark;
 } DexExceptionFrame;
 
 static __thread DexExceptionFrame _dex_exc_stack[DEX_MAX_EXCEPTION_DEPTH];
@@ -72,6 +75,20 @@ static __thread char _dex_exc_msg[DEX_EXCEPTION_MESSAGE_MAX];
 // back the slot it took, and _dex_cleanup_set points that slot at the new
 // value — one per reassignable local, and one per written heap field of a
 // struct local. A value written once needs no slot and takes none.
+//
+// A field a callee may be replacing cannot say so: the caller does not know the
+// new pointer until the call returns, and a throw means it never does. So for
+// that long the entry is *watched*: it holds the field's address, tagged in the
+// low bits an aligned pointer leaves free. That is safe because of when it is
+// read. _dex_cleanup_settle runs before the longjmp, while every frame being
+// unwound is still intact, and turns each watched entry into the pointer the
+// field holds at that moment. Everything after that is the plain pointers the
+// unwind has always released, so the rule above still holds where it matters.
+#define DEX_CLEANUP_WATCH_PTR 1u
+#define DEX_CLEANUP_WATCH_BOX 2u
+#define DEX_CLEANUP_WATCH_MASK 3u
+#define DEX_WATCH(addr) ((void*)((size_t)(addr) | DEX_CLEANUP_WATCH_PTR))
+#define DEX_WATCH_BOX(addr) ((void*)((size_t)(addr) | DEX_CLEANUP_WATCH_BOX))
 #define DEX_CLEANUP_MAX 4096
 static __thread void* _dex_cleanup_stack[DEX_CLEANUP_MAX];
 static __thread size_t _dex_cleanup_top = 0;
@@ -122,9 +139,33 @@ static void _dex_cleanup_drop_to(size_t mark) {
 static void _dex_cleanup_unwind_to(size_t mark) {
     while (_dex_cleanup_top > mark) {
         void* obj = _dex_cleanup_stack[--_dex_cleanup_top];
-        if (obj) {
+        // A watched entry was settled by the throw that brought us here, so one
+        // reaching this point has no value to release. Skipping it costs a leak;
+        // releasing a tagged address would corrupt the heap.
+        if (obj && !((size_t)obj & DEX_CLEANUP_WATCH_MASK)) {
             dex_release(obj);
         }
+    }
+}
+
+// Turns each watched entry the coming longjmp will unwind into the pointer its
+// field holds now. Only those: an entry below the catching try's height belongs
+// to a frame that carries on, and whose call may yet replace the field.
+//
+// A T? field addresses the value rather than the box's header, so its entry
+// steps back over the header, as unwindHeld does for a registered one.
+static void _dex_cleanup_settle(void) {
+    for (size_t i = _dex_exc_stack[_dex_exc_top].cleanup_mark; i < _dex_cleanup_top; i++) {
+        size_t entry = (size_t)_dex_cleanup_stack[i];
+        size_t kind = entry & DEX_CLEANUP_WATCH_MASK;
+        if (!kind) {
+            continue;
+        }
+        void* held = *(void**)(entry & ~(size_t)DEX_CLEANUP_WATCH_MASK);
+        if (kind == DEX_CLEANUP_WATCH_BOX && held) {
+            held = (char*)held - sizeof(DexObjHeader);
+        }
+        _dex_cleanup_stack[i] = held;
     }
 }
 
@@ -138,6 +179,7 @@ static void _dex_exc_push_frame(void) {
         exit(1);
     }
     _dex_exc_top++;
+    _dex_exc_stack[_dex_exc_top].cleanup_mark = _dex_cleanup_top;
 }
 
 static void _dex_exc_stage(const char* msg) {
@@ -205,6 +247,7 @@ static void _dex_throw_staged(const char* type) {
     _dex_exc_stack[_dex_exc_top].message = _dex_exc_msg;
     _dex_exc_stack[_dex_exc_top].type = type;
     _dex_exc_stack[_dex_exc_top].active = 1;
+    _dex_cleanup_settle();
     DEX_LONGJMP(_dex_exc_stack[_dex_exc_top].env);
 }
 
@@ -219,6 +262,7 @@ static void _dex_throw(const char* type, const char* msg) {
     _dex_exc_stack[_dex_exc_top].message = msg;
     _dex_exc_stack[_dex_exc_top].type = type;
     _dex_exc_stack[_dex_exc_top].active = 1;
+    _dex_cleanup_settle();
     DEX_LONGJMP(_dex_exc_stack[_dex_exc_top].env);
 }
 
@@ -232,6 +276,7 @@ static void _dex_rethrow(const char* type, const char* msg) {
     _dex_exc_stack[_dex_exc_top].message = msg;
     _dex_exc_stack[_dex_exc_top].type = type;
     _dex_exc_stack[_dex_exc_top].active = 1;
+    _dex_cleanup_settle();
     DEX_LONGJMP(_dex_exc_stack[_dex_exc_top].env);
 }
 

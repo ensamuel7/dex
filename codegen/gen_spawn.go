@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
+	"github.com/ensamuel7/dex/resolve"
 )
 
 func (g *Generator) genSpawnExpr(out *strings.Builder, e *ast.SpawnExpr) {
@@ -169,15 +170,8 @@ type capturedVar struct {
 
 // findCapturedVars identifies variables referenced in spawn body that are defined in the outer scope.
 func (g *Generator) findCapturedVars(body []ast.Stmt) []capturedVar {
-	used := make(map[string]bool)
-	defined := make(map[string]bool) // vars defined within the spawn body
-	g.collectUsedVars(body, used, defined)
-
 	var result []capturedVar
-	for name := range used {
-		if defined[name] {
-			continue
-		}
+	for name := range resolve.FreeNames(body) {
 		if g.namesGlobal(name) {
 			continue
 		}
@@ -213,164 +207,7 @@ func (g *Generator) namesGlobal(name string) bool {
 			return false
 		}
 	}
-	declared := make(map[string]bool)
-	g.collectUsedVars(g.currentFn.Body, make(map[string]bool), declared)
-	return !declared[name]
-}
-
-func (g *Generator) collectUsedVars(stmts []ast.Stmt, used, defined map[string]bool) {
-	for _, stmt := range stmts {
-		switch s := stmt.(type) {
-		case *ast.LetStmt:
-			g.collectUsedVarsExpr(s.Value, used)
-			defined[s.Name] = true
-		case *ast.ExprStmt:
-			g.collectUsedVarsExpr(s.Expr, used)
-		case *ast.ReturnStmt:
-			if s.Value != nil {
-				g.collectUsedVarsExpr(s.Value, used)
-			}
-		case *ast.AssignStmt:
-			g.collectUsedVarsExpr(s.Value, used)
-			used[s.Name] = true
-		case *ast.SendStmt:
-			if s.Target != nil {
-				g.collectUsedVarsExpr(s.Target, used)
-			}
-			g.collectUsedVarsExpr(s.Value, used)
-		case *ast.IfStmt:
-			g.collectUsedVarsExpr(s.Cond, used)
-			g.collectUsedVars(s.Then, used, defined)
-			g.collectUsedVars(s.Else, used, defined)
-		case *ast.WhileStmt:
-			g.collectUsedVarsExpr(s.Cond, used)
-			g.collectUsedVars(s.Body, used, defined)
-		case *ast.ForStmt:
-			g.collectUsedVars([]ast.Stmt{s.Init}, used, defined)
-			g.collectUsedVarsExpr(s.Cond, used)
-			g.collectUsedVars([]ast.Stmt{s.Post}, used, defined)
-			g.collectUsedVars(s.Body, used, defined)
-		case *ast.ForeachStmt:
-			g.collectUsedVarsExpr(s.Iterable, used)
-			defined[s.ValueVar] = true
-			if s.IndexVar != "" {
-				defined[s.IndexVar] = true
-			}
-			g.collectUsedVars(s.Body, used, defined)
-		case *ast.BlockStmt:
-			g.collectUsedVars(s.Stmts, used, defined)
-		case *ast.IncrementStmt:
-			used[s.Name] = true
-		case *ast.DecrementStmt:
-			used[s.Name] = true
-		case *ast.CompoundAssignStmt:
-			used[s.Name] = true
-			g.collectUsedVarsExpr(s.Value, used)
-		case *ast.IndexAssignStmt:
-			g.collectUsedVarsExpr(s.Array, used)
-			g.collectUsedVarsExpr(s.Index, used)
-			g.collectUsedVarsExpr(s.Value, used)
-		case *ast.FieldAssignStmt:
-			g.collectUsedVarsExpr(s.Object, used)
-			g.collectUsedVarsExpr(s.Value, used)
-		case *ast.DestructureLetStmt:
-			g.collectUsedVarsExpr(s.Value, used)
-			for _, name := range s.Names {
-				defined[name] = true
-			}
-		case *ast.DeferStmt:
-			g.collectUsedVarsExpr(s.Expr, used)
-		}
-	}
-}
-
-func (g *Generator) collectUsedVarsExpr(expr ast.Expr, used map[string]bool) {
-	if expr == nil {
-		return
-	}
-	switch e := expr.(type) {
-	case *ast.Ident:
-		used[e.Name] = true
-	case *ast.BinaryExpr:
-		g.collectUsedVarsExpr(e.Left, used)
-		g.collectUsedVarsExpr(e.Right, used)
-	case *ast.UnaryExpr:
-		g.collectUsedVarsExpr(e.Operand, used)
-	case *ast.CallExpr:
-		// A method call names its receiver in Module rather than as an operand,
-		// so `handler.start(port)` uses `handler` and must capture it.
-		if e.Module != "" {
-			head := e.Module
-			if dot := strings.Index(head, "."); dot >= 0 {
-				head = head[:dot]
-			}
-			if _, isVar := g.varTypes[head]; isVar {
-				used[head] = true
-			}
-		}
-		g.collectUsedVarsExpr(e.Recv, used)
-		for _, arg := range e.Args {
-			g.collectUsedVarsExpr(arg, used)
-		}
-	case *ast.IndexExpr:
-		g.collectUsedVarsExpr(e.Array, used)
-		g.collectUsedVarsExpr(e.Index, used)
-	case *ast.SliceExpr:
-		g.collectUsedVarsExpr(e.Array, used)
-		if e.Start != nil {
-			g.collectUsedVarsExpr(e.Start, used)
-		}
-		if e.End != nil {
-			g.collectUsedVarsExpr(e.End, used)
-		}
-	case *ast.FieldAccessExpr:
-		g.collectUsedVarsExpr(e.Object, used)
-	case *ast.ArrayLitExpr:
-		for _, elem := range e.Elems {
-			g.collectUsedVarsExpr(elem, used)
-		}
-	case *ast.StructLitExpr:
-		for _, v := range e.FieldValues {
-			g.collectUsedVarsExpr(v, used)
-		}
-	case *ast.SpawnExpr:
-		if e.Body != nil {
-			defined := make(map[string]bool)
-			g.collectUsedVars(e.Body, used, defined)
-		}
-		if e.Call != nil {
-			g.collectUsedVarsExpr(e.Call, used)
-		}
-	case *ast.ReceiveExpr:
-		g.collectUsedVarsExpr(e.Source, used)
-	case *ast.ChannelExpr:
-		// no vars
-	case *ast.NullLit:
-		// no vars
-	case *ast.EnumAccessExpr:
-		// no vars
-	case *ast.MapLitExpr:
-		// no vars
-	case *ast.StringInterpExpr:
-		for _, part := range e.Parts {
-			g.collectUsedVarsExpr(part, used)
-		}
-	case *ast.MatchExpr:
-		g.collectUsedVarsExpr(e.Tag, used)
-		for _, arm := range e.Arms {
-			for _, pat := range arm.Patterns {
-				g.collectUsedVarsExpr(pat, used)
-			}
-			g.collectUsedVarsExpr(arm.Body, used)
-		}
-	case *ast.LambdaExpr:
-		// Lambda body captures are handled separately
-		defined := make(map[string]bool)
-		for _, p := range e.Params {
-			defined[p.Name] = true
-		}
-		g.collectUsedVars(e.Body, used, defined)
-	}
+	return !resolve.DeclaredInFrame(g.currentFn.Body)[name]
 }
 
 func (g *Generator) emitRetainMovedArg(out *strings.Builder, target string, arg ast.Expr) {

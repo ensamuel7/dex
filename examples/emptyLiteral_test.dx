@@ -1,0 +1,199 @@
+// An empty `[]` or `{}` takes its type from where it goes: a parameter, a field,
+// a constructor argument, an enum payload, a return value, an assignment, a
+// default. It was accepted only on the right of a typed `let`, and an int[]
+// target failed even where a target was passed down, because an int element type
+// is 0, which read as no type at all.
+//
+// Each of these owns the value it is given, or borrows it for the call, so the
+// memory checker is what shows the literal's reference is accounted for.
+
+import "modules/emptyLits"
+import "json"
+
+struct Item {
+    name: string
+}
+
+struct Holder {
+    nums: int[]
+    names: string[]
+    items: Item[]
+    counts: map[string, int]
+}
+
+struct Made(nums: int[], counts: map[string, int]) {}
+
+struct MaybeNums {
+    nums: int[]?
+}
+
+enum Node {
+    Raw(string, int[])
+    Named(map[string, string])
+    Items(Item[])
+}
+
+interface Sized {
+    fn size(xs: int[], m: map[string, int]): int
+}
+
+struct Sizer {
+    base: int
+
+    fn size(xs: int[], m: map[string, int]): int {
+        return self.base + xs.len() + m.len()
+    }
+
+    fn measure(xs: string[], items: Item[]): int {
+        return xs.len() + items.len()
+    }
+}
+
+fn total(xs: int[]): int {
+    return xs.len()
+}
+
+fn names(xs: string[]): int {
+    return xs.len()
+}
+
+fn items(xs: Item[]): int {
+    return xs.len()
+}
+
+fn mapSize(m: map[string, string]): int {
+    return m.len()
+}
+
+fn optional(xs: int[]?): int {
+    if (xs != null) {
+        let held: int[] = xs
+        return held.len()
+    }
+
+    return -1
+}
+
+fn encoded(v: json.Value): string {
+    return json.encode(v)
+}
+
+fn defaults(xs: int[] = [], m: map[string, string] = {}, its: Item[] = []): int {
+    return xs.len() + m.len() + its.len()
+}
+
+fn returnedArray(): int[] {
+    return []
+}
+
+fn returnedMap(): map[string, int] {
+    return {}
+}
+
+fn returnedOptional(): int[]? {
+    return []
+}
+
+fn nodeSize(n: Node): int {
+    switch (n) {
+        case Node.Raw(s, xs): {
+            return s.len() + xs.len()
+        }
+        case Node.Named(m): {
+            return m.len()
+        }
+        case Node.Items(its): {
+            return its.len()
+        }
+    }
+}
+
+fn main(): void {
+    // Arguments.
+    assert(total([]) == 0)
+    assert(names([]) == 0)
+    assert(items([]) == 0)
+    assert(mapSize({}) == 0)
+    assert(optional([]) == 0)
+    assert(encoded({}) == "{}")
+    assert(encoded([]) == "[]")
+
+    // A named argument.
+    assert(defaults(m: {}) == 0)
+    assert(defaults(its: []) == 0)
+
+    // Through a function value, a method and an interface.
+    let f: fn(int[]): int = total
+    assert(f([]) == 0)
+    let s: Sizer = Sizer { base: 1 }
+    assert(s.size([], {}) == 1)
+    assert(s.measure([], []) == 0)
+    let sized: Sized = s
+    assert(sized.size([], {}) == 1)
+
+    // A module's function and constructor, and its defaults.
+    assert(emptyLits.count([]) == 0)
+    let bag: emptyLits.Bag = emptyLits.Bag([])
+    assert(bag.items.len() == 0)
+    assert(emptyLits.withDefaults() == 0)
+    assert(emptyLits.withDefaults([1], {}) == 1)
+
+    // Defaults, each call getting a fresh value to mutate nothing into.
+    assert(defaults() == 0)
+    assert(defaults() == 0)
+    assert(defaults([1, 2]) == 2)
+
+    // Struct fields, and the array is a real one that can be pushed to.
+    let h: Holder = Holder { nums: [], names: [], items: [], counts: {} }
+    h.nums.push(1)
+    h.names.push("n" + "ame")
+    h.items.push(Item { name: "i" + "tem" })
+    h.counts.set("k", 1)
+    assert(h.nums.len() == 1 && h.names[0] == "name" && h.items.len() == 1 && h.counts.len() == 1)
+
+    // Constructor arguments.
+    let made: Made = Made([], {})
+    made.nums.push(2)
+    assert(made.nums[0] == 2 && made.counts.len() == 0)
+
+    // An optional target holds an empty value, not null.
+    let maybe: MaybeNums = MaybeNums { nums: [] }
+    assert(maybe.nums != null)
+    let fromReturn: int[]? = returnedOptional()
+    assert(fromReturn != null)
+
+    // Enum payloads.
+    assert(nodeSize(Node.Raw("x", [])) == 1)
+    assert(nodeSize(Node.Named({})) == 0)
+    assert(nodeSize(Node.Items([])) == 0)
+
+    // Return values.
+    assert(returnedArray().len() == 0)
+    assert(returnedMap().len() == 0)
+
+    // Assignment replaces what was there, and releases it.
+    let xs: int[] = [1, 2, 3]
+    xs = []
+    assert(xs.len() == 0)
+    let m: map[string, int] = {}
+    m.set("a", 1)
+    m = {}
+    assert(m.len() == 0)
+    let opt: int[]? = [1]
+    opt = []
+    assert(opt != null)
+
+    // Field assignment too.
+    h.nums = []
+    h.names = []
+    h.items = []
+    h.counts = {}
+    assert(h.nums.len() == 0 && h.names.len() == 0 && h.items.len() == 0 && h.counts.len() == 0)
+
+    // In a loop, so a reference dropped or leaked per evaluation adds up.
+    for (let i: int = 0; i < 100; i++) {
+        assert(total([]) == 0)
+        assert(defaults() == 0)
+        h.nums = []
+    }
+}

@@ -81,6 +81,20 @@ func init() {
 				CName:      "dex_http_set_batch_window",
 				Doc:        "Under http.uring(), keep a batch open until its first request has waited ms milliseconds (or 4,096 requests have joined), so the http.afterBatch hook serves more requests per run: what one query answers for all of them costs the database less per request. Every response in the batch waits for the hook, so this adds up to ms to each one's latency. 0, the default, closes a batch after every pass of the loop; at most 1000. Call before listen. Other backends run the hook per request and ignore it.",
 			},
+			"gzip": {
+				Params:     []ast.Type{ast.TypeInt},
+				ParamNames: []string{"minBytes"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_http_set_gzip",
+				Doc:        "Compress 2xx response bodies of at least minBytes with gzip for clients whose Accept-Encoding allows it, adding Content-Encoding: gzip and Vary: Accept-Encoding. A body that would not get smaller is sent as it is. Handlers return plain bodies either way. Uses libdeflate at its fastest level when it is installed at build time (libdeflate-dev on Debian and Ubuntu); without it this does nothing. 0, the default, is off. Call before listen.",
+			},
+			"gather": {
+				Params:     []ast.Type{ast.TypeInt, ast.TypeInt},
+				ParamNames: []string{"count", "micros"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_http_set_gather",
+				Doc:        "Under http.uring(), when the last pass of the event loop had work, sleep until count completions have arrived or micros microseconds have passed before running the next pass, instead of waking for each one. Each pass then serves more requests with one round of system calls and one http.afterBatch run, which under load costs less CPU per request; each response can wait up to micros longer. Idle, the loop still wakes for the first event. 0 (the default) turns it off; count is at most 4096 and micros at most 100000. Needs Linux 5.11 or later; older kernels ignore it. Call before listen.",
+			},
 			"hold": {
 				Params:     []ast.Type{},
 				ReturnType: ast.TypeInt,
@@ -264,7 +278,18 @@ func init() {
 				},
 			},
 		},
-		CFlags:   []string{"-pthread", "-lcurl"},
+		CFlags:   httpFlags(),
 		CRuntime: httpRuntime,
 	})
+}
+
+// httpFlags links libdeflate when pkg-config finds it, which is what turns
+// http.gzip on; without it the module builds as before and gzip is a no-op.
+func httpFlags() []string {
+	flags := []string{"-pthread", "-lcurl"}
+	if gz, err := PkgConfig("libdeflate"); err == nil {
+		flags = append(flags, "-DDEX_HAS_LIBDEFLATE")
+		flags = append(flags, gz...)
+	}
+	return flags
 }

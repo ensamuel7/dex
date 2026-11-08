@@ -1,0 +1,44 @@
+import "http"
+import "os"
+import "str"
+
+fn big(req: http.HttpRequest): http.HttpResponse {
+    let n: int = str.toInt(req.query)
+    let s: string = "{\"items\":["
+    let i: int = 0
+    while (i < n) {
+        if (i > 0) {
+            s = s + ","
+        }
+        s = s + "{\"id\":${i},\"name\":\"item number ${i}\"}"
+        i = i + 1
+    }
+    return http.response(200, s + "]}", "application/json")
+}
+
+fn missing(req: http.HttpRequest): http.HttpResponse {
+    let s: string = "{\"error\":\""
+    let i: int = 0
+    while (i < 200) {
+        s = s + "xxxxxxxxxx"
+        i = i + 1
+    }
+    return http.response(404, s + "\"}", "application/json")
+}
+
+fn main(): void {
+    http.route("GET", "/big", big)
+    http.route("GET", "/missing", missing)
+    let mode: string = os.env("MODE")
+    if (mode == "uring" || mode == "gather") {
+        http.uring()
+    }
+    if (mode == "gather") {
+        http.gather(64, 2000)
+    }
+    if (mode == "inline") {
+        http.inline()
+    }
+    http.gzip(256)
+    http.listen(str.toInt(os.env("PORT")))
+}

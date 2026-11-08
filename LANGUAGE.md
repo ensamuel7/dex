@@ -2731,6 +2731,8 @@ http.listen(8080)
 | `hold` | `hold(): int` | Take a ticket for the request this handler is serving, so the `afterBatch` hook can answer it with `reply`: handlers collect their batch's work, the hook runs it as one query and replies to each ticket before any response is sent. Returns `-1` when there is no hook, outside a handler, or a second time for the same request; answer from the handler then. A request the hook does not reply to is sent what its handler returned, so return a fallback such as a `500`. |
 | `reply` | `reply(ticket: int, statusCode: int, body: string, contentType: string): void` | Answer a request `hold` took a ticket for, from the `afterBatch` hook of the batch that took it. An empty `contentType` means `application/json`. A ticket from another batch, one already answered, or a call outside the hook is ignored. |
 | `batchWindow` | `batchWindow(ms: int): void` | Under `uring`, keep a batch open until its first request has waited `ms` milliseconds (or 4,096 requests have joined), so the `afterBatch` hook serves more requests per run. Every response in the batch waits for the hook, so this adds up to `ms` to each one's latency. `0`, the default, closes a batch after every pass of the loop; at most `1000`. Call before `listen`; other backends run the hook per request and ignore it. |
+| `gzip` | `gzip(minBytes: int): void` | Compress `2xx` bodies of at least `minBytes` with gzip for clients whose `Accept-Encoding` allows it, adding `Content-Encoding: gzip` and `Vary: Accept-Encoding`. A body that would not get smaller goes out as it is; handlers return plain bodies either way. Uses libdeflate at its fastest level when it is installed at build time (`libdeflate-dev`); without it this does nothing. `0`, the default, is off. Call before `listen`. |
+| `gather` | `gather(count: int, micros: int): void` | Under `uring`, when the last pass of the loop had work, sleep until `count` completions have arrived or `micros` microseconds have passed before the next pass, instead of waking for each one. A pass then serves more requests with one round of system calls and one `afterBatch` run, which costs less CPU per request under load; each response can wait up to `micros` longer. Idle, the loop still wakes for the first event. `0`, the default, turns it off; `count` is at most `4096`, `micros` at most `100000`. Needs Linux 5.11+. Call before `listen`. |
 | `lanes` | `lanes(count: int, serve: fn(int, string[]): void): void` | Start `count` lane processes (1 to 16) that answer the requests handlers pass on with `relay`. A lane gathers what every worker relays to it and calls `serve(lane, payloads)` with the whole batch, so one query answers requests from all workers instead of a few from each. `serve` answers `payloads[i]` with `reply(i, ...)`; one it leaves unanswered gets `500`. A lane is its own process and opens what it needs, such as its database connection, itself. The next batch gathers while a lane is busy; with `batchWindow` set before this call, a batch also stays open until its first request has waited that long. Call before `fork` and `listen`, on Linux; elsewhere it does nothing. |
 | `relay` | `relay(lane: int, payload: string): bool` | Pass the request this handler is serving to `lane`, with `payload` as what that lane's `serve` is handed. The lane's reply is sent to the client, and the worker serves other connections meanwhile. Returns `true` when the request was passed on, and what the handler returns is then discarded; `false` under a backend other than `uring`, outside a handler, or for a lane that does not exist or has stopped, and the handler answers itself. Requests waiting on a lane that stops are answered `503`. |
 | `response` | `response(statusCode: int, body: string, contentType: string): HttpResponse` | Create an HTTP response  |
@@ -3478,9 +3480,40 @@ bindings, so every parameter has to be bound again.
 | `step`       | `step(stmt: int): bool`                              | Run one step; true if a row is available    |
 | `reset`      | `reset(stmt: int): void`                             | Rewind and clear bindings for a re-run      |
 | `finalize`   | `finalize(stmt: int): void`                          | Destroy the statement                       |
+| `send`       | `send(stmt: int): int`                               | Run a bound Postgres statement without waiting; returns a result handle |
 
 `bindInt` truncates past 2^31, which an id column reaches, so bind one with
 `bindLong` — the reason `db.col` hands ids back as `long` is the same.
+
+#### Pipelining
+
+`step` waits for the database every time, so a server that runs one statement
+per request spends most of a request waiting on the network. `send` runs a bound
+statement without waiting and returns a result handle. Every statement sent on a
+connection before one of their results is read goes out together and comes back
+in one round trip, and each is still its own transaction, so one failing does
+not undo the others. The statement's bindings are cleared, so it can be bound
+and sent again at once.
+
+```dex
+let rows: int[] = []
+foreach (ids as id) {
+    db.bindLong(byId, 1, id)
+    rows.push(db.send(byId))
+}
+foreach (rows as r) {
+    if (db.next(r)) {
+        let name: string = db.col(r, 0)
+    }
+    db.free(r)
+}
+```
+
+Read a sent result with `next`, `col`, `affected` and `errorCode`, which
+reports the result being read, and release it with `free`. Using the connection
+any other way, with `step`, `query` or `exec`, first waits for what is in
+flight. A connection's sends and their reads belong to one thread. `send` is
+Postgres only.
 
 `db.errorCode()` returns the SQLSTATE of the last Postgres statement the
 calling thread ran, or `""` when it succeeded, so a handler can tell a unique

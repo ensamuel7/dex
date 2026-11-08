@@ -27,6 +27,9 @@ int accept4(int fd, struct sockaddr* addr, socklen_t* addrlen, int flags);
 #include <signal.h>
 #include <time.h>
 #include <curl/curl.h>
+#ifdef DEX_HAS_LIBDEFLATE
+#include <libdeflate.h>
+#endif
 
 // A route handler is a function value: code plus whatever state it carries, so a
 // handler can be a method bound to the struct holding its dependencies. The
@@ -280,6 +283,7 @@ typedef struct DexHttpConn {
     int           direct;
     unsigned char ring;        /* io_uring: the ring that owns this connection */
     unsigned char plain_recv;  /* io_uring: the read in flight uses read_buf */
+    unsigned char accept_gzip; /* the request's Accept-Encoding allows gzip */
     int           relay_slot;
 } DexHttpConn;
 
@@ -389,6 +393,80 @@ static void dex_http_fail_and_close(DexHttpConn* conn, const char* status, const
     close(conn->fd);
     dex_http_conn_free(conn);
 }
+
+/* http.gzip: bodies of at least this many bytes are compressed for a client
+ * that accepts gzip. 0 is off, and off is all there is without libdeflate. */
+static int dex_http_gzip_min = 0;
+
+void dex_http_set_gzip(int min_bytes) {
+#ifdef DEX_HAS_LIBDEFLATE
+    dex_http_gzip_min = min_bytes > 0 ? min_bytes : 0;
+#else
+    (void)min_bytes;
+#endif
+}
+
+/* Whether an Accept-Encoding value lists coding with a non-zero q. */
+static int dex_http_coding_accepted(const char* v, int vlen, const char* coding) {
+    size_t clen = strlen(coding);
+    const char* end = v + vlen;
+    const char* p = v;
+    while (p < end) {
+        const char* comma = memchr(p, ',', (size_t)(end - p));
+        const char* item_end = comma ? comma : end;
+        while (p < item_end && (*p == ' ' || *p == '\t')) p++;
+        const char* name_end = p;
+        while (name_end < item_end && *name_end != ';' && *name_end != ' ' && *name_end != '\t') name_end++;
+        if ((size_t)(name_end - p) == clen && strncasecmp(p, coding, clen) == 0) {
+            const char* q = name_end;
+            while (q < item_end && *q != ';') q++;
+            if (q >= item_end) return 1;
+            q++;
+            while (q < item_end && (*q == ' ' || *q == '\t')) q++;
+            if (item_end - q >= 2 && (q[0] == 'q' || q[0] == 'Q') && q[1] == '=') {
+                q += 2;
+                /* q=0, q=0.0, q=0.000: refused. Anything else: accepted. */
+                if (q < item_end && *q == '0') {
+                    q++;
+                    if (q < item_end && *q == '.') q++;
+                    while (q < item_end && *q == '0') q++;
+                    if (q >= item_end || *q == ' ' || *q == '\t' || *q == ';') return 0;
+                }
+            }
+            return 1;
+        }
+        if (!comma) break;
+        p = comma + 1;
+    }
+    return 0;
+}
+
+#ifdef DEX_HAS_LIBDEFLATE
+/* One compressor and output buffer per thread: compressing never allocates
+ * once the buffer has grown to the largest body seen. Level 1 is the fastest
+ * and, on JSON, within a few percent of the default level's size. */
+static __thread struct libdeflate_compressor* dex_http_gz = NULL;
+static __thread char* dex_http_gz_buf = NULL;
+static __thread size_t dex_http_gz_cap = 0;
+
+/* Compress body into the thread's buffer. Returns the compressed length, or
+ * 0 when compressing failed or would not make it smaller. */
+static size_t dex_http_gzip(const char* body, size_t len) {
+    if (!dex_http_gz) {
+        dex_http_gz = libdeflate_alloc_compressor(1);
+        if (!dex_http_gz) return 0;
+    }
+    size_t bound = libdeflate_gzip_compress_bound(dex_http_gz, len);
+    if (bound > dex_http_gz_cap) {
+        char* nb = (char*)realloc(dex_http_gz_buf, bound);
+        if (!nb) return 0;
+        dex_http_gz_buf = nb;
+        dex_http_gz_cap = bound;
+    }
+    size_t n = libdeflate_gzip_compress(dex_http_gz, body, len, dex_http_gz_buf, dex_http_gz_cap);
+    return (n > 0 && n < len) ? n : 0;
+}
+#endif
 
 /* Find one header's value inside the header block. Scoped to header lines
  * rather than searched for across the whole request, which is what strstr over
@@ -501,6 +579,13 @@ static int dex_http_try_parse_headers(DexHttpConn* conn) {
         const char* v = dex_http_find_header(conn->read_buf, conn->headers_end,
                                              "Connection", &vlen, NULL);
         if (v && vlen == 5 && strncasecmp(v, "close", 5) == 0) conn->keep_alive = 0;
+    }
+    conn->accept_gzip = 0;
+    if (dex_http_gzip_min > 0) {
+        int vlen = 0;
+        const char* v = dex_http_find_header(conn->read_buf, conn->headers_end,
+                                             "Accept-Encoding", &vlen, NULL);
+        conn->accept_gzip = v && dex_http_coding_accepted(v, vlen, "gzip");
     }
 
     /* A request that frames its body with chunked encoding is refused rather
@@ -631,6 +716,21 @@ static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
     size_t ct_len = strcspn(content_type, "\r\n");
     if (body_len < 0) body_len = 0;
 
+    /* A client that accepts gzip gets a large enough success body compressed. */
+    const char* coding = "";
+    size_t coding_len = 0;
+#ifdef DEX_HAS_LIBDEFLATE
+    if (dex_http_gzip_min > 0 && conn->accept_gzip && body_len >= dex_http_gzip_min && status[0] == '2') {
+        size_t zn = dex_http_gzip(body, (size_t)body_len);
+        if (zn > 0) {
+            body = dex_http_gz_buf;
+            body_len = (int)zn;
+            coding = "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n";
+            coding_len = strlen(coding);
+        }
+    }
+#endif
+
     if (conn->keep_alive && dex_http_shed_at > 0 &&
         __atomic_load_n(&dex_http_live_conns, __ATOMIC_RELAXED) >= dex_http_shed_at) {
         conn->keep_alive = 0;
@@ -648,7 +748,7 @@ static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
     }
 
     size_t needed = 9 + status_len + 16 + ct_len + 18 + (size_t)ndigits + conn_line_len
-                  + extra_len * 2 + 2 + (size_t)body_len + 1;
+                  + coding_len + extra_len * 2 + 2 + (size_t)body_len + 1;
     dex_http_release_write_buf(conn);
     conn->write_buf = dex_http_buf_take(needed, &conn->write_cap);
     if (!conn->write_buf) { conn->write_len = 0; conn->write_pos = 0; return; }
@@ -661,6 +761,7 @@ static void dex_http_build_response_full(DexHttpConn* conn, const char* status,
     memcpy(w, "\r\nContent-Length: ", 18); w += 18;
     memcpy(w, digits, (size_t)ndigits); w += ndigits;
     memcpy(w, conn_line, conn_line_len); w += conn_line_len;
+    if (coding_len) { memcpy(w, coding, coding_len); w += coding_len; }
     size_t hlen = (size_t)(w - conn->write_buf);
 
     if (extra_len > 0) {
@@ -902,6 +1003,17 @@ static void dex_http_answer_batch_failed(DexHttpConn* conn) {
  * gets what its handler returned. */
 #define DEX_HTTP_HOLD_MAX 0xFFFF
 static int dex_http_batch_window_ms = 0;
+static unsigned dex_http_gather_n = 0;
+static unsigned dex_http_gather_us = 0;
+
+void dex_http_set_gather(int count, int micros) {
+    if (count < 0) count = 0;
+    if (count > 4096) count = 4096;
+    if (micros < 0) micros = 0;
+    if (micros > 100000) micros = 100000;
+    dex_http_gather_n = (count > 1 && micros > 0) ? (unsigned)count : 0;
+    dex_http_gather_us = (unsigned)micros;
+}
 
 void dex_http_set_batch_window(int ms) {
     if (ms < 0) ms = 0;
@@ -1419,6 +1531,7 @@ typedef struct {
     size_t sqes_size;
     unsigned* sq_flags;
     int taskrun_flag;      /* the kernel sets IORING_SQ_TASKRUN in sq_flags when work waits */
+    int ext_arg;           /* io_uring_enter takes a timeout (IORING_FEAT_EXT_ARG) */
 } DexUring;
 
 typedef struct {
@@ -1571,6 +1684,10 @@ static int dex_uring_setup(DexUring* r, int allow_defer) {
     r->sqes_size = sqes_size;
     r->sq_flags = (unsigned*)((char*)sq + p.sq_off.flags);
     r->taskrun_flag = 0;
+    r->ext_arg = 0;
+#ifdef IORING_FEAT_EXT_ARG
+    r->ext_arg = (p.features & IORING_FEAT_EXT_ARG) != 0;
+#endif
 #if defined(IORING_SETUP_TASKRUN_FLAG) && defined(IORING_SETUP_DEFER_TASKRUN)
     r->taskrun_flag = (p.flags & IORING_SETUP_TASKRUN_FLAG) && (p.flags & IORING_SETUP_DEFER_TASKRUN);
 #endif
@@ -1601,6 +1718,31 @@ static int dex_uring_enter(DexUring* r, unsigned wait_nr, int getevents) {
         int ret = (int)syscall(__NR_io_uring_enter, r->fd, to_submit, wait_nr, flags, NULL, 0);
         if (ret >= 0 || errno != EINTR) return ret;
     }
+}
+
+/* Submit what is queued, then sleep until wait_nr completions are waiting or
+ * micros have passed, whichever is first. Returns -1 when the kernel can't
+ * take a timeout, and the caller waits the plain way. */
+static int dex_uring_enter_timed(DexUring* r, unsigned wait_nr, unsigned micros) {
+#ifdef IORING_ENTER_EXT_ARG
+    if (!r->ext_arg) return -1;
+    __atomic_store_n(r->sq_tail, r->local_tail, __ATOMIC_RELEASE);
+    unsigned to_submit = r->local_tail - __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE);
+    struct __kernel_timespec ts = { .tv_sec = micros / 1000000, .tv_nsec = (long long)(micros % 1000000) * 1000 };
+    struct io_uring_getevents_arg arg;
+    memset(&arg, 0, sizeof(arg));
+    arg.ts = (unsigned long long)(uintptr_t)&ts;
+    for (;;) {
+        int ret = (int)syscall(__NR_io_uring_enter, r->fd, to_submit, wait_nr,
+                               IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG, &arg, sizeof(arg));
+        if (ret >= 0 || errno == ETIME) return 0;
+        if (errno != EINTR) return ret;
+        to_submit = 0;
+    }
+#else
+    (void)r; (void)wait_nr; (void)micros;
+    return -1;
+#endif
 }
 
 static struct io_uring_sqe* dex_uring_sqe(DexUring* r) {
@@ -2216,8 +2358,9 @@ static void dex_uring_sweep(void) {
     }
 }
 
-/* Handle every completion that is waiting on one ring. */
-static void dex_uring_reap(DexUringRing* r) {
+/* Handle every completion that is waiting on one ring. Returns how many. */
+static unsigned dex_uring_reap(DexUringRing* r) {
+    unsigned reaped = 0;
     unsigned head = *r->u.cq_head;
     unsigned tail = __atomic_load_n(r->u.cq_tail, __ATOMIC_ACQUIRE);
     while (head != tail) {
@@ -2226,6 +2369,7 @@ static void dex_uring_reap(DexUringRing* r) {
         int res = cqe->res;
         unsigned cflags = cqe->flags;
         head++;
+        reaped++;
         if (ud < 256 && (ud & 0xF) == DEX_UD_ACCEPT) {
             r->accepts_pending--;
             r->listener_pending[ud >> 4]--;
@@ -2278,6 +2422,7 @@ static void dex_uring_reap(DexUringRing* r) {
         else if ((ud & 0xF) == DEX_OP_SEND) dex_uring_on_send(conn, res);
     }
     __atomic_store_n(r->u.cq_head, head, __ATOMIC_RELEASE);
+    return reaped;
 }
 
 static int dex_uring_has_cqes(DexUringRing* r) {
@@ -2388,9 +2533,30 @@ static int dex_http_uring_run(int server_fd, int port) {
     dex_uring_queue_timeout();
     dex_lane_uring_live = 1;
     struct epoll_event evs[DEX_URING_MAX_RINGS];
+    unsigned last_reaped = 0;
     for (;;) {
         for (int i = 0; i < dex_uring_count; i++) dex_uring_arm_accepts(&dex_urings[i]);
-        if (dex_uring_count == 1) {
+        /* Busy (the last pass had work): with http.gather set, sleep until a
+         * batch has arrived on the first ring or the time is up, so one pass,
+         * one commit and one round of submissions serve many requests rather
+         * than waking for each. The other rings carry about as much, so they
+         * are entered without waiting afterwards. */
+        int gathered = 0;
+        if (dex_http_gather_n && last_reaped >= 4) {
+            for (int i = 1; i < dex_uring_count; i++) {
+                if (dex_urings[i].u.local_tail != __atomic_load_n(dex_urings[i].u.sq_head, __ATOMIC_ACQUIRE)) dex_uring_enter(&dex_urings[i].u, 0, 0);
+            }
+            unsigned want = dex_http_gather_n / (unsigned)dex_uring_count;
+            if (want < 1) want = 1;
+            if (dex_uring_enter_timed(&dex_urings[0].u, want, dex_http_gather_us) == 0) {
+                gathered = 1;
+                for (int i = 1; i < dex_uring_count; i++) {
+                    if (dex_uring_wants_enter(&dex_urings[i].u)) dex_uring_enter(&dex_urings[i].u, 0, 1);
+                }
+            }
+        }
+        if (gathered) {
+        } else if (dex_uring_count == 1) {
             if (dex_uring_enter(&dex_urings[0].u, 1, 1) < 0 && errno != EBUSY && errno != EAGAIN) {
                 perror("io_uring_enter");
                 return 0;
@@ -2422,7 +2588,8 @@ static int dex_http_uring_run(int server_fd, int port) {
                 }
             }
         }
-        for (int i = 0; i < dex_uring_count; i++) dex_uring_reap(&dex_urings[i]);
+        last_reaped = 0;
+        for (int i = 0; i < dex_uring_count; i++) last_reaped += dex_uring_reap(&dex_urings[i]);
         dex_uring_finish_pass();
         dex_lane_flush();
     }

@@ -1,0 +1,70 @@
+import "http"
+import "os"
+import "str"
+
+let runs: int = 0
+let tries: int = 0
+let batches: int = 0
+
+// Runs N times, asking to run again until the Nth.
+fn wait(req: http.HttpRequest): http.HttpResponse {
+    runs = runs + 1
+    if (runs < str.toInt(req.query) && http.later()) {
+        return http.response(500, "{\"error\":\"answered too early\"}", "application/json")
+    }
+    let r: int = runs
+    runs = 0
+    return http.response(200, "${r}", "application/json")
+}
+
+// Never ready: http.later refuses once the request has waited a second.
+fn forever(req: http.HttpRequest): http.HttpResponse {
+    tries = tries + 1
+    if (http.later()) {
+        return http.response(500, "{\"error\":\"answered too early\"}", "application/json")
+    }
+    let t: int = tries
+    tries = 0
+    return http.response(200, "${t}", "application/json")
+}
+
+// A second call in the same run is always refused. The first parks the
+// request until the second-long limit, so this answers after about a second.
+let secondTrue: bool = false
+fn twice(req: http.HttpRequest): http.HttpResponse {
+    let first: bool = http.later()
+    if (http.later()) {
+        secondTrue = true
+    }
+    if (first) {
+        return http.response(500, "{\"error\":\"answered too early\"}", "application/json")
+    }
+    let s: bool = secondTrue
+    secondTrue = false
+    return http.response(200, "${s}", "application/json")
+}
+
+fn fast(req: http.HttpRequest): http.HttpResponse {
+    return http.response(200, "fast", "application/json")
+}
+
+fn commit(): bool {
+    batches = batches + 1
+    return true
+}
+
+fn main(): void {
+    http.route("GET", "/wait", wait)
+    http.route("GET", "/forever", forever)
+    http.route("GET", "/twice", twice)
+    http.route("GET", "/fast", fast)
+    let mode: string = os.env("MODE")
+    if (mode == "uring" || mode == "gather") {
+        http.uring()
+        http.afterBatch(commit)
+    }
+    if (mode == "gather") {
+        http.gather(64, 2000)
+    }
+    http.listen(str.toInt(os.env("PORT")))
+}

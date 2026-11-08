@@ -101,6 +101,12 @@ func init() {
 				CName:      "dex_http_hold",
 				Doc:        "Take a ticket for the request this handler is serving, so the http.afterBatch hook can answer it with http.reply. Handlers collect their batch's work, the hook runs it as one query, and replies to each ticket before any response is sent. Returns -1 when there is no hook, when called outside a handler or a second time for the same request; answer from the handler then. A request the hook does not reply to is sent what its handler returned, so return a fallback such as a 500.",
 			},
+			"later": {
+				Params:     []ast.Type{},
+				ReturnType: ast.TypeBool,
+				CName:      "dex_http_later",
+				Doc:        "Under uring, run the handler serving this request again on the next pass of the loop instead of answering now; what it returns this time is discarded. For work that cannot proceed yet without blocking the loop, such as a write while another connection holds the database's write lock. Returns false outside a handler, on other backends, after a second call in the same run, or once the request has been waiting 1 second; answer from the handler then.",
+			},
 			"reply": {
 				Params:     []ast.Type{ast.TypeInt, ast.TypeInt, ast.TypeString, ast.TypeString},
 				ParamNames: []string{"ticket", "statusCode", "body", "contentType"},

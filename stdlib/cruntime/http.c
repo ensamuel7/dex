@@ -284,7 +284,10 @@ typedef struct DexHttpConn {
     unsigned char ring;        /* io_uring: the ring that owns this connection */
     unsigned char plain_recv;  /* io_uring: the read in flight uses read_buf */
     unsigned char accept_gzip; /* the request's Accept-Encoding allows gzip */
+    unsigned char later;       /* io_uring: the handler asked to run again (http.later) */
     int           relay_slot;
+    struct DexHttpConn* later_next;
+    uint64_t      later_since; /* io_uring: ms when http.later first parked it, 0 if never */
 } DexHttpConn;
 
 /* Global event-loop state for HTTP server */
@@ -804,6 +807,13 @@ static inline void dex_http_build_response(DexHttpConn* conn, const char* status
  * references it handed back. Three callers: the two route-matching paths and
  * the not-found fallback. */
 static inline void dex_http_apply_response(DexHttpConn* conn, Dex_HttpResponse resp) {
+    if (conn->later) {
+        /* The handler runs again on the next pass; what it returned now is not the answer. */
+        if (resp.contentType) dex_release(resp.contentType);
+        if (resp.headers) dex_release(resp.headers);
+        dex_release(resp.body);
+        return;
+    }
     const char* status = dex_http_status_text(resp.statusCode);
     const char* ct = "application/json";
     if (resp.contentType && resp.contentType->data[0] != '\0') {
@@ -958,6 +968,10 @@ static void dex_http_run_handler_body(DexHttpConn* conn) {
         dex_http_build_response(conn, "404 Not Found",
             "{\"error\": \"Not Found\"}", "application/json");
     }
+
+    /* A request parked by http.later is still being read, as far as anyone
+     * looking at its state can tell: it has no response yet. */
+    if (conn->later) return;
 
     /* Atomic because on a pool this runs on a worker while the event loop's
      * idle sweep reads every connection's state, this one included. */
@@ -2080,6 +2094,9 @@ static void dex_uring_need_more(DexHttpConn* conn) {
     dex_uring_queue_recv(conn);
 }
 
+static void dex_uring_handled(DexHttpConn* conn);
+static void dex_uring_park(DexHttpConn* conn);
+
 /* res bytes have been appended to conn->read_buf (or res <= 0: the read
  * failed or the client closed). */
 static void dex_uring_on_recv(DexHttpConn* conn, int res) {
@@ -2097,25 +2114,68 @@ static void dex_uring_on_recv(DexHttpConn* conn, int res) {
     }
     if (conn->state == HTTP_READING_BODY && conn->read_len - conn->headers_end >= conn->content_length) {
         dex_http_run_handler(conn);
-        dex_uring_idle(conn, 0);
-        if (conn->relay_slot) {
-            dex_http_release_write_buf(conn);
-            conn->write_len = 0;
-            conn->write_pos = 0;
-            return;
-        }
-        if (!conn->write_buf || conn->write_len <= 0) { dex_uring_close(conn); return; }
-        if (dex_http_after_batch) {
-            /* Held until the batch hook has run: see dex_uring_finish_pass. */
-            conn->next = dex_uring_pass_head;
-            dex_uring_pass_head = conn;
-            dex_uring_pass_count++;
-            return;
-        }
-        dex_uring_queue_send(conn);
+        if (conn->later) { dex_uring_park(conn); return; }
+        dex_uring_handled(conn);
         return;
     }
     dex_uring_need_more(conn);
+}
+
+/* A handler has answered conn's request. */
+static void dex_uring_handled(DexHttpConn* conn) {
+    conn->later_since = 0;
+    dex_uring_idle(conn, 0);
+    if (conn->relay_slot) {
+        dex_http_release_write_buf(conn);
+        conn->write_len = 0;
+        conn->write_pos = 0;
+        return;
+    }
+    if (!conn->write_buf || conn->write_len <= 0) { dex_uring_close(conn); return; }
+    if (dex_http_after_batch) {
+        /* Held until the batch hook has run: see dex_uring_finish_pass. */
+        conn->next = dex_uring_pass_head;
+        dex_uring_pass_head = conn;
+        dex_uring_pass_count++;
+        return;
+    }
+    dex_uring_queue_send(conn);
+}
+
+/* http.later: requests whose handlers asked to run again, in arrival order.
+ * Each pass of the loop runs them once more, after its new requests and
+ * before the batch hook, until they answer or have waited
+ * DEX_HTTP_LATER_MAX_MS, after which http.later refuses and the handler
+ * answers as it would without it. */
+#define DEX_HTTP_LATER_MAX_MS 1000
+#define DEX_HTTP_LATER_WAIT_US 200
+static DexHttpConn* dex_uring_later_head = NULL;
+static DexHttpConn* dex_uring_later_tail = NULL;
+
+static void dex_uring_park(DexHttpConn* conn) {
+    if (!conn->later_since) {
+        uint64_t now = dex_uring_now_ms();
+        conn->later_since = now ? now : 1;
+    }
+    dex_uring_idle(conn, 0);
+    conn->later_next = NULL;
+    if (dex_uring_later_tail) dex_uring_later_tail->later_next = conn;
+    else dex_uring_later_head = conn;
+    dex_uring_later_tail = conn;
+}
+
+static void dex_uring_run_later(void) {
+    DexHttpConn* c = dex_uring_later_head;
+    dex_uring_later_head = dex_uring_later_tail = NULL;
+    while (c) {
+        DexHttpConn* next = c->later_next;
+        c->later_next = NULL;
+        c->later = 0;
+        dex_http_run_handler(c);
+        if (c->later) dex_uring_park(c);
+        else dex_uring_handled(c);
+        c = next;
+    }
 }
 
 /* A receive completed. With a buffer ring the bytes are in one of the ring's
@@ -2310,6 +2370,14 @@ static void dex_lane_flush(void) {
         dex_lane_arm_recv(i);
         dex_lane_send_next(i);
     }
+}
+
+static _Bool dex_http_later_uring(void) {
+    DexHttpConn* c = dex_http_running;
+    if (!c || !dex_lane_uring_live || c->relay_slot || c->later) return 0;
+    if (c->later_since && dex_uring_now_ms() - c->later_since >= DEX_HTTP_LATER_MAX_MS) return 0;
+    c->later = 1;
+    return 1;
 }
 
 static _Bool dex_lane_relay_uring(int lane, DexString* payload) {
@@ -2556,6 +2624,15 @@ static int dex_http_uring_run(int server_fd, int port) {
             }
         }
         if (gathered) {
+        } else if (dex_uring_later_head) {
+            /* Parked requests run again next pass: wait briefly, not until
+             * the next event, which may be a second away when idle. */
+            for (int i = 1; i < dex_uring_count; i++) dex_uring_enter(&dex_urings[i].u, 0, 1);
+            if (dex_uring_enter_timed(&dex_urings[0].u, 1, DEX_HTTP_LATER_WAIT_US) != 0) {
+                struct timespec ts = { 0, DEX_HTTP_LATER_WAIT_US * 1000 };
+                nanosleep(&ts, NULL);
+                dex_uring_enter(&dex_urings[0].u, 0, 1);
+            }
         } else if (dex_uring_count == 1) {
             if (dex_uring_enter(&dex_urings[0].u, 1, 1) < 0 && errno != EBUSY && errno != EAGAIN) {
                 perror("io_uring_enter");
@@ -2590,12 +2667,21 @@ static int dex_http_uring_run(int server_fd, int port) {
         }
         last_reaped = 0;
         for (int i = 0; i < dex_uring_count; i++) last_reaped += dex_uring_reap(&dex_urings[i]);
+        if (dex_uring_later_head) dex_uring_run_later();
         dex_uring_finish_pass();
         dex_lane_flush();
     }
 }
 
 #endif
+
+_Bool dex_http_later(void) {
+#if defined(DEX_HTTP_HAVE_URING) && defined(__linux__)
+    return dex_http_later_uring();
+#else
+    return 0;
+#endif
+}
 
 _Bool dex_http_relay(int lane, DexString* payload) {
 #if defined(DEX_HTTP_HAVE_URING) && defined(__linux__)

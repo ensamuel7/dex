@@ -353,3 +353,29 @@ func TestExternalHandleAsStructField(t *testing.T) {
 		let l: Log = Log { file: c.open("/tmp/x", "w"), path: "/tmp/x" }
 	}`)
 }
+
+func TestExternalSizedByAccepted(t *testing.T) {
+	for _, decl := range []string{
+		`fn f(n: &long): string sized by n`,
+		`fn f(n: &int): string sized by n`,
+		`fn f(a: int, n: &long, b: string): string sized by n`,
+		`fn f(n: &long): owned string sized by n`,
+		`fn f(n: &long): owned string sized by n freed by "free"`,
+		`fn f(n: &long): owned string freed by "free" sized by n = "g"`,
+	} {
+		mustCheck(t, "external module m {\n    include \"<stdlib.h>\"\n    "+decl+"\n}\n\nfn main(): void {}\n")
+	}
+}
+
+func TestExternalSizedByRefused(t *testing.T) {
+	for _, c := range []struct{ decl, want string }{
+		{`fn f(n: &long): int sized by n`, "needs a string return"},
+		{`fn f(n: &long): string sized by m`, "names no parameter"},
+		{`fn f(): string sized by n`, "names no parameter"},
+		{`fn f(n: long): string sized by n`, "needs a &long or &int parameter"},
+		{`fn f(n: &double): string sized by n`, "needs a &long or &int parameter"},
+		{`fn f(s: string): string sized by s`, "needs a &long or &int parameter"},
+	} {
+		mustFail(t, "external module m {\n    include \"<stdlib.h>\"\n    "+c.decl+"\n}\n\nfn main(): void {}\n", c.want)
+	}
+}

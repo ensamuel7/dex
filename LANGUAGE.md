@@ -273,6 +273,22 @@ Type inference does **not** work with empty array literals — these still requi
 let items: int[] = []   // explicit type required
 ```
 
+An empty `[]` or `{}` takes its type from where it goes, wherever that is known:
+a parameter, a default, a struct field, a constructor argument, an enum payload,
+a return value, an assignment.
+
+```dex
+total([])
+let h: Holder = Holder { nums: [], counts: {} }
+let n: Node = Node.Raw("x", [])
+xs = []
+
+fn open(brokers: string, settings: map[string, string] = {}): int { ... }
+```
+
+A parameter of a generic function gives it nothing to go on, so `pick([])` is
+still an error, the way `let x = []` is.
+
 ### Multi-declaration
 
 Multiple variables of the same type can be declared on one line:
@@ -1321,6 +1337,20 @@ offset 0.
 
 A parameter with no default must always be passed.
 
+A default is evaluated afresh for each call that leaves the argument out, and in
+a module it means what it meant where it was written. It can name that module's
+constants and functions, private ones included, and what it imports, whatever
+the calling file has in scope:
+
+```dex
+// lib/d.dx
+import "other"
+
+const WAIT: int = 30000
+
+fn wait(ms: int = WAIT, limit: int = other.LIMIT): int { ... }
+```
+
 ### Named arguments
 
 An argument can name the parameter it is for. Named arguments can be given in
@@ -2356,8 +2386,8 @@ try {
   `finally` has run. Its message and fields are preserved as it goes.
 - The heap values the skipped frames held are released when the exception is
   caught, and their deferred calls run, so throwing on an error path neither
-  accumulates memory nor skips cleanup. What is still missed is narrow: the
-  nested-struct and optional fields of a struct local.
+  accumulates memory nor skips cleanup. That includes whatever a method had
+  written into a struct before the throw passed through it.
 - An exception that reaches the top of `main` unhandled prints
   `Unhandled <Type>: <message>` and exits with code 1.
 
@@ -4927,6 +4957,33 @@ C helper is compiled into the same translation unit and can take a `DexString*`
 directly, while a library you link against has no access to that layout. The
 pointer-and-length form is the only one that could work, and it is the form
 those functions are already written in.
+
+Bytes come back the same way, as a pointer and a length. A `string` return is
+read with `strlen`, so it stops at the first NUL. `sized by` names the
+out-parameter the function writes the length to, and the string is then that
+many bytes, whatever they are:
+
+```dex
+external module msg {
+    include "shim.h"
+
+    type Msg closed by "msg_free"
+
+    fn value(m: Msg, n: &long): string sized by n = "msg_value"
+    fn copied(m: Msg, n: &long): owned string sized by n = "msg_copy"
+    fn encoded(m: Msg, n: &long): owned string sized by n freed by "lib_free" = "msg_encode"
+}
+
+let n: long = 0
+let v: string = msg.value(m, n)     // n bytes, NULs included
+```
+
+It composes with the ownership forms above, and comes before or after `freed by`.
+The parameter has to be a `&long` or `&int` of the same declaration, and the
+return a `string`. The bytes are copied once, after the call has written the
+length. A NULL pointer or a negative length, which is how a C function says it
+has nothing, is `""`. Anything returned without `sized by` still stops at the
+first NUL, so a binding handling binary data has to ask for this.
 
 ### Opaque handles
 

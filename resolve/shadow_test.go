@@ -161,3 +161,122 @@ fn main(): void {}
 		}
 	}
 }
+
+// A module's parameter default is prefixed like the rest of the module: the
+// checker pastes it into the call, in the flat namespace, wherever the call is.
+func TestAModuleDefaultNamesItsModulesNames(t *testing.T) {
+	program, err := resolveProject(t, map[string]string{
+		"main.dx": `import "d"
+
+fn main(): void {}
+`,
+		"d.dx": `import "other" as "o"
+
+const WAIT: int = 1
+
+fn base(): int {
+    return 1
+}
+
+fn f(a: int = WAIT, b: int = base(), c: int = o.LIMIT, d: int = o.compute(), WAIT: int = WAIT): int {
+    return a
+}
+
+struct S {
+    fn m(a: int = WAIT, c: int = o.LIMIT): int {
+        return a
+    }
+}
+`,
+		"other.dx": `const LIMIT: int = 2
+
+fn compute(): int {
+    return 3
+}
+`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fn *ast.Function
+	for i := range program.Functions {
+		if program.Functions[i].Name == "d_f" {
+			fn = &program.Functions[i]
+		}
+	}
+	if fn == nil {
+		t.Fatal("no function d_f")
+	}
+	ident := func(e ast.Expr) string {
+		if id, ok := e.(*ast.Ident); ok {
+			return id.Name
+		}
+		return "not an identifier"
+	}
+	if got := ident(fn.Params[0].DefaultValue); got != "d_WAIT" {
+		t.Errorf("a constant: %s", got)
+	}
+	if call := fn.Params[1].DefaultValue.(*ast.CallExpr); call.Name != "d_base" {
+		t.Errorf("a function: %s", call.Name)
+	}
+	if got := ident(fn.Params[2].DefaultValue); got != "o_LIMIT" {
+		t.Errorf("another module's constant, through an alias: %s", got)
+	}
+	if call := fn.Params[3].DefaultValue.(*ast.CallExpr); call.Name != "o_compute" || call.Module != "" {
+		t.Errorf("another module's function keeps nothing for a caller's scope to capture: %q.%q", call.Module, call.Name)
+	}
+	if got := ident(fn.Params[4].DefaultValue); got != "d_WAIT" {
+		t.Errorf("a parameter does not shadow what its own default names: %s", got)
+	}
+
+	// A method's signature reads its parameters from the struct, not the
+	// flattened function, and a rewrite can replace the whole expression.
+	for i := range program.Structs {
+		if program.Structs[i].Name != "d_S" {
+			continue
+		}
+		params := program.Structs[i].Methods[0].Params
+		if got := ident(params[0].DefaultValue); got != "d_WAIT" {
+			t.Errorf("a method's default: %s", got)
+		}
+		if got := ident(params[1].DefaultValue); got != "o_LIMIT" {
+			t.Errorf("a method's default naming another module: %s", got)
+		}
+		return
+	}
+	t.Error("no struct d_S")
+}
+
+// A default may not reach another module's private function: that stays
+// qualified, so the checker still refuses it at the call.
+func TestAModuleDefaultKeepsAnothersPrivateQualified(t *testing.T) {
+	program, err := resolveProject(t, map[string]string{
+		"main.dx": `import "d"
+
+fn main(): void {}
+`,
+		"d.dx": `import "other"
+
+fn f(a: int = other.hidden()): int {
+    return a
+}
+`,
+		"other.dx": `private fn hidden(): int {
+    return 1
+}
+`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range program.Functions {
+		if program.Functions[i].Name == "d_f" {
+			call := program.Functions[i].Params[0].DefaultValue.(*ast.CallExpr)
+			if call.Module != "other" {
+				t.Errorf("a private function was flattened out of the checker's sight: %q.%q", call.Module, call.Name)
+			}
+			return
+		}
+	}
+	t.Fatal("no function d_f")
+}

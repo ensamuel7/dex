@@ -108,6 +108,9 @@ type Generator struct {
 	scopeStack []scopeFrame
 	// cleanupMarks names the C variables that hold cleanup-stack heights.
 	cleanupMarks int
+	// watchedSlots is the cleanup slots of struct fields being watched by a call
+	// whose generation is in progress. See genCallRefreshingUnwind.
+	watchedSlots map[string]bool
 	// stmtTempsRegistered records whether the statement being generated put any
 	// temporary on the cleanup stack, which is what decides if it needs a mark.
 	stmtTempsRegistered bool

@@ -116,3 +116,25 @@ func TestThrowOfAnOwnedStructReleasesIt(t *testing.T) {
 		}
 	}
 }
+
+// A send hands the receiver an owned reference, so one it only borrowed is
+// retained first. A value built for the send already is one.
+func TestSendRetainsWhatItBorrows(t *testing.T) {
+	out := generate(t, `fn main(): void {
+    let done = channel(string)
+    let local: string = "a" + "b"
+    send(done, local)
+    send(done, local + "c")
+    assert(receive(done) == "ab")
+    assert(receive(done) == "abc")
+}
+`)
+	borrowed := lineContaining(t, out, "_send_val = local;")
+	if !strings.Contains(borrowed, "dex_retain(_send_val)") {
+		t.Errorf("a borrowed value was sent without a reference:\n%s", borrowed)
+	}
+	minted := lineContaining(t, out, "dex_str_concat(_")
+	if strings.Contains(minted, "dex_retain(_send_val)") {
+		t.Errorf("a value built for the send was retained, which leaks it:\n%s", minted)
+	}
+}

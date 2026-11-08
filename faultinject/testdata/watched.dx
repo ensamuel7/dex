@@ -1,0 +1,125 @@
+// Allocation failures while a call may be replacing a struct's fields, so the
+// throw arrives with cleanup entries watching those fields rather than holding
+// pointers: partway through a method, between two writes, in a call's arguments,
+// and on a temporary in the middle of a fluent chain.
+
+struct Tag {
+    label: string
+
+    fn name(): string {
+        return self.label
+    }
+}
+
+interface Named {
+    fn name(): string
+}
+
+struct Inner {
+    note: string
+
+    fn setNote(s: string): void {
+        self.note = s + "i"
+    }
+}
+
+struct Acc {
+    note: string
+    items: string[]
+    counts: map[string, int]
+    inner: Inner
+    maybe: string?
+    box: Tag?
+    who: Named
+
+    fn writeAll(s: string): void {
+        self.note = s + "1"
+        self.items.push(s + "2")
+        self.counts.set(s + "3", 3)
+        self.inner.setNote(s + "4")
+        self.maybe = s + "5"
+        self.box = Tag { label: s + "6" }
+        self.who = Tag { label: s + "7" }
+        self.note = self.note + "8"
+    }
+
+    fn bump(): string {
+        self.note = self.note + "v"
+        return self.note
+    }
+
+    fn takes(s: string): void {
+        self.note = s + "t"
+        self.items.push(self.note + "u")
+    }
+}
+
+struct Chain {
+    note: string
+    tags: string[]
+
+    fn mark(s: string): &Chain {
+        self.note = s + "?"
+        self.tags.push(s + "!")
+        return self
+    }
+
+    fn done(): int {
+        return self.note.len() + self.tags.len()
+    }
+}
+
+fn fresh(s: string): Acc {
+    return Acc {
+        note: s + "note",
+        items: [s + "item"],
+        counts: {},
+        inner: Inner { note: s + "inner" },
+        maybe: s + "maybe",
+        box: Tag { label: s + "box" },
+        who: Tag { label: s + "who" }
+    }
+}
+
+fn makeChain(s: string): Chain {
+    return Chain { note: s + "old", tags: [] }
+}
+
+fn writes(a: &Acc, s: string): void {
+    a.note = s + "ref"
+    a.takes(s)
+}
+
+fn through(s: string): int {
+    let a: Acc = fresh(s)
+    a.writeAll(s)
+    writes(a, s)
+    a.takes(a.bump())
+    if (a.bump().len() > 0) {
+        a.takes(s)
+    }
+
+    return a.items.len()
+}
+
+fn sameFrame(s: string): int {
+    let a: Acc = fresh(s)
+    try {
+        a.writeAll(s)
+    } catch (e: Exception) {
+        a.note = e.message
+    }
+
+    return a.note.len()
+}
+
+fn main(): void {
+    let s: string = "s" + "tr"
+    try {
+        assert(through(s) > 0)
+        assert(sameFrame(s) > 0)
+        assert(makeChain(s).mark("x").mark("y").done() > 0)
+    } catch (e: Exception) {
+        assert(!e.message.isEmpty())
+    }
+}

@@ -141,12 +141,38 @@ func (c *Checker) checkExternals(program *ast.Program) {
 				c.addError(c.errAt(f.Pos, "freed by %q on %s.%s() is not a C identifier", f.ReturnFreer, shown, f.Name))
 			}
 
+			if f.ReturnSizedBy != "" {
+				c.checkSizedBy(shown, f)
+			}
+
 			if f.ReturnType != ast.TypeVoid && !externalTypeSupported(f.ReturnType) {
 				c.addError(c.errAt(f.Pos, "%s.%s() returns %s, which cannot cross the C boundary yet — only int, long, double, bool, char and string can",
 					shown, f.Name, typeName(f.ReturnType)))
 			}
 		}
 	}
+}
+
+// checkSizedBy holds `sized by n` to what it can mean: a string return, and a
+// parameter of the same declaration that C can write a length through.
+func (c *Checker) checkSizedBy(shown string, f ast.ExternalFunc) {
+	if f.ReturnType != ast.TypeString {
+		c.addError(c.errAt(f.Pos, "'sized by' on %s.%s() needs a string return, not %s — it says how many bytes the returned string holds",
+			shown, f.Name, typeName(f.ReturnType)))
+		return
+	}
+	for i, name := range f.ParamNames {
+		if name != f.ReturnSizedBy {
+			continue
+		}
+		pt := f.Params[i]
+		if !ast.IsRefType(pt) || (ast.RefInnerType(pt) != ast.TypeLong && ast.RefInnerType(pt) != ast.TypeInt) {
+			c.addError(c.errAt(f.Pos, "'sized by %s' on %s.%s() needs a &long or &int parameter, so that C can write the length — '%s' is %s",
+				name, shown, f.Name, name, typeName(pt)))
+		}
+		return
+	}
+	c.addError(c.errAt(f.Pos, "'sized by %s' on %s.%s() names no parameter of it", f.ReturnSizedBy, shown, f.Name))
 }
 
 // validInclude accepts a system header in angle brackets, an explicitly

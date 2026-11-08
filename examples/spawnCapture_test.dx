@@ -1,0 +1,333 @@
+// What a spawn body or a lambda captures is what it uses, wherever it uses it.
+//
+// The walk that decided this was written by hand and had no case for a try, a
+// throw, a switch or an enum constructor, so a variable used only inside one was
+// not carried, and the generated C named a variable that did not exist in the
+// thread's function. A worker thread with error handling has exactly that shape.
+//
+// Each case runs in a spawn and in a lambda, for an int, a string and a struct
+// holding a string, because a heap capture is one the closure has to own.
+//
+//   DEX_MEM_CHECK=1 DEX_MEM_LEAKS=error go run . run examples/spawnCapture_test.dx
+
+struct Oops(message: string) {}
+
+struct Named {
+    name: string
+    n: int
+}
+
+enum Kind {
+    A
+    B
+}
+
+enum Value {
+    N(int)
+    S(string)
+    Empty
+}
+
+fn risky(n: int): int throws Oops {
+    if (n < 0) {
+        throw Oops("negative")
+    }
+
+    return n + 1
+}
+
+fn riskyText(s: string): string throws Oops {
+    if (s.isEmpty()) {
+        throw Oops("empty")
+    }
+
+    return s + "!"
+}
+
+fn sizeOf(v: Value): int {
+    switch (v) {
+        case Value.N(n): {
+            return n
+        }
+        case Value.S(s): {
+            return s.len()
+        }
+        default: {
+            return -1
+        }
+    }
+}
+
+// Used only inside a try, in the body and in the catch.
+fn inTry(n: int, s: string, named: Named): void {
+    let done = channel(int)
+    let bad: int = -1
+    spawn {
+        let got: int = 0
+        try {
+            got = risky(n)
+            got = got + riskyText(s).len()
+            got = got + named.name.len()
+            got = risky(bad)
+        } catch (e: Oops) {
+            got = got + n + s.len() + named.n
+        }
+
+        send(done, got)
+    }
+
+    // 42 + 3 + 5, then the catch adds 41 + 2 + 7.
+    assert(receive(done) == 100)
+
+    let f: fn(): int = fn(): int {
+        let got: int = 0
+        try {
+            got = risky(n)
+            got = got + riskyText(s).len()
+            got = got + named.name.len()
+            got = risky(bad)
+        } catch (e: Oops) {
+            got = got + n + s.len() + named.n
+        }
+
+        return got
+    }
+
+    assert(f() == 100)
+}
+
+// Used only by a throw.
+fn inThrow(n: int, s: string, named: Named): void {
+    let done = channel(string)
+    spawn {
+        let msg: string = ""
+        try {
+            throw Oops("${s} ${n} ${named.name}")
+        } catch (e: Oops) {
+            msg = e.message
+        }
+
+        send(done, msg)
+    }
+
+    assert(receive(done) == "hi 41 named")
+
+    let f: fn(): void = fn(): void {
+        throw Oops("${s} ${n} ${named.name}")
+    }
+
+    try {
+        f()
+        assert(false)
+    } catch (e: Oops) {
+        assert(e.message == "hi 41 named")
+    }
+}
+
+// The tag and the case bodies of a switch.
+fn inSwitch(k: Kind, n: int, s: string, named: Named): void {
+    let done = channel(int)
+    spawn {
+        let got: int = 0
+        switch (k) {
+            case Kind.A: {
+                got = n + s.len()
+            }
+            case Kind.B: {
+                got = named.n
+            }
+        }
+
+        send(done, got)
+    }
+
+    assert(receive(done) == 43)
+
+    let f: fn(): int = fn(): int {
+        switch (k) {
+            case Kind.A: {
+                return n + s.len()
+            }
+            case Kind.B: {
+                return named.n
+            }
+        }
+
+        return 0
+    }
+
+    assert(f() == 43)
+}
+
+// An enum constructor's arguments.
+fn inEnumCtor(n: int, s: string, named: Named): void {
+    let done = channel(int)
+    spawn {
+        let a: Value = Value.N(n)
+        let b: Value = Value.S(s)
+        let c: Value = Value.S(named.name)
+        send(done, sizeOf(a) + sizeOf(b) + sizeOf(c))
+    }
+
+    assert(receive(done) == 48)
+
+    let f: fn(): int = fn(): int {
+        let a: Value = Value.N(n)
+        let b: Value = Value.S(s)
+        let c: Value = Value.S(named.name)
+        return sizeOf(a) + sizeOf(b) + sizeOf(c)
+    }
+
+    assert(f() == 48)
+}
+
+// A name bound in one branch is still the outer variable in its sibling. One
+// flat set of definitions took the sibling's use for the local and dropped the
+// capture.
+fn siblingBranch(n: int, flag: bool): void {
+    let done = channel(int)
+    spawn {
+        let got: int = 0
+        if (flag) {
+            #[allow(shadow)]
+            let n: int = 1
+            got = n
+        } else {
+            got = n
+        }
+
+        send(done, got)
+    }
+
+    assert(receive(done) == 41)
+
+    let f: fn(): int = fn(): int {
+        if (flag) {
+            #[allow(shadow)]
+            let n: int = 1
+            return n
+        } else {
+            return n
+        }
+    }
+
+    assert(f() == 41)
+}
+
+// Bindings the body makes for itself are not captures, whatever they are called,
+// and a closure inside a closure carries what it needs through both.
+fn ownBindings(n: int): void {
+    let done = channel(int)
+    let xs: int[] = [1, 2]
+    spawn {
+        let total: int = 0
+        foreach (xs as x) {
+            total = total + x
+        }
+
+        try {
+            throw Oops("own")
+        } catch (e: Oops) {
+            total = total + e.message.len()
+        }
+
+        let v: Value = Value.N(4)
+        switch (v) {
+            case Value.N(k): {
+                total = total + k
+            }
+            default: {}
+        }
+
+        let inner: fn(int): int = fn(k: int): int {
+            try {
+                return risky(k + n)
+            } catch (e: Oops) {
+                return -1
+            }
+
+            return 0
+        }
+
+        send(done, total + inner(0))
+    }
+
+    // 3 + 3 + 4 + 42
+    assert(receive(done) == 52)
+}
+
+// A method's receiver reached from inside a try.
+struct Counter {
+    base: string
+
+    fn run(n: int): int {
+        let done = channel(int)
+        spawn {
+            let got: int = 0
+            try {
+                got = risky(n) + self.base.len()
+            } catch (e: Oops) {
+                got = -1
+            }
+
+            send(done, got)
+        }
+
+        return receive(done)
+    }
+}
+
+// A receiver owns what it receives, so what a worker sends has to outlive the
+// worker's own scope. `send` took no reference to a value it only borrowed, and
+// the sender's scope exit then freed the string on its way to the receiver.
+fn sendOwnership(s: string, named: Named): void {
+    let done = channel(string)
+    spawn {
+        let local: string = s + "!"
+        send(done, local)
+        send(done, s)
+        send(done, named.name)
+        send(done, s + "?")
+        send(done, "literal")
+        assert(local == "hi!")
+    }
+
+    assert(receive(done) == "hi!")
+    assert(receive(done) == "hi")
+    assert(receive(done) == "named")
+    assert(receive(done) == "hi?")
+    assert(receive(done) == "literal")
+
+    let structs = channel(Named)
+    spawn {
+        let local: Named = Named { name: s + "!", n: 1 }
+        send(structs, local)
+        send(structs, named)
+        send(structs, Named { name: s, n: 3 })
+    }
+
+    let a: Named = receive(structs)
+    let b: Named = receive(structs)
+    let c: Named = receive(structs)
+    assert(a.name == "hi!" && b.name == "named" && c.name == "hi")
+}
+
+fn main(): void {
+    let s: string = "h" + "i"
+    let named: Named = Named { name: "na" + "med", n: 7 }
+
+    inTry(41, s, named)
+    inThrow(41, s, named)
+    inSwitch(Kind.A, 41, s, named)
+    inEnumCtor(41, s, named)
+    siblingBranch(41, false)
+    ownBindings(41)
+    sendOwnership(s, named)
+
+    let c: Counter = Counter { base: "ba" + "se" }
+    assert(c.run(1) == 6)
+
+    // What the closures captured is still the caller's.
+    assert(s == "hi")
+    assert(named.name == "named")
+}

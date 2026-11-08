@@ -446,6 +446,10 @@ type ExternalFunc struct {
 	// is copied and left alone, which is what getenv and strerror need.
 	OwnedReturn bool
 	ReturnFreer string
+	// ReturnSizedBy is `sized by n` on a string return: the name of the &int or
+	// &long parameter the C function writes the length to, so a returned string
+	// is that many bytes, NULs included, rather than what strlen finds.
+	ReturnSizedBy string
 }
 
 // GenericDecl is a generic declaration held as tokens, with the names of its
@@ -856,6 +860,10 @@ type ArrayLitExpr struct {
 	Pos      Pos
 	ElemType Type
 	Elems    []Expr
+	// Targeted is set by the checker when an empty literal took its element type
+	// from where it goes. ElemType alone cannot say so: an int element is 0, the
+	// same as no type at all.
+	Targeted bool
 	// AsJsonValue is set by the checker when the literal is being built as a
 	// json.Value rather than a typed array, which is what allows the elements to
 	// have differing types.

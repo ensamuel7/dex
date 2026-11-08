@@ -692,6 +692,9 @@ func (c *Checker) applyTargetType(expr ast.Expr, target ast.Type) error {
 			return nil
 		}
 	}
+	if ast.IsOptionalType(target) {
+		target = ast.OptionalInnerType(target)
+	}
 	switch lit := expr.(type) {
 	case *ast.MapLitExpr:
 		if target == ast.TypeJsonValue {
@@ -706,9 +709,27 @@ func (c *Checker) applyTargetType(expr ast.Expr, target ast.Type) error {
 		}
 		if ast.IsArrayType(target) || ast.IsStructArrayType(target) {
 			lit.ElemType = ast.ElementType(target)
+			lit.Targeted = true
 		}
 	case *ast.ObjectLitExpr:
 		return c.markJsonValue(lit)
+	}
+	return nil
+}
+
+// typeEmptyLiteral gives an empty `[]` or `{}` the type of the position it is in:
+// a parameter, a constructor argument, an enum payload, an assignment's target.
+// Nothing else is touched, so an expression that has a type of its own is checked
+// exactly as it would be. A target that cannot hold the literal leaves it untyped,
+// and checking it reports that it cannot be inferred.
+func (c *Checker) typeEmptyLiteral(expr ast.Expr, target ast.Type) error {
+	switch lit := expr.(type) {
+	case *ast.MapLitExpr:
+		return c.applyTargetType(lit, target)
+	case *ast.ArrayLitExpr:
+		if len(lit.Elems) == 0 {
+			return c.applyTargetType(lit, target)
+		}
 	}
 	return nil
 }

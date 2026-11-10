@@ -1,0 +1,73 @@
+// A spawned task starts even when every earlier one is still running.
+//
+// Spawn used a fixed pool sized from the CPU count (4 to 16 threads), so once
+// that many tasks never returned (a server, a forever loop) every later spawn
+// waited in the queue forever. Here 40 tasks each wait until all 40 have
+// started, more than the old pool ever had, so on it they never finish. The
+// watchdog, spawned first, turns that hang into a failure after 10 seconds.
+import "fmt"
+import "os"
+import "time"
+
+let mu: mutex = mutex
+let started: int = 0
+let finished: bool = false
+
+fn arrive(): void {
+    mu.lock()
+    defer mu.unlock()
+    started = started + 1
+}
+
+fn startedCount(): int {
+    mu.lock()
+    defer mu.unlock()
+    return started
+}
+
+fn isFinished(): bool {
+    mu.lock()
+    defer mu.unlock()
+    return finished
+}
+
+fn main(): void {
+    let n: int = 40
+
+    spawn {
+        let waited: int = 0
+        while (!isFinished() && waited < 10000) {
+            time.sleep(20)
+            waited = waited + 20
+        }
+
+        if (!isFinished()) {
+            fmt.println("spawn_elastic_test: only ${startedCount()} of 40 tasks started")
+            os.exit(1)
+        }
+    }
+
+    let done = channel(int)
+    for (let i: int = 0; i < n; i++) {
+        spawn {
+            arrive()
+            while (startedCount() < n) {
+                time.sleep(5)
+            }
+
+            send(done, 1)
+        }
+    }
+
+    let total: int = 0
+    for (let i: int = 0; i < n; i++) {
+        total += receive(done)
+    }
+
+    assert(total == n)
+    mu.lock()
+    finished = true
+    mu.unlock()
+
+    fmt.println("spawn_elastic_test: all assertions passed")
+}

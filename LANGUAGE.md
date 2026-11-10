@@ -2097,6 +2097,12 @@ let val = receive(task)  // 42
 spawn { do_background_work() }
 ```
 
+A spawned task starts right away even if every earlier one never returns, so each
+server or forever loop can have a spawn of its own. Tasks run on a pool
+of threads that grows when none is idle and shrinks back after a minute of
+quiet. Past 256 tasks running at once, a new spawn waits for one to finish, and
+the program says so once on stderr.
+
 ### send
 
 Send a value from inside a spawn block.

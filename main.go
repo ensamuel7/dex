@@ -566,6 +566,15 @@ func build(filename string) (string, error) {
 		cflags = slices.DeleteFunc(cflags, func(f string) bool { return strings.HasPrefix(f, "-D_FORTIFY_SOURCE") })
 	}
 	cflags = append(cflags, hardeningFlags(compiler)...)
+	// gcc's link-time pass splits the program into partitions and, under bare
+	// -flto, compiles them one after another and warns that it did ("using
+	// serial compilation of N LTRANS jobs") on every build. ltoFlags swaps in
+	// what the probe found the compiler can do instead; see there.
+	if len(ltoFlags) > 0 {
+		if i := slices.Index(cflags, "-flto"); i >= 0 {
+			cflags = slices.Replace(cflags, i, i+1, ltoFlags...)
+		}
+	}
 	cflags = append(cflags, strings.Fields(os.Getenv("DEX_CFLAGS"))...)
 	// A stdlib function whose C signature disagrees with how it is registered —
 	// a DexString* declared where the generated call passes char*, because
@@ -613,6 +622,8 @@ func build(filename string) (string, error) {
 var (
 	hardeningOnce   sync.Once
 	hardeningCached []string
+	// Set by the same probe as hardeningCached: what replaces -flto.
+	ltoFlags []string
 )
 
 func hardeningFlags(compiler string) []string {
@@ -642,6 +653,22 @@ func hardeningFlags(compiler string) []string {
 		for _, f := range candidates {
 			if supports(f) {
 				hardeningCached = append(hardeningCached, f)
+			}
+		}
+		// -flto=auto runs the partitions in parallel. gcc does that through
+		// make, and without it (a slim build image has none) it falls back to
+		// serial and warns anyway; there a single partition is the same serial
+		// work, measured no slower and no larger on a 230,000-line program,
+		// with nothing to warn about. clang rejects -flto-partition, so it
+		// only ever gets -flto=auto, which it runs without make.
+		if supports("-flto=auto") {
+			ltoFlags = []string{"-flto=auto"}
+			mk := os.Getenv("MAKE")
+			if mk == "" {
+				mk = "make"
+			}
+			if _, err := exec.LookPath(mk); err != nil && supports("-flto=auto", "-flto-partition=one") {
+				ltoFlags = append(ltoFlags, "-flto-partition=one")
 			}
 		}
 	})

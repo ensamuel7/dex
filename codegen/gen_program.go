@@ -141,7 +141,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 
 	// Collect and deduplicate includes from imported modules
 	emittedIncludes := map[string]bool{}
-	for _, mod := range g.importedModules {
+	for _, mod := range g.modulesInOrder() {
 		if mod.CIncludes != "" {
 			for _, line := range strings.Split(mod.CIncludes, "\n") {
 				line = strings.TrimSpace(line)
@@ -377,7 +377,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// interface by value, so neither can simply come first; a name is all a
 	// function pointer's parameters need, and the struct definitions below
 	// complete them.
-	for _, mod := range g.importedModules {
+	for _, mod := range g.modulesInOrder() {
 		for _, sd := range mod.Types {
 			out.WriteString(fmt.Sprintf("typedef struct Dex_%s Dex_%s;\n", sd.Name, sd.Name))
 		}
@@ -407,7 +407,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 	}
 
 	// Emit struct typedefs (module-provided types first, then user-defined)
-	for _, mod := range g.importedModules {
+	for _, mod := range g.modulesInOrder() {
 		for _, sd := range mod.Types {
 			out.WriteString(fmt.Sprintf("struct Dex_%s {\n", sd.Name))
 			for _, f := range sd.Fields {
@@ -493,7 +493,7 @@ func (g *Generator) Generate(program *ast.Program) string {
 	}
 
 	// Emit C runtime from imported modules
-	for _, mod := range g.importedModules {
+	for _, mod := range g.modulesInOrder() {
 		if mod.CRuntime != "" {
 			out.WriteString(mod.CRuntime)
 		}

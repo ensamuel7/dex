@@ -3,6 +3,7 @@ package codegen
 import (
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -258,7 +259,7 @@ func (g *Generator) CompilerFlags() []string {
 	if g.usesExternal {
 		flags = append(flags, "-Wno-pointer-sign", "-lm")
 	}
-	for _, mod := range g.importedModules {
+	for _, mod := range g.modulesInOrder() {
 		flags = append(flags, mod.CFlags...)
 	}
 	return flags
@@ -309,3 +310,19 @@ func (g *Generator) EnableProfile() { g.profile = true }
 
 // siteMarkers reports whether statements carry DEX_AT markers in this build.
 func (g *Generator) siteMarkers() bool { return (g.memCheck || g.profile) && g.usesRefcount }
+
+// modulesInOrder lists the imported modules by name. Ranging over the map put
+// their C in a different order on every build, which made the output differ
+// for the same program and defeated the per-unit object cache.
+func (g *Generator) modulesInOrder() []*stdlib.Module {
+	names := make([]string, 0, len(g.importedModules))
+	for name := range g.importedModules {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	mods := make([]*stdlib.Module, len(names))
+	for i, name := range names {
+		mods[i] = g.importedModules[name]
+	}
+	return mods
+}

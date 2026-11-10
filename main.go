@@ -573,11 +573,11 @@ func build(filename string) (string, error) {
 	cflags = append(cflags, hardeningFlags(compiler)...)
 	// gcc's link-time pass splits the program into partitions and, under bare
 	// -flto, compiles them one after another and warns that it did ("using
-	// serial compilation of N LTRANS jobs") on every build. ltoFlags swaps in
+	// serial compilation of N LTRANS jobs") on every build. ltoChoice swaps in
 	// what the probe found the compiler can do instead; see there.
-	if len(ltoFlags) > 0 {
+	if len(ltoChoice) > 0 {
 		if i := slices.Index(cflags, "-flto"); i >= 0 {
-			cflags = slices.Replace(cflags, i, i+1, ltoFlags...)
+			cflags = slices.Replace(cflags, i, i+1, ltoChoice...)
 		}
 	}
 	cflags = append(cflags, strings.Fields(os.Getenv("DEX_CFLAGS"))...)
@@ -624,7 +624,7 @@ var (
 	hardeningOnce   sync.Once
 	hardeningCached []string
 	// Set by the same probe as hardeningCached: what replaces -flto.
-	ltoFlags []string
+	ltoChoice []string
 )
 
 func hardeningFlags(compiler string) []string {
@@ -663,13 +663,13 @@ func hardeningFlags(compiler string) []string {
 		// with nothing to warn about. clang rejects -flto-partition, so it
 		// only ever gets -flto=auto, which it runs without make.
 		if supports("-flto=auto") {
-			ltoFlags = []string{"-flto=auto"}
+			ltoChoice = []string{"-flto=auto"}
 			mk := os.Getenv("MAKE")
 			if mk == "" {
 				mk = "make"
 			}
 			if _, err := exec.LookPath(mk); err != nil && supports("-flto=auto", "-flto-partition=one") {
-				ltoFlags = append(ltoFlags, "-flto-partition=one")
+				ltoChoice = append(ltoChoice, "-flto-partition=one")
 			}
 		}
 	})

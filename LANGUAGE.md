@@ -38,6 +38,18 @@ combined.
 
 Pipeline: `.dx` source → tokens → AST (Abstract Syntax Tree) → type check → C code → native binary (via `cc`/`gcc`)
 
+A large program's C is compiled on every core: dex cuts it into one unit per
+core, compiles them in parallel at the same `-O3`, and joins them with
+link-time optimisation (ThinLTO under clang, parallel partitions under gcc), so
+calls between units still inline. Each unit's object is kept in
+`build/<name>.units/` and reused when its text has not changed. A program with
+less than about 1 MB of generated functions, or whose external module includes
+a header of its own, is compiled as one unit, as before.
+`DEX_JOBS=N` caps the compiler processes, and `DEX_JOBS=1` always compiles one
+unit. If a split build fails, dex says so and builds the program again as one
+unit. `DEX_KEEP_C=1` keeps the generated C in `build/`. See
+`csplit/README.md` for the design and measurements.
+
 ---
 
 ## Program Structure

@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -171,7 +172,14 @@ type capturedVar struct {
 // findCapturedVars identifies variables referenced in spawn body that are defined in the outer scope.
 func (g *Generator) findCapturedVars(body []ast.Stmt) []capturedVar {
 	var result []capturedVar
-	for name := range resolve.FreeNames(body) {
+	// Sorted, so a closure's environment has the same layout on every build.
+	free := resolve.FreeNames(body)
+	names := make([]string, 0, len(free))
+	for name := range free {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if g.namesGlobal(name) {
 			continue
 		}

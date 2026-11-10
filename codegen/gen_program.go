@@ -2,6 +2,8 @@ package codegen
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ensamuel7/dex/ast"
@@ -668,8 +670,18 @@ func (g *Generator) Generate(program *ast.Program) string {
 	// been generated, because generating a body can introduce a new function
 	// type — a method value handed to a route, say — and every one of them has
 	// to be declared before the wrappers below use it.
-	// Emit function pointer typedefs
-	for t, name := range g.funcTypedefs {
+	// In the order they were registered, so the C is the same on every build.
+	fnTypes := make([]ast.Type, 0, len(g.funcTypedefs))
+	for t := range g.funcTypedefs {
+		fnTypes = append(fnTypes, t)
+	}
+	sort.Slice(fnTypes, func(i, j int) bool {
+		a, _ := strconv.Atoi(strings.TrimPrefix(g.funcTypedefs[fnTypes[i]], "DexFn_"))
+		b, _ := strconv.Atoi(strings.TrimPrefix(g.funcTypedefs[fnTypes[j]], "DexFn_"))
+		return a < b
+	})
+	for _, t := range fnTypes {
+		name := g.funcTypedefs[t]
 		params := ast.FuncTypeParams(t)
 		retType := ast.FuncTypeReturn(t)
 		// The environment is a hidden first argument, so a plain function and a

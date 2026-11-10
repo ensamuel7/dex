@@ -3320,6 +3320,40 @@ static struct curl_slist* dex_http_parse_json_headers(const char* json_str) {
     return list;
 }
 
+// Headers arrive either as a JSON object or as the newline-separated pairs
+// http.header() builds; the first non-blank character decides which.
+static struct curl_slist* dex_http_header_list(const char* headers) {
+    struct curl_slist* hdr_list = NULL;
+    if (headers && headers[0] != '\0') {
+        // Auto-detect: JSON object vs newline-separated headers
+        // Skip leading whitespace for detection
+        const char* detect = headers;
+        while (*detect == ' ' || *detect == '\t') detect++;
+        if (*detect == '{') {
+            // JSON format: parse key-value pairs
+            hdr_list = dex_http_parse_json_headers(headers);
+        } else {
+            // Newline-separated "Key: Value\n" format
+            const char* p = headers;
+            while (*p) {
+                const char* end = strchr(p, '\n');
+                if (!end) end = p + strlen(p);
+                size_t hlen = (size_t)(end - p);
+                char* h = (char*)dex_xmalloc(hlen + 1);
+                if (!h) { p = (*end) ? end + 1 : end; continue; }
+                memcpy(h, p, hlen);
+                h[hlen] = '\0';
+                // Trim trailing \r
+                if (hlen > 0 && h[hlen-1] == '\r') h[hlen-1] = '\0';
+                if (h[0] != '\0') hdr_list = curl_slist_append(hdr_list, h);
+                free(h);
+                p = (*end) ? end + 1 : end;
+            }
+        }
+    }
+    return hdr_list;
+}
+
 static Dex_HttpResponse dex_http_request_impl(const char* method, const char* url, const char* body, const char* headers, const Dex_HttpOptions* opts) {
     CURL* curl = curl_easy_init();
     if (!curl) return dex_http_resp_failed("could not initialise the http client");
@@ -3349,34 +3383,7 @@ static Dex_HttpResponse dex_http_request_impl(const char* method, const char* ur
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
     }
 
-    struct curl_slist* hdr_list = NULL;
-    if (headers && headers[0] != '\0') {
-        // Auto-detect: JSON object vs newline-separated headers
-        // Skip leading whitespace for detection
-        const char* detect = headers;
-        while (*detect == ' ' || *detect == '\t') detect++;
-        if (*detect == '{') {
-            // JSON format: parse key-value pairs
-            hdr_list = dex_http_parse_json_headers(headers);
-        } else {
-            // Newline-separated "Key: Value\n" format
-            const char* p = headers;
-            while (*p) {
-                const char* end = strchr(p, '\n');
-                if (!end) end = p + strlen(p);
-                size_t hlen = (size_t)(end - p);
-                char* h = (char*)dex_xmalloc(hlen + 1);
-                if (!h) { p = (*end) ? end + 1 : end; continue; }
-                memcpy(h, p, hlen);
-                h[hlen] = '\0';
-                // Trim trailing \r
-                if (hlen > 0 && h[hlen-1] == '\r') h[hlen-1] = '\0';
-                if (h[0] != '\0') hdr_list = curl_slist_append(hdr_list, h);
-                free(h);
-                p = (*end) ? end + 1 : end;
-            }
-        }
-    }
+    struct curl_slist* hdr_list = dex_http_header_list(headers);
     if (hdr_list) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr_list);
 
     Dex_HttpResponse resp;
@@ -3451,6 +3458,247 @@ Dex_HttpResponse dex_http_request(const char* method, const char* url, const cha
 
 Dex_HttpResponse dex_http_request_opts(const char* method, const char* url, const char* body, const char* headers, Dex_HttpOptions opts) {
     return dex_http_request_impl(method, url, body, headers, &opts);
+}
+
+// --- Streaming client ---
+//
+// http.stream and http.streamEvents hand a response to a callback as it
+// arrives instead of collecting it, which is what a model API sends a reply
+// token by token for. Only a 2xx body streams: anything else is collected into
+// resp.body as the ordinary client would, because an error is read whole.
+//
+// The callback runs inside curl's write callback, so a throw from it would
+// longjmp across curl's frames and strand the transfer. Each call therefore
+// sits under a try of its own, written here as the generated code writes one:
+// a throw aborts the transfer, curl is cleaned up, and the same exception is
+// thrown again from the call site, where the program's own try can catch it.
+
+typedef _Bool (*dex_http_chunk_fn)(void*, DexString*);
+
+typedef struct {
+    CURL* curl;
+    DexClosure* on_data;
+    int events;     // parse server-sent events rather than hand over bytes
+    int decided;    // the status code has been read
+    int streaming;  // it was a 2xx, so the body goes to the callback
+    int halted;     // the callback returned false or threw
+    int thrown;
+    const char* exc_type;
+    const char* exc_msg;
+    int last_cr;    // the previous chunk ended a line on a CR
+    dex_http_buf body;
+    dex_http_buf line;
+    dex_http_buf data;
+} dex_http_stream_state;
+
+static void dex_http_buf_append(dex_http_buf* b, const char* p, size_t n) {
+    char* grown = dex_xrealloc(b->data, b->len + n + 1);
+    b->data = grown;
+    memcpy(b->data + b->len, p, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+}
+
+static void dex_http_stream_deliver(dex_http_stream_state* st, const char* p, size_t n) {
+#ifdef DEX_SETJMP
+    size_t mark = _dex_cleanup_top;
+    size_t defer_mark = _dex_defer_top;
+    _dex_exc_push_frame();
+    if (DEX_SETJMP(_dex_exc_stack[_dex_exc_top].env) == 0) {
+        _dex_exc_stack[_dex_exc_top].active = 0;
+        DexString* chunk = dex_string_new(p, n);
+        _dex_cleanup_push(chunk);
+        _Bool more = ((dex_http_chunk_fn)st->on_data->fn)(st->on_data->env, chunk);
+        dex_release(chunk);
+        _dex_cleanup_drop_to(mark);
+        if (!more) st->halted = 1;
+    } else {
+        _dex_defer_run_to(defer_mark);
+        _dex_cleanup_unwind_to(mark);
+        st->thrown = 1;
+        st->halted = 1;
+    }
+    _dex_exc_top--;
+    if (st->thrown) {
+        st->exc_type = _dex_exc_stack[_dex_exc_top + 1].type;
+        st->exc_msg = _dex_exc_stack[_dex_exc_top + 1].message;
+    }
+#else
+    // A program that never throws has no exception runtime, and nothing in the
+    // callback can unwind.
+    DexString* chunk = dex_string_new(p, n);
+    _Bool more = ((dex_http_chunk_fn)st->on_data->fn)(st->on_data->env, chunk);
+    dex_release(chunk);
+    if (!more) st->halted = 1;
+#endif
+}
+
+// One line of an event stream, without its terminator, as the WHATWG
+// server-sent events grammar reads it. Only data is kept: event names, ids and
+// retry hints describe a browser's EventSource, and the model APIs this is for
+// put everything a caller needs in the data.
+static void dex_http_stream_line(dex_http_stream_state* st, const char* p, size_t n) {
+    if (n == 0) {
+        // A blank line ends an event. An event with no data line is not one.
+        if (st->data.len > 0) {
+            st->data.len--;
+            st->data.data[st->data.len] = '\0';
+            dex_http_stream_deliver(st, st->data.data, st->data.len);
+            st->data.len = 0;
+            st->data.data[0] = '\0';
+        }
+        return;
+    }
+    if (p[0] == ':') return;
+    size_t field = 0;
+    while (field < n && p[field] != ':') field++;
+    if (field != 4 || memcmp(p, "data", 4) != 0) return;
+    size_t at = field < n ? field + 1 : n;
+    if (at < n && p[at] == ' ') at++;
+    dex_http_buf_append(&st->data, p + at, n - at);
+    dex_http_buf_append(&st->data, "\n", 1);
+}
+
+// A line may end in CRLF, LF or a lone CR, and a chunk may end between the CR
+// and the LF of one terminator, which is what last_cr carries across.
+static void dex_http_stream_parse(dex_http_stream_state* st, const char* p, size_t n) {
+    size_t i = 0;
+    while (i < n && !st->halted) {
+        if (st->last_cr) {
+            st->last_cr = 0;
+            if (p[i] == '\n') {
+                i++;
+                continue;
+            }
+        }
+        size_t end = i;
+        while (end < n && p[end] != '\n' && p[end] != '\r') end++;
+        if (end == n) {
+            dex_http_buf_append(&st->line, p + i, n - i);
+            return;
+        }
+        if (st->line.len > 0) {
+            dex_http_buf_append(&st->line, p + i, end - i);
+            dex_http_stream_line(st, st->line.data, st->line.len);
+            st->line.len = 0;
+            st->line.data[0] = '\0';
+        } else {
+            dex_http_stream_line(st, p + i, end - i);
+        }
+        st->last_cr = p[end] == '\r';
+        i = end + 1;
+    }
+}
+
+static size_t dex_http_stream_write_cb(void* contents, size_t size, size_t nmemb, void* userp) {
+    size_t total = size * nmemb;
+    dex_http_stream_state* st = (dex_http_stream_state*)userp;
+    if (st->halted) return 0;
+    if (!st->decided) {
+        long code = 0;
+        curl_easy_getinfo(st->curl, CURLINFO_RESPONSE_CODE, &code);
+        st->streaming = code >= 200 && code < 300;
+        st->decided = 1;
+    }
+    if (!st->streaming) {
+        dex_http_buf_append(&st->body, (const char*)contents, total);
+        return total;
+    }
+    if (st->events) {
+        dex_http_stream_parse(st, (const char*)contents, total);
+    } else {
+        dex_http_stream_deliver(st, (const char*)contents, total);
+    }
+    // Returning short of total is how a write callback stops curl.
+    return st->halted ? 0 : total;
+}
+
+// Takes the closure: the generated call hands over a reference it owns.
+static Dex_HttpResponse dex_http_stream_impl(const char* method, const char* url, const char* body, const char* headers, Dex_HttpOptions opts, DexClosure* on_data, int events) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        dex_release(on_data);
+        return dex_http_resp_failed("could not initialise the http client");
+    }
+
+    dex_http_stream_state st;
+    memset(&st, 0, sizeof st);
+    st.curl = curl;
+    st.on_data = on_data;
+    st.events = events;
+    dex_http_buf hbuf = {NULL, 0};
+    dex_http_buf* bufs[] = {&st.body, &st.line, &st.data, &hbuf};
+    for (size_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) {
+        bufs[i]->data = dex_xmalloc(1);
+        bufs[i]->data[0] = '\0';
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, dex_http_stream_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &st);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, dex_http_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hbuf);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+    dex_http_apply_opts(curl, &opts);
+    if (body && body[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    }
+    struct curl_slist* hdr_list = dex_http_header_list(headers);
+    if (hdr_list) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr_list);
+
+    CURLcode res = curl_easy_perform(curl);
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    char* ct = NULL;
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ct);
+    char* content_type = dex_xstrdup(ct ? ct : "");
+
+    // Everything curl owns goes before anything managed is allocated, so a
+    // throw from here on, rethrown or injected, has no transfer to strand.
+    if (hdr_list) curl_slist_free_all(hdr_list);
+    curl_easy_cleanup(curl);
+    free(st.line.data);
+    free(st.data.data);
+    dex_release(on_data);
+
+#ifdef DEX_SETJMP
+    if (st.thrown) {
+        free(st.body.data);
+        free(hbuf.data);
+        free(content_type);
+        _dex_rethrow(st.exc_type, st.exc_msg);
+    }
+#endif
+
+    Dex_HttpResponse resp;
+    int stopped = res == CURLE_WRITE_ERROR && st.halted;
+    if (res == CURLE_OK || stopped) {
+        resp.statusCode = (int)code;
+        if (st.streaming) {
+            free(st.body.data);
+            resp.body = dex_string_from_lit("");
+        } else {
+            resp.body = dex_string_from_cstr(st.body.data);
+        }
+        resp.headers = dex_string_from_cstr(hbuf.data);
+        resp.contentType = dex_string_from_cstr(content_type);
+    } else {
+        // Status 0 says the stream did not finish, including after some of it
+        // was delivered: a dropped connection or the deadline passing midway.
+        free(st.body.data);
+        free(hbuf.data);
+        free(content_type);
+        resp = dex_http_resp_failed(curl_easy_strerror(res));
+    }
+    return resp;
+}
+
+Dex_HttpResponse dex_http_stream(const char* method, const char* url, const char* body, const char* headers, Dex_HttpOptions opts, DexClosure* on_data) {
+    return dex_http_stream_impl(method, url, body, headers, opts, on_data, 0);
+}
+
+Dex_HttpResponse dex_http_stream_events(const char* method, const char* url, const char* body, const char* headers, Dex_HttpOptions opts, DexClosure* on_data) {
+    return dex_http_stream_impl(method, url, body, headers, opts, on_data, 1);
 }
 
 // --- Form data (multipart) ---

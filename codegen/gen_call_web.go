@@ -244,6 +244,20 @@ func (g *Generator) genWebCall(out *strings.Builder, e *ast.CallExpr) bool {
 			g.genExpr(out, e.Args[4])
 			out.WriteString(")")
 			return true
+		case "stream", "streamEvents":
+			// The runtime releases the callback when the request is over, so
+			// it is handed a reference of its own.
+			fn := map[string]string{"stream": "dex_http_stream", "streamEvents": "dex_http_stream_events"}[e.Name]
+			out.WriteString(fn + "(")
+			for i := 0; i < 4; i++ {
+				g.genStringArg(out, e.Args[i])
+				out.WriteString(", ")
+			}
+			g.genExpr(out, e.Args[4])
+			out.WriteString(", ")
+			g.genOwnedClosureArg(out, e.Args[5])
+			out.WriteString(")")
+			return true
 		case "header":
 			out.WriteString("dex_string_from_cstr(dex_http_header(")
 			g.genStringArg(out, e.Args[0])

@@ -3016,6 +3016,47 @@ hop only.
 zero-valued struct verifies. Set it only when a broken certificate is the thing
 being inspected.
 
+**Streaming:**
+
+| Function   | Signature                                                              | Description                    |
+|------------|------------------------------------------------------------------------|--------------------------------|
+| `stream`   | `stream(method: string, url: string, body: string, headers: string, options: HttpOptions, onChunk: fn(string): bool): HttpResponse` | Hand a 2xx body to `onChunk` piece by piece as it arrives |
+| `streamEvents` | `streamEvents(method: string, url: string, body: string, headers: string, options: HttpOptions, onEvent: fn(string): bool): HttpResponse` | The same for a `text/event-stream` body, one call per server-sent event |
+
+`streamEvents` is the one a model API needs. It reassembles the event stream
+however the bytes were split on the wire and calls `onEvent` with the data of
+each event, its `data:` lines joined by newlines. Comments, `event:`, `id:` and
+`retry:` lines and events with no data are skipped, and an event the stream
+ends in the middle of is dropped. `stream` hands over the raw pieces, sized by
+however they arrived.
+
+```dex
+let reply = StringBuilder()
+let r: http.HttpResponse = http.streamEvents("POST", url, body, headers, http.HttpOptions { timeoutMs: 120000 }, fn(data: string): bool {
+    if (data == "[DONE]") {
+        return false
+    }
+    let chunk: json.Value = json.decode(data)
+    reply.append(chunk["choices"][0]["delta"]["content"].asString())
+    return true
+})
+```
+
+The callback returns `true` to keep reading and `false` to stop, which ends the
+request with the status code it had. Only a 2xx body is streamed. Any other
+status is collected whole into `body` without calling the callback, since an
+error is read as a whole: on success `body` is empty, on an error it is the
+error. `statusCode == 0` means the stream did not finish, with the reason in
+`body`, even if some of it was already delivered: a dropped connection, or
+`timeoutMs` running out midway. `timeoutMs` bounds the whole stream rather than
+each piece, so a long generation needs it raised.
+
+A throw from the callback aborts the request and is thrown again from the call
+site, so a `try` around the call catches it as usual. The callback runs inside
+libcurl's write callback, where a `longjmp` would cut through libcurl's frames,
+so the runtime wraps each call in a `try` of its own and rethrows only once the
+transfer is cleaned up.
+
 **Headers:**
 
 Headers can be provided in two formats:

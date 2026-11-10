@@ -1,0 +1,72 @@
+import "fmt"
+import "http"
+import "os"
+
+let seen: string = ""
+let count: int = 0
+let stopAt: int = 0
+let throwAt: int = 0
+
+fn reset(stop: int, boom: int): void {
+    seen = ""
+    count = 0
+    stopAt = stop
+    throwAt = boom
+}
+
+fn collect(data: string): bool {
+    count = count + 1
+    if (count == throwAt) {
+        throw Exception("callback threw at ${count}")
+    }
+
+    seen = seen + "[" + data + "]"
+    return count != stopAt
+}
+
+fn report(name: string, r: http.HttpResponse): void {
+    fmt.println("${name} status=${r.statusCode} count=${count} seen=${seen} body=${r.body}")
+}
+
+fn main(): void {
+    let base: string = os.env("BASE")
+    let opts: http.HttpOptions = http.HttpOptions {}
+
+    reset(0, 0)
+    report("events", http.streamEvents("GET", base + "/sse", "", "", opts, collect))
+
+    reset(0, 0)
+    let r: http.HttpResponse =
+        http.stream("POST", base + "/raw", "{\"q\":1}", "Content-Type: application/json\n", opts, collect)
+    fmt.println(
+        "raw status=${r.statusCode} body=${r.body} joined=${seen.replace("][", "").replace("[", "").replace("]", "")}"
+    )
+
+    reset(0, 0)
+    report("error", http.streamEvents("GET", base + "/err", "", "", opts, collect))
+
+    reset(2, 0)
+    report("stop", http.streamEvents("GET", base + "/sse", "", "", opts, collect))
+
+    reset(0, 2)
+    try {
+        http.streamEvents("GET", base + "/sse", "", "", opts, collect)
+        fmt.println("throw not rethrown")
+    } catch (e: Exception) {
+        fmt.println("throw caught=${e.message} count=${count} seen=${seen}")
+    }
+
+    reset(0, 0)
+    report("after", http.streamEvents("GET", base + "/sse", "", "", opts, fn(d: string): bool {
+        return collect(d)
+    }))
+
+    reset(0, 0)
+    let quick: http.HttpOptions = http.HttpOptions { timeoutMs: 700 }
+    let slow: http.HttpResponse = http.streamEvents("GET", base + "/slow", "", "", quick, collect)
+    fmt.println("slow status=${slow.statusCode} count=${count} seen=${seen} failed=${!slow.body.isEmpty()}")
+
+    reset(0, 0)
+    let dead: http.HttpResponse = http.stream("GET", "http://127.0.0.1:9/", "", "", opts, collect)
+    fmt.println("dead status=${dead.statusCode} count=${count} failed=${!dead.body.isEmpty()}")
+}

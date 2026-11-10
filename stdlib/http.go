@@ -194,6 +194,20 @@ func init() {
 				CName:      "",
 				Doc:        "Send a request under explicit HttpOptions: timeouts, redirect following, and TLS verification. Use it for any host you do not control.",
 			},
+			"stream": {
+				Params:     nil,
+				ParamNames: []string{"method", "url", "body", "headers", "options", "onChunk"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "Send a request and hand a 2xx body to onChunk, a fn(string): bool, piece by piece as it arrives; return false from it to stop reading. Returns the HttpResponse with an empty body once the stream ends, or with the whole body for any other status, which is not streamed. Status 0 means the stream did not finish, with the reason in the body. A throw from onChunk aborts the request and is rethrown from here. options.timeoutMs bounds the whole stream.",
+			},
+			"streamEvents": {
+				Params:     nil,
+				ParamNames: []string{"method", "url", "body", "headers", "options", "onEvent"},
+				ReturnType: ast.TypeVoid,
+				CName:      "",
+				Doc:        "http.stream for a text/event-stream body: onEvent is handed the data of each server-sent event, its data lines joined by newlines, whatever way the bytes were split on the wire. Comments, event names, ids and events with no data are skipped. This is how model APIs stream a reply.",
+			},
 			"formNew": {
 				Params:     nil,
 				ReturnType: ast.TypeString,

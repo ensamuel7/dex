@@ -544,7 +544,7 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 	}
 
 	// HTTP client functions returning HttpResponse
-	if e.Module == "http" && (e.Name == "get" || e.Name == "post" || e.Name == "put" || e.Name == "patch" || e.Name == "delete" || e.Name == "request" || e.Name == "requestWith" || e.Name == "postForm") {
+	if e.Module == "http" && (e.Name == "get" || e.Name == "post" || e.Name == "put" || e.Name == "patch" || e.Name == "delete" || e.Name == "request" || e.Name == "requestWith" || e.Name == "stream" || e.Name == "streamEvents" || e.Name == "postForm") {
 		httpRespType, ok := ast.LookupStructType("HttpResponse")
 		if !ok {
 			return 0, true, c.errAt(e.Pos, "HttpResponse type not registered (internal error)")
@@ -622,6 +622,35 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 				if argType != want {
 					return 0, true, c.errAt(e.Pos, "http.requestWith() argument %d must be %s, got %s", i+1, typeName(want), typeName(argType))
 				}
+			}
+		case "stream", "streamEvents":
+			if len(e.Args) != 6 {
+				return 0, true, c.errAt(e.Pos, "http.%s() takes exactly 6 arguments, got %d", e.Name, len(e.Args))
+			}
+			optsType, ok := ast.LookupStructType("HttpOptions")
+			if !ok {
+				return 0, true, c.errAt(e.Pos, "HttpOptions type not registered (internal error)")
+			}
+			for i, arg := range e.Args[:5] {
+				argType, err := c.checkExpr(arg)
+				if err != nil {
+					return 0, true, err
+				}
+				want := ast.TypeString
+				if i == 4 {
+					want = optsType
+				}
+				if argType != want {
+					return 0, true, c.errAt(e.Pos, "http.%s() argument %d must be %s, got %s", e.Name, i+1, typeName(want), typeName(argType))
+				}
+			}
+			cbType, err := c.checkExpr(e.Args[5])
+			if err != nil {
+				return 0, true, err
+			}
+			params := ast.FuncTypeParams(cbType)
+			if !ast.IsFuncType(cbType) || len(params) != 1 || params[0] != ast.TypeString || ast.FuncTypeReturn(cbType) != ast.TypeBool {
+				return 0, true, c.errAt(e.Pos, "http.%s() argument 6 must be fn(string): bool, got %s", e.Name, typeName(cbType))
 			}
 		case "postForm":
 			if len(e.Args) < 2 || len(e.Args) > 3 {

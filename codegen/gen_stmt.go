@@ -72,6 +72,11 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		if call, ok := s.Expr.(*ast.CallExpr); ok && (g.isHandleOutCall(call) || len(g.structLocalsWrittenByCall(call)) > 0) {
 			exprBody.WriteString("(void)")
 		}
+		// A bare receive(t) waits for the value and drops it; its statement
+		// expression yields the value, which clang reports as unused.
+		if _, ok := s.Expr.(*ast.ReceiveExpr); ok {
+			exprBody.WriteString("(void)")
+		}
 		g.genExpr(&exprBody, s.Expr)
 		exprBody.WriteString(";\n")
 		g.emitWithHoists(out, prefix, exprBody.String())

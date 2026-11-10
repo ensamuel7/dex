@@ -13,6 +13,7 @@ fn check(ok: bool, what: string): void {
 fn main(): void {
     let c: int = db.open("postgres", os.env("DATABASE_URL"))
     check(c >= 0, "open")
+    db.exec(c, "DROP TABLE IF EXISTS dex_pg_late")
     db.exec(c, "DROP TABLE IF EXISTS dex_pg_child")
     db.exec(c, "DROP TABLE IF EXISTS dex_pg")
     check(db.exec(c, "CREATE TABLE dex_pg (id bigint PRIMARY KEY, name text UNIQUE NOT NULL, bio text)") >= 0, "create")
@@ -172,6 +173,43 @@ fn main(): void {
     db.bindLong(byId, 1, 1)
     db.free(db.send(byId))
     check(db.exec(c, "DELETE FROM dex_pg WHERE id = 10") == 1, "exec after a freed unread send")
+
+    // A deferred constraint fails at the Sync, after CommandComplete: the
+    // statement ran, but its transaction did not commit.
+    db.exec(c, "DROP TABLE IF EXISTS dex_pg_late")
+    check(db.exec(c, "CREATE TABLE dex_pg_late (id bigserial PRIMARY KEY, pg_id bigint REFERENCES dex_pg (id) DEFERRABLE INITIALLY DEFERRED)") >= 0, "create deferred")
+    let late: int = db.prepare(c, "INSERT INTO dex_pg_late (pg_id) VALUES ($1) RETURNING id")
+    db.bindLong(late, 1, 999)
+    let lost: int = db.send(late)
+    db.bindLong(late, 1, 1)
+    let kept: int = db.send(late)
+    check(!db.next(lost), "a write whose commit fails has no row")
+    check(db.errorCode() == "23503", "a commit-time failure reports its SQLSTATE")
+    check(db.next(kept), "the next send still commits")
+    db.free(lost)
+    db.free(kept)
+    let lateCount: int = db.query(c, "SELECT count(*) FROM dex_pg_late")
+    check(db.next(lateCount), "count deferred")
+    let committed: int = db.col(lateCount, 0)
+    check(committed == 1, "only the write that committed is there")
+    db.free(lateCount)
+    db.exec(c, "DROP TABLE dex_pg_late")
+
+    // More results held at once than one pipeline carries.
+    let many: int[] = []
+    for (let i: int = 0; i < 3000; i = i + 1) {
+        db.bindLong(byId, 1, num.toLong((i % 2) + 1))
+        many.push(db.send(byId))
+    }
+    let read: int = 0
+    foreach (many as h) {
+        check(h >= 0, "send ${read} returns a handle")
+        if (db.next(h)) {
+            read = read + 1
+        }
+        db.free(h)
+    }
+    check(read == 3000, "3000 sends held at once are all read")
 
     db.exec(c, "DROP TABLE dex_pg_child")
     db.exec(c, "DROP TABLE dex_pg")

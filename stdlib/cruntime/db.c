@@ -17,7 +17,9 @@
 #endif
 
 #define DEX_DB_MAX_CONNS 16
-#define DEX_DB_MAX_RESULTS 1024
+// One per statement a pass of the event loop can send before its results are
+// read, so as many as http.hold has tickets.
+#define DEX_DB_MAX_RESULTS 65536
 #define DEX_DB_PIPE_MAX 1024
 #define DEX_DB_MAX_STMTS 64
 #define DEX_DB_POOL_SIZE 16
@@ -30,7 +32,7 @@
 // which would have meant every projection in a program had to know which of the
 // two produced its row — and a struct filled by db.fill would have needed two
 // spellings of the same read.
-#define DEX_DB_STMT_BASE 4096
+#define DEX_DB_STMT_BASE (1 << 20)
 
 #define DEX_DB_DRIVER_NONE 0
 #define DEX_DB_DRIVER_SQLITE 1
@@ -136,6 +138,27 @@ static DexDbConn dex_db_conns[DEX_DB_MAX_CONNS];
 static DexDbResult dex_db_results[DEX_DB_MAX_RESULTS];
 static DexDbStmt dex_db_stmts[DEX_DB_MAX_STMTS];
 static pthread_mutex_t dex_db_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int dex_db_result_hint = 0;
+
+/* Reserves a free result slot, or returns -1 when every one is taken. The scan
+ * starts just past the last slot handed out: a pass that sends thousands of
+ * statements and frees them in order finds each free slot at once instead of
+ * walking past all the ones still held. */
+static int dex_db_result_reserve(void) {
+    pthread_mutex_lock(&dex_db_mutex);
+    int slot = -1;
+    for (int n = 0; n < DEX_DB_MAX_RESULTS; n++) {
+        int i = (dex_db_result_hint + n) % DEX_DB_MAX_RESULTS;
+        if (dex_db_results[i].driver == DEX_DB_DRIVER_NONE) {
+            dex_db_results[i].driver = -1; // reserve slot
+            dex_db_result_hint = i + 1;
+            slot = i;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&dex_db_mutex);
+    return slot;
+}
 
 // ==========================================================================
 // A row, whichever table it came from
@@ -637,16 +660,7 @@ int dex_db_query(int conn, const char* sql) {
     if (conn < 0 || conn >= DEX_DB_MAX_CONNS) return -1;
     DexDbConn* c = &dex_db_conns[conn];
 
-    pthread_mutex_lock(&dex_db_mutex);
-    int slot = -1;
-    for (int i = 0; i < DEX_DB_MAX_RESULTS; i++) {
-        if (dex_db_results[i].driver == DEX_DB_DRIVER_NONE) {
-            slot = i;
-            dex_db_results[i].driver = -1; // reserve slot
-            break;
-        }
-    }
-    pthread_mutex_unlock(&dex_db_mutex);
+    int slot = dex_db_result_reserve();
     if (slot < 0) return -1;
 
     if (c->driver == DEX_DB_DRIVER_SQLITE) {
@@ -1616,17 +1630,43 @@ static void dex_db_pipe_collect(DexDbPool* pool) {
     PGconn* pg = pool->connections[entry];
     int ok = dex_db_pipe_flush(pg);
     for (int i = 0; i < pool->pipe_count; i++) {
+        /* A statement's result counts only once the ReadyForQuery of its own
+         * Sync has arrived (PGRES_PIPELINE_SYNC): its implicit transaction
+         * commits at the Sync, and can still fail there after CommandComplete,
+         * for instance on a deferred constraint. An error anywhere before the
+         * Sync replaces the result; no Sync at all leaves none, which reads as
+         * a failed statement (08006). Two NULLs in a row with nothing pending
+         * mean the pipeline ran dry before the Sync this item expects. */
         PGresult* first = NULL;
+        int failed = 0, synced = 0, idle = 0;
         while (ok) {
             PGresult* got = dex_db_pipe_next(pg, &ok);
-            if (!got) break;
-            if (!first) first = got;
-            else PQclear(got);
+            if (!ok) break;
+            if (!got) {
+                if (++idle >= 2) { ok = 0; break; }
+                continue;
+            }
+            idle = 0;
+            ExecStatusType st = PQresultStatus(got);
+            if (st == PGRES_PIPELINE_SYNC) {
+                PQclear(got);
+                synced = 1;
+                break;
+            }
+            if (!failed && (st == PGRES_FATAL_ERROR || st == PGRES_PIPELINE_ABORTED)) {
+                if (first) PQclear(first);
+                first = got;
+                failed = 1;
+            } else if (!first) {
+                first = got;
+            } else {
+                PQclear(got);
+            }
         }
-        if (ok) {
-            PGresult* sync = dex_db_pipe_next(pg, &ok);
-            if (!sync || PQresultStatus(sync) != PGRES_PIPELINE_SYNC) ok = 0;
-            if (sync) PQclear(sync);
+        if (!synced) {
+            if (first) PQclear(first);
+            first = NULL;
+            ok = 0;
         }
         int slot = pool->pipe_items[i];
         if (slot < 0 || dex_db_results[slot].driver != DEX_DB_DRIVER_POSTGRES || dex_db_results[slot].piped != 2) {
@@ -1683,16 +1723,7 @@ int dex_db_send(int stmt_id) {
         DexDbPool* pool = &dex_db_conns[s->conn_slot].pg_pool;
         if (pool->pipe_active && pool->pipe_count + 2 > DEX_DB_PIPE_MAX) dex_db_pipe_collect(pool);
 
-        pthread_mutex_lock(&dex_db_mutex);
-        int rslot = -1;
-        for (int i = 0; i < DEX_DB_MAX_RESULTS; i++) {
-            if (dex_db_results[i].driver == DEX_DB_DRIVER_NONE) {
-                rslot = i;
-                dex_db_results[i].driver = -1;
-                break;
-            }
-        }
-        pthread_mutex_unlock(&dex_db_mutex);
+        int rslot = dex_db_result_reserve();
         if (rslot < 0) {
             dex_db_pg_clear_params(s);
             dex_db_pg_note(NULL, 0);
@@ -1888,16 +1919,7 @@ int dex_db_query_params(int conn, const char* sql, DexArrayString* args) {
         return -1;
     }
 
-    pthread_mutex_lock(&dex_db_mutex);
-    int slot = -1;
-    for (int i = 0; i < DEX_DB_MAX_RESULTS; i++) {
-        if (dex_db_results[i].driver == DEX_DB_DRIVER_NONE) {
-            slot = i;
-            dex_db_results[i].driver = -1; // reserve slot
-            break;
-        }
-    }
-    pthread_mutex_unlock(&dex_db_mutex);
+    int slot = dex_db_result_reserve();
     if (slot < 0) return -1;
 
     int nparams = 0;

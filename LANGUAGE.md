@@ -3493,8 +3493,10 @@ per request spends most of a request waiting on the network. `send` runs a bound
 statement without waiting and returns a result handle. Every statement sent on a
 connection before one of their results is read goes out together and comes back
 in one round trip, and each is still its own transaction, so one failing does
-not undo the others. The statement's bindings are cleared, so it can be bound
-and sent again at once.
+not undo the others. A result is read only once its transaction has committed: a
+write whose commit fails, on a deferred constraint for instance, reads as failed,
+with that SQLSTATE. A thread can hold up to 65,536 unfreed results. The
+statement's bindings are cleared, so it can be bound and sent again at once.
 
 ```dex
 let rows: int[] = []

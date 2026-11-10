@@ -210,7 +210,9 @@ static void dex_send_response(int fd, const char* status, const char* body, cons
     iov[0].iov_len = hlen;
     iov[1].iov_base = (void*)body;
     iov[1].iov_len = body_len;
-    writev(fd, iov, 2);
+    // Best effort; see dex_http_fail_and_close, the only caller.
+    ssize_t r = writev(fd, iov, 2);
+    (void)r;
 }
 
 static const char* dex_http_status_text(int code) {

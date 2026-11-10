@@ -6,6 +6,14 @@
 #include <unistd.h>
 #include <termios.h>
 
+// Terminal echo for the line editor. A failed write to the terminal is not
+// something it can recover from, so the result is dropped; assigned rather
+// than cast to void because gcc's -Wunused-result ignores the cast.
+static void dex_io_echo(const void* buf, size_t n) {
+    ssize_t r = write(STDOUT_FILENO, buf, n);
+    (void)r;
+}
+
 static void dex_io_flush_line(void) {
     int ch;
     while ((ch = getchar()) != '\n' && ch != EOF) {}
@@ -37,7 +45,7 @@ static char* dex_io_read_line_interactive(void) {
         if (read(STDIN_FILENO, &c, 1) != 1) break;
 
         if (c == '\n' || c == '\r') {
-            write(STDOUT_FILENO, "\n", 1);
+            dex_io_echo("\n", 1);
             break;
         }
 
@@ -48,11 +56,11 @@ static char* dex_io_read_line_interactive(void) {
                 len--;
                 buf[len] = '\0';
                 // Redraw: move back, write rest of line, clear trailing char, reposition
-                write(STDOUT_FILENO, "\b", 1);
-                write(STDOUT_FILENO, buf + cursor, len - cursor);
-                write(STDOUT_FILENO, " \b", 2);
+                dex_io_echo("\b", 1);
+                dex_io_echo(buf + cursor, len - cursor);
+                dex_io_echo(" \b", 2);
                 for (size_t i = 0; i < len - cursor; i++)
-                    write(STDOUT_FILENO, "\b", 1);
+                    dex_io_echo("\b", 1);
             }
             continue;
         }
@@ -65,19 +73,19 @@ static char* dex_io_read_line_interactive(void) {
 
             if (seq[1] == 'D' && cursor > 0) { // Left arrow
                 cursor--;
-                write(STDOUT_FILENO, "\033[D", 3);
+                dex_io_echo("\033[D", 3);
             } else if (seq[1] == 'C' && cursor < len) { // Right arrow
                 cursor++;
-                write(STDOUT_FILENO, "\033[C", 3);
+                dex_io_echo("\033[C", 3);
             } else if (seq[1] == 'H') { // Home
                 while (cursor > 0) {
                     cursor--;
-                    write(STDOUT_FILENO, "\033[D", 3);
+                    dex_io_echo("\033[D", 3);
                 }
             } else if (seq[1] == 'F') { // End
                 while (cursor < len) {
                     cursor++;
-                    write(STDOUT_FILENO, "\033[C", 3);
+                    dex_io_echo("\033[C", 3);
                 }
             } else if (seq[1] == '3') { // Delete key (ESC [ 3 ~)
                 char extra;
@@ -86,10 +94,10 @@ static char* dex_io_read_line_interactive(void) {
                         memmove(buf + cursor, buf + cursor + 1, len - cursor - 1);
                         len--;
                         buf[len] = '\0';
-                        write(STDOUT_FILENO, buf + cursor, len - cursor);
-                        write(STDOUT_FILENO, " \b", 2);
+                        dex_io_echo(buf + cursor, len - cursor);
+                        dex_io_echo(" \b", 2);
                         for (size_t i = 0; i < len - cursor; i++)
-                            write(STDOUT_FILENO, "\b", 1);
+                            dex_io_echo("\b", 1);
                     }
                 }
             }
@@ -99,7 +107,7 @@ static char* dex_io_read_line_interactive(void) {
         if (c == 1) { // Ctrl+A — Home
             while (cursor > 0) {
                 cursor--;
-                write(STDOUT_FILENO, "\033[D", 3);
+                dex_io_echo("\033[D", 3);
             }
             continue;
         }
@@ -107,7 +115,7 @@ static char* dex_io_read_line_interactive(void) {
         if (c == 5) { // Ctrl+E — End
             while (cursor < len) {
                 cursor++;
-                write(STDOUT_FILENO, "\033[C", 3);
+                dex_io_echo("\033[C", 3);
             }
             continue;
         }
@@ -116,18 +124,18 @@ static char* dex_io_read_line_interactive(void) {
             if (cursor > 0) {
                 // Move to beginning visually
                 for (size_t i = 0; i < cursor; i++)
-                    write(STDOUT_FILENO, "\b", 1);
+                    dex_io_echo("\b", 1);
                 // Shift remaining text to front
                 memmove(buf, buf + cursor, len - cursor);
                 len -= cursor;
                 buf[len] = '\0';
                 cursor = 0;
                 // Rewrite remaining text and clear leftover chars
-                write(STDOUT_FILENO, buf, len);
-                write(STDOUT_FILENO, "\033[K", 3); // clear to end of line
+                dex_io_echo(buf, len);
+                dex_io_echo("\033[K", 3); // clear to end of line
                 // Reposition cursor at beginning
                 for (size_t i = 0; i < len; i++)
-                    write(STDOUT_FILENO, "\b", 1);
+                    dex_io_echo("\b", 1);
             }
             continue;
         }
@@ -142,7 +150,7 @@ static char* dex_io_read_line_interactive(void) {
         }
 
         if (c == 3) { // Ctrl+C
-            write(STDOUT_FILENO, "\n", 1);
+            dex_io_echo("\n", 1);
             tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
             free(buf);
             exit(130);
@@ -160,9 +168,9 @@ static char* dex_io_read_line_interactive(void) {
             len++;
             buf[len] = '\0';
             // Write from cursor to end, then reposition
-            write(STDOUT_FILENO, buf + cursor - 1, len - cursor + 1);
+            dex_io_echo(buf + cursor - 1, len - cursor + 1);
             for (size_t i = 0; i < len - cursor; i++)
-                write(STDOUT_FILENO, "\b", 1);
+                dex_io_echo("\b", 1);
         }
     }
 

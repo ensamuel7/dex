@@ -251,7 +251,11 @@ static void (*dex_shutdown_drain_hook)(void) = NULL;
 
 static void dex_notify_pipe_signal(DexNotifyPipe* np) {
     char c = 1;
-    (void)write(np->write_fd, &c, 1);
+    // A full pipe already has a wakeup pending, so a failed write loses
+    // nothing. Assigned rather than cast to void: gcc's -Wunused-result
+    // ignores the cast.
+    ssize_t r = write(np->write_fd, &c, 1);
+    (void)r;
 }
 
 static void dex_notify_pipe_drain(DexNotifyPipe* np) {

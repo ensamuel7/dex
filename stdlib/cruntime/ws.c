@@ -580,6 +580,15 @@ static void dex_ws_worker_func(void* arg) {
     dex_notify_pipe_signal(&srv->notify);
 }
 
+/* One write, result dropped: a refusal or a pong sent just before the
+ * connection is closed or the next frame is read, where a short write is not
+ * worth a retry. Assigned rather than cast to void because gcc's
+ * -Wunused-result ignores the cast. */
+static void dex_ws_write_best_effort(int fd, const void* buf, size_t n) {
+    ssize_t r = write(fd, buf, n);
+    (void)r;
+}
+
 /* Send a WebSocket close frame, then tear the connection down. Used when a
  * handler called ws.close(): the peer sees a clean close rather than the
  * connection simply going quiet. */
@@ -942,13 +951,13 @@ void dex_ws_listen(int port) {
                     if (rlen == 0) {
                         if (conn->read_len < DEX_WS_MAX_HANDSHAKE) continue;
                         const char* big = "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\n\r\n";
-                        write(conn->fd, big, strlen(big));
+                        dex_ws_write_best_effort(conn->fd, big, strlen(big));
                         dex_ws_ev_close_conn(conn);
                         continue;
                     }
                     if (rlen == -1) {
                         const char* bad = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
-                        write(conn->fd, bad, strlen(bad));
+                        dex_ws_write_best_effort(conn->fd, bad, strlen(bad));
                         dex_ws_ev_close_conn(conn);
                         continue;
                     }
@@ -995,7 +1004,7 @@ void dex_ws_listen(int port) {
                     /* Ping: auto-reply with pong inline */
                     if (opcode == 0x9) {
                         unsigned char pong[2] = {0x8A, 0x00};
-                        write(conn->fd, pong, 2);
+                        dex_ws_write_best_effort(conn->fd, pong, 2);
                         dex_ws_reset_frame_parser(conn);
                         continue;
                     }

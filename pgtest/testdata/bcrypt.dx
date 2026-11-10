@@ -28,5 +28,62 @@ fn main(): void {
     check(!crypto.bcryptVerify("x", "$2b$10$short"), "truncated hash")
     check(!crypto.bcryptVerify("x", "pbkdf2-sha256$1000$00$00"), "another scheme")
     check(!crypto.bcryptVerify("x", "$1$abc$def"), "md5crypt refused")
+
+    // bcryptVerifyAll agrees with bcryptVerify, set by set.
+    let pw: string[] = []
+    let stored: string[] = []
+    let want: bool[] = []
+    let chars: string = "abcdefghijklmnopqrstuvwxyz0123456789 !~"
+    for (let i: int = 0; i < 15; i = i + 1) {
+        let p: string = ""
+        for (let k: int = 0; k < (i * 7) % 80; k = k + 1) {
+            p = p + chars.substring((i * 13 + k * 5) % chars.len(), (i * 13 + k * 5) % chars.len() + 1)
+        }
+        let cost: int = 4
+        if (i % 3 == 0) {
+            cost = 5
+        }
+        let hashed: string = crypto.bcryptHash(p, cost)
+        pw.push(p)
+        if (i % 4 == 1) {
+            stored.push(crypto.bcryptHash(p + "x", cost))
+        } else {
+            stored.push(hashed)
+        }
+        want.push(i % 4 != 1)
+    }
+    // a $2a$ hash from another library, one at cost 10, and ones the engine passes on
+    pw.push("password123")
+    stored.push(seeded)
+    want.push(true)
+    pw.push("password124")
+    stored.push(seeded)
+    want.push(false)
+    pw.push("café")
+    stored.push(crypto.bcryptHash("café", 4))
+    want.push(true)
+    pw.push("x")
+    stored.push("$2b$10$short")
+    want.push(false)
+    pw.push("x")
+    stored.push("")
+    want.push(false)
+    let a72: string = ""
+    for (let k: int = 0; k < 72; k = k + 1) {
+        a72 = a72 + "a"
+    }
+    pw.push(a72 + "tail")
+    stored.push(crypto.bcryptHash(a72, 4))
+    want.push(true)
+    pw.push("no hash for this one")
+    let got: bool[] = crypto.bcryptVerifyAll(pw, stored)
+    check(got.len() == pw.len(), "one answer per password")
+    for (let i: int = 0; i < stored.len(); i = i + 1) {
+        check(got[i] == want[i], "verifyAll entry")
+        check(got[i] == crypto.bcryptVerify(pw[i], stored[i]), "verifyAll matches bcryptVerify")
+    }
+    check(!got[pw.len() - 1], "a password without a hash is false")
+    let none: string[] = []
+    check(crypto.bcryptVerifyAll(none, none).len() == 0, "empty")
     fmt.println("ok")
 }

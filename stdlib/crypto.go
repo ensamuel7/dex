@@ -113,6 +113,13 @@ func init() {
 				RawParams:  []int{0, 1},
 				Doc:        "Whether a password matches a bcrypt hash ($2a$, $2b$ or $2y$), compared in constant time. False for a malformed hash, a password containing a NUL byte, and without libxcrypt.",
 			},
+			"bcryptVerifyAll": {
+				Params:     []ast.Type{ast.TypeArrayString, ast.TypeArrayString},
+				ParamNames: []string{"passwords", "stored"},
+				ReturnType: ast.TypeArrayBool,
+				CName:      "dex_crypto_bcrypt_verify_all",
+				Doc:        "bcryptVerify for each passwords[i] against stored[i], computed side by side: four passwords take about 1.5 times as long as one, so a batch of logins costs well under half the CPU per password. The same answers as bcryptVerify, which handles any pair this cannot (passwords with bytes over 127 among them). One bool per password; false where stored has no entry.",
+			},
 			"encrypt": {
 				Params:     []ast.Type{ast.TypeString, ast.TypeString},
 				ParamNames: []string{"keyHex", "plaintext"},

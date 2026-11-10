@@ -62,6 +62,10 @@ dex format
 dex lint app.dx
 ```
 
+A large program compiles on every core, and an unchanged part is not compiled
+again; `DEX_JOBS=1` compiles it as one unit instead. See
+[Compilation](LANGUAGE.md#compilation).
+
 ## Docker
 
 The image `ensamuel7/dexlang` has `dex` and everything it compiles with: gcc,

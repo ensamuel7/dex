@@ -56,6 +56,11 @@ func formatError(msg string) string {
 }
 
 func main() {
+	// gcc's link-time optimiser may run this executable as make; see makeshim.go.
+	if isMakeShim() {
+		os.Exit(miniMake(os.Args[1:]))
+	}
+
 	// The resolver refuses a module whose dex.mod needs a newer compiler, so it
 	// has to know which one this is. It cannot import main to ask.
 	resolve.SetCompilerVersion(Version)
@@ -584,7 +589,7 @@ func build(filename string) (string, error) {
 	if abs, err := filepath.Abs(srcDir); err == nil {
 		srcDir = abs
 	}
-	args := append([]string{"-o", binaryPath,
+	args := append([]string{
 		"-I" + srcDir,
 		"-Werror=incompatible-pointer-types",
 		"-Werror=implicit-function-declaration",
@@ -599,12 +604,8 @@ func build(filename string) (string, error) {
 	if memCheck {
 		args = append(args, "-g", "-fno-omit-frame-pointer")
 	}
-	args = append(args, cFile)
-	args = append(args, libflags...)
-	cmd := exec.Command(compiler, args...)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("C compilation failed: %v", err)
+	if err := compileC(compiler, cFile, cCode, binaryPath, args, libflags, splittable(program)); err != nil {
+		return "", err
 	}
 
 	return binaryPath, nil

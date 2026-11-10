@@ -209,8 +209,24 @@ static inline void _dex_obj_free(void* ptr) {
 //   - The test precedes dex_mc_check. An immortal object is absent from the
 //     memory checker's registry by construction, and the checker reports a
 //     release of something it does not know about as an error.
+//
+// DEX_RC_KNOWN_IMMORTAL is the same test made visible to the optimiser. gcc
+// does not fold an atomic load, not even one from a const static, so where it
+// inlined a release of a literal it saw the free path as live and warned
+// "'free' called on unallocated object" (-Wfree-nonheap-object) at every such
+// site. Codegen releases literal temporaries like any other string, so that
+// was hundreds of warnings on a large program, all false. When the count is a
+// compile-time constant the plain read is folded away and never executed, so
+// nothing reads a mortal object's count non-atomically.
 #define DEX_RC_IMMORTAL __INT_MAX__
-#define DEX_IS_IMMORTAL(o) (DEX_RC_GET(o) == DEX_RC_IMMORTAL)
+#if defined(__GNUC__)
+#define DEX_RC_KNOWN_IMMORTAL(o)                    \
+    (__builtin_constant_p(*(const int*)&(o)->rc) && \
+     *(const int*)&(o)->rc == DEX_RC_IMMORTAL)
+#else
+#define DEX_RC_KNOWN_IMMORTAL(o) 0
+#endif
+#define DEX_IS_IMMORTAL(o) (DEX_RC_KNOWN_IMMORTAL(o) || DEX_RC_GET(o) == DEX_RC_IMMORTAL)
 
 #ifdef DEX_MEM_CHECK
 // Defined by the memory checker runtime, which is emitted immediately after

@@ -197,6 +197,28 @@ if (x != null) {
 }
 ```
 
+The same holds wherever a check has already settled the question. The
+right-hand side of `&&` runs only when the left was true, and the right-hand
+side of `||` only when the left was false, so a null check on the left narrows
+the right; an `else` branch is narrowed by what the condition proves when it is
+false; and `!` swaps the two:
+
+```dex
+fn display(u: User?): string {
+    if (u == null || u.name.isEmpty()) {   // u is User on the right of ||
+        return "nobody"
+    }
+    return u.name                          // and after the guard clause
+}
+
+if (u != null && u.age > 18) { ... }       // User on the right of &&, and in the block
+if (s == null || s.len() == 0) { ... } else { s.toUpper() }   // string in the else
+```
+
+Only what is certain narrows: `x == null && x.f` is still an error, because the
+right-hand side runs exactly when `x` is null, and nothing narrows after a
+condition that could have been true either way.
+
 **Functions with optional types:**
 
 Functions can accept and return optional types.
@@ -254,6 +276,7 @@ Char literals use single quotes and support escape sequences:
 let a: char = 'A'
 let newline: char = '\n'
 let tab: char = '\t'
+let cr: char = '\r'
 let backslash: char = '\\'
 let quote: char = '\''
 ```
@@ -312,6 +335,23 @@ const width, height: int = 100
 ```
 
 Multi-declaration requires an explicit type annotation.
+
+### Redeclaration
+
+A name can be declared once per scope. A second `let` of the same name in the
+same block, or of a parameter's name in a function body, is a compile error;
+assign to the existing variable instead. A nested block may declare the name
+again, which hides the outer one until the block ends (lint's `shadow` rule
+reports it).
+
+```dex
+let n: int = 1
+let n: int = 2      // error: 'n' is already declared in this scope
+n = 2               // fine
+if (n > 0) {
+    let n: int = 3  // fine: a new scope
+}
+```
 
 ### Assignment
 
@@ -599,6 +639,9 @@ let svc = Service{db: db}   // svc.db points to db
 | `const` variable | — | No | — | same as type | — |
 | `enum` | value | No (constants) | No | stack | — |
 | `map[K, V]` | pointer | Yes | Yes | heap (ref-counted) | — |
+
+A struct from another module is referenced by the same qualified name it is
+written with elsewhere: `fn resize(b: &shape.Box): void`.
 
 **Rules:**
 - Struct and primitive types (`int`, `long`, `double`, `bool`, `char`) can use the `&` prefix for pass-by-reference. `&string` is a compile error (strings are already heap-allocated pointers).
@@ -1201,6 +1244,10 @@ items.remove(0)                    // removes 10
 items.sort("asc")                  // sort ascending
 items.reverse()                    // reverse in place
 ```
+
+`.pop()` works on every array, a struct or interface array included: the
+element is moved out to the caller rather than copied, so it is not released
+when the array shrinks.
 
 > **Note:** `.sort()` is supported on primitive-typed arrays (`int[]`, `long[]`, `double[]`, `string[]`, `char[]`). Struct arrays do not support sorting.
 
@@ -3148,7 +3195,7 @@ Encode and decode JSON. The module has two functions — `json.encode` and
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `encode` | `encode(value: json.Value \| struct \| T[] \| map[string, V]): string` | Serialize a value to JSON text |
+| `encode` | `encode(value: json.Value \| struct \| T[] \| map[string, V] \| struct? \| T[]?): string` | Serialize a value to JSON text; an absent optional is `null` |
 | `decode` | `decode(json: string \| json.Value): T` | Parse JSON into `json.Value`, a struct, or a struct array |
 
 #### Structs
@@ -3196,6 +3243,15 @@ Escaping follows RFC 8259: `"` and `\` are escaped, the five shorthand controls
 are spelled out, anything else below `0x20` becomes `\u00XX`, and valid UTF-8
 above that passes through unchanged. `\uXXXX` on input is decoded, surrogate
 pairs included.
+
+An optional struct or array encodes as its value, or as `null` when it is
+absent, the way an optional field does inside a struct. Decoding that `null`
+into a `T?` gives `null` back:
+
+```dex
+let found: User? = findUser(id)
+let body: string = json.encode(found)   // {"name":...} or null
+```
 
 #### Checked decoding
 
@@ -4458,6 +4514,7 @@ let b: string = str.fromBool(true)    // "true"
 |----------|----------------|
 | `\n`     | Newline        |
 | `\t`     | Tab            |
+| `\r`     | Carriage return (for CRLF line endings: `"\r\n"`) |
 | `\\`     | Backslash      |
 | `\"`     | Double quote   |
 

@@ -1,13 +1,18 @@
 package stdlib
 
 // SpecialSignature returns the human-readable parameter string and return type
-// for polymorphic stdlib functions (those with Params == nil). This is the
+// for polymorphic stdlib functions (those with Params == nil), and for
+// http.route, whose handler is typed string in its FuncDef but accepts any of
+// the handler shapes checkHTTPHandler allows. This is the
 // single source of truth used by the LSP, docgen, and any other tool that
 // needs to display correct signatures for these special-cased functions.
 //
 // Returns ("", "", false) if the function is not special-cased, meaning the
 // caller should fall back to the normal Params-based rendering.
 func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret string, ok bool) {
+	if moduleName == "http" && funcName == "route" {
+		return "method: string, path: string, handler: fn", "void", true
+	}
 	if fd.Params != nil {
 		return "", "", false
 	}
@@ -24,7 +29,7 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 		case "set":
 			return "string, string, int|long|double|string|bool", "string", true
 		case "encode":
-			return "value: T[]|struct|map[string, V]", "string", true
+			return "value: T[]|struct|map[string, V]|struct?|T[]?", "string", true
 		case "decode":
 			return "json: string", "T | T? | T[] | T[]?  (struct target; T? and T[]? are checked)", true
 		case "setArray":
@@ -90,30 +95,40 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 		switch funcName {
 		case "listen":
 			return "port: int, [workers: int]", "void", true
+		case "listenOn":
+			return "host: string, port: int, [workers: int]", "void", true
+		case "notFound":
+			return "handler: fn", "void", true
+		case "afterBatch":
+			return "hook: fn(): bool", "void", true
+		case "lanes":
+			return "count: int, serve: fn(lane: int, payloads: string[]): void", "void", true
 		case "response":
 			return "statusCode: int, body: string, contentType: string", "HttpResponse", true
-		case "get":
-			return "string, [string]", "HttpResponse", true
+		case "responseWith":
+			return "statusCode: int, body: string, contentType: string, headers: string", "HttpResponse", true
+		case "get", "delete":
+			return "url: string, [headers: string]", "HttpResponse", true
 		case "post", "put", "patch":
-			return "string, string, [string]", "HttpResponse", true
-		case "delete":
-			return "string, [string]", "HttpResponse", true
+			return "url: string, body: string, [headers: string]", "HttpResponse", true
 		case "request":
-			return "string, string, string, string", "HttpResponse", true
+			return "method: string, url: string, body: string, headers: string", "HttpResponse", true
 		case "requestWith":
-			return "string, string, string, string, HttpOptions", "HttpResponse", true
+			return "method: string, url: string, body: string, headers: string, options: HttpOptions", "HttpResponse", true
 		case "stream":
-			return "string, string, string, string, HttpOptions, onChunk: fn(string): bool", "HttpResponse", true
+			return "method: string, url: string, body: string, headers: string, options: HttpOptions, onChunk: fn(string): bool", "HttpResponse", true
 		case "streamEvents":
-			return "string, string, string, string, HttpOptions, onEvent: fn(string): bool", "HttpResponse", true
+			return "method: string, url: string, body: string, headers: string, options: HttpOptions, onEvent: fn(string): bool", "HttpResponse", true
 		case "header":
-			return "string, string, string", "string", true
+			return "headers: string, key: string, value: string", "string", true
 		case "formNew":
 			return "", "string", true
-		case "formField", "formFile":
-			return "string, string, string", "string", true
+		case "formField":
+			return "form: string, name: string, value: string", "string", true
+		case "formFile":
+			return "form: string, name: string, path: string", "string", true
 		case "postForm":
-			return "string, string, [string]", "HttpResponse", true
+			return "url: string, form: string, [headers: string]", "HttpResponse", true
 		}
 
 	case "time":

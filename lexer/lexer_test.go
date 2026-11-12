@@ -476,3 +476,16 @@ func TestForLoopTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestCarriageReturnEscape(t *testing.T) {
+	toks, err := New(`"a\r\n" '\r'`).Tokenize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toks[0].Value != "a\r\n" {
+		t.Errorf("string = %q, want %q", toks[0].Value, "a\r\n")
+	}
+	if toks[1].Value != "\r" {
+		t.Errorf("char = %q, want %q", toks[1].Value, "\r")
+	}
+}

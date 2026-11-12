@@ -11,7 +11,7 @@ import (
 
 // Scope management
 func (g *Generator) pushScope() {
-	g.scopeStack = append(g.scopeStack, scopeFrame{})
+	g.scopeStack = append(g.scopeStack, scopeFrame{narrowing: g.saveNarrowing()})
 }
 
 func (g *Generator) popScope(out *strings.Builder, prefix string) {
@@ -20,6 +20,7 @@ func (g *Generator) popScope(out *strings.Builder, prefix string) {
 	}
 	scope := g.scopeStack[len(g.scopeStack)-1]
 	g.scopeStack = g.scopeStack[:len(g.scopeStack)-1]
+	defer g.restoreNarrowing(scope.narrowing)
 	for i := len(scope.vars) - 1; i >= 0; i-- {
 		sv := scope.vars[i]
 		g.emitReleaseVar(out, prefix, sv.name, sv.typ)

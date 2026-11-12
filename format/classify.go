@@ -17,7 +17,7 @@ func (p *printer) classify() {
 	// own, flat, and `P {` / `a: 1, // why` / `b: 2 }` is what came out.
 	var open []int
 	for i := range p.it {
-		if i > 0 && p.startsSegment(i) && !p.commentInGroup(i, open) {
+		if i > 0 && (p.startsSegment(i) || p.startsMember(i, open)) && !p.commentInGroup(i, open) {
 			p.boundary[i] = true
 			seg = i
 		}
@@ -50,6 +50,53 @@ func (p *printer) commentInGroup(i int, open []int) bool {
 	}
 	top := open[len(open)-1]
 	return !(p.it[top].kind == token.TokenLBrace && p.block[top])
+}
+
+// startsMember breaks between two members of a struct, enum or interface the
+// author wrote on one line. Newlines are not significant, so `struct P { x: int
+// y: int }` parses, and without this the fields stayed one segment.
+func (p *printer) startsMember(i int, open []int) bool {
+	if len(open) == 0 || !canEnd(p.it[i-1].kind) {
+		return false
+	}
+	top := open[len(open)-1]
+	if p.it[top].kind != token.TokenLBrace || !p.block[top] || top == i-1 {
+		return false
+	}
+	kind := token.TokenEOF
+	for k := p.segStart[top]; k < top; k++ {
+		switch p.it[k].kind {
+		case token.TokenStruct, token.TokenEnum, token.TokenInterface:
+			kind = p.it[k].kind
+		}
+	}
+	cur := p.it[i].kind
+	switch kind {
+	case token.TokenStruct:
+		if cur == token.TokenFn || cur == token.TokenFunction || cur == token.TokenPublic || cur == token.TokenPrivate {
+			return true
+		}
+		return cur == token.TokenIdent && i+1 < len(p.it) && p.it[i+1].kind == token.TokenColon
+	case token.TokenInterface:
+		return cur == token.TokenFn || cur == token.TokenFunction
+	case token.TokenEnum:
+		prev := p.it[i-1].kind
+		return cur == token.TokenIdent && (prev == token.TokenIdent || prev == token.TokenRParen)
+	}
+	return false
+}
+
+// innermostOpener is the bracket the token at i sits directly inside, or -1.
+func (p *printer) innermostOpener(i int) int {
+	for k := i - 1; k >= 0; k-- {
+		switch {
+		case isCloser(p.it[k].kind) && p.match[k] >= 0:
+			k = p.match[k]
+		case isOpener(p.it[k].kind):
+			return k
+		}
+	}
+	return -1
 }
 
 func (p *printer) pairBrackets() {
@@ -255,6 +302,13 @@ func (p *printer) space(i int) bool {
 	case token.TokenLParen, token.TokenLBracket, token.TokenDot, token.TokenBang,
 		token.TokenAmpersand:
 		return false
+	}
+
+	// A slice's colon binds tight on both sides: `a[1:4]`, `a[:3]`, `a[3:]`.
+	if pk == token.TokenColon {
+		if o := p.innermostOpener(i - 1); o >= 0 && p.it[o].kind == token.TokenLBracket {
+			return false
+		}
 	}
 
 	switch ck {

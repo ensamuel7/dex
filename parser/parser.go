@@ -915,6 +915,24 @@ func (p *Parser) parseType() (ast.Type, error) {
 			return 0, p.errorf("reference types (&) are only allowed on struct or primitive types")
 		}
 		name := p.current().Value
+		// A struct named by its module, &shape.Box, the way the same type is
+		// written without the &. Only a struct: an enum or an interface named
+		// this way is still refused below, as its bare spelling is.
+		if p.pos+2 < len(p.tokens) && p.tokens[p.pos+1].Kind == token.TokenDot && p.tokens[p.pos+2].Kind == token.TokenIdent {
+			member := p.tokens[p.pos+2].Value
+			flat := ast.QualifiedStructName(p.moduleIdentity(name), member)
+			if !p.structNames[flat] {
+				// A struct a stdlib module provides is registered bare: &http.HttpRequest.
+				flat = member
+			}
+			if t, ok := ast.LookupStructType(flat); ok && p.structNames[flat] {
+				p.advance() // consume module name
+				p.advance() // consume '.'
+				p.advance() // consume type name
+				return ast.RefTypeOf(t), nil
+			}
+			return 0, p.errorf("reference types (&) are only allowed on struct or primitive types, got '%s.%s'", name, member)
+		}
 		if !p.knownTypeName(name) {
 			return 0, p.errorf("reference types (&) are only allowed on struct or primitive types, got '%s'", name)
 		}

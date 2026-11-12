@@ -1,7 +1,7 @@
 {
   "name": "dex-lang",
   "displayName": "Dex Language",
-  "description": "Syntax highlighting and language support for DexLang (.dx files)",
+  "description": "DexLang for VS Code: highlighting, diagnostics, completion, go to definition, formatting, snippets, and run/build/test commands",
   "version": "0.9.38",
   "publisher": "DexLang",
   "icon": "icons/icon.png",
@@ -44,6 +44,130 @@
         "path": "./syntaxes/dex.tmLanguage.json"
       }
     ],
+    "snippets": [
+      {
+        "language": "dex",
+        "path": "./snippets/dex.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "dex.run",
+        "title": "Run File",
+        "category": "Dex",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dex.build",
+        "title": "Build File",
+        "category": "Dex",
+        "icon": "$(package)"
+      },
+      {
+        "command": "dex.test",
+        "title": "Test File",
+        "category": "Dex",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "dex.testAll",
+        "title": "Run All Tests",
+        "category": "Dex"
+      },
+      {
+        "command": "dex.dev",
+        "title": "Run File and Rerun on Change",
+        "category": "Dex"
+      },
+      {
+        "command": "dex.lint",
+        "title": "Lint File",
+        "category": "Dex"
+      },
+      {
+        "command": "dex.showVersion",
+        "title": "Show Compiler Version",
+        "category": "Dex"
+      },
+      {
+        "command": "dex.restartServer",
+        "title": "Restart Language Server",
+        "category": "Dex"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "dex.run",
+          "when": "resourceLangId == dex",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dex.test",
+          "when": "resourceLangId == dex && resourceFilename =~ /_test\\.dx$/",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dex.run",
+          "when": "resourceLangId == dex",
+          "group": "dex@1"
+        },
+        {
+          "command": "dex.build",
+          "when": "resourceLangId == dex",
+          "group": "dex@2"
+        },
+        {
+          "command": "dex.test",
+          "when": "resourceLangId == dex && resourceFilename =~ /_test\\.dx$/",
+          "group": "dex@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "dex.run",
+          "when": "resourceLangId == dex",
+          "group": "dex@1"
+        },
+        {
+          "command": "dex.build",
+          "when": "resourceLangId == dex",
+          "group": "dex@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "dex.run",
+          "when": "resourceLangId == dex"
+        },
+        {
+          "command": "dex.build",
+          "when": "resourceLangId == dex"
+        },
+        {
+          "command": "dex.test",
+          "when": "resourceLangId == dex"
+        },
+        {
+          "command": "dex.dev",
+          "when": "resourceLangId == dex"
+        },
+        {
+          "command": "dex.lint",
+          "when": "resourceLangId == dex"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "dex.run",
+        "key": "ctrl+f5",
+        "mac": "cmd+f5",
+        "when": "editorLangId == dex"
+      }
+    ],
     "configuration": {
       "title": "Dex",
       "properties": {
@@ -52,6 +176,14 @@
           "default": "dex",
           "description": "Path to the dex binary. Defaults to 'dex' (must be in PATH)."
         }
+      }
+    },
+    "configurationDefaults": {
+      "[dex]": {
+        "editor.formatOnSave": true,
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.defaultFormatter": "DexLang.dex-lang"
       }
     }
   },

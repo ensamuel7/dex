@@ -2903,3 +2903,16 @@ func TestFieldAccessNonStruct(t *testing.T) {
 		let y: int = x.field
 	}`, "field access requires a struct type")
 }
+
+func TestRedeclareInSameScope(t *testing.T) {
+	mustFail(t, `fn main(): void { let v: int = 1
+ let v: string = "x" }`, "'v' is already declared in this scope")
+	mustFail(t, `fn main(): void { let v: int = 1
+ let v: int = 2 }`, "'v' is already declared in this scope")
+	mustFail(t, `fn f(x: int): int { let x: int = 2
+ return x }
+fn main(): void { f(1) }`, "'x' is already declared in this scope")
+	mustCheck(t, `fn main(): void { let v: int = 1
+ if (v > 0) { let v: int = 2 } }`)
+	mustCheck(t, `fn main(): void { let a, b: int = 0 }`)
+}

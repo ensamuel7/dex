@@ -221,35 +221,28 @@ func (g *Generator) genStmtInner(out *strings.Builder, stmt ast.Stmt, indent int
 		g.genCondition(out, s.Cond)
 		out.WriteString(") {\n")
 		g.pushScope()
-		// Detect null check for type narrowing
-		varName, isNotNull := extractNullCheckCodegen(s.Cond)
-		if varName != "" && isNotNull {
-			g.emitNarrowing(out, prefix+"    ", varName)
-		}
+		// Narrowing: what the condition proves when true holds in the then
+		// branch, what it proves when false in the else branch. popScope ends it.
+		g.emitNarrowings(out, prefix+"    ", g.nonNullWhenCodegen(s.Cond, true))
 		for _, stmt := range s.Then {
 			g.genStmt(out, stmt, indent+1)
 		}
-		g.clearNarrowing(varName)
 		g.popScope(out, prefix+"    ")
+		whenFalse := g.nonNullWhenCodegen(s.Cond, false)
 		if s.Else != nil {
 			out.WriteString(fmt.Sprintf("%s} else {\n", prefix))
 			g.pushScope()
-			if varName != "" && !isNotNull {
-				g.emitNarrowing(out, prefix+"    ", varName)
-			}
+			g.emitNarrowings(out, prefix+"    ", whenFalse)
 			for _, stmt := range s.Else {
 				g.genStmt(out, stmt, indent+1)
-			}
-			if varName != "" && !isNotNull {
-				g.clearNarrowing(varName)
 			}
 			g.popScope(out, prefix+"    ")
 		}
 		out.WriteString(fmt.Sprintf("%s}\n", prefix))
 		// Guard clause: everything after `if (x == null) { return ... }` runs only
 		// when x is non-null, so bind the narrowed form for the rest of the block.
-		if varName != "" && !isNotNull && s.Else == nil && alwaysExitsCodegen(s.Then) {
-			g.emitNarrowing(out, prefix, varName)
+		if s.Else == nil && alwaysExitsCodegen(s.Then) {
+			g.emitNarrowings(out, prefix, whenFalse)
 		}
 
 	case *ast.WhileStmt:

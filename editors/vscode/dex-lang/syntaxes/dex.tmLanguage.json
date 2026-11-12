@@ -10,6 +10,9 @@
       "include": "#field-tags"
     },
     {
+      "include": "#annotations"
+    },
+    {
       "include": "#strings"
     },
     {
@@ -29,6 +32,9 @@
     },
     {
       "include": "#external-declaration"
+    },
+    {
+      "include": "#type-parameters"
     },
     {
       "include": "#keywords"
@@ -73,10 +79,45 @@
           "name": "string.quoted.double.dex",
           "begin": "\"",
           "end": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.dex"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.dex"
+            }
+          },
           "patterns": [
             {
               "name": "constant.character.escape.dex",
-              "match": "\\\\[\"\\\\nt0]"
+              "match": "\\\\[\"\\\\ntr]"
+            },
+            {
+              "name": "invalid.illegal.escape.dex",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.dex",
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.begin.dex"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.end.dex"
+                }
+              },
+              "contentName": "source.dex.embedded",
+              "patterns": [
+                {
+                  "include": "$self"
+                }
+              ]
             }
           ]
         }
@@ -86,12 +127,7 @@
       "patterns": [
         {
           "name": "string.quoted.single.dex",
-          "match": "'(\\\\[\"\\\\nt0']|[^'\\\\])'",
-          "captures": {
-            "0": {
-              "name": "string.quoted.single.dex"
-            }
-          }
+          "match": "'(\\\\[\"\\\\ntr']|[^'\\\\])'"
         }
       ]
     },
@@ -267,15 +303,27 @@
           "name": "meta.field-tag.dex",
           "begin": "`",
           "end": "`",
-          "beginCaptures": { "0": { "name": "punctuation.definition.tag.begin.dex" } },
-          "endCaptures": { "0": { "name": "punctuation.definition.tag.end.dex" } },
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.tag.begin.dex"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.tag.end.dex"
+            }
+          },
           "patterns": [
             {
               "comment": "key of a key:\"value\" pair",
               "match": "([A-Za-z_][A-Za-z0-9_]*)(:)",
               "captures": {
-                "1": { "name": "entity.other.attribute-name.dex" },
-                "2": { "name": "punctuation.separator.key-value.dex" }
+                "1": {
+                  "name": "entity.other.attribute-name.dex"
+                },
+                "2": {
+                  "name": "punctuation.separator.key-value.dex"
+                }
               }
             },
             {
@@ -375,6 +423,53 @@
         {
           "name": "punctuation.accessor.dot.dex",
           "match": "\\."
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "meta.annotation.dex",
+          "begin": "#\\[",
+          "end": "\\]",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.annotation.begin.dex"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.annotation.end.dex"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
+              "name": "storage.modifier.annotation.dex"
+            },
+            {
+              "include": "#strings"
+            }
+          ]
+        }
+      ]
+    },
+    "type-parameters": {
+      "patterns": [
+        {
+          "comment": "fn name<T, U>( and struct Name<T> {",
+          "match": "(?<=[A-Za-z0-9_])(<)([A-Z][A-Za-z0-9_]*(?:\\s*,\\s*[A-Z][A-Za-z0-9_]*)*)(>)(?=\\s*[({])",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.typeparameters.begin.dex"
+            },
+            "2": {
+              "name": "entity.name.type.parameter.dex"
+            },
+            "3": {
+              "name": "punctuation.definition.typeparameters.end.dex"
+            }
+          }
         }
       ]
     }

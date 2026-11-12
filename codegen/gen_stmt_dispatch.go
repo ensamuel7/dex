@@ -25,6 +25,7 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 	g.loopDepth = 0
 	g.narrowedVars = make(map[string]string)
 	g.narrowedTypes = make(map[string]ast.Type)
+	g.narrowCount = 0
 	g.fnHasDefer = containsDefer(fn.Body)
 
 	g.registerGlobalVars()

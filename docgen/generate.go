@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"html/template"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -16,9 +17,22 @@ import (
 //go:embed template.html
 var tmplHTML string
 
+//go:embed favicon.svg
+var faviconSVG []byte
+
+//go:embed icon.png
+var iconPNG []byte
+
+// Assets are the static files the page links to, written beside index.html.
+func Assets() map[string][]byte {
+	return map[string][]byte{"favicon.svg": faviconSVG, "icon.png": iconPNG}
+}
+
 // TemplateData holds all data passed to the HTML template.
 type TemplateData struct {
 	Modules   []ModuleData
+	Generated []ModuleData
+	Releases  []ReleaseData
 	DbModule  ModuleData
 	Keywords  []KeywordData
 	Types     []KeywordData
@@ -43,8 +57,74 @@ type MethodData struct {
 
 // ModuleData represents a stdlib module.
 type ModuleData struct {
-	Name  string
-	Funcs []FuncData
+	Name    string
+	Page    string
+	Summary string
+	Funcs   []FuncData
+}
+
+// ReleaseData is one tagged release, newest first on the Versions page.
+type ReleaseData struct {
+	Tag     string
+	Version string
+	Date    string
+}
+
+// releases reads the release tags from the repository the docs are generated
+// in, so the Versions page is current whenever the docs are. Outside a git
+// checkout it is empty and the page links to GitHub instead.
+func releases(projectRoot string) []ReleaseData {
+	out, err := exec.Command("git", "-C", projectRoot, "tag", "--list", "v*", "--sort=-v:refname",
+		"--format=%(refname:short)|%(creatordate:short)").Output()
+	if err != nil {
+		return nil
+	}
+	var rs []ReleaseData
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		tag, date, ok := strings.Cut(line, "|")
+		if !ok {
+			continue
+		}
+		rs = append(rs, ReleaseData{Tag: tag, Version: strings.TrimPrefix(tag, "v"), Date: date})
+	}
+	return rs
+}
+
+// moduleSummaries is the one-line description of each stdlib module, shown in
+// the overview table and at the top of a generated page. A module missing here
+// fails TestEveryModuleDocumented.
+var moduleSummaries = map[string]string{
+	"crypto":  "Random tokens, password hashing, encryption, HMAC, JWT signatures, base64/base32 and TOTP",
+	"db":      "Database access: SQLite, PostgreSQL, MySQL and MongoDB",
+	"file":    "Files and directories: read, write, list, permissions, locks, atomic writes",
+	"fmt":     "Formatted output to stdout",
+	"http":    "HTTP server and client",
+	"io":      "Read user input from stdin",
+	"json":    "JSON to and from structs, arrays and maps, plus the json.Value document type",
+	"kafka":   "Kafka producer and consumer",
+	"math":    "Math functions and constants",
+	"num":     "Numeric conversions between int, long and double",
+	"os":      "Environment variables, arguments and running commands",
+	"redis":   "Redis client: keys, hashes, lists, sets and pub/sub",
+	"reflect": "Read and write a struct's fields by position at runtime",
+	"smtp":    "Send email over SMTP",
+	"str":     "Conversions between strings and numbers",
+	"time":    "Clocks, sleeping, timers and formatting",
+	"ws":      "WebSocket server and client (RFC 6455)",
+}
+
+// handWritten lists the modules whose page is written in template.html. Every
+// other module gets a page generated from its registry entry alone.
+var handWritten = map[string]bool{
+	"crypto": true, "db": true, "file": true, "fmt": true, "http": true, "io": true, "json": true,
+	"math": true, "os": true, "reflect": true, "str": true, "time": true, "ws": true,
+}
+
+func modulePage(name string) string {
+	if name == "db" {
+		return "database"
+	}
+	return "mod-" + name
 }
 
 // FuncData represents a single function in a module.
@@ -206,7 +286,7 @@ func Generate(projectRoot string) (string, error) {
 
 	for _, name := range moduleNames {
 		mod := modules[name]
-		md := ModuleData{Name: name}
+		md := ModuleData{Name: name, Page: modulePage(name), Summary: moduleSummaries[name]}
 
 		funcNames := make([]string, 0, len(mod.Funcs))
 		for fn := range mod.Funcs {
@@ -225,6 +305,9 @@ func Generate(projectRoot string) (string, error) {
 				params := make([]string, len(fd.Params))
 				for i, p := range fd.Params {
 					params[i] = typeName(p)
+					if i < len(fd.ParamNames) && fd.ParamNames[i] != "" {
+						params[i] = fd.ParamNames[i] + ": " + params[i]
+					}
 				}
 				paramStr = strings.Join(params, ", ")
 			}
@@ -237,6 +320,9 @@ func Generate(projectRoot string) (string, error) {
 			})
 		}
 		data.Modules = append(data.Modules, md)
+		if !handWritten[name] {
+			data.Generated = append(data.Generated, md)
+		}
 	}
 
 	// Separate db module for dedicated database section
@@ -275,9 +361,10 @@ func Generate(projectRoot string) (string, error) {
 	}
 
 	data.ValueType = jsonValueDoc()
+	data.Releases = releases(projectRoot)
 
 	// Parse and execute the template
-	tmpl, err := template.New("docs").Parse(tmplHTML)
+	tmpl, err := template.New("docs").Funcs(template.FuncMap{"funcs": data.funcs}).Parse(tmplHTML)
 	if err != nil {
 		return "", fmt.Errorf("parsing template: %w", err)
 	}
@@ -288,6 +375,36 @@ func Generate(projectRoot string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// funcs gives the template a module's functions, all of them or the named ones
+// in the order named, so a hand-written page can group them under its own
+// headings while the signatures and descriptions still come from the registry.
+func (d TemplateData) funcs(module string, names ...string) ([]FuncData, error) {
+	for _, md := range d.Modules {
+		if md.Name != module {
+			continue
+		}
+		if len(names) == 0 {
+			return md.Funcs, nil
+		}
+		out := make([]FuncData, 0, len(names))
+		for _, n := range names {
+			found := false
+			for _, fd := range md.Funcs {
+				if fd.Name == n {
+					out = append(out, fd)
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("docs name %s.%s, which the stdlib does not have", module, n)
+			}
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("docs name module %s, which the stdlib does not have", module)
 }
 
 // jsonValueDoc describes json.Value and its methods. It is written out here

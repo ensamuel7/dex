@@ -1,0 +1,12 @@
+// `\r` in strings and chars, for line-based protocols that end lines in CRLF.
+import "num"
+
+fn main(): void {
+    let cr: char = '\r'
+    assert(num.toInt(cr) == 13)
+    let line: string = "HELO example.com\r\n"
+    assert(line.len() == 18)
+    assert(line.charAt(16) == '\r')
+    assert(line.charAt(17) == '\n')
+    assert("a\r\nb".split("\r\n").len() == 2)
+}

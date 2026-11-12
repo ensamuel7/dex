@@ -1,0 +1,37 @@
+// json.encode of a Struct? or T[]? gives the value's JSON, or null when it is
+// absent, the way an optional field encodes inside a struct.
+import "json"
+
+struct U {
+    name: string
+    tags: string[]
+}
+
+fn find(ok: bool): U? {
+    if (ok) {
+        return U { name: "a\"q", tags: ["x"] }
+    }
+    return null
+}
+
+fn names(ok: bool): string[]? {
+    if (ok) {
+        return ["p", "q"]
+    }
+    return null
+}
+
+fn main(): void {
+    let u: U? = U { name: "a", tags: [] }
+    let none: U? = null
+    for (let i: int = 0; i < 200; i++) {
+        assert(json.encode(u) == "{\"name\":\"a\",\"tags\":[]}")
+        assert(json.encode(none) == "null")
+        assert(json.encode(find(true)) == "{\"name\":\"a\\\"q\",\"tags\":[\"x\"]}")
+        assert(json.encode(find(false)) == "null")
+        assert(json.encode(names(true)) == "[\"p\",\"q\"]")
+        assert(json.encode(names(false)) == "null")
+        let back: U? = json.decode(json.encode(none))
+        assert(back == null)
+    }
+}

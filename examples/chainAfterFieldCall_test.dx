@@ -1,0 +1,22 @@
+// A call at the end of a field chain, or on a parenthesised expression, is a
+// receiver like any other: the chain keeps going after it.
+struct Filter {
+    q: string
+    view: string
+}
+
+fn normalise(f: Filter): string {
+    let q: string = f.q.trim().toUpper()
+    let v: string = (f.view.trim()).toLower()
+    let n: int = ("a" + "bc").len()
+    assert(n == 3)
+    return q + "/" + v
+}
+
+fn main(): void {
+    for (let i: int = 0; i < 100; i++) {
+        assert(normalise(Filter { q: " k james ", view: " ALL " }) == "K JAMES/all")
+        let f: Filter = Filter { q: "x,y", view: "" }
+        assert(f.q.split(",").len() == 2)
+    }
+}

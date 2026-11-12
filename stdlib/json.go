@@ -21,7 +21,7 @@ func init() {
 				ParamNames: []string{"value"},
 				ReturnType: ast.TypeString,
 				CName:      "",
-				Doc:        "Convert a value to a JSON string. Accepts a json.Value, struct, array, or map[string, V]; structs recurse into nested fields to any depth.",
+				Doc:        "Convert a value to a JSON string. Accepts a json.Value, struct, array, or map[string, V], or an optional struct or array (null when absent); structs recurse into nested fields to any depth.",
 			},
 			"decode": {
 				Params:     nil, // polymorphic — resolved from assignment context

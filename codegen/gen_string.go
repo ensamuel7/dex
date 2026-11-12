@@ -103,9 +103,21 @@ func (g *Generator) genNullComparison(out *strings.Builder, e *ast.BinaryExpr, w
 		nonNullExpr = e.Left
 	}
 
+	isEq := e.Op == ast.BinEq
+	// A narrowed optional is known not to be null: the check is a constant.
+	if id, ok := nonNullExpr.(*ast.Ident); ok {
+		if _, narrowed := g.narrowedTypes[id.Name]; narrowed {
+			if isEq {
+				out.WriteString("(0)")
+			} else {
+				out.WriteString("(1)")
+			}
+			return
+		}
+	}
+
 	// Determine the type of the non-null side
 	nonNullType := g.typeOfExpr(nonNullExpr)
-	isEq := e.Op == ast.BinEq
 
 	if ast.IsOptionalType(nonNullType) {
 		inner := ast.OptionalInnerType(nonNullType)

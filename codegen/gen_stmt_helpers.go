@@ -29,6 +29,92 @@ func extractNullCheckCodegen(cond ast.Expr) (string, bool) {
 	return "", false
 }
 
+// nonNullWhenCodegen mirrors the checker's nonNullWhen: the variables a
+// condition proves are not null when it evaluates to `outcome`, remembered per
+// node so a long `&&` chain stays linear.
+func (g *Generator) nonNullWhenCodegen(cond ast.Expr, outcome bool) []string {
+	key := nullFactKey{cond, outcome}
+	if names, ok := g.nullFacts[key]; ok {
+		return names
+	}
+	var names []string
+	switch e := cond.(type) {
+	case *ast.UnaryExpr:
+		if e.Op == ast.UnaryNot {
+			names = g.nonNullWhenCodegen(e.Operand, !outcome)
+		}
+	case *ast.BinaryExpr:
+		switch e.Op {
+		case ast.BinAnd:
+			if outcome {
+				names = joinNames(g.nonNullWhenCodegen(e.Left, true), g.nonNullWhenCodegen(e.Right, true))
+			}
+		case ast.BinOr:
+			if !outcome {
+				names = joinNames(g.nonNullWhenCodegen(e.Left, false), g.nonNullWhenCodegen(e.Right, false))
+			}
+		case ast.BinEq, ast.BinNeq:
+			if name, isNotNull := extractNullCheckCodegen(e); name != "" && isNotNull == outcome {
+				names = []string{name}
+			}
+		}
+	}
+	if g.nullFacts == nil {
+		g.nullFacts = make(map[nullFactKey][]string)
+	}
+	g.nullFacts[key] = names
+	return names
+}
+
+type nullFactKey struct {
+	cond    ast.Expr
+	outcome bool
+}
+
+// A fresh slice, so a remembered answer is never appended to in place.
+func joinNames(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	out := make([]string, 0, len(a)+len(b))
+	return append(append(out, a...), b...)
+}
+
+func (g *Generator) emitNarrowings(out *strings.Builder, prefix string, names []string) {
+	for _, name := range names {
+		if _, done := g.narrowedTypes[name]; done {
+			continue
+		}
+		g.emitNarrowing(out, prefix, name)
+	}
+}
+
+// Narrowing is lexical: a block's narrowed names end with the block, as the C
+// locals holding them do. pushScope saves, popScope restores.
+type narrowState struct {
+	vars  map[string]string
+	types map[string]ast.Type
+}
+
+func (g *Generator) saveNarrowing() narrowState {
+	st := narrowState{vars: make(map[string]string, len(g.narrowedVars)), types: make(map[string]ast.Type, len(g.narrowedTypes))}
+	for k, v := range g.narrowedVars {
+		st.vars[k] = v
+	}
+	for k, v := range g.narrowedTypes {
+		st.types[k] = v
+	}
+	return st
+}
+
+func (g *Generator) restoreNarrowing(st narrowState) {
+	g.narrowedVars = st.vars
+	g.narrowedTypes = st.types
+}
+
 // emitNarrowing emits a narrowed variable declaration for an optional variable
 // and registers it in the narrowedVars map so genExpr uses the narrowed name.
 func (g *Generator) emitNarrowing(out *strings.Builder, prefix, varName string) {
@@ -38,7 +124,7 @@ func (g *Generator) emitNarrowing(out *strings.Builder, prefix, varName string) 
 	}
 	inner := ast.OptionalInnerType(varType)
 	if ast.IsValueType(inner) {
-		narrowedName := "_narrow_" + varName
+		narrowedName := g.nextNarrowName(varName)
 		out.WriteString(fmt.Sprintf("%s%s %s = %s.value;\n", prefix, g.cType(inner), narrowedName, varName))
 		g.narrowedVars[varName] = narrowedName
 		g.narrowedTypes[varName] = inner
@@ -47,7 +133,7 @@ func (g *Generator) emitNarrowing(out *strings.Builder, prefix, varName string) 
 	if ast.IsStructType(inner) {
 		// Optional structs are Dex_Foo* — bind a value copy so everything
 		// downstream (field access, encode, calls) sees a plain struct.
-		narrowedName := "_narrow_" + varName
+		narrowedName := g.nextNarrowName(varName)
 		out.WriteString(fmt.Sprintf("%s%s %s = *%s;\n", prefix, g.cType(inner), narrowedName, varName))
 		g.narrowedVars[varName] = narrowedName
 		g.narrowedTypes[varName] = inner
@@ -59,10 +145,11 @@ func (g *Generator) emitNarrowing(out *strings.Builder, prefix, varName string) 
 	g.narrowedTypes[varName] = inner
 }
 
-// clearNarrowing removes a variable from the narrowedVars map.
-func (g *Generator) clearNarrowing(varName string) {
-	delete(g.narrowedVars, varName)
-	delete(g.narrowedTypes, varName)
+// Unique per function: two guards on one variable in one block each bind
+// their own local, where one name would be a C redefinition.
+func (g *Generator) nextNarrowName(varName string) string {
+	g.narrowCount++
+	return fmt.Sprintf("_narrow_%s_%d", varName, g.narrowCount)
 }
 
 // genForInit generates the init part of a for loop (no trailing semicolon).
@@ -403,7 +490,22 @@ func (g *Generator) genShortCircuit(out *strings.Builder, e *ast.BinaryExpr) {
 	out.WriteString("(")
 	g.genCondition(out, e.Left)
 	out.WriteString(fmt.Sprintf(" %s ", g.cBinOp(e.Op)))
-	g.genCondition(out, e.Right)
+	// The right-hand side runs only once the left has settled what it proves
+	// (true for &&, false for ||), so an optional it checked is narrowed there:
+	// bound inside the operand, where it exists only if the operand runs.
+	saved := g.saveNarrowing()
+	var decls strings.Builder
+	g.emitNarrowings(&decls, "", g.nonNullWhenCodegen(e.Left, e.Op == ast.BinAnd))
+	var right strings.Builder
+	g.genCondition(&right, e.Right)
+	g.restoreNarrowing(saved)
+	if decls.Len() == 0 {
+		out.WriteString(right.String())
+	} else {
+		result := g.nextTemp()
+		out.WriteString(fmt.Sprintf("({ %s_Bool %s = (%s); %s; })",
+			strings.ReplaceAll(decls.String(), "\n", " "), result, right.String(), result))
+	}
 	out.WriteString(")")
 }
 

@@ -71,7 +71,17 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 		if err != nil {
 			return 0, err
 		}
-		rightType, err := c.checkExpr(e.Right)
+		// The right of `&&` runs only when the left was true, the right of `||`
+		// only when it was false, so what that settles narrows it.
+		var rightType ast.Type
+		if e.Op == ast.BinAnd || e.Op == ast.BinOr {
+			c.pushScope()
+			c.narrowAll(c.nonNullWhen(e.Left, e.Op == ast.BinAnd))
+			rightType, err = c.checkExpr(e.Right)
+			c.popScope()
+		} else {
+			rightType, err = c.checkExpr(e.Right)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -112,6 +122,13 @@ func (c *Checker) checkExprKind(expr ast.Expr) (ast.Type, error) {
 			return c.arithResultType(e, leftType, rightType)
 
 		case ast.BinEq, ast.BinNeq:
+			// A null check on an optional that an earlier check has narrowed is
+			// redundant, not wrong: it was written against the declared type,
+			// and narrowing must never turn a program that compiled into one
+			// that does not.
+			if c.isNarrowedNullCheck(e) {
+				return ast.TypeBool, nil
+			}
 			// Allow null comparisons with optional types
 			if leftType == ast.TypeNull && ast.IsOptionalType(rightType) {
 				e.LeftType = leftType

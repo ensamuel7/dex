@@ -421,7 +421,9 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 						callExpr.ArgNames = p.lastArgNames
 						p.lastArgNames = nil
 					}
-					return callExpr, nil
+					// As below: f.name.trim().toUpper() keeps going after the
+					// first call instead of stopping at its closing paren.
+					return p.parsePostfix(callExpr, pos)
 				}
 				// Not a call, continue building the chain
 				members = append(members, nextMember)
@@ -601,7 +603,9 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		if err := p.expect(token.TokenRParen); err != nil {
 			return nil, err
 		}
-		return expr, nil
+		// A parenthesised expression is a receiver like any other:
+		// (a + b).len() and (x.trim()).toUpper().
+		return p.parsePostfix(expr, pos)
 
 	default:
 		return nil, p.errorf("unexpected token '%s'", tok.Value)

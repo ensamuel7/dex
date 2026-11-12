@@ -74,7 +74,11 @@ func (p *printer) run() string {
 
 		p.segment(i, end, indent+IndentWidth)
 
-		if last := end - 1; p.it[last].kind == token.TokenLBrace && p.block[last] {
+		last := end - 1
+		for last > i && p.it[last].kind == token.TokenComment {
+			last--
+		}
+		if p.it[last].kind == token.TokenLBrace && p.block[last] {
 			indent += IndentWidth
 		}
 

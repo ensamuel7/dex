@@ -14,6 +14,9 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 			if err := c.checkIdentifierName(s.Name, "variable", s.Pos); err != nil {
 				return err
 			}
+			if _, taken := c.scopes[len(c.scopes)-1][s.Name]; taken {
+				return c.errAt(s.Pos, "'%s' is already declared in this scope; assign to it, or pick another name", s.Name)
+			}
 		}
 		for _, n := range s.Names {
 			if err := c.checkIdentifierName(n, "variable", s.Pos); err != nil {
@@ -216,29 +219,20 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		if condType != ast.TypeBool {
 			return c.errAt(s.Pos, "if condition must be bool, got %s", typeName(condType))
 		}
-		// Detect null check pattern for type narrowing
-		varName, isNotNull := extractNullCheck(s.Cond)
+		// Narrowing: what the condition proves when true holds in the then
+		// branch, what it proves when false holds in the else branch.
 		c.pushScope()
-		if varName != "" && isNotNull {
-			// x != null in then-branch: narrow to inner type
-			if varType, ok := c.resolve(varName); ok && ast.IsOptionalType(varType) {
-				c.define(varName, ast.OptionalInnerType(varType))
-			}
-		}
+		c.narrowAll(c.nonNullWhen(s.Cond, true))
 		for _, stmt := range s.Then {
 			if err := c.checkStmt(stmt, returnType); err != nil {
 				return err
 			}
 		}
 		c.popScope()
+		whenFalse := c.nonNullWhen(s.Cond, false)
 		if s.Else != nil {
 			c.pushScope()
-			if varName != "" && !isNotNull {
-				// x == null in else-branch: narrow to inner type in else
-				if varType, ok := c.resolve(varName); ok && ast.IsOptionalType(varType) {
-					c.define(varName, ast.OptionalInnerType(varType))
-				}
-			}
+			c.narrowAll(whenFalse)
 			for _, stmt := range s.Else {
 				if err := c.checkStmt(stmt, returnType); err != nil {
 					return err
@@ -249,10 +243,8 @@ func (c *Checker) checkStmt(stmt ast.Stmt, returnType ast.Type) error {
 		// Guard clause: `if (x == null) { return ... }` with no else means every
 		// path that reaches the rest of this block has a non-null x, so narrow it
 		// in the enclosing scope for the statements that follow.
-		if varName != "" && !isNotNull && s.Else == nil && alwaysExits(s.Then) {
-			if varType, ok := c.resolve(varName); ok && ast.IsOptionalType(varType) {
-				c.define(varName, ast.OptionalInnerType(varType))
-			}
+		if s.Else == nil && alwaysExits(s.Then) {
+			c.narrowAll(whenFalse)
 		}
 		return nil
 

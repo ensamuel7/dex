@@ -31,6 +31,9 @@ func (g *Generator) genExpr(out *strings.Builder, expr ast.Expr) {
 			out.WriteString("'\\n'")
 		case '\t':
 			out.WriteString("'\\t'")
+		case '\r':
+			// A raw carriage return inside a C char literal reads as a line end.
+			out.WriteString("'\\r'")
 		default:
 			out.WriteString(fmt.Sprintf("'%c'", e.Value))
 		}
@@ -439,6 +442,11 @@ func (g *Generator) resolveFieldChainC(chain string) string {
 		return chain
 	}
 	parts := strings.SplitN(chain, ".", 2)
+	// A narrowed Struct? is read through its narrowed copy, as a bare name is:
+	// `u.tags.len()` inside `if (u != null)` named the box pointer.
+	if narrowed, ok := g.narrowedVars[parts[0]]; ok {
+		return narrowed + "." + parts[1]
+	}
 	baseType, ok := g.varTypes[parts[0]]
 	if !ok {
 		return chain

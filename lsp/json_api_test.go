@@ -71,7 +71,7 @@ func TestJSONApiSurfacedByLSP(t *testing.T) {
 	// Hover must render the polymorphic signatures, not a placeholder param type.
 	lines := strings.Split(jsonFeatureSource, "\n")
 	for name, wantSig := range map[string]string{
-		"encode": "json.encode(value: T[]|struct|map[string, V]): string",
+		"encode": "json.encode(value: T[]|struct|map[string, V]|struct?|T[]?): string",
 		"decode": "json.decode(json: string)",
 	} {
 		line, col := -1, -1

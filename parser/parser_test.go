@@ -2494,3 +2494,30 @@ func TestErrorInterfaceMissingBrace(t *testing.T) {
 		t.Fatal("expected error for interface missing opening brace")
 	}
 }
+
+func TestCallAfterFieldChainCallContinues(t *testing.T) {
+	// f.q.trim().toUpper(): the chain call is the receiver of the next one.
+	e := parseExpr(t, `f.q.trim().toUpper()`)
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected CallExpr, got %T", e)
+	}
+	if call.Name != "toUpper" {
+		t.Fatalf("Name = %q, want toUpper", call.Name)
+	}
+	recv, ok := call.Recv.(*ast.CallExpr)
+	if !ok || recv.Module != "f.q" || recv.Name != "trim" {
+		t.Fatalf("Recv = %#v, want f.q.trim()", call.Recv)
+	}
+}
+
+func TestParenthesisedReceiver(t *testing.T) {
+	e := parseExpr(t, `(a + b).len()`)
+	call, ok := e.(*ast.CallExpr)
+	if !ok || call.Name != "len" {
+		t.Fatalf("expected a len() call, got %#v", e)
+	}
+	if _, ok := call.Recv.(*ast.BinaryExpr); !ok {
+		t.Fatalf("Recv = %T, want *ast.BinaryExpr", call.Recv)
+	}
+}

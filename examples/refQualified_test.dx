@@ -1,0 +1,17 @@
+// A struct from another module can be taken by reference with its qualified
+// name, the way it is written without the &.
+import "modules/refShape"
+
+fn grow(b: &refShape.Box, by: int): void {
+    b.w = b.w + by
+    b.label = b.label + "+"
+}
+
+fn main(): void {
+    let b: refShape.Box = refShape.Box { w: 1, label: "box" }
+    grow(b, 2)
+    assert(b.w == 3)
+    assert(b.label == "box+")
+    refShape.widen(b)
+    assert(b.w == 4)
+}

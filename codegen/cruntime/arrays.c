@@ -671,12 +671,10 @@ void* dex_array_struct_get(DexArrayStruct* a, int index) {
     return (char*)a->data + (size_t)index * a->elem_size;
 }
 
-void dex_array_struct_pop(DexArrayStruct* a) {
+void* dex_array_struct_pop(DexArrayStruct* a) {
     if (a->len == 0) { dex_panic("pop from empty array"); }
     a->len--;
-    if (a->cleanup) {
-        a->cleanup((char*)a->data + (size_t)a->len * a->elem_size);
-    }
+    return (char*)a->data + (size_t)a->len * a->elem_size;
 }
 
 void dex_array_struct_remove(DexArrayStruct* a, int index) {

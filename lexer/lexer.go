@@ -302,6 +302,8 @@ func (l *Lexer) Tokenize() ([]token.Token, error) {
 					charVal = '\n'
 				case 't':
 					charVal = '\t'
+				case 'r':
+					charVal = '\r'
 				default:
 					return nil, fmt.Errorf("%s%d:%d: unknown escape sequence '\\%c' in char literal", l.errPrefix(), l.line, l.col, l.source[l.pos])
 				}
@@ -525,6 +527,8 @@ func (l *Lexer) scanStringLiteral(startLine, startCol int) ([]token.Token, error
 				str = append(str, '\n')
 			case 't':
 				str = append(str, '\t')
+			case 'r':
+				str = append(str, '\r')
 			default:
 				return nil, fmt.Errorf("%s%d:%d: unknown escape sequence '\\%c'", l.errPrefix(), l.line, l.col, l.source[l.pos])
 			}

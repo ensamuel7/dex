@@ -1,0 +1,130 @@
+{
+  "main": {
+    "prefix": "main",
+    "description": "Program entry point",
+    "body": ["import \"fmt\"", "", "fn main(): void {", "    ${0:fmt.println(\"Hello, World!\")}", "}"]
+  },
+  "fn": {
+    "prefix": "fn",
+    "description": "Function",
+    "body": ["fn ${1:name}(${2:arg}: ${3:int}): ${4:void} {", "    $0", "}"]
+  },
+  "struct": {
+    "prefix": "struct",
+    "description": "Struct",
+    "body": ["struct ${1:Name} {", "    ${2:field}: ${3:string}", "}"]
+  },
+  "method": {
+    "prefix": "method",
+    "description": "Method inside a struct",
+    "body": ["fn ${1:name}(): ${2:void} {", "    $0", "}"]
+  },
+  "interface": {
+    "prefix": "interface",
+    "description": "Interface",
+    "body": ["interface ${1:Name} {", "    fn ${2:method}(): ${3:string}", "}"]
+  },
+  "enum": {
+    "prefix": "enum",
+    "description": "Enum",
+    "body": ["enum ${1:Name} {", "    ${2:First}", "    ${3:Second}", "}"]
+  },
+  "let": {
+    "prefix": "let",
+    "description": "Variable with a type",
+    "body": ["let ${1:name}: ${2:int} = ${0:0}"]
+  },
+  "if": {
+    "prefix": "if",
+    "description": "if",
+    "body": ["if (${1:condition}) {", "    $0", "}"]
+  },
+  "ife": {
+    "prefix": "ife",
+    "description": "if / else",
+    "body": ["if (${1:condition}) {", "    $2", "} else {", "    $0", "}"]
+  },
+  "foreach": {
+    "prefix": "foreach",
+    "description": "Loop over an array",
+    "body": ["foreach (${1:items} as ${2:item}) {", "    $0", "}"]
+  },
+  "for": {
+    "prefix": "for",
+    "description": "Counting loop",
+    "body": ["for (let ${1:i} = 0; $1 < ${2:n}; $1++) {", "    $0", "}"]
+  },
+  "while": {
+    "prefix": "while",
+    "description": "while loop",
+    "body": ["while (${1:condition}) {", "    $0", "}"]
+  },
+  "switch": {
+    "prefix": "switch",
+    "description": "switch",
+    "body": ["switch (${1:value}) {", "    case ${2:1}: {", "        $0", "    }", "    default: {", "    }", "}"]
+  },
+  "try": {
+    "prefix": "try",
+    "description": "try / catch",
+    "body": ["try {", "    $1", "} catch (e: Exception) {", "    ${0:fmt.println(e.message)}", "}"]
+  },
+  "tryf": {
+    "prefix": "tryf",
+    "description": "try / catch / finally",
+    "body": ["try {", "    $1", "} catch (e: Exception) {", "    $2", "} finally {", "    $0", "}"]
+  },
+  "spawn": {
+    "prefix": "spawn",
+    "description": "Run a block on another thread and receive its result",
+    "body": ["let ${1:task} = spawn {", "    send(${2:value})", "}", "", "let ${3:result} = receive($1)"]
+  },
+  "http server": {
+    "prefix": "server",
+    "description": "HTTP server with one route",
+    "body": [
+      "import \"http\"",
+      "",
+      "fn ${1:handleHello}(req: http.HttpRequest): http.HttpResponse {",
+      "    return http.response(200, \"${2:Hello from Dex}\", \"text/plain\")",
+      "}",
+      "",
+      "fn main(): void {",
+      "    http.route(\"GET\", \"/${3:hello}\", $1)",
+      "    http.listen(${4:8080})",
+      "}"
+    ]
+  },
+  "route": {
+    "prefix": "route",
+    "description": "HTTP handler",
+    "body": ["fn ${1:handle}(req: http.HttpRequest): http.HttpResponse {", "    return http.response(200, ${0:\"\"}, \"application/json\")", "}"]
+  },
+  "decode": {
+    "prefix": "decode",
+    "description": "Decode JSON into a struct, null if it does not fit",
+    "body": ["let ${1:value}: ${2:Type}? = json.decode(${3:body})", "if ($1 == null) {", "    $0", "}"]
+  },
+  "test": {
+    "prefix": "test",
+    "description": "Test file body: run with dex test",
+    "body": ["fn main(): void {", "    assert(${1:1 + 1 == 2})$0", "}"]
+  },
+  "external": {
+    "prefix": "external",
+    "description": "Bind C functions",
+    "body": [
+      "external module ${1:zlib} {",
+      "    include \"<${2:zlib.h}>\"",
+      "    link \"-l${3:z}\"",
+      "",
+      "    fn ${4:compressBound}(${5:sourceLen}: ${6:long}): ${7:long}",
+      "}"
+    ]
+  },
+  "defer": {
+    "prefix": "lock",
+    "description": "Lock a mutex until the function returns",
+    "body": ["${1:mu}.lock()", "defer $1.unlock()", "$0"]
+  }
+}

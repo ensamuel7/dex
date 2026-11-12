@@ -1,0 +1,34 @@
+// Narrowing never breaks code that compiled before: a redundant null check on
+// a narrowed optional is still accepted, and is simply always true or false.
+struct S {
+    v: int
+}
+
+fn find(ok: bool): S? {
+    if (ok) {
+        return S { v: 4 }
+    }
+    return null
+}
+
+fn guarded(ok: bool, n: int?): int {
+    let s: S? = find(ok)
+    if (s == null || n == null) {
+        return -1
+    }
+    if (s != null) {
+        if (n == null) {
+            return -2
+        }
+        return s.v + n
+    }
+    return -3
+}
+
+fn main(): void {
+    for (let i: int = 0; i < 50; i++) {
+        assert(guarded(true, 3) == 7)
+        assert(guarded(false, 3) == -1)
+        assert(guarded(true, null) == -1)
+    }
+}

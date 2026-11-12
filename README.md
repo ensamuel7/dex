@@ -74,7 +74,7 @@ need nothing else installed, which makes it a good fit for CI, or for trying the
 language without installing it.
 
 ```bash
-docker pull ensamuel7/dexlang:0.9.38     # or :latest
+docker pull ensamuel7/dexlang:latest
 ```
 
 The image's entrypoint is `dex`, and its working directory is `/workspace`, so
@@ -101,7 +101,7 @@ docker run --rm -p 8080:8080 -v "$(pwd):/workspace" ensamuel7/dexlang run server
 Build in the dex image and copy only the binary into a small one:
 
 ```dockerfile
-FROM ensamuel7/dexlang:0.9.38 AS build
+FROM ensamuel7/dexlang:latest AS build
 WORKDIR /src
 COPY . .
 RUN dex build main.dx
@@ -130,8 +130,10 @@ To see exactly what one needs:
 docker run --rm -v "$(pwd):/workspace" --entrypoint ldd ensamuel7/dexlang build/main
 ```
 
-Pin a version tag in a Dockerfile rather than `latest`, so a new release
-cannot change a build that used to work.
+`latest` follows each release. For a build that must not change under you, pin
+a version instead: the tags are listed on
+[Docker Hub](https://hub.docker.com/r/ensamuel7/dexlang/tags), and every release
+is on the [Versions](https://ensamuel7.github.io/dex/#versions) page.
 
 ## What It Looks Like
 

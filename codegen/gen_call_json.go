@@ -12,7 +12,12 @@ import (
 func (g *Generator) genJsonCall(out *strings.Builder, e *ast.CallExpr) bool {
 	// json.encode(value) — special codegen (returns const char*, needs wrapping)
 	if e.Module == "json" && e.Name == "encode" {
-		g.genJsonEncodeToString(out, e.Args[0], g.typeOfExpr(e.Args[0]))
+		argType := g.typeOfExpr(e.Args[0])
+		if ast.IsOptionalType(argType) {
+			g.genJsonEncodeOptional(out, e.Args[0], argType)
+			return true
+		}
+		g.genJsonEncodeToString(out, e.Args[0], argType)
 		return true
 	}
 
@@ -53,6 +58,44 @@ func (g *Generator) genJsonCall(out *strings.Builder, e *ast.CallExpr) bool {
 
 	// db.col(rows, col) — polymorphic: dispatch by resolved return type
 	return false
+}
+
+// genJsonEncodeOptional encodes a `T?` of a struct or array: the value as
+// genJsonEncodeToString would, or `null` when it is absent, matching how an
+// optional field encodes. The value is bound once; what it names is encoded
+// through a plain local of the inner type, so every shape keeps its one
+// encoder. A minted optional (a call's result) is released here, since only
+// this expression ever holds it.
+func (g *Generator) genJsonEncodeOptional(out *strings.Builder, arg ast.Expr, argType ast.Type) {
+	inner := ast.OptionalInnerType(argType)
+	opt := g.nextTemp()
+	val := g.nextTemp()
+	res := g.nextTemp()
+	owned := g.isNewAlloc(arg)
+
+	out.WriteString(fmt.Sprintf("({ %s %s = ", g.cType(argType), opt))
+	g.genExpr(out, arg)
+	out.WriteString(fmt.Sprintf("; DexString* %s; if (%s) { ", res, opt))
+	if ast.IsStructType(inner) && !ast.IsArrayType(inner) {
+		// A Struct? addresses the value inside its box.
+		out.WriteString(fmt.Sprintf("%s %s = *%s; ", g.cType(inner), val, opt))
+	} else {
+		out.WriteString(fmt.Sprintf("%s %s = %s; ", g.cType(inner), val, opt))
+	}
+	// A named local borrows, so the encoder releases nothing of it.
+	g.varTypes[val] = inner
+	if ast.IsArrayType(inner) {
+		g.arrVars[val] = inner
+	}
+	out.WriteString(fmt.Sprintf("%s = ", res))
+	g.genJsonEncodeToString(out, &ast.Ident{Name: val}, inner)
+	out.WriteString(fmt.Sprintf("; } else { %s = dex_string_copy_cstr(\"null\"); } ", res))
+	if owned {
+		var rel strings.Builder
+		g.emitReleaseVar(&rel, "", opt, argType)
+		out.WriteString(strings.ReplaceAll(strings.TrimRight(rel.String(), "\n"), "\n", " ") + " ")
+	}
+	out.WriteString(res + "; })")
 }
 
 // genJsonEncodeToString emits an expression producing a DexString* holding the

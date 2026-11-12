@@ -32,6 +32,8 @@ type scopeVar struct {
 type scopeFrame struct {
 	vars []scopeVar
 	mark string
+	// The narrowing in force when the block opened, put back when it closes.
+	narrowing narrowState
 }
 
 type Generator struct {
@@ -132,9 +134,10 @@ type Generator struct {
 	varAnnotations map[string][]string // per-variable annotation tracking
 
 	// Type narrowing for optional types in null checks
-	narrowedVars  map[string]string   // varName -> narrowed C var name in current scope
-	narrowedTypes map[string]ast.Type // varName -> narrowed (non-optional) type in current scope
-	narrowStack   []map[string]string // stack of narrowedVars snapshots for scope management
+	narrowedVars  map[string]string        // varName -> narrowed C var name in current scope
+	narrowedTypes map[string]ast.Type      // varName -> narrowed (non-optional) type in current scope
+	narrowCount   int                      // numbers each narrowed local within a function
+	nullFacts     map[nullFactKey][]string // nonNullWhenCodegen's answers, per condition node
 
 	// Statement-level temp tracking for string concat intermediates
 	pendingReleases []string // temp var names to release after current statement

@@ -97,6 +97,15 @@ func (c *Checker) checkStdlibCall(e *ast.CallExpr, mod *stdlib.Module) (ast.Type
 		if argType == ast.TypeJsonValue {
 			return ast.TypeString, true, nil
 		}
+		// A struct or array that may be absent encodes as itself or as null,
+		// the way an optional field does inside a struct.
+		if ast.IsOptionalType(argType) {
+			inner := ast.OptionalInnerType(argType)
+			if !ast.IsArrayType(inner) && !ast.IsStructType(inner) {
+				return 0, true, c.errAt(e.Pos, "json.encode() takes an optional only of a struct or an array, got %s", typeName(argType))
+			}
+			return ast.TypeString, true, nil
+		}
 		if !ast.IsArrayType(argType) && !ast.IsStructType(argType) && !ast.IsMapType(argType) {
 			return 0, true, c.errAt(e.Pos, "json.encode() argument must be a json.Value, array, struct, or map, got %s", typeName(argType))
 		}

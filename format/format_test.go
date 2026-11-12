@@ -182,6 +182,31 @@ func TestCanonicalShape(t *testing.T) {
 			in:   "fn f() {   \n    g()\t\n}",
 			want: "fn f() {\n    g()\n}\n",
 		},
+		{
+			name: "a slice's colon binds tight",
+			in:   "let a: int[] = n[1 : 4]\nlet b: int[] = n[ : 3]\nlet c: int[] = n[i + 1 :]\n",
+			want: "let a: int[] = n[1:4]\nlet b: int[] = n[:3]\nlet c: int[] = n[i + 1:]\n",
+		},
+		{
+			name: "a literal's colon inside an index keeps its space",
+			in:   "let v: int = m[{a:1}.len()]\n",
+			want: "let v: int = m[{ a: 1 }.len()]\n",
+		},
+		{
+			name: "struct fields on one line get a line each",
+			in:   "struct P { x: int  y: int? }\n",
+			want: "struct P {\n    x: int\n    y: int?\n}\n",
+		},
+		{
+			name: "enum variants and interface methods on one line get a line each",
+			in:   "enum E { A B(v: long) C }\n\ninterface I { fn a(): int fn b(): int }\n",
+			want: "enum E {\n    A\n    B(v: long)\n    C\n}\n\ninterface I {\n    fn a(): int\n    fn b(): int\n}\n",
+		},
+		{
+			name: "a comment after an opening brace keeps the block indented",
+			in:   "fn f(): int {   // returned\nlet p = 1\nif (p > 0) { // c\ny()\n}\nreturn p\n}\n",
+			want: "fn f(): int { // returned\n    let p = 1\n    if (p > 0) { // c\n        y()\n    }\n\n    return p\n}\n",
+		},
 	}
 
 	for _, tc := range cases {

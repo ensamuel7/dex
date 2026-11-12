@@ -16,8 +16,11 @@ type funcSig struct {
 }
 
 type Checker struct {
-	scopes      []map[string]ast.Type
-	constScopes []map[string]bool
+	nullFacts map[nullFactKey][]string // nonNullWhen's answers, per condition node
+	// Per scope: what each name narrowed there was declared as (narrowAll).
+	narrowScopes []map[string]ast.Type
+	scopes       []map[string]ast.Type
+	constScopes  []map[string]bool
 	// By-value struct parameters of the function being checked. A reflect
 	// setter refuses to write through one: it is a copy sharing the caller's
 	// heap pointers, so writing a string field releases a reference the caller
@@ -320,12 +323,14 @@ func (c *Checker) pushScope() {
 	c.scopes = append(c.scopes, make(map[string]ast.Type))
 	c.constScopes = append(c.constScopes, make(map[string]bool))
 	c.annotationScopes = append(c.annotationScopes, make(map[string][]string))
+	c.narrowScopes = append(c.narrowScopes, make(map[string]ast.Type))
 }
 
 func (c *Checker) popScope() {
 	c.scopes = c.scopes[:len(c.scopes)-1]
 	c.constScopes = c.constScopes[:len(c.constScopes)-1]
 	c.annotationScopes = c.annotationScopes[:len(c.annotationScopes)-1]
+	c.narrowScopes = c.narrowScopes[:len(c.narrowScopes)-1]
 }
 
 func (c *Checker) define(name string, typ ast.Type) {

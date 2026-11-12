@@ -114,6 +114,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		for name, content := range docgen.Assets() {
+			if err := os.WriteFile(filepath.Join(outDir, name), content, 0644); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
 		fmt.Printf("Generated: %s\n", outPath)
 		return
 	}

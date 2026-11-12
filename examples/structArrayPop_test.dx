@@ -1,0 +1,46 @@
+struct Item {
+    id: long
+    name: string
+}
+
+interface Named {
+    fn label(): string
+}
+
+struct Tag {
+    text: string
+
+    fn label(): string {
+        return text
+    }
+}
+
+struct Box {
+    items: Item[]
+}
+
+fn main(): void {
+    let items: Item[] = [Item { id: 1, name: "a" }, Item { id: 2, name: "b" + "x" }, Item { id: 3, name: "c" }]
+    let last: Item = items.pop()
+    assert(last.id == 3)
+    assert(last.name == "c")
+    assert(items.len() == 2)
+
+    items.pop()
+    assert(items.len() == 1)
+
+    let first: Item = items.pop()
+    items.push(Item { id: 9, name: "z" })
+    assert(first.name == "a")
+    assert(items[0].name == "z")
+
+    let tags: Named[] = [Tag { text: "t1" }, Tag { text: "t" + "2" }]
+    let t: Named = tags.pop()
+    assert(t.label() == "t2")
+    assert(tags.len() == 1)
+
+    let box: Box = Box { items: [Item { id: 4, name: "d" + "!" }] }
+    let fromField: Item = box.items.pop()
+    assert(fromField.name == "d!")
+    assert(box.items.len() == 0)
+}

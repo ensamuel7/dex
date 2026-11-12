@@ -1,0 +1,9 @@
+// A struct another file takes by reference as `&refShape.Box`.
+struct Box {
+    w: int
+    label: string
+}
+
+fn widen(b: &Box): void {
+    b.w = b.w + 1
+}

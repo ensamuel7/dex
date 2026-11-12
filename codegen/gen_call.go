@@ -734,7 +734,7 @@ func (g *Generator) genCallExpr(out *strings.Builder, e *ast.CallExpr) {
 					out.WriteString(fmt.Sprintf("%s->len", e.Module))
 					return
 				case "pop":
-					out.WriteString(fmt.Sprintf("dex_array_struct_pop(%s)", e.Module))
+					out.WriteString(fmt.Sprintf("(*(%s*)dex_array_struct_pop(%s))", g.cType(elemType), e.Module))
 					return
 				case "remove":
 					out.WriteString(fmt.Sprintf("dex_array_struct_remove(%s, ", e.Module))

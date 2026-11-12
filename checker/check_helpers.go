@@ -7,6 +7,98 @@ import (
 	"github.com/ensamuel7/dex/ast"
 )
 
+// nonNullWhen lists the variables a condition proves are not null when it
+// evaluates to `outcome`. A plain `x != null` proves x when true and `x == null`
+// when false; `&&` proves what both sides prove when it is true, `||` what both
+// sides prove when it is false, and `!` swaps the two. It is what narrows an
+// optional in an if's branches, after a guard clause, and on the right-hand
+// side of `x != null && ...` or `x == null || ...`, which runs only when the
+// left-hand side has already settled it.
+//
+// Every `&&` asks it about its left operand, so a long chain would re-walk
+// itself at every link; answers are remembered per node to keep that linear.
+func (c *Checker) nonNullWhen(cond ast.Expr, outcome bool) []string {
+	key := nullFactKey{cond, outcome}
+	if names, ok := c.nullFacts[key]; ok {
+		return names
+	}
+	var names []string
+	switch e := cond.(type) {
+	case *ast.UnaryExpr:
+		if e.Op == ast.UnaryNot {
+			names = c.nonNullWhen(e.Operand, !outcome)
+		}
+	case *ast.BinaryExpr:
+		switch e.Op {
+		case ast.BinAnd:
+			if outcome {
+				names = joinNames(c.nonNullWhen(e.Left, true), c.nonNullWhen(e.Right, true))
+			}
+		case ast.BinOr:
+			if !outcome {
+				names = joinNames(c.nonNullWhen(e.Left, false), c.nonNullWhen(e.Right, false))
+			}
+		case ast.BinEq, ast.BinNeq:
+			if name, isNotNull := extractNullCheck(e); name != "" && isNotNull == outcome {
+				names = []string{name}
+			}
+		}
+	}
+	if c.nullFacts == nil {
+		c.nullFacts = make(map[nullFactKey][]string)
+	}
+	c.nullFacts[key] = names
+	return names
+}
+
+type nullFactKey struct {
+	cond    ast.Expr
+	outcome bool
+}
+
+// A fresh slice, so a remembered answer is never appended to in place.
+func joinNames(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	out := make([]string, 0, len(a)+len(b))
+	return append(append(out, a...), b...)
+}
+
+// isNarrowedNullCheck: `x == null` or `x != null` where x was declared optional
+// and is narrowed here. Narrowing redefines the name in the scope that holds
+// it, often the declaring scope itself, so what it narrowed from is recorded
+// separately, in narrowScopes.
+func (c *Checker) isNarrowedNullCheck(e *ast.BinaryExpr) bool {
+	name, _ := extractNullCheck(e)
+	if name == "" {
+		return false
+	}
+	now, ok := c.resolve(name)
+	if !ok || ast.IsOptionalType(now) {
+		return false
+	}
+	for i := len(c.narrowScopes) - 1; i >= 0; i-- {
+		if from, ok := c.narrowScopes[i][name]; ok {
+			return ast.OptionalInnerType(from) == now
+		}
+	}
+	return false
+}
+
+// narrowAll narrows each named optional to its inner type in the current scope.
+func (c *Checker) narrowAll(names []string) {
+	for _, name := range names {
+		if t, ok := c.resolve(name); ok && ast.IsOptionalType(t) {
+			c.define(name, ast.OptionalInnerType(t))
+			c.narrowScopes[len(c.narrowScopes)-1][name] = t
+		}
+	}
+}
+
 // extractNullCheck detects null comparison patterns in conditions.
 // Returns (varName, isNotNull) where isNotNull=true means "x != null".
 func extractNullCheck(cond ast.Expr) (string, bool) {

@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DexLang Documentation</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="256x256" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -44,6 +46,7 @@ a:hover{text-decoration:underline}
 .label-data{color:#2dd4bf;border-left-color:#2dd4bf}
 .label-stdlib{color:#4ade80;border-left-color:#4ade80}
 .label-internals{color:#fb923c;border-left-color:#fb923c}
+.label-libraries{color:#f472b6;border-left-color:#f472b6}
 .label-examples{color:var(--text2);border-left-color:var(--text2)}
 
 /* Main */
@@ -189,6 +192,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
       <div class="nav-group-toggle label-guide" onclick="toggleGroup(this)">Guide <span class="chevron">&#9660;</span></div>
       <div class="nav-group-links">
         <a onclick="show('getting-started')">Getting Started</a>
+        <a onclick="show('versions')">Versions</a>
       </div>
     </div>
     <div class="nav-group" data-group="language">
@@ -238,6 +242,17 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
         <a onclick="show('mod-crypto')">crypto</a>
         <a onclick="show('mod-str')">str</a>
         <a onclick="show('mod-reflect')">reflect</a>
+{{range .Generated}}        <a onclick="show('{{.Page}}')">{{.Name}}</a>
+{{end}}      </div>
+    </div>
+    <div class="nav-group" data-group="libraries">
+      <div class="nav-group-toggle label-libraries" onclick="toggleGroup(this)">Libraries <span class="chevron">&#9660;</span></div>
+      <div class="nav-group-links">
+        <a onclick="show('libraries')">Overview</a>
+        <a onclick="show('lib-dexqu')">dexqu</a>
+        <a onclick="show('lib-redis')">redis</a>
+        <a onclick="show('lib-sqlite')">sqlite</a>
+        <a onclick="show('lib-dexdns')">dexdns</a>
       </div>
     </div>
     <div class="nav-group" data-group="internals">
@@ -275,8 +290,25 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
 <li><strong>Fedora:</strong> <code>sudo dnf install gcc</code></li>
 </ul>
 
+<h4>Windows</h4>
+<p>On Windows, <code>dex</code> runs under <a href="https://learn.microsoft.com/windows/wsl/install">WSL2</a>, the Linux environment built into Windows 10 and 11. The compiler and the programs it builds are Linux binaries there, so everything on this site works as written. In PowerShell, as administrator:</p>
+<div class="install">
+<pre><code>wsl --install</code></pre>
+</div>
+<p>Restart when it asks, open <strong>Ubuntu</strong> from the Start menu, and install a C compiler and <code>dex</code> inside it:</p>
+<div class="install">
+<pre><code>sudo apt update &amp;&amp; sudo apt install -y gcc curl
+curl -fsSL https://raw.githubusercontent.com/ensamuel7/dex/main/install.sh | sh</code></pre>
+</div>
+<ul>
+<li><strong>Keep projects in the Linux file system</strong>, under <code>~</code>, not under <code>/mnt/c</code>. Building reads and writes many files, and crossing into the Windows drive is several times slower.</li>
+<li><strong>Edit in VS Code</strong> with Microsoft's <em>WSL</em> extension: run <code>code .</code> in a project folder inside Ubuntu, then install the Dex extension when VS Code offers to install it in WSL. It then uses the <code>dex</code> inside Linux.</li>
+<li><strong>Servers are reachable from Windows.</strong> A program listening on port 8080 in WSL answers at <code>http://localhost:8080</code> in a Windows browser.</li>
+<li><strong>Docker Desktop</strong> works too: the <a onclick="show('getting-started')" style="cursor:pointer">Docker image</a> below runs the same way from PowerShell.</li>
+</ul>
+
 <h4>From source</h4>
-<p>If you have <a href="https://go.dev/dl/">Go</a> (1.21+) installed:</p>
+<p>If you have <a href="https://go.dev/dl/">Go</a> (1.25+) installed:</p>
 <div class="install">
 <pre><code>go install github.com/ensamuel7/dex@latest</code></pre>
 </div>
@@ -290,7 +322,7 @@ h4{font-size:1rem;font-weight:600;color:var(--heading);margin:24px 0 8px}
 <pre><code>import "fmt"
 
 fn main(): void {
-  fmt.println("Hello, World!")
+    fmt.println("Hello, World!")
 }</code></pre>
 
 <h3>Build &amp; Run</h3>
@@ -307,7 +339,7 @@ dex run hello.dx      # build + run, cleans up after</code></pre>
 <h3>Docker</h3>
 <p>The image <code>ensamuel7/dexlang</code> has <code>dex</code> and everything it compiles with: gcc, git, and the headers for SQLite, PostgreSQL, OpenSSL, libcurl and hiredis. You need nothing else installed, which makes it a good fit for CI, or for trying the language without installing it.</p>
 <div class="install">
-<pre><code>docker pull ensamuel7/dexlang:0.9.15     # or :latest</code></pre>
+<pre><code>docker pull ensamuel7/dexlang:latest</code></pre>
 </div>
 <p>The entrypoint is <code>dex</code> and the working directory is <code>/workspace</code>, so mount your project there and pass a command:</p>
 <div class="install">
@@ -321,7 +353,7 @@ docker run --rm -p 8080:8080 -v "$(pwd):/workspace" ensamuel7/dexlang run server
 <p><code>build</code> writes a <strong>Linux</strong> binary to <code>build/</code>, so it runs in a container or on a Linux server, not on a Mac or Windows host. On a Linux host, add <code>--user "$(id -u):$(id -g)"</code> so <code>build/</code> belongs to you rather than to root.</p>
 <p>To ship a program in its own image, build in the dex image and copy only the binary into a small one:</p>
 <div class="install">
-<pre><code>FROM ensamuel7/dexlang:0.9.15 AS build
+<pre><code>FROM ensamuel7/dexlang:latest AS build
 WORKDIR /src
 COPY . .
 RUN dex build main.dx
@@ -336,7 +368,8 @@ CMD ["app"]</code></pre>
 </div>
 <p>A project with a <code>dex.mod</code> needs its libraries fetched first: add <code>RUN dex mod download</code> before the build. Without a <code>dex.mod</code> that command fails, so leave it out.</p>
 <p>The runtime image must be the same Debian release the dex image is built on (13, "trixie"), because the binary links against that release's libraries.</p>
-<p>The binary links only the libraries for the modules it imports. A program using nothing beyond <code>fmt</code> needs libc alone, so the <code>apt-get</code> line can go. To see exactly what one needs: <code>docker run --rm -v "$(pwd):/workspace" --entrypoint ldd ensamuel7/dexlang build/main</code>. Pin a version tag in a Dockerfile rather than <code>latest</code>, so a new release cannot change a build that used to work.</p>
+<p>The binary links only the libraries for the modules it imports. A program using nothing beyond <code>fmt</code> needs libc alone, so the <code>apt-get</code> line can go. To see exactly what one needs: <code>docker run --rm -v "$(pwd):/workspace" --entrypoint ldd ensamuel7/dexlang build/main</code>.</p>
+<p><code>latest</code> follows each release. For a build that must not change under you, pin a version instead: the image tags are listed on <a href="https://hub.docker.com/r/ensamuel7/dexlang/tags">Docker Hub</a>, and every release is on the <a onclick="show('versions')" style="cursor:pointer">Versions</a> page.</p>
 
 <h3>CLI Commands</h3>
 <table>
@@ -349,6 +382,10 @@ CMD ["app"]</code></pre>
 <tr><td><code>dex format [path]</code></td><td>Lay files out the one canonical way (<code>--check</code> to only report)</td></tr>
 <tr><td><code>dex lint &lt;file&gt;</code></td><td>Report what compiles but is probably not meant</td></tr>
 <tr><td><code>dex check &lt;file&gt;</code></td><td>Run cppcheck over the generated C (needs <code>cppcheck</code>)</td></tr>
+<tr><td><code>dex mod init &lt;path&gt;</code></td><td>Start a <code>dex.mod</code> naming this module, as in <code>github.com/acme/app</code></td></tr>
+<tr><td><code>dex get &lt;module&gt;[@version]</code></td><td>Add a library to <code>dex.mod</code> and download it</td></tr>
+<tr><td><code>dex mod download</code></td><td>Fetch every module <code>dex.mod</code> requires into the module cache</td></tr>
+<tr><td><code>dex mod verify</code></td><td>Check the cached modules against <code>dex.sum</code></td></tr>
 <tr><td><code>dex lsp</code></td><td>Start the Language Server Protocol server</td></tr>
 <tr><td><code>dex docs</code></td><td>Generate this documentation page</td></tr>
 <tr><td><code>dex update</code></td><td>Update the <code>dex</code> binary in place</td></tr>
@@ -401,6 +438,16 @@ individual ones off.</p>
 </div>
 </section>
 
+<section id="versions" class="page-section">
+<h2>Versions</h2>
+<p>Every release of <code>dex</code>, newest first. <code>dex version</code> prints the one you have, and <code>dex update</code> moves to the newest. Each links to its release on GitHub, with prebuilt binaries for macOS and Linux on Intel and ARM.</p>
+<p>The Docker image's <code>latest</code> tag follows releases. To pin one, use a tag from <a href="https://hub.docker.com/r/ensamuel7/dexlang/tags">Docker Hub</a>, which lists the versions that have an image.</p>
+{{if .Releases}}<table>
+<tr><th>Version</th><th>Released</th><th></th></tr>
+{{range .Releases}}<tr><td><code>{{.Version}}</code></td><td>{{.Date}}</td><td><a href="https://github.com/ensamuel7/dex/releases/tag/{{.Tag}}">Release notes and downloads</a></td></tr>
+{{end}}</table>{{else}}<p>See <a href="https://github.com/ensamuel7/dex/releases">the releases on GitHub</a>.</p>{{end}}
+</section>
+
 <!-- Types & Variables -->
 <section id="types-variables" class="page-section">
 <h2>Types &amp; Variables</h2>
@@ -437,18 +484,18 @@ let nums: int[] = [1, 2, 3]</code></pre>
 
 <h3>Type Inference</h3>
 <p>DexLang supports <strong>type inference</strong> — when the type can be determined from the right-hand side of an assignment, the type annotation is optional. The compiler will infer the correct type at compile time.</p>
-<pre><code>let y = 100          // inferred as int
-let pi = 3.14        // inferred as double
-let msg = "world"    // inferred as string
-let ok = true        // inferred as bool
-let ch = 'A'         // inferred as char
-let big = 100L       // inferred as long</code></pre>
+<pre><code>let y = 100        // inferred as int
+let pi = 3.14      // inferred as double
+let msg = "world"  // inferred as string
+let ok = true      // inferred as bool
+let ch = 'A'       // inferred as char</code></pre>
+<p>A whole-number literal is always inferred as <code>int</code>. For a <code>long</code>, write the type: <code>let big: long = 1000000</code>.</p>
 
 <p>Inference also works with expressions, function returns, and struct constructors:</p>
-<pre><code>let sum = 10 + 20        // inferred as int
-let half = 10.0 / 3.0    // inferred as double
-let nums = [1, 2, 3]     // inferred as int[]
-let words = ["a", "b"]   // inferred as string[]</code></pre>
+<pre><code>let sum = 10 + 20       // inferred as int
+let half = 10.0 / 3.0   // inferred as double
+let nums = [1, 2, 3]    // inferred as int[]
+let words = ["a", "b"]  // inferred as string[]</code></pre>
 
 <h4>When explicit types are required</h4>
 <table>
@@ -461,9 +508,18 @@ let words = ["a", "b"]   // inferred as string[]</code></pre>
 <h3>Multi-Declaration</h3>
 <p>Multiple variables of the same type can be declared on one line.</p>
 <pre><code>let x, y, z: int = 0
-let a, b: string?          // both default to null
+let a, b: string?  // both default to null
 const width, height: int = 100</code></pre>
 <p>Multi-declaration requires an explicit type annotation.</p>
+
+<h3>Redeclaration</h3>
+<p>A name can be declared once per scope. A second <code>let</code> of the same name in the same block, or of a parameter's name in a function body, is a compile error; assign to the existing variable instead. A nested block may declare the name again, hiding the outer one until the block ends.</p>
+<pre><code>let n: int = 1
+let n: int = 2      // error: 'n' is already declared in this scope
+n = 2               // fine
+if (n &gt; 0) {
+    let n: int = 3  // fine: a new scope
+}</code></pre>
 
 <h3>Assignment</h3>
 <p>A variable must be declared with <code>let</code> before it can be assigned.</p>
@@ -472,10 +528,10 @@ name = "DexLang"</code></pre>
 
 <h3>Compound Assignment &amp; Increment</h3>
 <p>These operators work on numeric variables (<code>int</code>, <code>long</code>, <code>double</code>).</p>
-<pre><code>x += 5    // equivalent to x = x + 5
-x -= 2    // equivalent to x = x - 2
-x++       // equivalent to x = x + 1
-x--       // equivalent to x = x - 1</code></pre>
+<pre><code>x += 5  // equivalent to x = x + 5
+x -= 2  // equivalent to x = x - 2
+x++     // equivalent to x = x + 1
+x--     // equivalent to x = x - 1</code></pre>
 
 <h3>String Escape Sequences</h3>
 <table>
@@ -500,7 +556,7 @@ import "json"</code></pre>
 <h3>Program Entry Point</h3>
 <p>Every program requires a <code>main</code> function that returns <code>void</code>. The compiler emits an implicit exit code of 0.</p>
 <pre><code>fn main(): void {
-  // your program here
+    // your program here
 }</code></pre>
 
 <h3>Type Semantics</h3>
@@ -592,11 +648,11 @@ fn main(): void {
 <h3>Functions</h3>
 <p>Functions are declared with <code>fn</code> or <code>function</code>. Both are equivalent:</p>
 <pre><code>fn add(a: int, b: int): int {
-  return a + b
+    return a + b
 }
 
 function main(): void {
-  fmt.println("hello")
+    fmt.println("hello")
 }</code></pre>
 
 <h3>Default Parameters &amp; Named Arguments</h3>
@@ -614,17 +670,17 @@ sessionStore.list(db, filter, limit: 10, offset: 0)</code></pre>
 <h4>if / else</h4>
 <p><code>else if</code> chains are supported. The condition must be <code>bool</code> and enclosed in parentheses.</p>
 <pre><code>if (x &gt; 0) {
-  fmt.println(x)
+    fmt.println(x)
 } else {
-  fmt.println(0)
+    fmt.println(0)
 }</code></pre>
 
 <h4>while</h4>
 <p>Loop while a condition is true:</p>
 <pre><code>let i: int = 0
 while (i &lt; 10) {
-  fmt.println(i)
-  i = i + 1
+    fmt.println(i)
+    i = i + 1
 }</code></pre>
 
 <h4>for</h4>
@@ -644,24 +700,29 @@ for (let i = 0; i &lt; 100; i += 2) {
 
 // Value only
 foreach (nums as n) {
-  fmt.println(n)
+    fmt.println(n)
 }
 
 // Index and value
 foreach (nums as i, n) {
-  fmt.println(i)  // 0, 1, 2
-  fmt.println(n)  // 10, 20, 30
+    fmt.println(i)  // 0, 1, 2
+    fmt.println(n)  // 10, 20, 30
 }</code></pre>
 
 <h4>break and continue</h4>
 <p>Exit a loop early with <code>break</code>, or skip to the next iteration with <code>continue</code>. Both work inside <code>while</code>, <code>for</code>, and <code>foreach</code> loops. Using them outside a loop is a compile error.</p>
 <pre><code>while (true) {
-  if (done) { break }
+    if (done) {
+        break
+    }
 }
 
 for (let i = 0; i &lt; 10; i++) {
-  if (i % 2 == 0) { continue }
-  fmt.println(i)  // prints odd numbers only
+    if (i % 2 == 0) {
+        continue
+    }
+
+    fmt.println(i)  // prints odd numbers only
 }</code></pre>
 
 <h4>switch</h4>
@@ -697,9 +758,9 @@ switch (code) {
 <h2>Optional Types</h2>
 <p>Append <code>?</code> to any type to make it optional. Optional types can hold either a value of the inner type or <code>null</code>.</p>
 <pre><code>let x: int? = 5        // has a value
-let y: int? = null      // no value
-let z: int?             // defaults to null
-let s: string? = null   // optional string</code></pre>
+let y: int? = null     // no value
+let z: int?            // defaults to null
+let s: string? = null  // optional string</code></pre>
 
 <h3>Available Optional Types</h3>
 <table>
@@ -726,6 +787,7 @@ if (x != null) {
     if (id == 1) {
         return "Alice"
     }
+
     return null
 }
 
@@ -756,9 +818,9 @@ const name: string = "DexLang"</code></pre>
 <h3>Immutability</h3>
 <p>Attempting to modify a const variable is a compile error:</p>
 <pre><code>const x = 42
-x = 10        // ERROR: cannot reassign const variable 'x'
-x++           // ERROR: cannot modify const variable 'x'
-x += 5        // ERROR: cannot modify const variable 'x'</code></pre>
+x = 10  // ERROR: cannot reassign const variable 'x'
+x++     // ERROR: cannot modify const variable 'x'
+x += 5  // ERROR: cannot modify const variable 'x'</code></pre>
 </section>
 
 <!-- Access Modifiers -->
@@ -808,17 +870,17 @@ private struct InternalConfig {
 <h3>Array Basics</h3>
 <p>Arrays are declared with a typed bracket syntax. Elements are accessed and assigned by index, and built-in methods handle common operations:</p>
 <pre><code>let nums: int[] = [10, 20, 30]
-let first: int = nums[0]       // indexing
-nums[1] = 25                    // index assignment
-nums.push(40)                   // append
-let length: int = nums.len()   // length</code></pre>
+let first: int = nums[0]      // indexing
+nums[1] = 25                  // index assignment
+nums.push(40)                 // append
+let length: int = nums.len()  // length</code></pre>
 
 <h3>Slicing</h3>
 <p>Use <code>arr[start:end]</code> to create a new array from a sub-range. Start is inclusive, end is exclusive. Either bound can be omitted:</p>
 <pre><code>let nums: int[] = [10, 20, 30, 40, 50]
-let mid: int[] = nums[1:4]     // [20, 30, 40]
-let head: int[] = nums[:3]     // [10, 20, 30]
-let tail: int[] = nums[3:]     // [40, 50]</code></pre>
+let mid: int[] = nums[1:4]  // [20, 30, 40]
+let head: int[] = nums[:3]  // [10, 20, 30]
+let tail: int[] = nums[3:]  // [40, 50]</code></pre>
 <p>The result is always a new array. Start and end are clamped to valid bounds. Slicing works on all array types (<code>int[]</code>, <code>string[]</code>, <code>bool[]</code>, struct arrays, etc.).</p>
 
 <h3>Array Methods</h3>
@@ -838,13 +900,13 @@ let tail: int[] = nums[3:]     // [40, 50]</code></pre>
 items.push(10)
 items.push(20)
 items.push(30)
-let count: int = items.len()       // 3
-let last: int = items.pop()        // 30
-let has: bool = items.contains(10) // true
-let idx: int = items.indexOf(20)   // 1
-items.remove(0)                    // removes 10
-items.sort("asc")                  // sort ascending
-items.reverse()                    // reverse in place</code></pre>
+let count: int = items.len()        // 3
+let last: int = items.pop()         // 30
+let has: bool = items.contains(10)  // true
+let idx: int = items.indexOf(20)    // 1
+items.remove(0)                     // removes 10
+items.sort("asc")                   // sort ascending
+items.reverse()                     // reverse in place</code></pre>
 <p><strong>Note:</strong> <code>.sort()</code> is supported on primitive-typed arrays (<code>int[]</code>, <code>long[]</code>, <code>double[]</code>, <code>string[]</code>, <code>char[]</code>). Struct arrays do not support sorting.</p>
 </section>
 
@@ -874,10 +936,11 @@ let result: string = sb.toString() // "hello 42"</code></pre>
 <pre><code>import "str"
 
 let sb = StringBuilder()
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i &lt; 100; i++) {
     sb.append(str.fromInt(i))
     sb.append(",")
 }
+
 let csv: string = sb.toString()</code></pre>
 
 <p><code>StringBuilder</code> is reference-counted and automatically released at scope exit.</p>
@@ -944,19 +1007,30 @@ foreach (colors as color) {
 let m2: map[int, string] = {}</code></pre>
 
 <h3>Method API</h3>
-<pre><code>m.set("alice", 100)
-let v: int = m.get("alice")
-let exists: bool = m.has("alice")
-m.remove("alice")
-let n: int = m.len()
-m.clear()
-let k: string[] = m.keys()
-let vals: int[] = m.values()</code></pre>
+<pre><code>let scores: map[string, int] = {}
+
+// Write
+scores.set("alice", 100)
+scores.set("bob", 7)
+
+// Read
+let a: int = scores.get("alice")       // 100
+let c: int = scores.get("carol")       // 0, the zero value for a missing key
+let known: bool = scores.has("alice")  // true
+let n: int = scores.len()              // 2
+
+// Iterate
+let names: string[] = scores.keys()    // ["alice", "bob"], in no fixed order
+let points: int[] = scores.values()    // [100, 7], in the same order as keys()
+
+// Delete
+scores.remove("alice")                 // one key
+scores.clear()                         // every key</code></pre>
 
 <h3>Bracket Syntax</h3>
 <p>Maps also support bracket notation for get and set:</p>
-<pre><code>m["bob"] = 200
-let v2: int = m["bob"]</code></pre>
+<pre><code>scores["bob"] = 200
+let b: int = scores["bob"]  // 200</code></pre>
 
 <h3>Map Methods</h3>
 <table>
@@ -982,7 +1056,7 @@ let v2: int = m["bob"]</code></pre>
 <p>A <code>${...}</code> inside a string literal substitutes the value of the expression inside it:</p>
 <pre><code>let n = 7
 let name = "dex"
-let s = "n=${n} name=${name} sum=${n + 1}"   // "n=7 name=dex sum=8"
+let s = "n=${n} name=${name} sum=${n + 1}"  // "n=7 name=dex sum=8"
 fmt.println("inline ${n}")</code></pre>
 <ul>
 <li>Any expression goes inside, not only a name &mdash; <code>${n + 1}</code>, <code>${arr[0]}</code>, <code>${describe(n)}</code>. A call inside an interpolation runs exactly once.</li>
@@ -1022,50 +1096,49 @@ fmt.println("inline ${n}")</code></pre>
 
 <h3>Examples</h3>
 <pre><code>let s: string = "Hello, World"
-let n: int = s.len()                // 12
-let b: bool = s.contains("World")  // true
-let lo: string = s.toLower()       // "hello, world"
-let up: string = s.toUpper()       // "HELLO, WORLD"
-let t: string = "  hello  ".trim() // "hello"
+let n: int = s.len()                       // 12
+let b: bool = s.contains("World")          // true
+let lo: string = s.toLower()               // "hello, world"
+let up: string = s.toUpper()               // "HELLO, WORLD"
+let t: string = "  hello  ".trim()         // "hello"
 
-let parts: string[] = s.split(",") // ["Hello", " World"]
-let sub: string = s.substring(0, 5) // "Hello"
-let r: string = s.replace("World", "Dex") // "Hello, Dex"
-let c: char = s.charAt(0)          // 'H'
+let parts: string[] = s.split(",")         // ["Hello", " World"]
+let sub: string = s.substring(0, 5)        // "Hello"
+let r: string = s.replace("World", "Dex")  // "Hello, Dex"
+let c: char = s.charAt(0)                  // 'H'
 
-let idx: int = s.indexOf("World")  // 7
-let sw: bool = s.startsWith("Hello") // true
-let ew: bool = s.endsWith("World")   // true</code></pre>
+let idx: int = s.indexOf("World")          // 7
+let sw: bool = s.startsWith("Hello")       // true
+let ew: bool = s.endsWith("World")         // true</code></pre>
 
 <h3>Validation</h3>
 <pre><code>let input: string = "Hello123"
-let alnum: bool = input.isAlphanumeric() // true
-let alpha: bool = input.isAlpha()        // false (contains digits)
-let digit: bool = "42".isDigit()         // true
-let empty: bool = "".isEmpty()           // true
-let hasUp: bool = input.containsUppercase() // true
-let hasLo: bool = input.containsLowercase() // true
-let hasDg: bool = input.containsDigit()    // true</code></pre>
+let alnum: bool = input.isAlphanumeric()     // true
+let alpha: bool = input.isAlpha()            // false (contains digits)
+let digit: bool = "42".isDigit()             // true
+let empty: bool = "".isEmpty()               // true
+let hasUp: bool = input.containsUppercase()  // true
+let hasLo: bool = input.containsLowercase()  // true
+let hasDg: bool = input.containsDigit()      // true</code></pre>
 
 <h3>String Coercion</h3>
 <p>When one operand of <code>+</code> is a <code>string</code> and the other is a non-string type, the non-string operand is automatically converted to its string representation. This works for all primitive types, structs, enums, and arrays.</p>
 <pre><code>let n: int = 42
-let msg: string = "value: " + n     // "value: 42"
+let msg: string = "value: " + n  // "value: 42"
 
 let pi: double = 3.14
-let s: string = "pi is " + pi       // "pi is 3.14"
+let s: string = "pi is " + pi    // "pi is 3.14"
 
 let flag: bool = true
-let t: string = "flag: " + flag     // "flag: true"
+let t: string = "flag: " + flag  // "flag: true"
 
 // Works on either side
 let x: int = 10
-let s2: string = x + " items"       // "10 items"
+let s2: string = x + " items"    // "10 items"
 
 // Structs
-struct Point { x: int  y: int }
 let p = Point { x: 1, y: 2 }
-let s3: string = "pos: " + p        // "pos: Point{x: 1, y: 2}"</code></pre>
+let s3: string = "pos: " + p     // "pos: Point{x: 1, y: 2}"</code></pre>
 </section>
 
 <!-- Structs -->
@@ -1075,26 +1148,26 @@ let s3: string = "pos: " + p        // "pos: Point{x: 1, y: 2}"</code></pre>
 <h3>Struct Declaration</h3>
 <p>Structs define composite types with named, typed fields:</p>
 <pre><code>struct Point {
-  x: int
-  y: int
+    x: int
+    y: int
 }
 
 struct User {
-  name: string
-  age: int
-  active: bool
+    name: string
+    age: int
+    active: bool
 }</code></pre>
 
 <h3>Creating Instances</h3>
 <p>Create a struct instance using literal syntax with field names:</p>
-<pre><code>let p: Point = Point{x: 10, y: 20}
-let u: User = User{name: "Alice", age: 30, active: true}</code></pre>
+<pre><code>let p: Point = Point { x: 10, y: 20 }
+let u: User = User { name: "Alice", age: 30, active: true }</code></pre>
 
 <h3>Field Access &amp; Assignment</h3>
 <p>Access fields with dot notation. Fields can be reassigned after creation:</p>
-<pre><code>let name: string = u.name    // field access
-u.age = 31                    // field assignment
-fmt.println(p.x)                // use in expressions</code></pre>
+<pre><code>let name: string = u.name  // field access
+u.age = 31                 // field assignment
+fmt.println(p.x)           // use in expressions</code></pre>
 
 <h3>Struct Methods</h3>
 <p>Structs can have methods defined inside the struct body:</p>
@@ -1111,13 +1184,13 @@ fmt.println(p.x)                // use in expressions</code></pre>
     }
 }
 
-let p = Point{x: 3, y: 4}
-let total: int = p.sum()    // 7
-p.display()                  // Point(3, 4)</code></pre>
+let p = Point { x: 3, y: 4 }
+let total: int = p.sum()  // 7
+p.display()               // Point(3, 4)</code></pre>
 
 <p>A method receives the instance it was called on as a <strong>pointer</strong>, named <code>self</code>. Bare field names read through the receiver, so <code>x</code> and <code>self.x</code> mean the same thing when read — but <strong>assignment requires <code>self</code></strong>, because a method's locals and its fields are separate namespaces.</p>
 <pre><code>fn moveTo(nx: int, ny: int): void {
-    self.x = nx      // changes the instance
+    self.x = nx  // changes the instance
     self.y = ny
 }</code></pre>
 
@@ -1166,14 +1239,14 @@ let shouted: string = "  mixed  ".trim().toUpper()</code></pre>
 }</code></pre>
 <p>The format is space-separated <code>key:"value"</code> pairs, so one field can carry several namespaces at once. A tag is <strong>raw</strong> &mdash; no escapes, no interpolation &mdash; which is what lets an SQL fragment like <code>COALESCE(a.name, '')</code> be written exactly as it will be used.</p>
 <p>Tags are read back through <code>reflect.fieldTag</code>:</p>
-<pre><code>reflect.fieldTag(bk, 2, "db")      // "COALESCE(a.name, '')"
-reflect.fieldTag(bk, 4, "json")    // "price"
-reflect.fieldTag(bk, 0, "db")      // "" &mdash; that field has no tag</code></pre>
+<pre><code>reflect.fieldTag(bk, 2, "db")    // "COALESCE(a.name, '')"
+reflect.fieldTag(bk, 4, "json")  // "price"
+reflect.fieldTag(bk, 0, "db")    // "" — that field has no tag</code></pre>
 <p><strong>A tag is data, not a directive.</strong> The compiler stores it and never interprets it: nothing in the language knows what <code>db</code> or <code>json</code> means. That is the difference from an annotation &mdash; <code>#[owned]</code> changes what the compiler emits, so the valid set is closed and an unknown one is an error, whereas any tag key is allowed. (<code>#[allow(...)]</code> is the one exception: it suppresses a lint finding rather than directing the compiler, so it is accepted anywhere and checked by lint instead.) What the compiler does check is that the pairs are well formed, which catches the typo that would otherwise make a key silently invisible:</p>
-<pre><code>f: string `db:x`             // error: tag key 'db' must have a quoted value
-f: string `db`               // error: tag key 'db' is missing its ':"value"'
-f: string `db:"a" db:"b"`    // error: tag repeats key 'db'
-f: string `db:"a"json:"b"`   // error: needs a space between keys</code></pre>
+<pre><code>f: string `db:x`            // error: tag key 'db' must have a quoted value
+f: string `db`              // error: tag key 'db' is missing its ':"value"'
+f: string `db:"a" db:"b"`   // error: tag repeats key 'db'
+f: string `db:"a"json:"b"`  // error: needs a space between keys</code></pre>
 <p>Any struct may carry tags &mdash; there is no separate kind of struct for it. The key is the discriminator: a type that means nothing to a database layer simply has no <code>db</code> key, and <code>fieldTag</code> reports <code>""</code>.</p>
 
 <h3>Zero Values</h3>
@@ -1189,27 +1262,27 @@ f: string `db:"a"json:"b"`   // error: needs a space between keys</code></pre>
 <tr><td>array</td><td><code>null</code></td></tr>
 <tr><td>optional</td><td><code>null</code></td></tr>
 </table>
-<pre><code>let origin = Point{}            // Point{x: 0, y: 0}
-let p = Point{x: 5}            // Point{x: 5, y: 0}</code></pre>
+<pre><code>let origin = Point {}   // Point{x: 0, y: 0}
+let p = Point { x: 5 }  // Point{x: 5, y: 0}</code></pre>
 
 <h3>Value &amp; Reference Semantics</h3>
 <p>Structs are <strong>pass-by-value</strong> by default. The function receives a copy — changes inside the function do not affect the caller:</p>
 <pre><code>fn tryUpdate(user: User): void {
-    user.name = "changed"   // modifies the local copy only
+    user.name = "changed"  // modifies the local copy only
 }
 
-let u = User{name: "john", age: 25}
+let u = User { name: "john", age: 25 }
 tryUpdate(u)
-fmt.println(u.name)   // still "john"</code></pre>
+fmt.println(u.name)        // still "john"</code></pre>
 
 <p>Use <code>&amp;StructName</code> in the parameter type to pass by reference. Mutations through the reference affect the original. The caller does not need to write <code>&amp;</code> at the call site — the compiler inserts it automatically.</p>
 <pre><code>fn update(user: &amp;User): void {
-    user.name = "changed"   // modifies the original
+    user.name = "changed"  // modifies the original
 }
 
-let u = User{name: "john", age: 25}
+let u = User { name: "john", age: 25 }
 update(u)
-fmt.println(u.name)   // "changed"</code></pre>
+fmt.println(u.name)        // "changed"</code></pre>
 
 <h4>Primitive references</h4>
 <p>Primitives (<code>int</code>, <code>long</code>, <code>double</code>, <code>bool</code>, <code>char</code>) also support the <code>&amp;</code> prefix for pass-by-reference:</p>
@@ -1219,7 +1292,7 @@ fmt.println(u.name)   // "changed"</code></pre>
 
 let x: int = 5
 increment(x)
-fmt.println(x)   // 6</code></pre>
+fmt.println(x)  // 6</code></pre>
 
 <h4>Reference summary</h4>
 <table>
@@ -1241,8 +1314,8 @@ struct Service {
     db: &amp;Database
 }
 
-let db = Database{host: "localhost"}
-let svc = Service{db: db}   // svc.db points to db</code></pre>
+let db = Database { host: "localhost" }
+let svc = Service { db: db }  // svc.db points to db</code></pre>
 </section>
 
 <!-- Interfaces -->
@@ -1278,36 +1351,36 @@ struct Person {
     fmt.println(g.greet())
 }
 
-let p = Person{name: "Alice"}
-printGreeting(p)    // "Hello, I'm Alice"</code></pre>
+let p = Person { name: "Alice" }
+printGreeting(p)  // "Hello, I'm Alice"</code></pre>
 
 <h3>An Interface Value Owns Its Data</h3>
 <p>An interface value is a refcounted box holding a <strong>copy</strong> of the struct it was built from, plus that struct's method table. Because it owns the copy rather than pointing at someone else's struct, it goes anywhere a value can go:</p>
-<pre><code>fn greeterFor(robot: bool): Greeter {   // returned
-    let p = Person{name: "Eve"}
-    return p
+<pre><code>fn greeterFor(robot: bool): Greeter {
+    let p = Person { name: "Eve" }
+    return p                          // returned
 }
 
 struct Entry {
     key: string
-    who: Greeter                        // stored in a field
+    who: Greeter                      // stored in a field
 }
 
-let crowd: Greeter[] = [p, r]           // held in an array, mixed types
-assert(crowd[0].greet() == "Hi Ada")    // dispatched through an element</code></pre>
+let crowd: Greeter[] = [p, r]         // held in an array, mixed types
+assert(crowd[0].greet() == "Hi Ada")  // dispatched through an element</code></pre>
 <p>Coercion costs one pooled allocation, and the struct's heap fields are retained rather than copied — a string in the original and a string in the box are the same bytes with one more reference.</p>
 <p>The consequence of copying is that <strong>mutation through an interface does not reach the original</strong>:</p>
-<pre><code>let t = Tally{n: 0}
+<pre><code>let t = Tally { n: 0 }
 let counts: Counter = t
 assert(counts.bump(3) == 3)
 assert(counts.total() == 3)
-assert(t.n == 0)        // the box was mutated, not t</code></pre>
+assert(t.n == 0)  // the box was mutated, not t</code></pre>
 <p>Go behaves the same way for the same reason. To mutate the original, call the method on the struct directly rather than through an interface.</p>
 
 <h3>Where an Interface Does Not Fit</h3>
 <p>Two containers refuse one, each for a reason of its own. A map holds only the six scalar value types — a struct value is refused identically — and an optional needs a spelling for absent, which a vtable pair does not have:</p>
-<pre><code>fn each(m: map[string, Greeter]): void {}   // compile error
-fn maybe(g: Greeter?): void {}              // compile error</code></pre>
+<pre><code>fn each(m: map[string, Greeter]): void {}  // compile error
+fn maybe(g: Greeter?): void {}             // compile error</code></pre>
 <p>An array is the way to hold a varying number of them.</p>
 
 <h3>Multiple Methods</h3>
@@ -1344,7 +1417,7 @@ struct Empty {
 fn show(s: Stringer): void {}
 
 fn main(): void {
-    let e = Empty{x: 1}
+    let e = Empty { x: 1 }
     show(e)
 }</code></pre>
 <pre><code>argument 1 of 'show': expected Stringer, got Empty (missing fn toString(): string)</code></pre>
@@ -1371,12 +1444,13 @@ fn pick&lt;T&gt;(a: T, b: T, first: bool): T {
     if (first) {
         return a
     }
+
     return b
 }</code></pre>
 <p>Type arguments are <strong>inferred from the call</strong>, so a generic function is called like any other:</p>
-<pre><code>identity(42)        // T = int
-identity("hi")      // T = string
-pick(1, 2, true)    // T = int</code></pre>
+<pre><code>identity(42)      // T = int
+identity("hi")    // T = string
+pick(1, 2, true)  // T = int</code></pre>
 
 <h3>Shared and Independent Type Parameters</h3>
 <p>Several parameters may share a type parameter, and they have to agree:</p>
@@ -1387,8 +1461,8 @@ pick(1, 2, true)    // T = int</code></pre>
     return "" + a + "/" + b
 }
 
-describeTwo(7, "s")      // A = int, B = string
-describeTwo("s", 9)      // A = string, B = int</code></pre>
+describeTwo(7, "s")  // A = int, B = string
+describeTwo("s", 9)  // A = string, B = int</code></pre>
 
 <h3>Inference Through Containers</h3>
 <p>Inference descends into a container, so the element type pins the parameter:</p>
@@ -1397,7 +1471,7 @@ describeTwo("s", 9)      // A = string, B = int</code></pre>
 }
 
 let nums: int[] = [10, 20]
-firstElem(nums)    // T = int</code></pre>
+firstElem(nums)  // T = int</code></pre>
 <p>A type parameter that appears in no parameter's type has nothing to be inferred from, and the compiler says so rather than guessing:</p>
 <pre><code>cannot infer type parameter T of makeDefault() from the arguments; it appears in no parameter's type</code></pre>
 <p>A generic may call a generic, including itself:</p>
@@ -1496,7 +1570,7 @@ dex mod verify                             # check the cache against dex.sum</co
 }
 
 fn main(): void {
-    fmt.println(zlib.compressBound(1024))   // 1037
+    fmt.println(zlib.compressBound(1024))  // 1037
 }</code></pre>
 <p><code>= "symbol"</code> names a C function whose own name reads badly in Dex. <code>int</code>, <code>long</code>, <code>double</code>, <code>bool</code>, <code>char</code> and <code>string</code> cross the boundary, plus <code>void</code> as a return type and opaque handles.</p>
 
@@ -1538,30 +1612,16 @@ let rc: int = sq.open("app.db", db)</code></pre>
 <!-- Standard Library -->
 <section id="stdlib" class="page-section">
 <h2>Standard Library</h2>
-<p>DexLang ships with 16 built-in modules covering output, JSON serialization, reflection, networking, databases, message queues, email, file I/O, math, time, cryptography, and system interaction. Import any module with the <code>import</code> keyword:</p>
+<p>DexLang ships with {{len .Modules}} built-in modules covering output, JSON serialization, reflection, networking, databases, message queues, email, file I/O, math, time, cryptography, and system interaction. Import any module with the <code>import</code> keyword:</p>
 <pre><code>import "fmt"
 import "json"</code></pre>
 
 <h3>Available Modules</h3>
 <table>
-<tr><th>Module</th><th>Description</th><th>Key Functions</th></tr>
-<tr><td><code><a onclick="show('mod-fmt')" style="cursor:pointer">fmt</a></code></td><td>Formatted output to stdout</td><td><code>print</code>, <code>println</code></td></tr>
-<tr><td><code><a onclick="show('mod-json')" style="cursor:pointer">json</a></code></td><td>JSON building, parsing, and struct serialization</td><td><code>new</code>, <code>set</code>, <code>stringify</code>, <code>objectify</code>, <code>get</code>, <code>setArray</code>, ...</td></tr>
-<tr><td><code><a onclick="show('mod-http')" style="cursor:pointer">http</a></code></td><td>HTTP server and client</td><td><code>route</code>, <code>listen</code>, <code>get</code>, <code>post</code>, <code>put</code>, <code>delete</code>, ...</td></tr>
-<tr><td><code><a onclick="show('database')" style="cursor:pointer">db</a></code></td><td>Database access (SQLite, PostgreSQL, MySQL, MongoDB)</td><td><code>open</code>, <code>exec</code>, <code>query</code>, <code>next</code>, <code>col</code>, <code>free</code>, <code>close</code></td></tr>
-<tr><td><code><a onclick="show('mod-file')" style="cursor:pointer">file</a></code></td><td>Filesystem operations</td><td><code>read</code>, <code>write</code>, <code>append</code>, <code>exists</code>, <code>remove</code>, <code>rename</code>, <code>upload</code></td></tr>
-<tr><td><code><a onclick="show('mod-math')" style="cursor:pointer">math</a></code></td><td>Math functions and constants</td><td><code>pi</code>, <code>sqrt</code>, <code>pow</code>, <code>sin</code>, <code>cos</code>, <code>floor</code>, <code>ceil</code>, <code>abs</code>, ...</td></tr>
-<tr><td><code><a onclick="show('mod-time')" style="cursor:pointer">time</a></code></td><td>Time, sleeping, and scheduling</td><td><code>now</code>, <code>sleep</code>, <code>setTimeout</code>, <code>setInterval</code>, <code>format</code>, <code>isoNow</code>, ...</td></tr>
-<tr><td><code><a onclick="show('mod-ws')" style="cursor:pointer">ws</a></code></td><td>WebSocket server and client (RFC 6455)</td><td><code>handleMessage</code>, <code>listen</code>, <code>connect</code>, <code>send</code>, <code>receive</code>, <code>close</code></td></tr>
-<tr><td><code><a onclick="show('mod-io')" style="cursor:pointer">io</a></code></td><td>Read user input from stdin</td><td><code>prompt</code>, <code>readLine</code>, <code>readInt</code>, <code>readDouble</code>, <code>readBool</code></td></tr>
-<tr><td><code><a onclick="show('mod-os')" style="cursor:pointer">os</a></code></td><td>Environment variables and command execution</td><td><code>env</code>, <code>exit</code>, <code>exec</code></td></tr>
-<tr><td><code><a onclick="show('mod-crypto')" style="cursor:pointer">crypto</a></code></td><td>Cryptographic utilities</td><td><code>uuid</code></td></tr>
-<tr><td><code><a onclick="show('mod-str')" style="cursor:pointer">str</a></code></td><td>String/type conversion utilities</td><td><code>fromInt</code>, <code>toInt</code>, <code>fromDouble</code>, <code>toDouble</code>, ...</td></tr>
-<tr><td><code><a onclick="show('mod-reflect')" style="cursor:pointer">reflect</a></code></td><td>Read a struct's fields by position at runtime</td><td><code>fieldCount</code>, <code>fieldName</code>, <code>fieldKind</code>, <code>asString</code>, <code>toString</code>, <code>indexOf</code>, ...</td></tr>
-<tr><td><code>redis</code></td><td>Redis client: keys, hashes, sets, pub/sub</td><td><code>connect</code>, <code>get</code>, <code>set</code>, <code>hget</code>, <code>publish</code>, <code>subscribe</code>, ...</td></tr>
-<tr><td><code>kafka</code></td><td>Kafka producer and consumer</td><td><code>producer</code>, <code>produce</code>, <code>consumer</code>, <code>subscribe</code>, <code>poll</code>, <code>commit</code>, ...</td></tr>
-<tr><td><code>smtp</code></td><td>Send email over SMTP</td><td><code>send</code>, <code>sendHtml</code></td></tr>
-</table>
+<tr><th>Module</th><th>What it does</th><th>Functions</th></tr>
+{{range .Modules}}<tr><td><code><a onclick="show('{{.Page}}')" style="cursor:pointer">{{.Name}}</a></code></td><td>{{.Summary}}</td><td>{{len .Funcs}}</td></tr>
+{{end}}</table>
+<p>Client libraries that wrap a C library or stand on their own, such as the <a onclick="show('lib-dexqu')" style="cursor:pointer">dexqu</a> query builder, are published separately and installed with <code>dex get</code>. See <a onclick="show('libraries')" style="cursor:pointer">Libraries</a>.</p>
 
 <h3>Quick Reference</h3>
 <p>Click any module name above to see full documentation with examples. Below is a complete function reference for all modules.</p>
@@ -1596,6 +1656,7 @@ while (db.next(rows)) {
     let name: string = db.col(rows, 1)
     fmt.println(name)
 }
+
 db.free(rows)
 db.close(conn)</code></pre>
 
@@ -1694,6 +1755,10 @@ while (db.next(rows)) {
 
 <h3>Limits</h3>
 <p>The runtime uses fixed-size pools: up to <strong>16</strong> simultaneous connections and <strong>64</strong> active result sets. Always call <code>db.free(rows)</code> and <code>db.close(conn)</code> to release slots.</p>
+
+<h3>Reference</h3>
+<p>Every function in <code>db</code>, generated from the compiler's own signatures.</p>
+{{template "funcref" (funcs "db")}}
 </section>
 
 <!-- Concurrency -->
@@ -1710,6 +1775,7 @@ while (db.next(rows)) {
     let result = expensiveComputation()
     send(result)
 }
+
 let val = receive(task)</code></pre>
 
 <h4>Function call form</h4>
@@ -1723,17 +1789,19 @@ let val = receive(task)  // 42</code></pre>
 
 <h4>Fire-and-forget</h4>
 <p>If you don't need the result, omit the assignment. The task runs in the background.</p>
-<pre><code>spawn { doBackgroundWork() }</code></pre>
+<pre><code>spawn {
+    doBackgroundWork()
+}</code></pre>
 
 <h3>send</h3>
 <p>Send a value from inside a spawn block, or to a shared channel. Inside a spawn block, <code>send(value)</code> delivers the value to whoever calls <code>receive(task)</code>. With two arguments, <code>send(channel, value)</code> pushes a value into a shared channel for many-to-one communication.</p>
-<pre><code>send(value)            // send to the task's implicit handle
-send(channel, value)   // send to a shared channel</code></pre>
+<pre><code>send(value)           // send to the task's implicit handle
+send(channel, value)  // send to a shared channel</code></pre>
 
 <h3>receive</h3>
 <p>Block until a value is available from a task handle or channel, then return it. The return type matches the type that was sent. For task handles, this is determined by the <code>send(value)</code> call or the spawned function's return type.</p>
-<pre><code>let val: int = receive(task)      // receive from a task handle
-let val: int = receive(channel)   // receive from a channel</code></pre>
+<pre><code>let val: int = receive(task)     // receive from a task handle
+let val: int = receive(channel)  // receive from a channel</code></pre>
 
 <h3>channel</h3>
 <p>Create a shared channel for many-to-one communication. Takes a type argument specifying the element type. Channels are typed — a <code>channel(int)</code> can only carry <code>int</code> values.</p>
@@ -1751,14 +1819,18 @@ let ch: chan int = channel(int)  // explicit type annotation</code></pre>
 <pre><code>let task = spawn {
     send(42)
 }
+
 assert(receive(task) == 42)</code></pre>
 
 <h4>Many-to-one (fan-in via shared channel)</h4>
 <p>Multiple tasks push values into a shared channel, and the parent collects them:</p>
 <pre><code>let ch = channel(int)
 for (let i = 0; i &lt; 10; i++) {
-    spawn { send(ch, i * 10) }
+    spawn {
+        send(ch, i * 10)
+    }
 }
+
 let total = 0
 for (let i = 0; i &lt; 10; i++) {
     total += receive(ch)
@@ -1771,6 +1843,7 @@ let task = spawn {
     // x is captured by value — this is a copy
     send(x * 2)
 }
+
 let result = receive(task)  // 20</code></pre>
 
 <h3>Mutex</h3>
@@ -1797,7 +1870,8 @@ fn lookup(key: int): int {
     if (totals.has(key)) {
         found = totals.get(key)
     }
-    mu.unlock()          // unlock before returning, not after
+
+    mu.unlock()  // unlock before returning, not after
     return found
 }</code></pre>
 <p>Note the shape of <code>lookup</code>: read what you need into a local, unlock, <em>then</em> return. Returning from inside the critical section would skip the <code>unlock</code> and deadlock every other thread.</p>
@@ -1817,7 +1891,7 @@ fn increment(c: &amp;Counter): void {
 }
 
 fn main(): void {
-    let c = Counter{mu: mutex, value: 0}
+    let c = Counter { mu: mutex, value: 0 }
     let ch = channel(int)
 
     for (let i = 0; i &lt; 10; i++) {
@@ -1839,9 +1913,9 @@ fn main(): void {
 <p>If code inside a lock can throw an exception, a bare <code>.unlock()</code> call may never execute — leaving the mutex locked and all other threads deadlocked. Use <code>defer</code> to guarantee the unlock runs on both normal return and exception:</p>
 <pre><code>fn increment(c: &amp;Counter): void {
     c.mu.lock()
-    defer c.mu.unlock()   // runs when function exits, no matter what
+    defer c.mu.unlock()  // runs when function exits, no matter what
 
-    riskyOperation()       // if this throws, defer still fires
+    riskyOperation()     // if this throws, defer still fires
     c.value = c.value + 1
 }</code></pre>
 <p><code>defer</code> queues a call that executes when the function exits — whether by <code>return</code>, by falling off the end, or because an exception unwound past the frame. Multiple defers run in LIFO order (last defer runs first).</p>
@@ -1857,7 +1931,7 @@ fn main(): void {
     } catch (e: Exception) {
         fmt.println("Error: " + e.message)
     } finally {
-        c.mu.unlock()      // always runs
+        c.mu.unlock()  // always runs
     }
 }</code></pre>
 
@@ -1912,9 +1986,9 @@ fn main(): void {
 
 <h3>Throwable Types</h3>
 <p>Any struct can be thrown when it carries a <code>message: string</code> and nothing that would need releasing:</p>
-<pre><code>struct ParseError(message: string, line: int) {}   // throwable
-struct IOError(message: string) {}                 // throwable
-struct Plain(code: int) {}                         // no message field
+<pre><code>struct ParseError(message: string, line: int) {}       // throwable
+struct IOError(message: string) {}                     // throwable
+struct Plain(code: int) {}                             // no message field
 struct TwoStrings(message: string, detail: string) {}  // detail cannot survive</code></pre>
 <p>The restriction comes from the unwind. A throw is a <code>longjmp</code>, so the message is copied into the runtime before the jump and the remaining fields travel as a flat byte copy. An <code>int</code>, <code>bool</code>, <code>double</code> or <code>char</code> survives that; a second string could only arrive already freed, so the compiler refuses it rather than hand you a dangling one.</p>
 
@@ -1929,10 +2003,12 @@ throw ParseError("not a digit", 12)</code></pre>
     if (path == "") {
         throw IOError("no path")
     }
+
     throw ParseError("bad digit", 12)
 }
 
-fn anything(): int throws {        // something escapes, unspecified
+// something escapes, unspecified
+fn anything(): int throws {
     throw Exception("whatever")
 }</code></pre>
 <p>The declaration is checked against what the function does by <code>dex lint</code> rather than by the compiler — the program runs either way. Lint reports an exception that escapes a function not declaring it, a type a <code>throws</code> list leaves out, and a <code>throws</code> naming a type the function cannot throw. Throwing is inferred transitively; a <code>throw</code> inside a lambda or a <code>spawn</code> does not escape the function that wrote it, because it runs in another frame or on another thread.</p>
@@ -1971,6 +2047,7 @@ fn main(): void {
 } finally {
     fmt.println("always runs")
 }
+
 // exception propagates after finally</code></pre>
 
 <h3>Cross-Function Exceptions</h3>
@@ -2087,16 +2164,16 @@ let reserved = buildHandle()   // kept for its side effect, never read</code></p
 <div class="func-card"><div class="sig"><span class="module">fmt</span>.print(<span class="ptype">value: int|long|double|string|bool</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Print a single value to stdout without a trailing newline. Accepts any primitive type — the compiler selects the correct format string at compile time.</p>
 <pre><code>fmt.print("hello ")
-fmt.print("world")         // output: hello world</code></pre>
+fmt.print("world")  // output: hello world</code></pre>
 
 <h3>println</h3>
 <div class="func-card"><div class="sig"><span class="module">fmt</span>.println(<span class="ptype">value: int|long|double|string|bool</span>) <span class="ret">-&gt; void</span></div></div>
 <p>Print a single value followed by a newline. Accepts any primitive type — the compiler selects the correct format string at compile time. Each call prints exactly one value. To print multiple values, use multiple calls or build a string with concatenation.</p>
-<pre><code>fmt.println(42)            // prints: 42
-fmt.println("hello")       // prints: hello
-fmt.println(3.14)          // prints: 3.140000
-fmt.println(true)          // prints: true
-fmt.println(1000000)       // prints: 1000000</code></pre>
+<pre><code>fmt.println(42)       // prints: 42
+fmt.println("hello")  // prints: hello
+fmt.println(3.14)     // prints: 3.140000
+fmt.println(true)     // prints: true
+fmt.println(1000000)  // prints: 1000000</code></pre>
 </section>
 
 <!-- json module -->
@@ -2109,14 +2186,14 @@ fmt.println(1000000)       // prints: 1000000</code></pre>
 <div class="func-card"><div class="sig"><span class="module">json</span>.encode(<span class="ptype">value: json.Value|struct|T[]|map[string, V]</span>) <span class="ret">-&gt; string</span></div></div>
 <p>Serialize a value to JSON text. Structs recurse into nested fields to any depth.</p>
 <pre><code>let nums: int[] = [10, 20, 30]
-json.encode(nums)                  // [10,20,30]
+json.encode(nums)  // [10,20,30]
 
 let p = Person { name: "Alice", age: 30, active: true }
-json.encode(p)                     // {"name":"Alice","age":30,"active":true}
+json.encode(p)     // {"name":"Alice","age":30,"active":true}
 
 let m: map[string, int] = {}
 m.set("x", 1)
-json.encode(m)                     // {"x": 1}</code></pre>
+json.encode(m)     // {"x": 1}</code></pre>
 
 <h3>Object and array literals</h3>
 <p>A <code>json.Value</code> is built with an object or array literal. No per-field call is needed, and nesting is just nesting.</p>
@@ -2128,7 +2205,7 @@ json.encode(v)
 <div class="func-card"><div class="sig"><span class="module">json</span>.decode(<span class="ptype">json: string|json.Value</span>) <span class="ret">-&gt; T</span></div></div>
 <p>Parse JSON into a struct, a struct array, or a <code>json.Value</code>. The target type comes from the annotation, which is required.</p>
 <pre><code>let back: Person = json.decode("{\"name\":\"Bob\",\"age\":25,\"active\":false}")
-back.name                          // "Bob"</code></pre>
+back.name  // "Bob"</code></pre>
 <p>A missing nested object leaves that sub-struct zeroed rather than failing. For input you do not trust, annotate the target as optional and the decode returns <code>null</code> on malformed JSON or a type mismatch instead of zero values:</p>
 <pre><code>let checked: Person? = json.decode(untrusted)
 if (checked == null) {
@@ -2138,11 +2215,11 @@ if (checked == null) {
 <h3>Walking a document</h3>
 <p>Annotate the target as <code>json.Value</code> to index a document without declaring its shape. Indexing works by key or position, at any depth.</p>
 <pre><code>let doc: json.Value = json.decode("{\"points\":[{\"x\":4},{\"x\":9}],\"n\":2}")
-doc["points"][1]["x"].asInt()      // 9
-doc["n"].asInt()                   // 2
-doc["points"].len()                // 2
-doc.has("n")                       // true
-doc["absent"].isNull()             // true</code></pre>
+doc["points"][1]["x"].asInt()  // 9
+doc["n"].asInt()               // 2
+doc["points"].len()            // 2
+doc.has("n")                   // true
+doc["absent"].isNull()         // true</code></pre>
 
 <table>
 <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
@@ -2193,8 +2270,8 @@ doc["absent"].isNull()             // true</code></pre>
 <p>Convenience function to create an <code>HttpResponse</code> struct.</p>
 
 <h4>listen</h4>
-<div class="func-card"><div class="sig"><span class="module">http</span>.listen(<span class="ptype">port: int</span>) <span class="ret">-&gt; void</span></div></div>
-<p>Start the HTTP server on the given port. This call blocks — it runs the server event loop indefinitely.</p>
+<div class="func-card"><div class="sig"><span class="module">http</span>.listen(<span class="ptype">port: int, [workers: int]</span>) <span class="ret">-&gt; void</span></div></div>
+<p>Start the HTTP server on the given port. This call blocks — it runs the server event loop indefinitely. The optional <code>workers</code> runs that many processes sharing the port; see <a onclick="show('mod-http')" style="cursor:pointer">Using every core</a> below.</p>
 
 <h4>HttpRequest</h4>
 <p>Handlers that take a parameter receive an <code>HttpRequest</code> struct with these fields:</p>
@@ -2205,6 +2282,7 @@ doc["absent"].isNull()             // true</code></pre>
 <tr><td><code>body</code></td><td><code>string</code></td><td>Request body (empty string if none)</td></tr>
 <tr><td><code>query</code></td><td><code>string</code></td><td>Raw query string after '?' (empty if none)</td></tr>
 <tr><td><code>params</code></td><td><code>map[string,string]</code></td><td>Route parameters extracted from <code>:param</code> segments</td></tr>
+<tr><td><code>headers</code></td><td><code>map[string,string]</code></td><td>Request headers, keys lower-cased: read <code>"authorization"</code>, not <code>"Authorization"</code></td></tr>
 </table>
 
 <pre><code>// Handler with route parameters
@@ -2236,12 +2314,13 @@ fn main(): void {
 <p>Client functions send HTTP requests and return an <code>HttpResponse</code> struct. Requires <code>libcurl</code> at compile time.</p>
 
 <h4>HttpResponse</h4>
-<p>All client request functions return an <code>HttpResponse</code> with three fields:</p>
+<p>All client request functions return an <code>HttpResponse</code>, the same struct a handler returns:</p>
 <table>
 <tr><th>Field</th><th>Type</th><th>Description</th></tr>
 <tr><td><code>statusCode</code></td><td><code>int</code></td><td>HTTP status code (e.g. 200, 404, 500)</td></tr>
 <tr><td><code>body</code></td><td><code>string</code></td><td>Response body content</td></tr>
 <tr><td><code>contentType</code></td><td><code>string</code></td><td>Content-Type header from the response</td></tr>
+<tr><td><code>headers</code></td><td><code>string</code></td><td>The headers that arrived, as newline-separated <code>Key: Value</code> pairs</td></tr>
 </table>
 
 <h4>Request Functions</h4>
@@ -2313,6 +2392,153 @@ fn main(): void {
     http.route("POST", "/echo", handleEcho)
     http.listen(8080)
 }</code></pre>
+
+<h3>Production settings</h3>
+<p>Settings that bound what a client can cost the server, and give it a proper 404 and compressed responses. Call each before <code>listen</code>.</p>
+{{template "funcref" (funcs "http" "limits" "notFound" "responseWith" "gzip" "listenOn" "extraPort")}}
+
+<h3>Calling other services</h3>
+<p>The plain client functions above use default timeouts and follow no redirects. For a host you do not control, set them explicitly with <code>HttpOptions</code>, and use the streaming forms for a large body or a model API's server-sent events.</p>
+{{template "funcref" (funcs "http" "requestWith" "stream" "streamEvents")}}
+<table>
+<tr><th>HttpOptions field</th><th>Type</th><th>Meaning</th></tr>
+<tr><td><code>timeoutMs</code></td><td><code>int</code></td><td>Deadline for the whole request. 0 for the default of 30000.</td></tr>
+<tr><td><code>connectTimeoutMs</code></td><td><code>int</code></td><td>Deadline for the connection alone. 0 for the default of 10000.</td></tr>
+<tr><td><code>maxRedirects</code></td><td><code>int</code></td><td>How many redirects to follow. 0, the default, hands you the 3xx.</td></tr>
+<tr><td><code>insecureTls</code></td><td><code>bool</code></td><td>Skip certificate verification. Leave it false.</td></tr>
+</table>
+
+<h3>How handlers run</h3>
+<p>The server has three ways of running handlers. Pick one before <code>listen</code>; the handlers themselves are the same code in all three.</p>
+<table>
+<tr><th>Mode</th><th>Turn it on</th><th>Handlers run</th><th>Use it when</th></tr>
+<tr><td>Thread pool</td><td>the default</td><td>on a pool of worker threads, sized by <code>http.threads</code></td><td>handlers may block: an outbound request, a slow query, a sleep</td></tr>
+<tr><td>Inline</td><td><code>http.inline()</code></td><td>one at a time, on the thread that owns the sockets</td><td>handlers are short and local, such as an SQLite file on one core</td></tr>
+<tr><td>io_uring</td><td><code>http.uring()</code></td><td>one at a time on the ring's thread, in batches</td><td>Linux, many connections, and you want batching (below)</td></tr>
+</table>
+<p>In the inline and io_uring modes a handler that blocks stalls every connection while it does, so keep blocking work out of them, or move it to a <a onclick="show('concurrency')" style="cursor:pointer">spawn</a>.</p>
+{{template "funcref" (funcs "http" "threads" "inline")}}
+
+<h3>io_uring</h3>
+<p>On Linux, <code>http.uring()</code> replaces epoll with io_uring. Accepts, reads, writes and closes are queued on one ring and submitted together, so a pass of the event loop costs one system call however many connections it served. On macOS, on a kernel without io_uring, or in a container that blocks it, the server says so at startup and falls back to epoll, so the same program runs everywhere.</p>
+<p>Each pass of the loop is a <strong>batch</strong>: every request that pass served. That is what makes the batching functions below worth having. Under load a batch holds many requests, and one database transaction or one query can serve all of them.</p>
+{{template "funcref" (funcs "http" "uring" "gather" "later")}}
+<p><code>gather</code> makes batches bigger by waiting briefly before each pass, and <code>later</code> lets a handler step aside when it would otherwise block the loop, for example while another connection holds SQLite's write lock. A typical io_uring setup:</p>
+<pre><code>http.afterBatch(commitBatch)
+http.uring()
+http.gather(64, 250)        // wait for 64 completions or 250 µs
+http.limits(0, 75, 200000)  // keep the default body limit
+http.listenOn("0.0.0.0", 80, 1)</code></pre>
+
+<h3>Batching and group commit</h3>
+<p>A durable write costs a disk flush, and a flush costs the same for one row as for a thousand. <code>http.afterBatch</code> runs a hook after a batch of handlers and before any of their responses is sent, so the handlers in a batch can share one transaction and the hook commits it once. Every client still hears "saved" only after its write is on disk.</p>
+<pre><code>import "db"
+import "http"
+
+let conn: int = -1
+let insert: int = -1
+let inTx: bool = false
+
+fn createNote(req: http.HttpRequest): http.HttpResponse {
+    if (!inTx) {
+        db.exec(conn, "BEGIN IMMEDIATE")
+        inTx = true
+    }
+
+    db.bindStr(insert, 1, req.body)
+    db.step(insert)
+    db.reset(insert)
+    return http.response(201, "{\"saved\":true}", "application/json")
+}
+
+fn commitBatch(): bool {
+    if (!inTx) {
+        return true
+    }
+
+    inTx = false
+    return db.exec(conn, "COMMIT") &gt;= 0
+}
+
+fn main(): void {
+    conn = db.open("sqlite", "notes.db")
+    db.exec(conn, "PRAGMA journal_mode=WAL")
+    db.exec(conn, "CREATE TABLE IF NOT EXISTS notes(body TEXT)")
+    insert = db.prepare(conn, "INSERT INTO notes(body) VALUES (?)")
+
+    http.route("POST", "/notes", createNote)
+    http.afterBatch(commitBatch)
+    http.uring()
+    http.gather(64, 250)
+    http.listen(8080, 1)
+}</code></pre>
+<p>If the hook returns <code>false</code>, every request in the batch is answered 500 instead of what its handler returned, so no client is told a write succeeded when it did not. Under the thread pool or inline mode a batch is a single request, so the same program is correct there too; it just doesn't batch.</p>
+<p>Reads can be batched as well. A handler takes a ticket with <code>http.hold</code>, the hook answers every ticket from one query with <code>http.reply</code>, and <code>http.batchWindow</code> keeps a batch open a little longer so it gathers more requests:</p>
+<pre><code>let tickets: int[] = []
+let ids: string[] = []
+
+fn price(req: http.HttpRequest): http.HttpResponse {
+    let ticket: int = http.hold()
+    if (ticket &lt; 0) {
+        return http.response(200, lookupOne(req.params.get("id")), "application/json")
+    }
+
+    tickets.push(ticket)
+    ids.push(req.params.get("id"))
+    return http.response(500, "{\"error\":\"not answered\"}", "application/json")
+}
+
+fn answerBatch(): bool {
+    foreach (tickets as i, ticket) {
+        http.reply(ticket, 200, lookupOne(ids[i]), "")
+    }
+
+    tickets = []
+    ids = []
+    return true
+}</code></pre>
+{{template "funcref" (funcs "http" "afterBatch" "hold" "reply" "batchWindow")}}
+
+<h3>Using every core</h3>
+<p>One io_uring or inline server runs handlers on one thread. To use more cores, run several copies of the process sharing one port: <code>http.listen(port, workers)</code> does it for you, and <code>http.fork</code> does it earlier, so each copy can open its own database connection after the split.</p>
+{{template "funcref" (funcs "http" "fork")}}
+<p>When several processes write one SQLite file, each takes the write lock in turn. <strong>Lanes</strong> avoid that: a lane is a separate process that owns the database, and every worker passes its requests to it with <code>http.relay</code>. The lane gets the requests from all workers together and can answer them with one query.</p>
+<pre><code>fn serve(lane: int, payloads: string[]): void {
+    foreach (payloads as i, id) {
+        http.reply(i, 200, json.encode({ id: id, lane: lane }), "")
+    }
+}
+
+fn lookup(req: http.HttpRequest): http.HttpResponse {
+    if (http.relay(0, req.params.get("id"))) {
+        return http.response(500, "", "")
+    }
+
+    return http.response(503, "{\"error\":\"no lane\"}", "application/json")
+}
+
+fn main(): void {
+    http.lanes(1, serve)
+    http.fork(0)
+    http.route("GET", "/item/:id", lookup)
+    http.uring()
+    http.listen(8080, 1)
+}</code></pre>
+{{template "funcref" (funcs "http" "lanes" "relay")}}
+
+<h3>Performance checklist</h3>
+<p>Measure before tuning, and change one thing at a time. In rough order of how much each step usually buys:</p>
+<ol>
+<li><strong>Start with the defaults.</strong> The thread pool is the safe choice while handlers might block, and it is fast enough for most services.</li>
+<li><strong>Make handlers short.</strong> Prepare statements once at startup with <code>db.prepare</code>, not per request. Build fixed SQL once (the <a onclick="show('lib-dexqu')" style="cursor:pointer">dexqu</a> <code>param()</code> templates bind in about a tenth of a microsecond).</li>
+<li><strong>On one core with local data, go inline.</strong> <code>http.inline()</code> removes the thread handoff, lock and wakeup from every request.</li>
+<li><strong>On Linux, go io_uring.</strong> <code>http.uring()</code> makes a pass of the loop one system call. Add <code>http.gather</code> once the server is busy.</li>
+<li><strong>Group your writes.</strong> <code>http.afterBatch</code> turns a flush per request into a flush per batch. <code>http.batchWindow</code> buys bigger batches with a little latency.</li>
+<li><strong>Use the other cores.</strong> <code>http.listen(port, workers)</code> or <code>http.fork</code>, opening connections after the fork. Use lanes when the workers would fight over one database.</li>
+<li><strong>Send less.</strong> <code>http.gzip</code> for large JSON bodies, if libdeflate is installed at build time.</li>
+<li><strong>Raise the limits for load tests.</strong> <code>http.limits</code> sets the connection cap. A single load generator can open only about 64,000 connections to one port, so <code>http.extraPort</code> adds ports to spread them.</li>
+</ol>
+<p>For memory, <code>dex profile server.dx</code> reports which lines allocate and hold memory. For SQLite, <code>DEX_SQLITE</code> compiles a pinned amalgamation into the binary instead of linking the system's (see <a onclick="show('database')" style="cursor:pointer">db</a>).</p>
 </section>
 
 <!-- file module -->
@@ -2380,6 +2606,10 @@ fn main(): void {
         file.remove("hello.txt")
     }
 }</code></pre>
+
+<h3>Reference</h3>
+<p>Every function in <code>file</code>, generated from the compiler's own signatures.</p>
+{{template "funcref" (funcs "file")}}
 </section>
 
 <!-- math module -->
@@ -2390,7 +2620,7 @@ fn main(): void {
 
 <p><strong>Note on int arguments:</strong> Integer <em>literals</em> are automatically widened to <code>double</code>, so <code>math.pow(2, 10)</code> works. However, <code>int</code> <em>variables</em> are not auto-widened — you need to convert first:</p>
 <pre><code>// Literals work directly
-let a: double = math.pow(2, 10)    // OK — 1024.0
+let a: double = math.pow(2, 10)             // OK — 1024.0
 
 // Variables need explicit conversion
 let x: int = 2
@@ -2404,46 +2634,20 @@ let b: double = math.pow(x * 1.0, y * 1.0)  // multiply by 1.0 to widen to doubl
 <div class="func-card"><div class="sig"><span class="module">math</span>.e() <span class="ret">-&gt; double</span></div></div>
 <p>Return Euler's number (2.71828...).</p>
 
-<pre><code>let pi: double = math.pi()     // 3.14159...
-let euler: double = math.e()   // 2.71828...</code></pre>
+<pre><code>let pi: double = math.pi()    // 3.14159...
+let euler: double = math.e()  // 2.71828...</code></pre>
 
 <h3>Trigonometric</h3>
-<table>
-<tr><th>Function</th><th>Description</th></tr>
-<tr><td><code>math.sin(x: double): double</code></td><td>Sine of x (radians)</td></tr>
-<tr><td><code>math.cos(x: double): double</code></td><td>Cosine of x (radians)</td></tr>
-<tr><td><code>math.tan(x: double): double</code></td><td>Tangent of x (radians)</td></tr>
-<tr><td><code>math.asin(x: double): double</code></td><td>Arc sine of x</td></tr>
-<tr><td><code>math.acos(x: double): double</code></td><td>Arc cosine of x</td></tr>
-<tr><td><code>math.atan(x: double): double</code></td><td>Arc tangent of x</td></tr>
-</table>
+{{template "funcref" (funcs "math" "sin" "cos" "tan" "asin" "acos" "atan")}}
 
 <h3>Power, Root &amp; Logarithm</h3>
-<table>
-<tr><th>Function</th><th>Description</th></tr>
-<tr><td><code>math.sqrt(x: double): double</code></td><td>Square root</td></tr>
-<tr><td><code>math.pow(base: double, exp: double): double</code></td><td>Exponentiation</td></tr>
-<tr><td><code>math.exp(x: double): double</code></td><td>e raised to x</td></tr>
-<tr><td><code>math.log(x: double): double</code></td><td>Natural logarithm</td></tr>
-<tr><td><code>math.log2(x: double): double</code></td><td>Base-2 logarithm</td></tr>
-<tr><td><code>math.log10(x: double): double</code></td><td>Base-10 logarithm</td></tr>
-</table>
+{{template "funcref" (funcs "math" "sqrt" "pow" "exp" "log" "log2" "log10")}}
 
 <h3>Rounding &amp; Absolute Value</h3>
-<table>
-<tr><th>Function</th><th>Description</th></tr>
-<tr><td><code>math.floor(x: double): double</code></td><td>Round down to nearest integer</td></tr>
-<tr><td><code>math.ceil(x: double): double</code></td><td>Round up to nearest integer</td></tr>
-<tr><td><code>math.round(x: double): double</code></td><td>Round to nearest integer</td></tr>
-<tr><td><code>math.abs(x: double): double</code></td><td>Absolute value</td></tr>
-</table>
+{{template "funcref" (funcs "math" "floor" "ceil" "round" "abs")}}
 
 <h3>Comparison</h3>
-<table>
-<tr><th>Function</th><th>Description</th></tr>
-<tr><td><code>math.min(a: double, b: double): double</code></td><td>Return the smaller of a and b</td></tr>
-<tr><td><code>math.max(a: double, b: double): double</code></td><td>Return the larger of a and b</td></tr>
-</table>
+{{template "funcref" (funcs "math" "min" "max")}}
 
 <h3>Full example</h3>
 <pre><code>import "math"
@@ -2451,14 +2655,14 @@ import "fmt"
 
 fn main(): void {
     let pi: double = math.pi()
-    let root: double = math.sqrt(16.0)    // 4.0
-    let val: double = math.pow(2.0, 10.0) // 1024.0
-    let angle: double = math.sin(pi / 2.0) // 1.0
+    let root: double = math.sqrt(16.0)      // 4.0
+    let val: double = math.pow(2.0, 10.0)   // 1024.0
+    let angle: double = math.sin(pi / 2.0)  // 1.0
 
-    fmt.println(math.floor(3.7))   // 3.0
-    fmt.println(math.ceil(3.2))    // 4.0
-    fmt.println(math.abs(-5.0))    // 5.0
-    fmt.println(math.min(3.0, 7.0)) // 3.0
+    fmt.println(math.floor(3.7))            // 3.0
+    fmt.println(math.ceil(3.2))             // 4.0
+    fmt.println(math.abs(-5.0))             // 5.0
+    fmt.println(math.min(3.0, 7.0))         // 3.0
 }</code></pre>
 </section>
 
@@ -2513,7 +2717,7 @@ fn main(): void {
 <p>Return the current Unix timestamp in seconds (wall clock time).</p>
 
 <pre><code>let ts: long = time.unixNow()
-let iso: string = time.isoNow()                    // "2025-01-15T10:30:00Z"
+let iso: string = time.isoNow()                     // "2025-01-15T10:30:00Z"
 let formatted: string = time.format(ts, "iso8601")  // ISO 8601
 let custom: string = time.format(ts, "%Y-%m-%d")    // "2025-01-15"</code></pre>
 
@@ -2523,7 +2727,7 @@ import "fmt"
 
 fn main(): void {
     let start: long = time.now()
-    time.sleep(100)  // sleep 100ms
+    time.sleep(100)       // sleep 100ms
     let elapsed: long = time.now() - start
     fmt.println(elapsed)
 
@@ -2542,10 +2746,10 @@ fn heartbeat(): void {
 }
 
 fn main(): void {
-    time.setTimeout(heartbeat, 5000)                // call once after 5s
-    let id: int = time.setInterval(heartbeat, 1000) // call every 1s
+    time.setTimeout(heartbeat, 5000)                 // call once after 5s
+    let id: int = time.setInterval(heartbeat, 1000)  // call every 1s
     time.sleep(10000)
-    time.clearInterval(id)                          // stop interval
+    time.clearInterval(id)                           // stop interval
 }</code></pre>
 </section>
 
@@ -2616,7 +2820,7 @@ fn onConnect(conn: ws.Conn, path: string): void {
 
 fn onMessage(conn: ws.Conn, msg: string): void {
     fmt.println("received: " + msg)
-    ws.send(conn, "echo: " + msg)  // reply to this client
+    ws.send(conn, "echo: " + msg)      // reply to this client
 }
 
 fn onDisconnect(conn: ws.Conn): void {
@@ -2625,10 +2829,10 @@ fn onDisconnect(conn: ws.Conn): void {
 
 fn main(): void {
     // 1. Register handlers
-    ws.setProtocol("chat.v1")           // optional subprotocol
-    ws.handleConnect(onConnect)          // called when a client connects
-    ws.handleMessage(onMessage)          // called on each message
-    ws.handleDisconnect(onDisconnect)    // called when a client disconnects
+    ws.setProtocol("chat.v1")          // optional subprotocol
+    ws.handleConnect(onConnect)        // called when a client connects
+    ws.handleMessage(onMessage)        // called on each message
+    ws.handleDisconnect(onDisconnect)  // called when a client disconnects
 
     // 2. Start the server (blocks)
     ws.listen(9090)
@@ -2653,6 +2857,10 @@ fn main(): void {
     // Clean up
     ws.close(conn)
 }</code></pre>
+
+<h3>Reference</h3>
+<p>Every function in <code>ws</code>, generated from the compiler's own signatures.</p>
+{{template "funcref" (funcs "ws")}}
 </section>
 
 <!-- io module -->
@@ -2732,27 +2940,67 @@ fn main(): void {
         fmt.println("Error: " + result.error)
     }
 }</code></pre>
+
+<h3>Reference</h3>
+<p>Every function in <code>os</code>, generated from the compiler's own signatures.</p>
+{{template "funcref" (funcs "os")}}
 </section>
 
 <!-- crypto module -->
 <section id="mod-crypto" class="page-section">
 <h2>crypto<span class="badge">module</span></h2>
-<p>The <code>crypto</code> module provides cryptographic utility functions.</p>
+<p>The <code>crypto</code> module covers what a web service needs: random tokens, password hashing, encrypting secrets at rest, HMAC for webhooks and HS256 tokens, RS256 for ID tokens and service accounts, the base64 and base32 encodings, and TOTP codes.</p>
 <pre><code>import "crypto"</code></pre>
-
-<h3>Functions</h3>
-
-<div class="func-card"><div class="sig"><span class="module">crypto</span>.uuid() <span class="ret">-&gt; string</span></div></div>
-<p>Generate a random UUID v4 string.</p>
+<p>Functions marked <em>Needs OpenSSL</em> use the OpenSSL the build finds through <code>pkg-config</code>, and the bcrypt functions use libxcrypt the same way. On a machine without the library the program still compiles, and those functions return <code>""</code> or <code>false</code>. The Docker image has OpenSSL.</p>
 
 <h3>Example</h3>
 <pre><code>import "crypto"
 import "fmt"
+import "time"
 
 fn main(): void {
-    let id: string = crypto.uuid()
-    fmt.println(id)  // e.g. "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
+    let stored: string = crypto.hashPassword("correct horse")
+    let ok: bool = crypto.verifyPassword("correct horse", stored)
+
+    let session: string = crypto.randomHex(32)
+
+    let key: string = crypto.randomHex(32)
+    let sealed: string = crypto.encrypt(key, "4111 1111 1111 1111")
+    let card: string = crypto.decrypt(key, sealed)
+
+    let body: string = "{\"event\":\"charge.success\"}"
+    let sent: string = crypto.hmacSha512Hex("whsec_test", body)
+    let genuine: bool = crypto.secureEquals(sent, crypto.hmacSha512Hex("whsec_test", body))
+
+    let secret: string = crypto.randomBase32(20)
+    let code: string = crypto.totp(secret, time.unixNow())
+
+    fmt.println("${ok} ${session.len()} ${card} ${genuine} ${code.len()}")
 }</code></pre>
+
+<h3>Random values</h3>
+<p>All three read the operating system's entropy source and return <code>""</code> if it cannot be read, never a guessable value.</p>
+{{template "funcref" (funcs "crypto" "uuid" "randomHex" "randomBase32")}}
+
+<h3>Passwords</h3>
+<p>Use <code>hashPassword</code> for new systems. The bcrypt functions are there for importing users whose stored hashes are already bcrypt.</p>
+{{template "funcref" (funcs "crypto" "hashPassword" "verifyPassword" "bcryptHash" "bcryptVerify" "bcryptVerifyAll")}}
+
+<h3>Encryption</h3>
+{{template "funcref" (funcs "crypto" "encrypt" "decrypt")}}
+
+<h3>Hashes and MACs</h3>
+<p>Compare a signature or token with <code>secureEquals</code>, never <code>==</code>: <code>==</code> stops at the first differing byte, which leaks how much of a guess was right.</p>
+{{template "funcref" (funcs "crypto" "sha256Hex" "hmacSha256Hex" "hmacSha256B64Url" "hmacSha512Hex" "hmacSha1Hex" "secureEquals")}}
+
+<h3>RS256 signatures</h3>
+{{template "funcref" (funcs "crypto" "verifyRs256" "signRs256")}}
+
+<h3>Encodings</h3>
+{{template "funcref" (funcs "crypto" "base64Encode" "base64Decode" "base64UrlDecode" "base32Encode" "base32Decode")}}
+
+<h3>One-time codes</h3>
+{{template "funcref" (funcs "crypto" "totp")}}
 </section>
 
 <!-- str module -->
@@ -2779,11 +3027,11 @@ fn main(): void {
 import "fmt"
 
 fn main(): void {
-    let s: string = str.fromInt(42)       // "42"
-    let n: int = str.toInt("42")          // 42
-    let d: double = str.toDouble("3.14")  // 3.14
-    let b: string = str.fromBool(true)    // "true"
-    let big: string = str.fromLong(1000000) // "1000000"
+    let s: string = str.fromInt(42)          // "42"
+    let n: int = str.toInt("42")             // 42
+    let d: double = str.toDouble("3.14")     // 3.14
+    let b: string = str.fromBool(true)       // "true"
+    let big: string = str.fromLong(1000000)  // "1000000"
     fmt.println(s)
     fmt.println(n)
 }</code></pre>
@@ -2807,14 +3055,13 @@ struct User {
 }
 
 fn main(): void {
-    let unit: User = User { id: 42, email: "ada@example.com",
-                            score: 150.0, active: true }
+    let unit: User = User { id: 42, email: "ada@example.com", score: 150.0, active: true }
 
     let i: int = 0
     while (i &lt; reflect.fieldCount(unit)) {
-        fmt.println(reflect.fieldName(unit, i) + " (" +
-                    reflect.fieldKind(unit, i) + ") = " +
-                    reflect.toString(unit, i))
+        let name: string = reflect.fieldName(unit, i)
+        let kind: string = reflect.fieldKind(unit, i)
+        fmt.println("${name} (${kind}) = ${reflect.toString(unit, i)}")
         i = i + 1
     }
 }</code></pre>
@@ -2853,11 +3100,12 @@ active (bool) = true</code></pre>
         sb.append(";")
         i = i + 1
     }
+
     return sb.toString()
 }
 
-reflect.asString(unit.detail, 0)    // a nested struct field
-reflect.asString(people[0], 1)     // an array element</code></pre>
+reflect.asString(unit.detail, 0)  // a nested struct field
+reflect.asString(people[0], 1)    // an array element</code></pre>
 
 <h3>What it costs</h3>
 <p>Reflection here is not the usual trade of speed for flexibility, because the metadata is <strong>generated rather than discovered</strong>.</p>
@@ -2868,6 +3116,302 @@ reflect.asString(people[0], 1)     // an array element</code></pre>
 <h3>Limits</h3>
 <p>Reflection is <strong>read-only</strong>: there are no setters, so a struct cannot yet be filled in field by field. Writing would have to release the old value and retain the new one through a generated setter, and that is left for a later version rather than bolted on.</p>
 <p>The subject must be a variable, field, or element &mdash; not a temporary. A temporary owns its heap fields, and reflecting one would leave nobody to release them, so bind it to a variable first.</p>
+
+<h3>Reference</h3>
+<p>Every function in <code>reflect</code>, generated from the compiler's own signatures.</p>
+{{template "funcref" (funcs "reflect")}}
+</section>
+
+<!-- Generated module pages -->
+{{range .Generated}}
+<section id="{{.Page}}" class="page-section">
+<h2>{{.Name}}<span class="badge">module</span></h2>
+<p>{{.Summary}}.</p>
+<pre><code>import "{{.Name}}"</code></pre>
+
+<h3>Functions</h3>
+{{template "funcref" .Funcs}}
+</section>
+{{end}}
+
+<!-- Libraries -->
+<section id="libraries" class="page-section">
+<h2>Libraries</h2>
+<p>Some packages live outside the compiler, in the <a href="https://github.com/ensamuel7/dex-modules">dex-modules</a> repository, so each can be released on its own schedule rather than waiting for a new compiler. Every folder there is a module with its own <code>dex.mod</code> and its own version tags.</p>
+
+<table>
+<tr><th>Library</th><th>What it does</th><th>Needs</th><th>Latest</th></tr>
+<tr><td><code><a onclick="show('lib-dexqu')" style="cursor:pointer">dexqu</a></code></td><td>A SQL query builder: one query renders for the PostgreSQL, MySQL or SQLite dialect</td><td>nothing: pure Dex</td><td><code>v0.2.0</code></td></tr>
+<tr><td><code><a onclick="show('lib-redis')" style="cursor:pointer">redis</a></code></td><td>A pooled Redis client, safe to share between threads</td><td>hiredis</td><td><code>v0.1.0</code></td></tr>
+<tr><td><code><a onclick="show('lib-sqlite')" style="cursor:pointer">sqlite</a></code></td><td>SQLite with prepared statements and typed errors</td><td>libsqlite3</td><td><code>v0.1.0</code></td></tr>
+<tr><td><code><a onclick="show('lib-dexdns')" style="cursor:pointer">dexdns</a></code></td><td>DNS records at Cloudflare, Hetzner or PowerDNS, behind one interface</td><td>nothing: pure Dex</td><td><code>v0.1.0</code></td></tr>
+</table>
+
+<h3>Installing one</h3>
+<p>A library needs a <code>dex.mod</code> in your project. Create it once, then add libraries with <code>dex get</code>:</p>
+<div class="install">
+<pre><code>dex mod init github.com/acme/app
+dex get github.com/ensamuel7/dex-modules/dexqu
+dex get github.com/ensamuel7/dex-modules/redis@v0.1.0</code></pre>
+</div>
+<p><code>dex get</code> downloads the release into the module cache, adds a <code>require</code> line to <code>dex.mod</code>, and records a checksum in <code>dex.sum</code>. Commit both files. On another machine, or in CI, <code>dex mod download</code> fetches everything <code>dex.mod</code> lists. See <a onclick="show('dex-mod')" style="cursor:pointer">Modules &amp; dex.mod</a> for the details.</p>
+<p>Import a library by its full path. Its last segment is the name you call it by, or give it another with <code>as</code>:</p>
+<pre><code>import "github.com/ensamuel7/dex-modules/redis"
+import "github.com/ensamuel7/dex-modules/dexqu" as "q"</code></pre>
+
+<h3>Libraries that wrap C</h3>
+<p><code>redis</code> and <code>sqlite</code> bind a C library through an <a onclick="show('calling-c')" style="cursor:pointer">external module</a> and find it with <code>pkg-config</code>, so the library and <code>pkg-config</code> both have to be installed:</p>
+<div class="install">
+<pre><code>brew install pkg-config hiredis sqlite                      # macOS
+sudo apt install pkg-config libhiredis-dev libsqlite3-dev   # Ubuntu/Debian</code></pre>
+</div>
+<p>The C names, header and link flags stay private to the library. A program that imports <code>sqlite</code> sees <code>sqlite.Database</code> and <code>sqlite.Statement</code>, never <code>sqlite3*</code>.</p>
+
+<h3>The stdlib redis module and the redis library</h3>
+<p>The standard library also has a <a onclick="show('mod-redis')" style="cursor:pointer">redis module</a>. The library is the newer of the two: a <code>Client</code> value that holds a pool of connections and can be shared between threads, <code>string?</code> for a missing key, and <code>redis.RedisError</code> thrown on every failure.</p>
+</section>
+
+<section id="lib-dexqu" class="page-section">
+<h2>dexqu<span class="badge">library</span></h2>
+<p>A SQL query builder. It produces SQL text and the values for its placeholders, for PostgreSQL, MySQL or SQLite. Written in pure Dex, with no C library.</p>
+<div class="install">
+<pre><code>dex get github.com/ensamuel7/dex-modules/dexqu</code></pre>
+</div>
+<p>Needs dex 0.9.16 or later. <a href="https://github.com/ensamuel7/dex-modules/tree/main/dexqu">Source and full README</a>.</p>
+
+<pre><code>import "github.com/ensamuel7/dex-modules/dexqu" as "q"
+
+let active: q.Select = q.from("users u")
+    .columns(["u.id", "u.email"])
+    .join("orgs o", q.col("o.id").eq(q.col("u.org_id")))
+    .where(q.col("u.active").eq(q.boolean(true)))
+    .where(q.col("o.plan").in([q.text("pro"), q.text("team")]))
+    .orderBy("u.created_at DESC")
+    .limit(20)
+
+let built: q.Query = active.build(q.Dialect.Postgres)</code></pre>
+<p><code>built.sql</code> is then:</p>
+<pre><code>SELECT "u"."id", "u"."email" FROM "users" AS "u"
+JOIN "orgs" AS "o" ON "o"."id" = "u"."org_id"
+WHERE "u"."active" = TRUE AND "o"."plan" IN ($1, $2)
+ORDER BY "u"."created_at" DESC LIMIT $3</code></pre>
+<p>and <code>built.args</code> is <code>[Text(pro), Text(team), Int(20)]</code>. <code>build</code> throws <code>q.QueryError</code> for a query that cannot be written: a feature the dialect lacks, an UPDATE with no condition, or a malformed name.</p>
+
+<h3>Three rules</h3>
+<p><strong>Builders are values.</strong> Every method returns a new builder and leaves its receiver alone, so a base query can be shared and branched. A call whose result is dropped does nothing: write <code>s = s.where(...)</code>, not <code>s.where(...)</code>. A base built at startup can be branched from any number of threads at once.</p>
+<pre><code>let base: q.Select = q.from("orders").where(q.col("tenant_id").eq(q.param("tenant")))
+let open: q.Select = base.where(q.col("state").eq(q.text("open")))
+let recent: q.Select = base.orderBy("created_at DESC").limit(50)</code></pre>
+<p><strong>Values are never SQL.</strong> <code>q.text</code>, <code>q.integer</code>, <code>q.bigint</code> and <code>q.real</code> become placeholders, with their values in <code>Query.args</code>. There is no interpolated mode. <code>eq(q.sqlNull())</code> becomes <code>IS NULL</code>.</p>
+<p><strong>Names are always quoted.</strong> <code>"u.name"</code> becomes <code>"u"."name"</code>, so a reserved word works as a column and a name taken from a request cannot become SQL. <code>orderBy</code> accepts only a name and an optional <code>ASC</code> or <code>DESC</code>, so a sort key from a query string is safe to pass straight in.</p>
+
+<h3>Build once, run many</h3>
+<p><code>q.param(name)</code> is a placeholder whose value comes later. Build the query once at startup and bind it per request: binding costs about a tenth of a microsecond, building about two.</p>
+<pre><code>let byEmail: q.Query = q.from("users")
+    .where(q.col("email").eq(q.param("email")))
+    .where(q.col("deleted_at").isNull())
+    .build(q.Dialect.Postgres)
+
+let args: q.Value[] = byEmail.bind().setText("email", email).args()</code></pre>
+
+<h3>Running a query</h3>
+<p><code>Query.sql</code> and <code>Query.args</code> go to whatever driver you use. For the standard library's <code>db</code> module, the <code>sqldb</code> package does the binding:</p>
+<pre><code>import "db"
+import "github.com/ensamuel7/dex-modules/dexqu" as "q"
+import "github.com/ensamuel7/dex-modules/dexqu/sqldb"
+
+let st: int = sqldb.query(conn, active.build(q.Dialect.SQLite))
+while (db.next(st)) {
+    let email: string = db.col(st, 1)
+}
+
+db.finalize(st)</code></pre>
+<p><code>fields</code> selects one column per struct field, in the order <code>db.fill</code> reads them back, taking each column from the field's <code>db</code> tag when it has one:</p>
+<pre><code>struct Account {
+    id: long
+    fullName: string
+    email: string `db:"lower(email)"`
+}
+
+let a: Account = Account {}
+let accounts: q.Select = q.from("accounts").fields(reflect.fields(a), reflect.fieldTags(a, "db"))</code></pre>
+
+<h3>What it covers</h3>
+<table>
+<tr><th></th><th>Methods</th></tr>
+<tr><td>Values and names</td><td><code>col</code>, <code>star</code>, <code>integer</code>, <code>bigint</code>, <code>real</code>, <code>text</code>, <code>boolean</code>, <code>sqlNull</code>, <code>param</code>, <code>raw</code>, <code>rawWith</code></td></tr>
+<tr><td>Conditions</td><td><code>eq neq lt lte gt gte</code>, <code>isNull isNotNull</code>, <code>like ilike</code>, <code>in notIn</code>, <code>inSelect</code>, <code>between</code>, <code>and or not</code>, <code>exists</code></td></tr>
+<tr><td>SELECT</td><td>joins (including LATERAL), <code>where</code>, <code>groupBy</code>, <code>having</code>, <code>orderBy</code>, <code>limit</code>/<code>offset</code>, row locks, <code>union</code>/<code>intersect</code>/<code>except</code>, CTEs (<code>with</code>, <code>withRecursive</code>, <code>withMaterialized</code>), window functions, <code>count()</code> for a page's total</td></tr>
+<tr><td>INSERT</td><td><code>values</code>, <code>set</code>, <code>fromSelect</code>, upserts with <code>onConflict</code>, <code>returning</code></td></tr>
+<tr><td>UPDATE, DELETE</td><td><code>set</code>, <code>where</code>, <code>returning</code>; refused without a <code>where</code> unless <code>all()</code> says that is meant</td></tr>
+</table>
+
+<h3>Dialects</h3>
+<p>One query renders for any of three databases. Pick the dialect when you build, so the same <code>q.Select</code> can serve a Postgres production database and an SQLite test:</p>
+<pre><code>let pg: q.Query = active.build(q.Dialect.Postgres)
+let my: q.Query = active.build(q.Dialect.MySQL)
+let lite: q.Query = active.build(q.Dialect.SQLite)</code></pre>
+<p>A feature a dialect lacks is refused at <code>build</code> with a <code>q.QueryError</code>, rather than producing SQL the server rejects.</p>
+<table>
+<tr><th></th><th>Postgres</th><th>MySQL</th><th>SQLite</th></tr>
+<tr><td>identifiers</td><td><code>"x"</code></td><td><code>`x`</code></td><td><code>"x"</code></td></tr>
+<tr><td>placeholders</td><td><code>$1, $2</code></td><td><code>?</code></td><td><code>?</code></td></tr>
+<tr><td><code>ilike</code></td><td><code>ILIKE</code></td><td><code>LIKE</code></td><td><code>LIKE</code> (both already ignore ASCII case)</td></tr>
+<tr><td><code>concat</code></td><td><code>a || b</code></td><td><code>CONCAT(a, b)</code></td><td><code>a || b</code></td></tr>
+<tr><td><code>boolean</code></td><td><code>TRUE</code>/<code>FALSE</code></td><td><code>TRUE</code>/<code>FALSE</code></td><td><code>1</code>/<code>0</code></td></tr>
+<tr><td><code>doNothing</code></td><td><code>ON CONFLICT … DO NOTHING</code></td><td><code>INSERT IGNORE</code></td><td><code>ON CONFLICT … DO NOTHING</code></td></tr>
+<tr><td><code>doUpdate</code></td><td><code>ON CONFLICT (k) DO UPDATE SET c = EXCLUDED.c</code></td><td><code>ON DUPLICATE KEY UPDATE c = VALUES(c)</code></td><td>as Postgres</td></tr>
+<tr><td>OFFSET alone</td><td><code>OFFSET $n</code></td><td><code>LIMIT 18446744073709551615 OFFSET ?</code></td><td><code>LIMIT -1 OFFSET ?</code></td></tr>
+<tr><td><code>returning</code></td><td>yes</td><td>refused</td><td>yes (3.35+)</td></tr>
+<tr><td>row locks</td><td>yes</td><td>yes</td><td>refused</td></tr>
+<tr><td><code>fullJoin</code></td><td>yes</td><td>refused</td><td>yes (3.39+)</td></tr>
+<tr><td>LATERAL joins</td><td>yes</td><td>yes (8.0.14+)</td><td>refused</td></tr>
+<tr><td><code>withMaterialized</code></td><td>yes</td><td>refused</td><td>yes (3.35+)</td></tr>
+<tr><td><code>arrayOf</code></td><td>yes</td><td>refused</td><td>refused</td></tr>
+</table>
+<p>MySQL has no conflict target: <code>ON DUPLICATE KEY</code> applies to every unique key, so <code>onConflict(columns)</code> is ignored there.</p>
+</section>
+
+<section id="lib-redis" class="page-section">
+<h2>redis<span class="badge">library</span></h2>
+<p>A Redis client over the hiredis C library.</p>
+<div class="install">
+<pre><code>dex get github.com/ensamuel7/dex-modules/redis</code></pre>
+</div>
+<p>Needs hiredis and <code>pkg-config</code>: <code>brew install hiredis</code> or <code>apt install libhiredis-dev</code>. <a href="https://github.com/ensamuel7/dex-modules/tree/main/redis">Source</a>.</p>
+
+<pre><code>import "github.com/ensamuel7/dex-modules/redis"
+
+let r: redis.Client = redis.connect("127.0.0.1", 6379, "")
+r.set("greeting", "hello")
+let g: string? = r.get("greeting")
+
+let reply: redis.Reply = r.command(["ZADD", "board", "42", "ada"])</code></pre>
+<p>Arguments are sent as a list, never through a format string, so a value holding spaces or <code>%</code> is sent as written. Every failure throws <code>redis.RedisError</code>: a refused connection, a dropped one, or an error reply. A password, when given, is sent with <code>AUTH</code> on every connection the client opens, and <code>connect</code> fails at once if it is wrong.</p>
+
+<h3>API</h3>
+<table>
+<tr><th>Call</th><th>Notes</th></tr>
+<tr><td><code>redis.connect(host, port, password): Client</code></td><td>a pool of 8 connections; <code>""</code> for no password</td></tr>
+<tr><td><code>redis.connectPool(host, port, password, size): Client</code></td><td>the same with <code>size</code> connections, up to 64</td></tr>
+<tr><td><code>r.command(args: string[]): Reply</code></td><td>any command</td></tr>
+<tr><td><code>r.ping(): string</code></td><td></td></tr>
+<tr><td><code>r.set(key, value)</code>, <code>r.setex(key, value, seconds)</code></td><td></td></tr>
+<tr><td><code>r.get(key): string?</code></td><td><code>null</code> when absent</td></tr>
+<tr><td><code>r.del(key): long</code>, <code>r.exists(key): bool</code></td><td></td></tr>
+<tr><td><code>r.incr(key): long</code>, <code>r.incrBy(key, by): long</code></td><td></td></tr>
+<tr><td><code>r.expire(key, seconds): bool</code>, <code>r.ttl(key): long</code></td><td></td></tr>
+<tr><td><code>r.keys(pattern): string[]</code></td><td></td></tr>
+<tr><td><code>r.hset</code>, <code>r.hget</code>, <code>r.hgetall</code>, <code>r.hdel</code>, <code>r.hkeys</code></td><td>hashes; <code>hget</code> gives <code>string?</code>, <code>hgetall</code> a <code>map[string, string]</code></td></tr>
+<tr><td><code>r.lpush</code>, <code>r.rpush</code>, <code>r.lrange(key, start, stop)</code></td><td>lists</td></tr>
+<tr><td><code>r.sadd</code>, <code>r.srem</code>, <code>r.sismember</code>, <code>r.smembers</code></td><td>sets</td></tr>
+<tr><td><code>r.publish(channel, message): long</code></td><td></td></tr>
+<tr><td><code>r.subscribe(channel): Subscriber</code></td><td>a connection of its own, subscribed</td></tr>
+<tr><td><code>sub.subscribe(channel)</code>, <code>sub.psubscribe(pattern)</code></td><td>add a channel or a pattern</td></tr>
+<tr><td><code>sub.next(): Message?</code></td><td>block for the next message; <code>null</code> once the connection drops</td></tr>
+</table>
+<p>A <code>Reply</code> has a <code>kind</code> (<code>Text</code>, <code>Number</code>, <code>List</code>, <code>Nil</code>, <code>Status</code>) and the matching <code>text</code>, <code>number</code> or <code>items</code>.</p>
+
+<h3>Threads</h3>
+<p>A <code>Client</code> can be shared by any number of threads. Each command takes a connection from the pool for the length of the command, waiting if all are in use, so two threads never read each other's replies. A connection that drops is redialled the next time it is taken.</p>
+
+<h3>Pub/sub</h3>
+<p>Subscribing takes a connection out of request/reply for good, so <code>r.subscribe</code> opens one of its own rather than taking one from the pool. Messages are pulled, usually from a thread that does nothing else:</p>
+<pre><code>let sub: redis.Subscriber = r.subscribe("jobs:node-a")
+spawn {
+    while (true) {
+        let m: redis.Message? = sub.next()
+        if (m == null) {
+            break
+        }
+
+        handle(m.channel, m.payload)
+    }
+}</code></pre>
+<p>A <code>Message</code> has the <code>channel</code> it arrived on, the <code>pattern</code> that matched it (<code>""</code> for a plain subscription) and the <code>payload</code>.</p>
+</section>
+
+<section id="lib-sqlite" class="page-section">
+<h2>sqlite<span class="badge">library</span></h2>
+<p>SQLite over libsqlite3, with prepared statements as values.</p>
+<div class="install">
+<pre><code>dex get github.com/ensamuel7/dex-modules/sqlite</code></pre>
+</div>
+<p>Needs libsqlite3 and <code>pkg-config</code>: <code>brew install sqlite</code> or <code>apt install libsqlite3-dev</code>. <a href="https://github.com/ensamuel7/dex-modules/tree/main/sqlite">Source</a>.</p>
+
+<pre><code>import "fmt"
+import "github.com/ensamuel7/dex-modules/sqlite"
+
+let db: sqlite.Database = sqlite.open("app.db")
+db.exec("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT)")
+
+let ins: sqlite.Statement = db.prepare("INSERT INTO users(name) VALUES (?)")
+ins.bindText(1, "ada").run()
+
+let q: sqlite.Statement = db.prepare("SELECT id, name FROM users WHERE id > ?")
+q.bindInt(1, 0)
+while (q.next()) {
+    fmt.println(q.getText(1))
+}</code></pre>
+<p>Every failure throws <code>sqlite.SqliteError</code>, carrying SQLite's message and result code.</p>
+
+<h3>API</h3>
+<table>
+<tr><th>Call</th><th>Notes</th></tr>
+<tr><td><code>sqlite.open(path): Database</code></td><td>open or create a file</td></tr>
+<tr><td><code>sqlite.memory(): Database</code></td><td>an in-memory database</td></tr>
+<tr><td><code>sqlite.version(): string</code></td><td>the linked libsqlite3 version</td></tr>
+<tr><td><code>db.exec(sql)</code></td><td>run SQL with no results; several statements allowed</td></tr>
+<tr><td><code>db.prepare(sql): Statement</code></td><td>compile one statement</td></tr>
+<tr><td><code>db.queryInt(sql): int</code></td><td>first column of the first row</td></tr>
+<tr><td><code>db.queryString(sql): string?</code></td><td>the same, <code>null</code> for no row or NULL</td></tr>
+<tr><td><code>db.changes(): int</code>, <code>db.lastInsertId(): long</code></td><td>after a write</td></tr>
+<tr><td><code>st.bindText</code>, <code>bindInt</code>, <code>bindLong</code>, <code>bindDouble</code>, <code>bindNull</code></td><td>parameters counted from 1; chainable</td></tr>
+<tr><td><code>st.next(): bool</code></td><td>step; <code>true</code> while there is a row</td></tr>
+<tr><td><code>st.run(): int</code></td><td>step to the end, returning rows changed</td></tr>
+<tr><td><code>st.reset()</code></td><td>rewind and clear bindings, to run it again</td></tr>
+<tr><td><code>st.columns(): string[]</code></td><td>column names</td></tr>
+<tr><td><code>st.getText</code>, <code>getInt</code>, <code>getLong</code>, <code>getDouble</code>, <code>isNull</code></td><td>columns counted from 0</td></tr>
+</table>
+
+<h3>Lifetime</h3>
+<p><code>Database</code> and <code>Statement</code> hold C handles, closed when the last reference to them goes. A statement keeps a reference to its connection, so the connection stays open until its last statement is finalized, whichever order they are released in.</p>
+</section>
+
+<section id="lib-dexdns" class="page-section">
+<h2>dexdns<span class="badge">library</span></h2>
+<p>A domain's DNS records at Cloudflare, Hetzner (Cloud API) or a PowerDNS Authoritative server, behind one interface. Pure Dex, using only <code>http</code> and <code>json</code>.</p>
+<div class="install">
+<pre><code>dex get github.com/ensamuel7/dex-modules/dexdns</code></pre>
+</div>
+<p>Needs dex 0.9.16 or later. <a href="https://github.com/ensamuel7/dex-modules/tree/main/dexdns">Source</a>.</p>
+
+<pre><code>import "github.com/ensamuel7/dex-modules/dexdns"
+
+let p: dexdns.Cloudflare = dexdns.cloudflare("https://api.cloudflare.com/client/v4", token)
+p.comment = "Kept by my-app"
+let z: dexdns.Zone = p.zone("example.com")
+
+// Exactly these MX records.
+let mx = dexdns.Record { name: "example.com", type: "MX", content: "mail.example.com", ttl: 3600, priority: 10 }
+p.replace(z, "example.com", "example.com", "MX", [mx])
+
+// Our SPF in, the old one out; the zone's other TXT records stay.
+p.update(z, "example.com", "example.com", "TXT", [newSpf], [oldSpf])</code></pre>
+
+<table>
+<tr><th>Provider</th><th>Constructor</th></tr>
+<tr><td>Cloudflare</td><td><code>cloudflare(api, token)</code>; set <code>comment</code> to tag the records it makes</td></tr>
+<tr><td>Hetzner</td><td><code>hetzner(api, token)</code>; <code>comment</code> likewise</td></tr>
+<tr><td>PowerDNS</td><td><code>powerdns(api, key, nameservers, label)</code>; <code>label</code> names it in error messages</td></tr>
+</table>
+<p>Each implements the <code>Provider</code> interface: <code>kind</code>, <code>zone</code> (found, or created), <code>list</code>, <code>replace</code>, <code>update</code> and <code>forget</code>. Writes return <code>""</code> when done, or the provider's reason.</p>
+
+<h3>Records are provider-neutral</h3>
+<p>Names are full, lowercase and without the trailing dot. TXT content is the whole unquoted text, split into 255-byte strings on the wire where a provider needs it and joined back on reading. MX and SRV keep their priority in <code>priority</code>, and SRV content is <code>weight port target</code>. <code>sameValue</code> compares two records the way a provider would.</p>
+
+<h3>update touches only what it is given</h3>
+<p><code>update</code> drops the <code>drop</code> values, adds the <code>add</code> values, and leaves every other value at that name and type alone, so two programs can share a zone as long as each edits only the records it made. Neither <code>replace</code> nor <code>update</code> compares TTL or proxying: an existing record with the same value is kept.</p>
 </section>
 
 <!-- AST (Abstract Syntax Tree) -->
@@ -3106,7 +3650,9 @@ function buildToc() {
     // Give heading an id if it doesn't have one
     if (!h.id) h.id = 'toc-heading-' + i;
     var a = document.createElement('a');
-    a.textContent = h.textContent.replace(/module$/, '').trim();
+    var label = h.cloneNode(true);
+    label.querySelectorAll('.badge').forEach(function(b) { b.remove(); });
+    a.textContent = label.textContent.trim();
     a.href = 'javascript:void(0)';
     a.setAttribute('data-target', h.id);
     var tag = h.tagName.toLowerCase();
@@ -3167,6 +3713,7 @@ function addCopyButtons() {
 var searchIndex = [];
 var sectionNames = {
   'getting-started': 'Getting Started',
+  'versions': 'Versions',
   'types-variables': 'Types & Variables',
   'operators-math': 'Operators & Math',
   'functions-control': 'Functions & Control Flow',
@@ -3196,6 +3743,13 @@ var sectionNames = {
   'mod-os': 'os Module',
   'mod-crypto': 'crypto Module',
   'mod-str': 'str Module',
+  'mod-reflect': 'reflect Module',
+{{range .Generated}}  '{{.Page}}': '{{.Name}} Module',
+{{end}}  'libraries': 'Libraries',
+  'lib-dexqu': 'dexqu',
+  'lib-redis': 'redis library',
+  'lib-sqlite': 'sqlite library',
+  'lib-dexdns': 'dexdns',
   'ast': 'AST',
   'lexer': 'Lexer & Tokens'
 };
@@ -3420,3 +3974,5 @@ window.addEventListener('hashchange', function() {
 </script>
 </body>
 </html>
+{{define "funcref"}}{{range .}}<div class="func-card"><div class="sig"><span class="module">{{.Module}}</span>.{{.Name}}(<span class="ptype">{{.Params}}</span>) <span class="ret">-&gt; {{.Return}}</span></div>{{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}</div>
+{{end}}{{end}}

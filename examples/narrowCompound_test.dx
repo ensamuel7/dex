@@ -1,0 +1,122 @@
+// An optional narrows wherever a null check has already settled it: the right
+// of `&&` / `||`, an if's branches, and after a guard clause.
+struct User {
+    name: string
+    tags: string[]
+}
+
+fn find(name: string): User? {
+    if (name.isEmpty()) {
+        return null
+    }
+    return User { name: name, tags: [name] }
+}
+
+fn count(n: int): int? {
+    if (n < 0) {
+        return null
+    }
+    return n
+}
+
+fn label(s: string): string? {
+    if (s == "none") {
+        return null
+    }
+    return s
+}
+
+fn rightOfOr(u: User?): string {
+    if (u == null || u.name.isEmpty()) {
+        return "nobody"
+    }
+    // Narrowed for the rest of the block, as a guard clause.
+    return u.name
+}
+
+fn rightOfAnd(n: int?): bool {
+    return n != null && n + 1 > 5
+}
+
+fn elseOfOr(s: string?): string {
+    if (s == null || s.len() == 0) {
+        return "-"
+    } else {
+        return s.toUpper()
+    }
+}
+
+fn thenOfAnd(u: User?, n: int?): int {
+    if (u != null && n != null && u.tags.len() > 0) {
+        return n + u.tags.len()
+    }
+    return -1
+}
+
+fn notNegated(s: string?): int {
+    if (!(s == null)) {
+        return s.len()
+    }
+    return 0
+}
+
+fn twoGuards(u: User?, v: User?, extra: bool): string {
+    if (u == null || u.name == "x") {
+        return "a"
+    }
+    if (v == null || extra) {
+        return "b"
+    }
+    return u.name + v.name + "!"
+}
+
+fn guardInLoop(names: string[]): int {
+    let total: int = 0
+    foreach (names as n) {
+        let u: User? = find(n)
+        if (u == null || u.tags.len() == 0) {
+            continue
+        }
+        total = total + u.tags.len()
+    }
+    let after: User? = find("")
+    if (after != null && after.name == "z") {
+        total = total + 100
+    }
+    return total
+}
+
+fn nested(u: User?): string {
+    if (u != null) {
+        if (u.name == "a" || u.tags.len() > 3) {
+            return "inner " + u.name
+        }
+        return "outer " + u.name
+    }
+    return "none"
+}
+
+fn main(): void {
+    for (let i: int = 0; i < 100; i++) {
+        assert(rightOfOr(find("ada")) == "ada")
+        assert(rightOfOr(find("")) == "nobody")
+        assert(rightOfAnd(count(7)))
+        assert(!rightOfAnd(count(2)))
+        assert(!rightOfAnd(count(-1)))
+        assert(elseOfOr(label("ok")) == "OK")
+        assert(elseOfOr(label("none")) == "-")
+        assert(thenOfAnd(find("b"), count(2)) == 3)
+        assert(thenOfAnd(find(""), count(2)) == -1)
+        assert(thenOfAnd(find("b"), count(-1)) == -1)
+        assert(notNegated(label("abc")) == 3)
+        assert(notNegated(label("none")) == 0)
+        assert(twoGuards(find("q"), find("r"), false) == "qr!")
+        assert(twoGuards(find("x"), find("r"), false) == "a")
+        assert(twoGuards(find("q"), find("r"), true) == "b")
+        assert(twoGuards(find("q"), find(""), false) == "b")
+        assert(guardInLoop(["a", "", "b"]) == 2)
+        assert(nested(find("a")) == "inner a")
+        assert(nested(find("bb")) == "outer bb")
+        assert(nested(find("")) == "none")
+    }
+}

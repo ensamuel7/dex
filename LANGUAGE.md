@@ -4557,11 +4557,12 @@ active (bool) = true
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `reflect.typeName(value)` | `string` | The struct's type name. A compile-time constant. |
+| `reflect.typeName(value)` | `string` | The struct's type name as written: `User`, `shop.Order` for a type a module declares, `Box<int>` for a generic. A compile-time constant. |
 | `reflect.fieldCount(value)` | `int` | How many fields the struct declares. A compile-time constant. |
 | `reflect.fields(value)` | `string[]` | Field names in declaration order. Allocates; prefer `fieldName` in a loop. |
 | `reflect.fieldName(value, index)` | `string` | Name of the field at this index, `""` if out of range. |
-| `reflect.fieldKind(value, index)` | `string` | `"int"`, `"long"`, `"double"`, `"bool"`, `"string"`, `"char"`, `"struct"`, `"array"`, or `"other"` for a field reflection cannot read (a map, a `json.Value`, an enum); `""` if out of range. |
+| `reflect.fieldKind(value, index)` | `string` | `"int"`, `"long"`, `"double"`, `"bool"`, `"string"`, `"char"`, `"struct"`, `"array"`, or `"other"` for a field reflection cannot read (a map, a `json.Value`, an enum); `""` if out of range. The category to branch on: a `string[]` field is `"array"`. |
+| `reflect.fieldType(value, index)` | `string` | The field's declared type, spelled as written: `"string[]"`, `"Address"`, `"map[string, int]"`, `"int?"`, `"Box<int>"`; `""` if out of range. For display and schemas. |
 | `reflect.fieldTag(value, index, key)` | `string` | The value this field's tag gives for `key`, or `""` if the field has no tag or no such key. See [Field tags](#field-tags). |
 | `reflect.fieldTags(value, key)` | `string[]` | Every field's tag value for `key`, in declaration order, `""` where a field has none. The array form of `fieldTag`. |
 | `reflect.indexOf(value, name)` | `int` | Index of the named field, `-1` if absent. |

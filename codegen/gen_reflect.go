@@ -147,6 +147,18 @@ func (g *Generator) emitReflectForStruct(out *strings.Builder, sd ast.StructDef)
 	}
 	out.WriteString("};\n")
 
+	out.WriteString(fmt.Sprintf("static const char* const _dex_refl_types_%s[%d] = {", sd.Name, max(n, 1)))
+	for i, f := range sd.Fields {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(fmt.Sprintf("%q", ast.DisplayType(f.Type)))
+	}
+	if n == 0 {
+		out.WriteString("0")
+	}
+	out.WriteString("};\n")
+
 	// Name and kind lookups. Both bounds-check, so an index computed at runtime
 	// cannot read off the end of the table.
 	out.WriteString(fmt.Sprintf("static DexString* _dex_refl_name_%s(int i) {\n", sd.Name))
@@ -156,6 +168,10 @@ func (g *Generator) emitReflectForStruct(out *strings.Builder, sd ast.StructDef)
 	out.WriteString(fmt.Sprintf("static DexString* _dex_refl_kind_%s(int i) {\n", sd.Name))
 	out.WriteString(fmt.Sprintf("    if (i < 0 || i >= %d) return dex_string_from_lit(\"\");\n", n))
 	out.WriteString(fmt.Sprintf("    return dex_string_from_lit(_dex_refl_kinds_%s[i]);\n}\n", sd.Name))
+
+	out.WriteString(fmt.Sprintf("static DexString* _dex_refl_type_%s(int i) {\n", sd.Name))
+	out.WriteString(fmt.Sprintf("    if (i < 0 || i >= %d) return dex_string_from_lit(\"\");\n", n))
+	out.WriteString(fmt.Sprintf("    return dex_string_from_lit(_dex_refl_types_%s[i]);\n}\n", sd.Name))
 
 	// Field tags, stored verbatim. A field without one carries "" rather than
 	// being absent from the table, so the index still lines up with the others.

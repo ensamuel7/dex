@@ -122,6 +122,7 @@ type StructDef struct {
 	Pos               Pos
 	Annotations       []string
 	DeclaredOrder     bool
+	Display           string
 }
 
 // QualifiedStructName is the flat name a module's type is registered under.
@@ -137,6 +138,9 @@ func QualifiedStructName(module, name string) string {
 // returned unchanged.
 func DisplayStructName(flat string) string {
 	if t, ok := LookupStructType(flat); ok {
+		if def := GetStructDef(t); def != nil && def.Display != "" {
+			return def.Display
+		}
 		if def := GetStructDef(t); def != nil && def.Module != "" {
 			return def.Module + "." + strings.TrimPrefix(def.Name, def.Module+"_")
 		}

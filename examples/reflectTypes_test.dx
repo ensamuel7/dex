@@ -1,0 +1,64 @@
+import "reflect"
+import "modules/alphaTypes"
+
+struct Address {
+    city: string
+}
+
+struct Box<T> {
+    value: T
+}
+
+struct Profile {
+    name: string
+    tags: string[]
+    home: Address
+    scores: map[string, int]
+    age: int?
+    reply: alphaTypes.Response
+    boxes: Box<string>[]
+    nested: Box < string[] >
+}
+
+fn nameOf(p: &Profile): string {
+    return reflect.typeName(p)
+}
+
+fn main(): void {
+    let p: Profile = Profile {
+        name: "ada",
+        tags: [],
+        home: Address { city: "London" },
+        scores: {},
+        age: null,
+        reply: alphaTypes.make("ok"),
+        boxes: [],
+        nested: Box<string[]> { value: [] }
+    }
+    assert(reflect.typeName(p) == "Profile")
+    assert(nameOf(p) == "Profile")
+    let reply: alphaTypes.Response = p.reply
+    assert(reflect.typeName(reply) == "alphaTypes.Response")
+    let nested: Box<string[]> = p.nested
+    assert(reflect.typeName(nested) == "Box<string[]>")
+
+    let want: string[] = [
+        "string",
+        "string[]",
+        "Address",
+        "map[string, int]",
+        "int?",
+        "alphaTypes.Response",
+        "Box<string>[]",
+        "Box<string[]>"
+    ]
+    let kinds: string[] = ["string", "array", "struct", "other", "other", "struct", "array", "struct"]
+    let i: int = 0
+    while (i < reflect.fieldCount(p)) {
+        assert(reflect.fieldType(p, i) == want[i])
+        assert(reflect.fieldKind(p, i) == kinds[i])
+        i = i + 1
+    }
+
+    assert(reflect.fieldType(p, i) == "")
+}

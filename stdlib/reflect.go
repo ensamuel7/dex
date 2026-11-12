@@ -45,7 +45,7 @@ func init() {
 				ParamNames: []string{"value"},
 				ReturnType: ast.TypeString,
 				CName:      "",
-				Doc:        "Name of the struct's type, as written in its declaration. Known at compile time, so this costs no more than a string literal.",
+				Doc:        "Name of the struct's type as a reader writes it: \"User\", \"shop.Order\" for one a module declares, \"Box<int>\" for a generic instantiation. Known at compile time, so this costs no more than a string literal.",
 			},
 			"fieldCount": {
 				Params:     nil,
@@ -73,7 +73,14 @@ func init() {
 				ParamNames: []string{"value", "index"},
 				ReturnType: ast.TypeString,
 				CName:      "",
-				Doc:        "Type of the field at this index as a string: \"int\", \"long\", \"double\", \"bool\", \"string\", \"char\", \"struct\", \"array\", or \"other\" for a field reflection cannot read; \"\" if the index is out of range. Compare it to pick which as* accessor to call.",
+				Doc:        "Category of the field at this index: \"int\", \"long\", \"double\", \"bool\", \"string\", \"char\", \"struct\", \"array\", or \"other\" for a field reflection cannot read; \"\" if the index is out of range. Compare it to pick which as* accessor to call.",
+			},
+			"fieldType": {
+				Params:     nil,
+				ParamNames: []string{"value", "index"},
+				ReturnType: ast.TypeString,
+				CName:      "",
+				Doc:        "Declared type of the field at this index, spelled as written: \"string[]\", \"Address\", \"map[string, int]\", \"int?\", \"shop.Order\", \"Box<int>\"; \"\" if the index is out of range. fieldKind() is the category to branch on; this is the exact type, for display and schemas.",
 			},
 			"fieldTags": {
 				Params:     nil,

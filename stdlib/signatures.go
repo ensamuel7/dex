@@ -49,7 +49,7 @@ func SpecialSignature(moduleName, funcName string, fd *FuncDef) (params, ret str
 			return "value: struct|&struct", "int", true
 		case "fields":
 			return "value: struct|&struct", "string[]", true
-		case "fieldName", "fieldKind":
+		case "fieldName", "fieldKind", "fieldType":
 			return "value: struct|&struct, index: int", "string", true
 		case "fieldTag":
 			return "value: struct|&struct, index: int, key: string", "string", true

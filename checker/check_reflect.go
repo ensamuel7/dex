@@ -129,7 +129,7 @@ func (c *Checker) checkReflectCall(e *ast.CallExpr) (ast.Type, error) {
 	}
 
 	switch e.Name {
-	case "fieldName", "fieldKind", "asString", "toString":
+	case "fieldName", "fieldKind", "fieldType", "asString", "toString":
 		return ast.TypeString, nil
 	case "asInt":
 		return ast.TypeInt, nil

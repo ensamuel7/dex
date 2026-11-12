@@ -69,7 +69,7 @@ func TestReflectApiSurfacedByLSP(t *testing.T) {
 	}
 	joined := strings.Join(labels, ",")
 	for _, want := range []string{
-		"typeName", "fieldCount", "fields", "fieldName", "fieldKind",
+		"typeName", "fieldCount", "fields", "fieldName", "fieldKind", "fieldType",
 		"indexOf", "has", "asInt", "asLong", "asDouble", "asBool",
 		"asString", "toString",
 	} {

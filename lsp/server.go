@@ -950,65 +950,7 @@ func formatFuncSignature(fn *ast.Function) string {
 }
 
 func typeName(t ast.Type) string {
-	switch t {
-	case ast.TypeInt:
-		return "int"
-	case ast.TypeBool:
-		return "bool"
-	case ast.TypeString:
-		return "string"
-	case ast.TypeVoid:
-		return "void"
-	case ast.TypeLong:
-		return "long"
-	case ast.TypeDouble:
-		return "double"
-	case ast.TypeArrayInt:
-		return "int[]"
-	case ast.TypeArrayBool:
-		return "bool[]"
-	case ast.TypeArrayString:
-		return "string[]"
-	case ast.TypeArrayLong:
-		return "long[]"
-	case ast.TypeArrayDouble:
-		return "double[]"
-	case ast.TypeChar:
-		return "char"
-	case ast.TypeArrayChar:
-		return "char[]"
-	// Spelled as the checker spells them, so a hover reads like a diagnostic.
-	case ast.TypeStringBuilder:
-		return "StringBuilder"
-	case ast.TypeJsonValue:
-		return "json.Value"
-	case ast.TypeMutex:
-		return "mutex"
-	default:
-		if ast.IsOptionalType(t) {
-			return typeName(ast.OptionalInnerType(t)) + "?"
-		}
-		if ast.IsStructArrayType(t) {
-			elemType := ast.ElementType(t)
-			if ast.IsEnumType(elemType) {
-				return ast.EnumName(elemType) + "[]"
-			}
-			return ast.StructName(elemType) + "[]"
-		}
-		if ast.IsStructType(t) {
-			return ast.DisplayStructName(ast.StructName(t))
-		}
-		if ast.IsEnumType(t) {
-			return ast.DisplayStructName(ast.EnumName(t))
-		}
-		if ast.IsMapType(t) {
-			return "map[" + typeName(ast.MapKeyType(t)) + ", " + typeName(ast.MapValueType(t)) + "]"
-		}
-		if ast.IsRefType(t) {
-			return "&" + typeName(ast.RefInnerType(t))
-		}
-		return "unknown"
-	}
+	return ast.DisplayType(t)
 }
 
 // seedParserModuleTypes extracts import paths from tokens and seeds the parser

@@ -35,7 +35,7 @@ func (g *Generator) genReflectCall(out *strings.Builder, e *ast.CallExpr) bool {
 	// reflection's.
 	if _, isIdent := e.Args[0].(*ast.Ident); !isIdent {
 		switch e.Name {
-		case "typeName", "fieldCount", "fields", "fieldName", "fieldKind", "fieldTag", "fieldTags", "indexOf", "has":
+		case "typeName", "fieldCount", "fields", "fieldName", "fieldKind", "fieldType", "fieldTag", "fieldTags", "indexOf", "has":
 			out.WriteString("(((void)(")
 			g.genExpr(out, e.Args[0])
 			out.WriteString(")), ")
@@ -59,7 +59,7 @@ func (g *Generator) genReflectCallBody(out *strings.Builder, e *ast.CallExpr) bo
 	switch e.Name {
 	// --- Known entirely at compile time -------------------------------------
 	case "typeName":
-		out.WriteString(fmt.Sprintf("dex_string_from_lit(%q)", def.Name))
+		out.WriteString(fmt.Sprintf("dex_string_from_lit(%q)", ast.DisplayStructName(def.Name)))
 		return true
 	case "fieldCount":
 		out.WriteString(strconv.Itoa(n))
@@ -98,6 +98,11 @@ func (g *Generator) genReflectCallBody(out *strings.Builder, e *ast.CallExpr) bo
 		return true
 	case "fieldKind":
 		out.WriteString(fmt.Sprintf("_dex_refl_kind_%s(", def.Name))
+		g.genExpr(out, e.Args[1])
+		out.WriteString(")")
+		return true
+	case "fieldType":
+		out.WriteString(fmt.Sprintf("_dex_refl_type_%s(", def.Name))
 		g.genExpr(out, e.Args[1])
 		out.WriteString(")")
 		return true

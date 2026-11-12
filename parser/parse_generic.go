@@ -334,12 +334,18 @@ func (p *Parser) instantiateStruct(name string, args []ast.Type) (ast.Type, erro
 		delete(p.structNames, flat)
 		return 0, err
 	}
+	shown := make([]string, len(args))
+	for i, a := range args {
+		shown[i] = ast.DisplayType(a)
+	}
+	sd.Display = name + "<" + strings.Join(shown, ", ") + ">"
 	*p.instantiatedStructs = append(*p.instantiatedStructs, *sd)
 
 	t, ok := ast.LookupStructType(flat)
 	if !ok {
 		return 0, p.errorf("internal error: instantiating %s did not register %s", name, flat)
 	}
+	ast.GetStructDef(t).Display = sd.Display
 	return t, nil
 }
 

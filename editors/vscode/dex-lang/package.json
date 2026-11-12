@@ -2,7 +2,7 @@
   "name": "dex-lang",
   "displayName": "Dex Language",
   "description": "DexLang for VS Code: highlighting, diagnostics, completion, go to definition, formatting, snippets, and run/build/test commands",
-  "version": "0.9.39",
+  "version": "0.9.40",
   "publisher": "DexLang",
   "icon": "icons/icon.png",
   "repository": {

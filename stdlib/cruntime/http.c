@@ -287,6 +287,10 @@ typedef struct DexHttpConn {
     unsigned char plain_recv;  /* io_uring: the read in flight uses read_buf */
     unsigned char accept_gzip; /* the request's Accept-Encoding allows gzip */
     unsigned char later;       /* io_uring: the handler asked to run again (http.later) */
+    unsigned char armed;       /* io_uring: a multishot receive is in flight */
+    unsigned char closing;     /* io_uring: closed, freed once the receive above ends */
+    char*         early;       /* io_uring: bytes that arrived before the response went out */
+    int           early_len;
     int           relay_slot;
     struct DexHttpConn* later_next;
     uint64_t      later_since; /* io_uring: ms when http.later first parked it, 0 if never */
@@ -363,6 +367,7 @@ static void dex_http_conn_free(DexHttpConn* conn) {
     }
     __atomic_sub_fetch(&dex_http_live_conns, 1, __ATOMIC_RELAXED);
     free(conn->read_buf);
+    free(conn->early);
     dex_http_release_write_buf(conn);
     free(conn->path);
     free(conn);
@@ -1967,6 +1972,20 @@ static void dex_uring_queue_timeout(void) {
 
 static void dex_uring_close(DexHttpConn* conn) {
     DexUringRing* r = dex_uring_ring_of(conn);
+    if (conn->closing) return;
+    /* A multishot receive still names conn, and closing the descriptor does
+     * not end it, so it is cancelled and conn is freed by its last completion
+     * (dex_uring_on_recv_cqe) rather than here. */
+    int armed = conn->armed;
+    if (armed) {
+        struct io_uring_sqe* c = dex_uring_sqe(&r->u);
+        if (c) {
+            c->opcode = IORING_OP_ASYNC_CANCEL;
+            c->addr = (unsigned long)conn | DEX_OP_RECV;
+            c->user_data = DEX_UD_IGNORE;
+        }
+        conn->closing = 1;
+    }
     struct io_uring_sqe* sqe = dex_uring_sqe(&r->u);
     dex_uring_idle(conn, 0);
     if (conn->direct) {
@@ -1987,7 +2006,7 @@ static void dex_uring_close(DexHttpConn* conn) {
         }
         dex_uring_real_live--;
     }
-    dex_http_conn_free(conn);
+    if (!armed) dex_http_conn_free(conn);
 }
 
 static void dex_uring_shutdown(DexHttpConn* conn) {
@@ -2004,11 +2023,21 @@ static void dex_uring_shutdown(DexHttpConn* conn) {
     if (!conn->direct) shutdown(conn->fd, SHUT_RDWR);
 }
 
+/* Multishot receives (6.0): one receive per connection stays armed across
+ * requests, so a request costs the kernel no new submission and no poll set up
+ * and torn down. Off until a buffer ring exists, and off for good if the
+ * kernel refuses one. */
+#ifdef IORING_RECV_MULTISHOT
+static int dex_uring_multishot = 0;
+#endif
+
 /* Queue the next read. With a buffer ring the kernel picks the buffer when
  * data arrives; without one, or for the one read after the ring ran dry
- * (plain_recv), it reads into the connection's own buffer. */
+ * (plain_recv), it reads into the connection's own buffer. A connection whose
+ * multishot receive is still armed already has its next read. */
 static void dex_uring_queue_recv_ex(DexHttpConn* conn, int poll_first) {
     DexUringRing* r = dex_uring_ring_of(conn);
+    if (conn->armed) return;
     if (!r->br || conn->plain_recv) {
         if (r->br) {
             /* The ring was out of buffers: one read into memory of our own. */
@@ -2027,6 +2056,13 @@ static void dex_uring_queue_recv_ex(DexHttpConn* conn, int poll_first) {
         sqe->flags |= IOSQE_BUFFER_SELECT;
         sqe->buf_group = 0;
         sqe->len = DEX_URING_BUF_BYTES;
+#ifdef IORING_RECV_MULTISHOT
+        if (dex_uring_multishot) {
+            sqe->ioprio |= IORING_RECV_MULTISHOT;
+            sqe->len = 0;   /* a multishot receive takes its size from the buffer */
+            conn->armed = 1;
+        }
+#endif
     } else {
         sqe->addr = (unsigned long)(conn->read_buf + conn->read_len);
         sqe->len = (unsigned)(conn->read_cap - conn->read_len - 1);
@@ -2180,9 +2216,75 @@ static void dex_uring_run_later(void) {
     }
 }
 
+/* n received bytes at src join the request being read. */
+static void dex_uring_take(DexHttpConn* conn, const char* src, int n) {
+    int room = dex_uring_reserve(conn, n);
+    if (room > 0) memcpy(conn->read_buf + conn->read_len, src, (size_t)room);
+    if (room < 0) { dex_uring_close(conn); return; }
+    if (room == 0) { dex_uring_need_more(conn); return; }   /* at the ceiling: 431 or 400 */
+    dex_uring_on_recv(conn, room);
+}
+
+/* Whether received bytes belong to the request in hand. Not while it waits on
+ * a handler (http.later), a lane, the batch hook or its send: the parked
+ * handler still reads its body out of read_buf. */
+static inline int dex_uring_reading(DexHttpConn* conn) {
+    return (conn->state == HTTP_READING_HEADERS || conn->state == HTTP_READING_BODY) && !conn->later;
+}
+
+/* Bytes that arrived early wait here until the response has gone out. */
+static int dex_uring_hold(DexHttpConn* conn, const char* src, int n) {
+    if (conn->early_len + n > DEX_HTTP_MAX_HEADER_BYTES) return -1;
+    char* b = (char*)realloc(conn->early, (size_t)(conn->early_len + n));
+    if (!b) return -1;
+    memcpy(b + conn->early_len, src, (size_t)n);
+    conn->early = b;
+    conn->early_len += n;
+    return 0;
+}
+
 /* A receive completed. With a buffer ring the bytes are in one of the ring's
  * buffers, which goes back to the ring as soon as they are copied out. */
 static void dex_uring_on_recv_cqe(DexUringRing* r, DexHttpConn* conn, int res, unsigned cflags) {
+    int was_armed = conn->armed;
+#ifdef IORING_RECV_MULTISHOT
+    if (was_armed && !(cflags & IORING_CQE_F_MORE)) conn->armed = 0;
+#endif
+    if (conn->closing) {
+#ifdef DEX_URING_HAVE_PBUF
+        if (cflags & IORING_CQE_F_BUFFER) {
+            dex_uring_buf_put(r, cflags >> IORING_CQE_BUFFER_SHIFT);
+            dex_uring_buf_publish(r);
+        }
+#endif
+        if (!conn->armed) dex_http_conn_free(conn);
+        return;
+    }
+#ifdef IORING_RECV_MULTISHOT
+    if (was_armed && res == -EINVAL) {
+        /* The kernel takes buffer rings but not multishot receives. */
+        dex_uring_multishot = 0;
+        dex_uring_queue_recv(conn);
+        return;
+    }
+#endif
+    if (was_armed && conn->state != HTTP_DONE && !dex_uring_reading(conn)) {
+        /* The response is still on its way. Bytes wait for it; a close or an
+         * error means no further request, so the connection closes after it. */
+#ifdef DEX_URING_HAVE_PBUF
+        if (res > 0 && (cflags & IORING_CQE_F_BUFFER)) {
+            unsigned bid = cflags >> IORING_CQE_BUFFER_SHIFT;
+            int held = dex_uring_hold(conn, r->bufs + (size_t)bid * DEX_URING_BUF_BYTES, res);
+            dex_uring_buf_put(r, bid);
+            dex_uring_buf_publish(r);
+            if (held == 0) return;
+        }
+#endif
+        /* Out of buffers: the receive is queued again after the response. */
+        if (res == -ENOBUFS) return;
+        conn->keep_alive = 0;
+        return;
+    }
 #ifdef DEX_URING_HAVE_PBUF
     if (r->br && (cflags & IORING_CQE_F_BUFFER)) {
         unsigned bid = cflags >> IORING_CQE_BUFFER_SHIFT;
@@ -2226,6 +2328,15 @@ static void dex_uring_on_send(DexHttpConn* conn, int res) {
         dex_http_conn_reset(conn);
         if (dex_uring_ring_of(conn)->br) dex_uring_rbuf_release(conn);
         dex_uring_idle(conn, (uint32_t)conn->last_active);
+        if (conn->early) {
+            char* b = conn->early;
+            int n = conn->early_len;
+            conn->early = NULL;
+            conn->early_len = 0;
+            dex_uring_take(conn, b, n);
+            free(b);
+            return;
+        }
         dex_uring_queue_recv_ex(conn, 1);
     } else {
         dex_uring_close(conn);
@@ -2570,6 +2681,9 @@ static int dex_http_uring_run(int server_fd, int port) {
         dex_uring_register_direct(&dex_urings[i], slots);
         dex_uring_setup_bufs(&dex_urings[i]);
     }
+#ifdef IORING_RECV_MULTISHOT
+    dex_uring_multishot = dex_urings[0].br != NULL && dex_uring_kernel_at_least(6, 0);
+#endif
     /* An extra ring is only worth having if it holds connections; if any of
      * them could not register a table, go back to the one ring. */
     for (int i = 1; i < dex_uring_count; i++) {

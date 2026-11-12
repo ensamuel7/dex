@@ -31,6 +31,10 @@ func gzGet(r *bufio.Reader, w io.Writer, path, accept string) (gzResp, error) {
 	if _, err := io.WriteString(w, req+"\r\n"); err != nil {
 		return gzResp{}, err
 	}
+	return gzRead(r)
+}
+
+func gzRead(r *bufio.Reader) (gzResp, error) {
 	line, err := r.ReadString('\n')
 	if err != nil || len(line) < 12 {
 		return gzResp{}, fmt.Errorf("status line %q: %v", line, err)

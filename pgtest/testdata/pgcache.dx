@@ -1,0 +1,122 @@
+import "db"
+import "os"
+import "fmt"
+import "str"
+
+fn check(ok: bool, what: string): void {
+    if (!ok) {
+        fmt.println("FAIL " + what + " (errorCode " + db.errorCode() + ")")
+        os.exit(1)
+    }
+}
+
+// The one value a query returns, or "<none>".
+fn one(c: int, sql: string, args: string[]): string {
+    let r: int = db.queryParams(c, sql, args)
+    if (r < 0 || !db.next(r)) {
+        if (r >= 0) {
+            db.free(r)
+        }
+        return "<none>"
+    }
+    let v: string = db.col(r, 0)
+    db.free(r)
+    return v
+}
+
+fn cached(c: int): int {
+    let none: string[] = []
+    return str.toInt(one(c, "SELECT count(*)::int FROM pg_prepared_statements WHERE name LIKE 'dex_qc_%'", none))
+}
+
+fn main(): void {
+    let on: bool = os.env("DB_STATEMENT_CACHE") != "0"
+    let c: int = db.open("postgres", os.env("DATABASE_URL"))
+    check(c >= 0, "open")
+    let none: string[] = []
+    db.exec(c, "DROP TABLE IF EXISTS dex_qc")
+    check(db.exec(c, "CREATE TABLE dex_qc (id bigint PRIMARY KEY, name text UNIQUE NOT NULL, n int NOT NULL DEFAULT 0)") >= 0, "create")
+
+    let a1: string[] = ["1", "ada"]
+    check(db.execParams(c, "INSERT INTO dex_qc (id, name) VALUES ($1, $2)", a1) == 1, "insert")
+    let id1: string[] = ["1"]
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id1) == "ada", "first read")
+
+    // Rows are never kept: a change made between two runs of the same statement shows.
+    let rename: string[] = ["1", "grace"]
+    check(db.execParams(c, "UPDATE dex_qc SET name = $2 WHERE id = $1", rename) == 1, "update")
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id1) == "grace", "second read sees the update")
+    db.exec(c, "UPDATE dex_qc SET name = 'linus' WHERE id = 1")
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id1) == "linus", "a write from query() shows too")
+
+    if (on) {
+        check(cached(c) >= 3, "statements are kept on the connection")
+    } else {
+        check(cached(c) == 0, "DB_STATEMENT_CACHE=0 keeps none")
+    }
+
+    // Errors read as they always have, and the connection carries on.
+    let dup: string[] = ["2", "linus"]
+    check(db.execParams(c, "INSERT INTO dex_qc (id, name) VALUES ($1, $2)", dup) < 0, "duplicate fails")
+    check(db.errorCode() == "23505", "unique violation reports 23505")
+    let a2: string[] = ["2", "ada"]
+    check(db.execParams(c, "INSERT INTO dex_qc (id, name) VALUES ($1, $2)", a2) == 1, "the same statement works after a failure")
+    check(db.queryParams(c, "SELECT name FROM no_such_table WHERE id = $1", id1) < 0, "bad table fails")
+    check(db.errorCode() == "42P01", "undefined table reports 42P01")
+    check(db.queryParams(c, "SELEKT 1", none) < 0, "syntax error fails")
+    check(db.errorCode() == "42601", "syntax error reports 42601")
+
+    // The result's columns change: Postgres refuses the old statement, which is made again.
+    check(one(c, "SELECT * FROM dex_qc WHERE id = $1", id1) == "1", "select star")
+    check(db.exec(c, "ALTER TABLE dex_qc ADD COLUMN bio text NOT NULL DEFAULT 'new'") >= 0, "add column")
+    let r: int = db.queryParams(c, "SELECT * FROM dex_qc WHERE id = $1", id1)
+    check(r >= 0 && db.next(r), "select star after a new column")
+    let bio: string = db.col(r, 3)
+    check(bio == "new", "the new column is there")
+    db.free(r)
+
+    // A column's type changes under a statement.
+    check(one(c, "SELECT n FROM dex_qc WHERE id = $1", id1) == "0", "int column")
+    check(db.exec(c, "ALTER TABLE dex_qc ALTER COLUMN n TYPE text USING 'x' || n::text") >= 0, "retype")
+    check(one(c, "SELECT n FROM dex_qc WHERE id = $1", id1) == "x0", "the retyped column reads")
+
+    // A table dropped and made again, same name.
+    check(db.exec(c, "DROP TABLE dex_qc") >= 0, "drop")
+    check(db.exec(c, "CREATE TABLE dex_qc (id bigint PRIMARY KEY, name text NOT NULL)") >= 0, "recreate")
+    let a3: string[] = ["1", "hopper"]
+    check(db.execParams(c, "INSERT INTO dex_qc (id, name) VALUES ($1, $2)", a3) == 1, "insert into the new table")
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id1) == "hopper", "read the new table")
+
+    // The server forgets every statement: they are made again.
+    check(db.exec(c, "DEALLOCATE ALL") >= 0, "deallocate all")
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id1) == "hopper", "read after DEALLOCATE ALL")
+    check(db.exec(c, "DISCARD ALL") >= 0, "discard all")
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id1) == "hopper", "read after DISCARD ALL")
+
+    // Inside a transaction nothing is prepared, and it rolls back as before.
+    check(db.exec(c, "BEGIN") >= 0, "begin")
+    let a4: string[] = ["4", "kept?"]
+    check(db.execParams(c, "INSERT INTO dex_qc (id, name) VALUES ($1, $2)", a4) == 1, "insert in a transaction")
+    let id4: string[] = ["4"]
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id4) == "kept?", "read in the transaction")
+    check(db.exec(c, "ROLLBACK") >= 0, "rollback")
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id4) == "<none>", "rolled back")
+
+    // Statements other than queries and DML go straight through.
+    check(db.execParams(c, "SET application_name = 'dex_qc'", none) >= 0, "set")
+    check(one(c, "SHOW application_name", none) == "dex_qc", "show")
+
+    // More distinct statements than a connection keeps.
+    for (let i: int = 0; i < 300; i = i + 1) {
+        let got: string = one(c, "SELECT ${i} + $1::int", id1)
+        check(got == str.fromInt(i + 1), "distinct statement ${i}")
+    }
+    if (on) {
+        let kept: int = cached(c)
+        check(kept > 0 && kept <= 257, "the oldest are given up (${kept} kept)")
+    }
+    check(one(c, "SELECT name FROM dex_qc WHERE id = $1", id1) == "hopper", "an evicted statement is made again")
+
+    db.exec(c, "DROP TABLE dex_qc")
+    fmt.println("ok")
+}

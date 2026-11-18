@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <ctype.h>
 #include <pthread.h>
 #include <sqlite3.h>
 #ifdef DEX_HAS_POSTGRES
@@ -47,6 +49,9 @@ typedef struct {
     // Bumped whenever an entry's socket is replaced, so anything cached against
     // a connection — a server-side prepared statement — knows it is stale.
     unsigned int generation[DEX_DB_POOL_SIZE];
+    // queryParams/execParams statements this entry has prepared, made on first
+    // use and touched only by whoever holds the entry (dex_db_pg_exec_cached).
+    struct DexDbStmtCache* cache[DEX_DB_POOL_SIZE];
     int size;                         // actual number of connections
     // Kept so a dead entry can be rebuilt from scratch when PQreset cannot
     // revive it.
@@ -361,6 +366,161 @@ static void dex_db_pg_note(PGresult* res, int ok) {
     const char* st = res ? PQresultErrorField(res, PG_DIAG_SQLSTATE) : NULL;
     if (!st || strlen(st) != 5) st = "08006";
     memcpy(dex_db_sqlstate, st, 6);
+}
+#endif
+
+#ifdef DEX_HAS_POSTGRES
+// ==========================================================================
+// Statement cache for queryParams / execParams
+//
+// PQexecParams makes Postgres parse and plan a statement on every call, which
+// for the short lookups a web handler makes is most of what the server spends
+// on them. Instead each pool connection prepares a statement the first time it
+// sees its SQL text and re-runs it after that.
+//
+// Only plans are kept, never rows, so every call still reads current data.
+// Postgres re-plans a prepared statement itself when a table it reads changes.
+// The one change it refuses is a different set of result columns (SELECT *
+// after ALTER TABLE), with 0A000; a statement the server no longer has (after
+// DEALLOCATE or DISCARD) fails with 26000. Both fail before anything runs, so
+// the statement is prepared again and retried once.
+//
+// Skipped inside a transaction, where a failed statement aborts the whole
+// transaction and the retry could not run; for anything other than plain DML
+// and queries; and entirely when DB_STATEMENT_CACHE=0, for a pooler such as
+// PgBouncer in transaction mode, which cannot keep a statement on one
+// connection. A reconnect bumps the entry's generation, which empties it.
+// ==========================================================================
+#define DEX_DB_STMT_CACHE 256
+
+typedef struct {
+    unsigned long long hash;
+    char* sql;                       // NULL for an empty slot
+    char name[24];
+} DexDbCached;
+
+typedef struct DexDbStmtCache {
+    unsigned int generation;
+    int used;                        // slots ever filled
+    int evict;                       // next slot to give up once all are used
+    DexDbCached items[DEX_DB_STMT_CACHE];
+} DexDbStmtCache;
+
+static unsigned int dex_db_cached_seq;
+
+static int dex_db_stmt_cache_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char* env = getenv("DB_STATEMENT_CACHE");
+        on = !(env && (strcmp(env, "0") == 0 || strcasecmp(env, "off") == 0 || strcasecmp(env, "false") == 0));
+    }
+    return on;
+}
+
+static int dex_db_cacheable(const char* sql) {
+    static const char* const verbs[] = { "select", "insert", "update", "delete", "with", "values" };
+    while (*sql == ' ' || *sql == '\t' || *sql == '\n' || *sql == '\r') sql++;
+    for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++) {
+        size_t n = strlen(verbs[i]);
+        if (strncasecmp(sql, verbs[i], n) == 0 && !isalnum((unsigned char)sql[n]) && sql[n] != '_') return 1;
+    }
+    return 0;
+}
+
+static unsigned long long dex_db_sql_hash(const char* sql) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (const unsigned char* p = (const unsigned char*)sql; *p; p++) {
+        h = (h ^ *p) * 1099511628211ULL;
+    }
+    return h;
+}
+
+static void dex_db_cache_clear(DexDbStmtCache* c) {
+    for (int i = 0; i < c->used; i++) free(c->items[i].sql);
+    c->used = 0;
+    c->evict = 0;
+}
+
+static void dex_db_cache_drop(PGconn* pg, DexDbCached* it, int deallocate) {
+    if (deallocate) {
+        char sql[48];
+        snprintf(sql, sizeof(sql), "DEALLOCATE %s", it->name);
+        PQclear(PQexec(pg, sql));
+    }
+    free(it->sql);
+    it->sql = NULL;
+}
+
+static void dex_db_cache_free(DexDbPool* pool) {
+    for (int i = 0; i < DEX_DB_POOL_SIZE; i++) {
+        if (!pool->cache[i]) continue;
+        dex_db_cache_clear(pool->cache[i]);
+        free(pool->cache[i]);
+        pool->cache[i] = NULL;
+    }
+}
+
+// Runs sql on the held entry through its cached statement. NULL means the
+// cache does not apply and the caller runs PQexecParams; otherwise the result,
+// successful or not, for the caller to judge as it would PQexecParams's.
+static PGresult* dex_db_pg_exec_cached(DexDbPool* pool, int entry, const char* sql, int nparams, const char** values) {
+    PGconn* pg = pool->connections[entry];
+    if (!dex_db_stmt_cache_on() || !dex_db_cacheable(sql) || PQtransactionStatus(pg) != PQTRANS_IDLE) return NULL;
+
+    DexDbStmtCache* c = pool->cache[entry];
+    if (!c) {
+        c = (DexDbStmtCache*)calloc(1, sizeof(DexDbStmtCache));
+        if (!c) return NULL;
+        c->generation = pool->generation[entry];
+        pool->cache[entry] = c;
+    }
+    if (c->generation != pool->generation[entry]) {
+        dex_db_cache_clear(c);
+        c->generation = pool->generation[entry];
+    }
+
+    unsigned long long h = dex_db_sql_hash(sql);
+    DexDbCached* it = NULL;
+    for (int i = 0; i < c->used; i++) {
+        if (c->items[i].sql && c->items[i].hash == h && strcmp(c->items[i].sql, sql) == 0) {
+            it = &c->items[i];
+            break;
+        }
+    }
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (!it) {
+            for (int i = 0; i < c->used && !it; i++) {
+                if (!c->items[i].sql) it = &c->items[i];
+            }
+            if (!it && c->used < DEX_DB_STMT_CACHE) it = &c->items[c->used++];
+            if (!it) {
+                it = &c->items[c->evict];
+                c->evict = (c->evict + 1) % DEX_DB_STMT_CACHE;
+                dex_db_cache_drop(pg, it, 1);
+            }
+
+            snprintf(it->name, sizeof(it->name), "dex_qc_%u", __atomic_add_fetch(&dex_db_cached_seq, 1, __ATOMIC_RELAXED));
+            PGresult* pr = PQprepare(pg, it->name, sql, 0, NULL);
+            if (PQresultStatus(pr) != PGRES_COMMAND_OK) return pr;
+            PQclear(pr);
+            it->hash = h;
+            it->sql = dex_xstrdup(sql);
+        }
+
+        PGresult* res = PQexecPrepared(pg, it->name, nparams, values, NULL, NULL, 0);
+        ExecStatusType st = PQresultStatus(res);
+        if (st == PGRES_TUPLES_OK || st == PGRES_COMMAND_OK || attempt == 1) return res;
+
+        const char* code = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+        int changed = code && strcmp(code, "0A000") == 0;
+        int gone = code && strcmp(code, "26000") == 0;
+        if ((!changed && !gone) || PQtransactionStatus(pg) != PQTRANS_IDLE) return res;
+        PQclear(res);
+        dex_db_cache_drop(pg, it, changed);
+        it = NULL;
+    }
+    return NULL;
 }
 #endif
 
@@ -1200,6 +1360,7 @@ void dex_db_close(int conn) {
         for (int i = 0; i < pool->size; i++) {
             if (pool->connections[i]) PQfinish(pool->connections[i]);
         }
+        dex_db_cache_free(pool);
         pthread_mutex_destroy(&pool->lock);
         pthread_cond_destroy(&pool->available);
     }
@@ -1939,8 +2100,11 @@ int dex_db_query_params(int conn, const char* sql, DexArrayString* args) {
     // checkout and use, but a statement Postgres rejects is not retried.
     PGresult* res = NULL;
     for (int attempt = 0; attempt < 2; attempt++) {
-        res = PQexecParams(pool->connections[entry], sql, nparams,
-                           NULL, values, NULL, NULL, 0);
+        res = dex_db_pg_exec_cached(pool, entry, sql, nparams, values);
+        if (!res) {
+            res = PQexecParams(pool->connections[entry], sql, nparams,
+                               NULL, values, NULL, NULL, 0);
+        }
         dex_db_pg_note(res, PQresultStatus(res) == PGRES_TUPLES_OK);
         if (PQresultStatus(res) == PGRES_TUPLES_OK) break;
         int broken = dex_db_pg_broken(pool->connections[entry]);
@@ -1999,8 +2163,11 @@ int dex_db_exec_params(int conn, const char* sql, DexArrayString* args) {
 
     int n = -1;
     for (int attempt = 0; attempt < 2; attempt++) {
-        PGresult* res = PQexecParams(pool->connections[entry], sql, nparams,
-                                     NULL, values, NULL, NULL, 0);
+        PGresult* res = dex_db_pg_exec_cached(pool, entry, sql, nparams, values);
+        if (!res) {
+            res = PQexecParams(pool->connections[entry], sql, nparams,
+                               NULL, values, NULL, NULL, 0);
+        }
         ExecStatusType status = PQresultStatus(res);
         dex_db_pg_note(res, status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK);
         if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {

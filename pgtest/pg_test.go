@@ -36,6 +36,17 @@ func TestPostgres(t *testing.T) {
 	run(t, "pg", "DATABASE_URL="+dsn, "DB_POOL_SIZE=1")
 }
 
+// queryParams and execParams through the per-connection statement cache, and
+// with it turned off.
+func TestPostgresStatementCache(t *testing.T) {
+	dsn := os.Getenv("DEX_TEST_POSTGRES")
+	if dsn == "" {
+		t.Skip("set DEX_TEST_POSTGRES to a database this test may create tables in")
+	}
+	run(t, "pgcache", "DATABASE_URL="+dsn, "DB_POOL_SIZE=1")
+	run(t, "pgcache", "DATABASE_URL="+dsn, "DB_POOL_SIZE=1", "DB_STATEMENT_CACHE=0")
+}
+
 func TestBcrypt(t *testing.T) {
 	if exec.Command("pkg-config", "--exists", "libxcrypt").Run() != nil {
 		t.Skip("bcrypt needs libxcrypt")

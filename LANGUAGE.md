@@ -3542,6 +3542,21 @@ statement rather than just its data, so write the keyword into the SQL:
 let sql: string = "UPDATE people SET manager_id = NULL WHERE id = $1"
 ```
 
+Each pool connection prepares a statement the first time it sees its SQL text
+and re-runs it after that, so Postgres parses and plans a hot query once per
+connection instead of on every call; on short lookups that is about half of
+what the server spends. Only the plan is kept, never rows, so every call reads
+current data, and Postgres re-plans by itself when a table changes. A statement
+whose result columns changed (`SELECT *` after `ALTER TABLE`) or that the server
+no longer has (after `DEALLOCATE` or `DISCARD`) is prepared again and retried
+once, since neither ran. Inside a transaction, and for anything that is not
+`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `WITH` or `VALUES`, the statement goes
+through as a one-off. Each connection keeps its 256 most recent statements, so
+build SQL whose text varies with its data (an `IN` list of changing length) as
+an array parameter instead: `= ANY($1::bigint[])`. Set `DB_STATEMENT_CACHE=0`
+behind a pooler that cannot keep a statement on one connection, such as
+PgBouncer in transaction mode before 1.21.
+
 Both functions are **PostgreSQL only**. SQLite and MySQL spell placeholders
 differently, and silently accepting a statement written for one dialect on
 another is how a query that looks bound stops being bound; against those drivers
@@ -3550,8 +3565,8 @@ these return `-1` and say so on stderr. Use
 
 #### Prepared statements
 
-`queryParams` compiles its SQL on every call. A statement on a hot path can be
-compiled once and re-run instead, which is what `prepare` is for: it returns a
+On Postgres, `queryParams` already keeps each statement prepared per
+connection. `prepare` is for stepping one statement many times yourself: it returns a
 handle you bind values into, step, and reset. It is the only bound-parameter
 path for SQLite and MySQL, whose placeholder is `?`, positional from one.
 

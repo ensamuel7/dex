@@ -95,6 +95,8 @@ func (g *Generator) genFunction(out *strings.Builder, fn *ast.Function) {
 		out.WriteString("    size_t _dex_defer_base = _dex_defer_top;\n")
 	}
 
+	g.adoptChangedParams(out, fn)
+
 	// Line-buffer stdout. C block-buffers it whenever it is not a terminal, so a
 	// long-running program whose output is redirected to a file or captured by a
 	// container runtime would emit nothing until 4KB had accumulated — its logs
@@ -474,4 +476,58 @@ func (g *Generator) registerGlobalVars() {
 			g.sbVars[name] = true
 		}
 	}
+}
+
+// adoptChangedParams gives the function its own reference to each parameter it
+// changes. Parameters are borrowed: the caller keeps its reference and releases
+// it afterwards. Assigning one, or a field of a struct one, released what the
+// caller still held, so the caller then read and released freed memory; and the
+// value assigned was never released. A parameter that is changed takes its own
+// references on entry and is released like a local on every way out.
+func (g *Generator) adoptChangedParams(out *strings.Builder, fn *ast.Function) {
+	for _, p := range fn.Params {
+		if p.Name == "self" || ast.IsRefType(p.Type) || !ast.NeedsRelease(p.Type) {
+			continue
+		}
+		isStruct := ast.IsStructType(p.Type)
+		if !isStruct && p.Type != ast.TypeString && !ast.IsArrayType(p.Type) && !ast.IsMapType(p.Type) {
+			continue
+		}
+		if !g.isReassigned(p.Name) && !(isStruct && fieldAssigned(fn.Body, p.Name)) {
+			continue
+		}
+		if isStruct {
+			g.emitRetainBorrowedStructFields(out, "    ", p.Name, p.Type)
+		} else {
+			out.WriteString(fmt.Sprintf("    dex_retain(%s);\n", p.Name))
+		}
+		g.registerScopeVar(out, "    ", p.Name, p.Type)
+	}
+}
+
+// fieldAssigned reports whether body assigns a field of name, directly or
+// through nested fields (name.a = .., name.a.b = ..).
+func fieldAssigned(body []ast.Stmt, name string) bool {
+	found := false
+	resolve.VisitStmts(body, func(st ast.Stmt) {
+		fa, ok := st.(*ast.FieldAssignStmt)
+		if !ok {
+			return
+		}
+		obj := fa.Object
+		for {
+			switch o := obj.(type) {
+			case *ast.Ident:
+				if o.Name == name {
+					found = true
+				}
+				return
+			case *ast.FieldAccessExpr:
+				obj = o.Object
+				continue
+			}
+			return
+		}
+	}, func(ast.Expr) {})
+	return found
 }

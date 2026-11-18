@@ -1,0 +1,82 @@
+import "str"
+
+// A function that changes a parameter changes its own copy: the caller's value is
+// untouched, and nothing is released twice (run under make memcheck / sanitize).
+struct Move {
+    id: long
+    phase: string
+    tags: string[]
+}
+
+struct Stop(message: string) {}
+
+fn heap(s: string): string {
+    return s + str.fromInt(1)
+}
+
+fn make(): Move {
+    return Move { id: 1, phase: heap("creating"), tags: [heap("t")] }
+}
+
+fn advance(m: Move): string {
+    m.phase = heap("syncing")
+    m.tags = [heap("u")]
+    return m.phase
+}
+
+fn early(m: Move, stop: bool): string {
+    m.phase = heap("early")
+    if (stop) {
+        return m.phase
+    }
+    m.phase = heap("late")
+    return m.phase
+}
+
+fn back(m: Move): Move {
+    m.phase = heap("back")
+    return m
+}
+
+fn halt(m: Move): void throws Stop {
+    m.phase = heap("halted")
+    throw Stop(m.phase)
+}
+
+fn grow(s: string, n: int): string {
+    for (let i: int = 0; i < n; i++) {
+        s = s + heap("+")
+    }
+    return s
+}
+
+fn swap(xs: string[]): int {
+    xs = [heap("a"), heap("b")]
+    return xs.len()
+}
+
+fn main(): void {
+    assert(advance(make()) == "syncing1")
+
+    let m: Move = make()
+    assert(advance(m) == "syncing1")
+    assert(m.phase == "creating1" && m.tags[0] == "t1")
+    assert(early(m, true) == "early1" && early(m, false) == "late1")
+
+    let b: Move = back(m)
+    assert(b.phase == "back1" && m.phase == "creating1")
+
+    let caught: string = ""
+    try {
+        halt(m)
+    } catch (e: Stop) {
+        caught = e.message
+    }
+    assert(caught == "halted1" && m.phase == "creating1")
+
+    let s: string = heap("s")
+    assert(grow(s, 2) == "s1+1+1" && s == "s1")
+
+    let xs: string[] = [heap("x")]
+    assert(swap(xs) == 2 && xs[0] == "x1")
+}

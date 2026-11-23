@@ -56,6 +56,13 @@ func init() {
 				CName:      "dex_ws_listen",
 				Doc:        "Start a WebSocket server on the given port and block serving it. Takes the handlers and subprotocol registered on the current thread and gives this server its own copy, so several servers can run at once — spawn each on its own thread.",
 			},
+			"listenOn": {
+				Params:     []ast.Type{ast.TypeString, ast.TypeInt},
+				ParamNames: []string{"host", "port"},
+				ReturnType: ast.TypeVoid,
+				CName:      "dex_ws_listen_host",
+				Doc:        "Like ws.listen, bound to one interface: an IPv4 address such as \"127.0.0.1\", or \"0.0.0.0\" for every interface. For a server behind a proxy on the same machine that should not also be reachable directly.",
+			},
 			"connect": {
 				Params:     nil,
 				ParamNames: []string{"url"},

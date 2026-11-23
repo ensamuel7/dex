@@ -22,6 +22,7 @@ int accept4(int fd, struct sockaddr* addr, socklen_t* addrlen, int flags);
 #endif
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
@@ -2846,6 +2847,10 @@ static int dex_http_listener_index(void* tag) {
 static int dex_http_bind_listener(const char* host, int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { perror("socket"); return -1; }
+    /* Not inherited by programs a handler starts (os.exec): a child holding the
+     * listening socket kept the port bound after the server exited, so a restart
+     * failed with EADDRINUSE until the child ended. */
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 #ifdef SO_REUSEPORT
@@ -3021,6 +3026,7 @@ static void dex_listen_on(const char* host, int port) {
 #else
                     int client_fd = accept(lfd, (struct sockaddr*)&client_addr, &client_len);
                     if (client_fd < 0) break;
+                    fcntl(client_fd, F_SETFD, FD_CLOEXEC);
                     dex_set_nonblocking(client_fd);
 #endif
                     DexHttpConn* conn = dex_http_conn_new(client_fd);

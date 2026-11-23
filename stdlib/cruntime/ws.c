@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 #if defined(__APPLE__)
 #include <sys/random.h>
 #endif
@@ -746,13 +747,24 @@ static void dex_ws_drain_server(DexWsServer* srv) {
     }
 }
 
+void dex_ws_listen_host(const char* host, int port);
+
 void dex_ws_listen(int port) {
+    dex_ws_listen_host(NULL, port);
+}
+
+/* Bound to one IPv4 address ("127.0.0.1"), or every one for NULL, "" or "0.0.0.0":
+ * a server behind a proxy on the same machine need not answer on the others. */
+void dex_ws_listen_host(const char* host, int port) {
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, dex_ws_shutdown_handler);
     signal(SIGTERM, dex_ws_shutdown_handler);
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) { perror("ws socket"); return; }
+    /* Not inherited by programs the server starts: a child holding the listening
+     * socket keeps the port bound after the server exits, and can accept on it. */
+    fcntl(server_fd, F_SETFD, FD_CLOEXEC);
 
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -761,9 +773,16 @@ void dex_ws_listen(int port) {
 #endif
 
     struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
+    if (!host || !*host || strcmp(host, "0.0.0.0") == 0) {
+        addr.sin_addr.s_addr = INADDR_ANY;
+    } else if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        fprintf(stderr, "[ws] not an IPv4 address to bind: %s\n", host);
+        close(server_fd);
+        return;
+    }
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("ws bind"); close(server_fd); return;
@@ -816,6 +835,7 @@ void dex_ws_listen(int port) {
                     socklen_t client_len = sizeof(client_addr);
                     int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
                     if (client_fd < 0) break;
+                    fcntl(client_fd, F_SETFD, FD_CLOEXEC);
                     dex_set_nonblocking(client_fd);
                     DexWsConn* conn = dex_ws_conn_new(srv, client_fd);
                     if (!conn) {

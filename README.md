@@ -624,7 +624,6 @@ fn main(): void {
 | `json`    | `encode` / `decode` between structs and JSON, plus the `json.Value` type |
 | `db`      | Database access (SQLite, Postgres, MySQL, MongoDB) |
 | `redis`   | Redis client — strings, hashes, lists, sets, expiry |
-| `kafka`   | Kafka producer and consumer |
 | `crypto`  | Hashing, HMAC, base64, AES, RSA signing |
 | `math`    | Trig, rounding, sqrt, pow, etc. |
 | `num`     | Explicit numeric conversion — `toInt`, `toLong`, `toDouble`, `toChar` |

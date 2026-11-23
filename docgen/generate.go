@@ -101,7 +101,6 @@ var moduleSummaries = map[string]string{
 	"http":    "HTTP server and client",
 	"io":      "Read user input from stdin",
 	"json":    "JSON to and from structs, arrays and maps, plus the json.Value document type",
-	"kafka":   "Kafka producer and consumer",
 	"math":    "Math functions and constants",
 	"num":     "Numeric conversions between int, long and double",
 	"os":      "Environment variables, arguments and running commands",

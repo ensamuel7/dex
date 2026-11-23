@@ -537,6 +537,11 @@ func (r *resolver) resolveImports(sourceDir string) error {
 		if err != nil {
 			return posError(imp.Pos, err)
 		}
+		if imp.Path == "kafka" {
+			if _, err := os.Stat(filePath); err != nil {
+				return posError(imp.Pos, fmt.Errorf("kafka is no longer in the standard library: dex get github.com/ensamuel7/dex-modules/kafka and import that path"))
+			}
+		}
 		absPath, err := filepath.Abs(filePath)
 		if err != nil {
 			return fmt.Errorf("cannot resolve path for import '%s': %v", imp.Path, err)

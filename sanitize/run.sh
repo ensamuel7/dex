@@ -9,7 +9,7 @@ for mode in $modes; do
     case "$mode" in
         asan) DEX_SANITIZE=address,undefined dex test examples || status=1 ;;
         msan)
-            files=$(grep -L -E 'import "(crypto|db|http|ws|redis|kafka|smtp|modules/sqlite)"|external module' examples/*_test.dx)
+            files=$(grep -L -E 'import "(crypto|db|http|ws|redis|smtp|modules/sqlite)"|external module' examples/*_test.dx)
             DEX_SANITIZE=memory,undefined MSAN_OPTIONS=halt_on_error=1 dex test $files || status=1
             ;;
         tsan) DEX_SANITIZE=thread dex test examples || status=1 ;;

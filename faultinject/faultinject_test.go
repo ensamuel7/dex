@@ -55,7 +55,6 @@ var skipped = map[string]string{
 	"httpNotFound_test.dx":   "serves forever",
 	"httpOptions_test.dx":    "serves forever",
 	"routeParams_test.dx":    "serves forever",
-	"kafka_test.dx":          "needs a broker",
 	"redis_test.dx":          "needs a server",
 	"ws_test.dx":             "serves forever",
 	"wsHeader_test.dx":       "serves forever",

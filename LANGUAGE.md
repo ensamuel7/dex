@@ -3961,58 +3961,18 @@ redis.command(r, args)
 
 ### kafka
 
-A Kafka client, wrapping librdkafka. Unlike Redis, the protocol is too large to
-speak by hand — consumer groups and partition leadership are most of it — so this
-module needs the library at build time:
+Kafka is not in the standard library. It is the first-party module
+`github.com/ensamuel7/dex-modules/kafka`, over librdkafka, released on its own:
 
 ```sh
-brew install librdkafka        # macOS
-apt install librdkafka-dev     # Debian/Ubuntu
-```
-
-`dex build` finds it with `pkg-config`. Without it the module still compiles and
-every call fails with a message saying so, so a program that only mentions Kafka
-on a path it never takes still builds and runs.
-
-```dex
-import "kafka"
-
-let p: int = kafka.producer("localhost:9092")
-kafka.produce(p, "orders.created", "order-42", payload)   // key picks the partition
-kafka.flush(p, 5000)
-kafka.close(p)
+dex get github.com/ensamuel7/dex-modules/kafka
 ```
 
 ```dex
-let c: int = kafka.consumer("localhost:9092", "persister")
-kafka.subscribe(c, "orders.created")
-while (true) {
-    let msg: string = kafka.poll(c, 1000)     // "" when nothing arrived
-    if (!msg.isEmpty()) {
-        store(kafka.lastKey(c), msg)
-        kafka.commit(c)                        // committed after handling, not before
-    }
-}
+import "github.com/ensamuel7/dex-modules/kafka"
 ```
 
-| Function | Signature | Description |
-|---|---|---|
-| `available` | `available(): bool` | Did this build find librdkafka |
-| `producer` | `producer(brokers: string): int` | Open a producer; `-1` on failure |
-| `produce` | `produce(producer: int, topic: string, key: string, value: string): bool` | Queue a message |
-| `flush` | `flush(producer: int, timeoutMs: int): int` | Wait for delivery; returns what is still queued |
-| `consumer` | `consumer(brokers: string, groupId: string): int` | Open a consumer in a group |
-| `subscribe` | `subscribe(consumer: int, topic: string): bool` | Add a topic |
-| `poll` | `poll(consumer: int, timeoutMs: int): string` | Wait for one message |
-| `lastTopic` | `lastTopic(consumer: int): string` | Topic of the last message |
-| `lastKey` | `lastKey(consumer: int): string` | Key of the last message |
-| `commit` | `commit(consumer: int): bool` | Commit polled offsets |
-| `close` | `close(handle: int): void` | Flush or leave the group, then close |
-
-Messages sharing a key land on the same partition and keep their order, which is
-why a stable identity — an account id, a user id — makes a good key. Auto-commit
-is off: a consumer commits once a message is safely handled, so a crash replays
-it rather than losing it.
+Its README covers producers, consumers, transactions and admin.
 
 ### smtp
 

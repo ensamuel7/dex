@@ -96,6 +96,24 @@ int main(void) {
 		"", path, sizeof(path), reply, sizeof(reply));
 	expect_str("long path truncated", path, "/a-path-longer-");
 
+	/* Header names in any case: Node's WebSocket sends them all lower case. */
+	rlen = dex_ws_handshake_reply(
+		"GET /x HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\nupgrade: websocket\r\n"
+		"sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-protocol: chat.v1, chat.v1.token.x\r\n\r\n",
+		"chat.v1", path, sizeof(path), reply, sizeof(reply));
+	expect_int("lower-case request accepted", rlen > 0, 1);
+	expect_int("lower-case request's accept", strstr(reply, "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n") != NULL, 1);
+	expect_int("lower-case request's protocol", strstr(reply, "Sec-WebSocket-Protocol: chat.v1\r\n") != NULL, 1);
+	expect_int("upgrade value in any case", dex_ws_handshake_reply(
+		"GET / HTTP/1.1\r\nUPGRADE: WebSocket\r\nSEC-WEBSOCKET-KEY: k\r\n\r\n",
+		"", path, sizeof(path), reply, sizeof(reply)) > 0, 1);
+	expect_int("upgrade to something else refused", dex_ws_handshake_reply(
+		"GET / HTTP/1.1\r\nUpgrade: h2c\r\nSec-WebSocket-Key: k\r\n\r\n",
+		"", path, sizeof(path), reply, sizeof(reply)), -1);
+	expect_int("a path is not a header", dex_ws_handshake_reply(
+		"GET /Upgrade:websocket HTTP/1.1\r\nSec-WebSocket-Key: k\r\n\r\n",
+		"", path, sizeof(path), reply, sizeof(reply)), -1);
+
 	printf(failures == 0 ? "OK\n" : "FAILURES\n");
 	return failures == 0 ? 0 : 1;
 }

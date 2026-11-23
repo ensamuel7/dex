@@ -90,6 +90,39 @@ static int dex_ws_ci_eq(const char* a, const char* b, size_t n) {
     return 1;
 }
 
+/* The value of header `name` (lower case, colon included) in a request, after
+ * the colon; NULL when absent. Header names are case-insensitive (RFC 9110):
+ * Node's WebSocket sends `sec-websocket-key:`, a browser `Sec-WebSocket-Key:`.
+ * The request line is skipped, so a path cannot pose as a header. */
+static const char* dex_ws_find_header(const char* request, const char* name) {
+    size_t namelen = strlen(name);
+    const char* line = strstr(request, "\r\n");
+    while (line) {
+        line += 2;
+        if (line[0] == '\r' && line[1] == '\n') break;   /* end of headers */
+        if (dex_ws_ci_eq(line, name, namelen)) return line + namelen;
+        line = strstr(line, "\r\n");
+    }
+    return NULL;
+}
+
+/* Whether a header value, up to its line end, holds `token` (lower case) as one
+ * comma-separated item, compared without case: `Connection: keep-alive, Upgrade`. */
+static int dex_ws_value_has(const char* value, const char* token) {
+    size_t tlen = strlen(token);
+    const char* end = strstr(value, "\r\n");
+    if (!end) return 0;
+    while (value < end) {
+        while (value < end && (*value == ' ' || *value == '\t' || *value == ',')) value++;
+        const char* tok = value;
+        while (value < end && *value != ',') value++;
+        const char* stop = value;
+        while (stop > tok && (stop[-1] == ' ' || stop[-1] == '\t')) stop--;
+        if ((size_t)(stop - tok) == tlen && dex_ws_ci_eq(tok, token, tlen)) return 1;
+    }
+    return 0;
+}
+
 /* On a match, copies the client's own spelling of the token into `out`: a
  * browser compares the echoed value against its offer list case-sensitively,
  * so answering "chat.v1" to a client that asked for "CHAT.V1" is refused. */
@@ -97,16 +130,7 @@ static int dex_ws_client_offers(const char* request, const char* proto,
                                 char* out, size_t out_size) {
     if (!proto || !*proto) return 0;
 
-    static const char NAME[] = "sec-websocket-protocol:";
-    const size_t namelen = sizeof(NAME) - 1;
-    const char* hdr = NULL;
-    for (const char* line = request; line && *line; ) {
-        if (dex_ws_ci_eq(line, NAME, namelen)) { hdr = line + namelen; break; }
-        const char* nl = strstr(line, "\r\n");
-        if (!nl) break;
-        line = nl + 2;
-        if (line[0] == '\r' && line[1] == '\n') break;   /* end of headers */
-    }
+    const char* hdr = dex_ws_find_header(request, "sec-websocket-protocol:");
     if (!hdr) return 0;
 
     const char* end = strstr(hdr, "\r\n");
@@ -176,8 +200,8 @@ static int dex_ws_handshake_reply(const char* request, const char* subprotocol,
                                   char* response, size_t response_size) {
     if (!strstr(request, "\r\n\r\n")) return 0;
 
-    if (!strstr(request, "Upgrade: websocket") &&
-        !strstr(request, "Upgrade: WebSocket")) return -1;
+    const char* upgrade = dex_ws_find_header(request, "upgrade:");
+    if (!upgrade || !dex_ws_value_has(upgrade, "websocket")) return -1;
 
     if (strncmp(request, "GET ", 4) == 0 && path_size > 0) {
         const char* pstart = request + 4;
@@ -190,10 +214,9 @@ static int dex_ws_handshake_reply(const char* request, const char* subprotocol,
         }
     }
 
-    const char* key_hdr = strstr(request, "Sec-WebSocket-Key:");
+    const char* key_hdr = dex_ws_find_header(request, "sec-websocket-key:");
     if (!key_hdr) return -2;
-    key_hdr += 18;
-    while (*key_hdr == ' ') key_hdr++;
+    while (*key_hdr == ' ' || *key_hdr == '\t') key_hdr++;
     char ws_key[64];
     int ki = 0;
     while (key_hdr[ki] && key_hdr[ki] != '\r' && key_hdr[ki] != '\n' && ki < 63) {

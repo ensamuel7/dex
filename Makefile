@@ -1,4 +1,4 @@
-DEX_VERSION ?= 0.9.43
+DEX_VERSION ?= 0.9.44
 IMAGE_NAME  := ensamuel7/dexlang
 PREFIX      ?= /usr/local
 

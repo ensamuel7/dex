@@ -718,10 +718,10 @@ Releases are automated via GitHub Actions. When you push a version tag, the work
 **To cut a release:**
 
 ```bash
-make release VERSION=0.9.45
+make release VERSION=0.9.46
 ```
 
-This creates an annotated tag `v0.9.45` and pushes it. The tag push triggers the workflow which:
+This creates an annotated tag `v0.9.46` and pushes it. The tag push triggers the workflow which:
 - Builds `dex` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
 - Creates a GitHub Release with all 4 tarballs attached
 - Deploys docs to GitHub Pages
@@ -729,7 +729,7 @@ This creates an annotated tag `v0.9.45` and pushes it. The tag push triggers the
 **To also publish Docker images** (separate from the GitHub release):
 
 ```bash
-make docker-publish DEX_VERSION=0.9.45
+make docker-publish DEX_VERSION=0.9.46
 ```
 
 This builds the image for linux/amd64 and linux/arm64 with `docker buildx`

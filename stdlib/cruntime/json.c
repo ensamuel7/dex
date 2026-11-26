@@ -337,11 +337,13 @@ const char* dex_json_array_get_raw(const char* json, int index) {
 typedef struct DexStructFieldDesc {
     const char* name;
     size_t offset;
-    int kind; // 0=int,1=bool,2=string,3=long,4=double,5=nested struct,6=array,7=unsupported
+    int kind; // 0=int,1=bool,2=string,3=long,4=double,5=nested struct,6=array,7=unsupported,8=json.Value
     int num_sub;                     // kind 5: field count of the nested struct
     struct DexStructFieldDesc* sub;  // kind 5: descriptors for the nested struct
     // kind 6: codecs emitted by codegen. Held as pointers so this runtime never
     // has to link against the array runtime, which is emitted conditionally.
+    // kind 8 uses the same two slots for json_value.c's field codecs, which are
+    // defined after this file.
     const char* (*enc_arr)(void* field);
     void (*dec_arr)(const char* json, void* field);
 } DexStructFieldDesc;
@@ -440,8 +442,9 @@ const char* dex_json_encode_struct(void* data, int num_fields, DexStructFieldDes
             n = snprintf(buf + pos, cap - pos, "\"%s\":%g", fields[f].name, *(double*)((char*)data + fields[f].offset));
             break;
         case 6: // array — encoded by a codegen-supplied codec
+        case 8: // json.Value — written as the document it holds
             { const char* sub = fields[f].enc_arr ? fields[f].enc_arr((char*)data + fields[f].offset) : NULL;
-              const char* subs = sub ? sub : "[]";
+              const char* subs = sub ? sub : (fields[f].kind == 8 ? "null" : "[]");
               size_t eklen = dex_json_escaped_len(fields[f].name);
               size_t sublen = strlen(subs);
               size_t field_need = eklen + sublen + 8;
@@ -525,6 +528,18 @@ void dex_json_decode_struct(const char* json, void* out, int num_fields, DexStru
                   const char* raw = dex_json_get(json, fields[f].name);
                   fields[f].dec_arr(raw, (char*)out + fields[f].offset);
                   free((void*)raw);
+              } }
+            break;
+        case 8: // json.Value — parse the raw value, whatever its shape; absent stays NULL, which reads as null
+            { const char* raw = dex_json_find_value(json, fields[f].name);
+              if (raw && fields[f].dec_arr) {
+                  const char* end = dex_json_skip_value(raw);
+                  size_t n = (size_t)(end - raw);
+                  char* text = (char*)dex_xmalloc(n + 1);
+                  memcpy(text, raw, n);
+                  text[n] = '\0';
+                  fields[f].dec_arr(text, (char*)out + fields[f].offset);
+                  free(text);
               } }
             break;
         case 5: // nested struct — decode the raw sub-object recursively
@@ -644,6 +659,7 @@ static int dex_json_kind_ok(const char* v, int kind) {
     case 2: return (*v == '"' || *v == '{' || *v == '[');
     case 5: return (*v == '{');
     case 6: return (*v == '[');
+    case 8: return 1;
     }
     return 1;
 }

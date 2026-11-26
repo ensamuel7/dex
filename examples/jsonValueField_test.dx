@@ -1,0 +1,101 @@
+// A struct field of type json.Value encodes as the document it holds and decodes
+// from any JSON value. It used to be described to the runtime as an int, so
+// encoding wrote the pointer as a number and decoding wrote an int over it.
+
+import "json"
+
+enum Level {
+    Low
+    High
+}
+
+struct Holder {
+    name: string
+    data: json.Value
+}
+
+// The enum keeps this struct off the generated encoder, so it goes through the
+// field descriptors instead: both encode paths are covered.
+struct Tagged {
+    level: Level
+    data: json.Value
+}
+
+struct Outer {
+    id: int
+    inner: Holder
+}
+
+fn doc(raw: string): json.Value {
+    let v: json.Value = json.decode(raw)
+    return v
+}
+
+fn encodesTheDocument(): void {
+    let h: Holder = Holder { name: "n", data: doc("{\"a\":1,\"b\":[true,null,\"x\"]}") }
+    assert(json.encode(h) == "{\"name\":\"n\",\"data\":{\"a\":1,\"b\":[true,null,\"x\"]}}")
+
+    let list: Holder[] = [h, Holder { name: "s", data: doc("\"quoted \\\"text\\\"\"") }]
+    assert(json.encode(list) == "[{\"name\":\"n\",\"data\":{\"a\":1,\"b\":[true,null,\"x\"]}},{\"name\":\"s\",\"data\":\"quoted \\\"text\\\"\"}]")
+
+    let o: Outer = Outer { id: 2, inner: Holder { name: "deep", data: doc("[1,2.5,-3]") } }
+    assert(json.encode(o) == "{\"id\":2,\"inner\":{\"name\":\"deep\",\"data\":[1,2.5,-3]}}")
+
+    let wrapped: json.Value = { holder: h }
+    assert(wrapped["holder"]["data"]["b"][2].asString() == "x")
+}
+
+fn encodesThroughDescriptors(): void {
+    let t: Tagged = Tagged { level: Level.High, data: doc("{\"k\":\"v\"}") }
+    assert(json.encode(t) == "{\"level\":1,\"data\":{\"k\":\"v\"}}")
+    let unset: Tagged = Tagged { level: Level.Low, data: doc("null") }
+    assert(json.encode(unset) == "{\"level\":0,\"data\":null}")
+}
+
+fn decodesAnyShape(): void {
+    let h: Holder = json.decode("{\"name\":\"n\",\"data\":{\"a\":[1,{\"z\":\"}\"}]}}")
+    assert(h.name == "n")
+    assert(h.data["a"][1]["z"].asString() == "}")
+
+    let s: Holder = json.decode("{\"data\":\"plain\",\"name\":\"after\"}")
+    assert(s.data.asString() == "plain")
+    assert(s.name == "after")
+
+    let n: Holder = json.decode("{\"name\":\"num\",\"data\":42}")
+    assert(n.data.asLong() == 42)
+
+    let missing: Holder = json.decode("{\"name\":\"none\"}")
+    assert(missing.data.isNull())
+    assert(json.encode(missing) == "{\"name\":\"none\",\"data\":null}")
+
+    let o: Outer = json.decode("{\"id\":7,\"inner\":{\"name\":\"i\",\"data\":[true]}}")
+    assert(o.inner.data[0].asBool())
+
+    let list: Holder[] = json.decode("[{\"name\":\"a\",\"data\":{\"x\":1}},{\"name\":\"b\",\"data\":[]}]")
+    assert(list.len() == 2)
+    assert(list[0].data["x"].asInt() == 1)
+    assert(list[1].data.isArray())
+}
+
+fn roundTrips(): void {
+    let text: string = "{\"name\":\"r\",\"data\":{\"nested\":{\"deep\":[null,false,\"\\u00e9\"]}}}"
+    let h: Holder = json.decode(text)
+    let again: Holder = json.decode(json.encode(h))
+    assert(json.encode(again) == json.encode(h))
+    assert(again.data["nested"]["deep"][1].isBool())
+}
+
+fn checkedDecodeAcceptsAnyShape(): void {
+    let ok: Holder? = json.decode("{\"name\":\"c\",\"data\":[1]}")
+    assert(ok != null)
+    let bad: Holder? = json.decode("{\"name\":\"c\",\"data\":[1}")
+    assert(bad == null)
+}
+
+fn main(): void {
+    encodesTheDocument()
+    encodesThroughDescriptors()
+    decodesAnyShape()
+    roundTrips()
+    checkedDecodeAcceptsAnyShape()
+}

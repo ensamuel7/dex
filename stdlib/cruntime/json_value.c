@@ -389,6 +389,25 @@ DexString* dex_jv_encode(DexJsonValue* v) {
     return dex_string_from_cstr(dex_jv_encode_cstr(v));
 }
 
+// A struct field of type json.Value. The descriptor codecs in json.c reach these
+// through DexStructFieldDesc's codec slots (kind 8); the generated encoders call
+// dex_jb_jv directly.
+DexJsonValue* dex_jv_parse(const char* text);
+
+const char* dex_jv_field_enc(void* field) {
+    return dex_jv_encode_cstr(*(DexJsonValue**)field);
+}
+
+void dex_jv_field_dec(const char* raw, void* field) {
+    *(DexJsonValue**)field = dex_jv_parse(raw);
+}
+
+static void dex_jb_jv(DexJB* b, DexJsonValue* v) {
+    const char* text = dex_jv_encode_cstr(v);
+    dex_jb_raw(b, text, strlen(text));
+    free((void*)text);
+}
+
 // --- Parsing ---
 
 typedef struct {

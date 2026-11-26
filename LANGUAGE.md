@@ -3227,6 +3227,19 @@ Field names are the JSON keys. A key absent from the input leaves that field at
 its zero value, and an absent array field yields an empty array rather than a
 null one.
 
+A field of type `json.Value` holds a document of any shape. It encodes as that
+document, not as a string, and decodes from whatever value the key has: object,
+array, string, number, boolean or null. An absent key leaves it null. This is how
+a struct carries a part whose shape the struct does not fix, such as a JSON Schema
+or a payload passed through:
+
+```dex
+struct Tool {
+    name: string
+    inputSchema: json.Value
+}
+```
+
 String values are escaped on the way out and unescaped on the way back, so a
 field may hold anything — a quote, a backslash, a newline, a tab, a control
 character, or another JSON document — and survive the round trip byte for byte:

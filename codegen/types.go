@@ -762,6 +762,10 @@ func (g *Generator) genStructFieldDescs(out *strings.Builder, structType ast.Typ
 			out.WriteString(", NULL, NULL}")
 			continue
 		}
+		if f.Type == ast.TypeJsonValue {
+			out.WriteString(fmt.Sprintf("{\"%s\", %s, 8, 0, NULL, dex_jv_field_enc, dex_jv_field_dec}", f.Name, fieldOffset))
+			continue
+		}
 		if encFn, decFn, ok := jsonArrayCodecNames(f.Type); ok {
 			out.WriteString(fmt.Sprintf("{\"%s\", %s, 6, 0, NULL, %s, %s}", f.Name, fieldOffset, encFn, decFn))
 			continue

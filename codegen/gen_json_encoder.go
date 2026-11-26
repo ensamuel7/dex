@@ -21,7 +21,7 @@ func (g *Generator) jsonStructEncodable(t ast.Type, visiting map[ast.Type]bool) 
 	for _, f := range def.Fields {
 		switch {
 		case f.Type == ast.TypeInt, f.Type == ast.TypeLong, f.Type == ast.TypeBool,
-			f.Type == ast.TypeDouble, f.Type == ast.TypeString:
+			f.Type == ast.TypeDouble, f.Type == ast.TypeString, f.Type == ast.TypeJsonValue:
 		case ast.IsStructType(f.Type):
 			if !g.jsonStructEncodable(f.Type, visiting) {
 				return false
@@ -95,6 +95,8 @@ func (g *Generator) jsonEncoderFor(t ast.Type) (string, bool) {
 			body.WriteString(fmt.Sprintf("    dex_jb_double(b, %s);\n", field))
 		case f.Type == ast.TypeString:
 			body.WriteString(fmt.Sprintf("    dex_jb_str(b, %s);\n", field))
+		case f.Type == ast.TypeJsonValue:
+			body.WriteString(fmt.Sprintf("    dex_jb_jv(b, %s);\n", field))
 		case ast.IsOptionalType(f.Type):
 			inner := ast.OptionalInnerType(f.Type)
 			switch {

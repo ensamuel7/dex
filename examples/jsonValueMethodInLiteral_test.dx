@@ -1,0 +1,44 @@
+// A json.Value method used directly as a value in an object literal keeps its
+// type. asInt() and len() return int, which is also the zero value of the
+// field that carries a call's resolved type, so they used to read as
+// unresolved and encode as null.
+
+import "json"
+
+struct Box {
+    n: int
+
+    fn count(): int {
+        return n + 1
+    }
+}
+
+fn main(): void {
+    let doc: json.Value = json.decode("{\"a\":500,\"b\":true,\"s\":\"x\",\"d\":1.5,\"list\":[1,2,3]}")
+
+    let v: json.Value = {
+        i: doc["a"].asInt(),
+        l: doc["a"].asLong(),
+        b: doc["b"].asBool(),
+        s: doc["s"].asString(),
+        d: doc["d"].asDouble(),
+        n: doc["list"].len(),
+        has: doc.has("a"),
+        isNumber: doc["a"].isNumber()
+    }
+    assert(
+        json.encode(v) ==
+        "{\"i\":500,\"l\":500,\"b\":true,\"s\":\"x\",\"d\":1.5,\"n\":3,\"has\":true,\"isNumber\":true}"
+    )
+
+    // A named receiver takes the same path as an expression one.
+    let list: json.Value = doc["list"]
+    let w: json.Value = { size: list.len(), second: list[1].asInt() }
+    assert(json.encode(w) == "{\"size\":3,\"second\":2}")
+
+    // Other int-returning calls were never affected; they stay as they were.
+    let b: Box = Box { n: 4 }
+    let text: string = "hello"
+    let other: json.Value = { method: b.count(), length: text.len() }
+    assert(json.encode(other) == "{\"method\":5,\"length\":5}")
+}

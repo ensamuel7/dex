@@ -392,6 +392,12 @@ func (g *Generator) typeOfExpr(expr ast.Expr) ast.Type {
 			return ast.FuncTypeOf(paramTypes, fn.ReturnType)
 		}
 	case *ast.CallExpr:
+		// A json.Value method's type follows from its name. Asked before
+		// ResolvedType because TypeInt is that field's zero value, so asInt() and
+		// len() read as unresolved and an object literal encoded them as null.
+		if t, ok := g.jsonValueMethodType(e); ok {
+			return t
+		}
 		// A method call on a receiver expression carries its result type from the
 		// checker; nothing else here can recover it.
 		if e.Recv != nil && e.ResolvedType != 0 {

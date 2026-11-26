@@ -137,6 +137,45 @@ var jsonValueMethodFns = map[string]string{
 	"keys":     "dex_jv_keys",
 }
 
+// Result types of jsonValueMethodFns, plus has. Mirrors the checker's
+// jsonValueMethods; codegen cannot import the checker.
+var jsonValueMethodTypes = map[string]ast.Type{
+	"len":      ast.TypeInt,
+	"asInt":    ast.TypeInt,
+	"asLong":   ast.TypeLong,
+	"asDouble": ast.TypeDouble,
+	"asBool":   ast.TypeBool,
+	"asString": ast.TypeString,
+	"isNull":   ast.TypeBool,
+	"isBool":   ast.TypeBool,
+	"isNumber": ast.TypeBool,
+	"isString": ast.TypeBool,
+	"isArray":  ast.TypeBool,
+	"isObject": ast.TypeBool,
+	"keys":     ast.TypeArrayString,
+	"has":      ast.TypeBool,
+}
+
+// The type of a call whose receiver is a json.Value, written either as an
+// expression (doc["a"].asInt()) or as a named variable or field path (doc.len()).
+func (g *Generator) jsonValueMethodType(e *ast.CallExpr) (ast.Type, bool) {
+	t, ok := jsonValueMethodTypes[e.Name]
+	if !ok {
+		return 0, false
+	}
+	if e.Recv != nil {
+		return t, g.typeOfExpr(e.Recv) == ast.TypeJsonValue
+	}
+	if e.Module == "" {
+		return 0, false
+	}
+	recvType := g.varTypes[e.Module]
+	if recvType != ast.TypeJsonValue && strings.Contains(e.Module, ".") {
+		recvType = g.resolveFieldChainType(e.Module)
+	}
+	return t, recvType == ast.TypeJsonValue
+}
+
 // When the receiver owns its reference — parsed[0].asInt() — the intermediate is
 // released once the result is in hand.
 func (g *Generator) genJsonValueMethodExpr(out *strings.Builder, recv ast.Expr, method string, args []ast.Expr, retType ast.Type) bool {
